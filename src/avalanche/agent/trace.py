@@ -9,6 +9,8 @@ extras.
 
 from __future__ import annotations
 
+import math
+from collections.abc import Mapping
 from typing import Annotated, Literal, Self
 
 from pydantic import (
@@ -21,6 +23,7 @@ from pydantic import (
     PositiveInt,
     model_validator,
 )
+from pydantic_core import to_json
 
 from ..file import File
 from ..workspace import Workspace
@@ -112,8 +115,6 @@ class AgentTraceHeader(BaseModel):
 
     model_config = _STRICT
 
-    runtime_kind: RuntimeKind
-    trace_format: str
     status: AgentTraceStatus
     stop_reason: str | None
     model: str | None
@@ -125,18 +126,16 @@ class AgentTraceHeader(BaseModel):
     session_id: str | None
     native: TraceHeaderNative
 
+    @property
+    def runtime_kind(self) -> RuntimeKind:
+        return self.native.runtime_kind
+
+    @property
+    def trace_format(self) -> str:
+        return self.native.format
+
     @model_validator(mode="after")
     def _check_native(self) -> Self:
-        if self.trace_format != self.native.format:
-            raise ValueError(
-                f"header trace_format {self.trace_format!r} does not match "
-                f"native format {self.native.format!r}"
-            )
-        if self.runtime_kind != self.native.runtime_kind:
-            raise ValueError(
-                f"header runtime_kind {self.runtime_kind!r} does not match "
-                f"native format {self.native.format!r}"
-            )
         size = len(self.native.model_dump_json().encode())
         if size > TRACE_HEADER_NATIVE_LIMIT_BYTES:
             raise ValueError(
@@ -147,26 +146,20 @@ class AgentTraceHeader(BaseModel):
 
 
 class AgentTrace(BaseModel):
-    """The complete trace of one agent invocation.
+    """The complete trace of one agent invocation, kept in process.
 
-    When ``turns_streamed`` is true, turns travelled as live events and the
-    record carries none; the header still states how many there were.
+    On the wire the turns travel as live events and the final event carries the
+    header alone.
     """
 
     model_config = _STRICT
 
-    schema_version: Literal[2] = 2
     header: AgentTraceHeader
     turns: tuple[Turn, ...]
-    turns_streamed: bool
 
     @model_validator(mode="after")
     def _check_consistency(self) -> Self:
         header = self.header
-        if self.turns_streamed:
-            if self.turns:
-                raise ValueError("a trace with streamed turns must not carry turns")
-            return self
         indexes = [turn.index for turn in self.turns]
         if indexes != list(range(1, len(self.turns) + 1)):
             raise ValueError(f"turn indexes must run 1..n in order, got {indexes}")
@@ -249,4 +242,63 @@ def file_input_evidence(value: File | Workspace) -> FileInputEvidenceValue:
         total_size_bytes=sum(
             len(entry.content) for entry in value.entries if entry.content is not None
         ),
+    )
+
+
+# Inputs and outputs a trace keeps, all fields together; the largest fields are left
+# out beyond this, so one event stays well under the operator's body limits.
+RETAINED_VALUES_LIMIT_BYTES = 4 * 1024 * 1024
+_MAX_EVIDENCE_COLLECTION_ITEMS = 10_000
+_MAX_EVIDENCE_DEPTH = 32
+
+
+def unavailable_value(reason: str) -> dict[str, JsonValue]:
+    """The marker that stands in for a value a trace cannot keep."""
+    return {"kind": "unavailable", "reason": reason}
+
+
+def evidence_value(value: object, *, depth: int = 0) -> JsonValue:
+    """A step value as a trace keeps it: JSON, with files and workspaces by reference."""
+    if depth > _MAX_EVIDENCE_DEPTH:
+        return unavailable_value("maximum nesting depth exceeded")
+    if value is None or isinstance(value, (str, bool, int)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else unavailable_value("non-finite number")
+    if isinstance(value, File | Workspace):
+        return file_input_evidence(value).model_dump(mode="json")
+    if isinstance(value, BaseModel):
+        value = value.model_dump(mode="python")
+    if isinstance(value, Mapping):
+        if len(value) > _MAX_EVIDENCE_COLLECTION_ITEMS:
+            return unavailable_value("mapping exceeds item limit")
+        projected: dict[str, JsonValue] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                return unavailable_value("mapping keys must be strings")
+            projected[key] = evidence_value(item, depth=depth + 1)
+        return projected
+    if isinstance(value, (list, tuple)):
+        if len(value) > _MAX_EVIDENCE_COLLECTION_ITEMS:
+            return unavailable_value("sequence exceeds item limit")
+        return [evidence_value(item, depth=depth + 1) for item in value]
+    return unavailable_value(f"unsupported value type: {type(value).__name__}")
+
+
+def retained_fields(
+    values: Mapping[str, object],
+) -> tuple[dict[str, JsonValue], tuple[str, ...]]:
+    """Fields as a trace keeps them, and the names of those left out for size."""
+    projected = {name: evidence_value(value) for name, value in values.items()}
+    sizes = {name: len(to_json(value)) for name, value in projected.items()}
+    total = len(to_json(projected))
+    omitted: set[str] = set()
+    for name in sorted(projected, key=sizes.__getitem__, reverse=True):
+        if total <= RETAINED_VALUES_LIMIT_BYTES:
+            break
+        total -= sizes[name]
+        omitted.add(name)
+    return (
+        {name: value for name, value in projected.items() if name not in omitted},
+        tuple(name for name in projected if name in omitted),
     )

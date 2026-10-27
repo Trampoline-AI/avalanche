@@ -23,7 +23,7 @@ from avalanche.agent.live import (
     AgentTraceTerminal,
     TurnFinished,
 )
-from avalanche.agent.trace import AgentTrace
+from avalanche.agent.trace import AgentTraceHeader
 
 from .agent_trace_viewers import (
     InspectionTurn,
@@ -31,8 +31,10 @@ from .agent_trace_viewers import (
     TraceFormatViewer,
     TraceGroup,
     TraceItem,
+    event_trace_format,
     viewer_for,
 )
+from .agent_trace_viewers.generic import GENERIC
 from .dag_layout import DagNode, SeqGroup, build_nav_grid, nav_move, workflow_to_layout
 from .models import (
     AgentEventDetailAppended,
@@ -642,26 +644,45 @@ class UIStore:
         return events
 
     @property
-    def selected_agent_record(self) -> AgentTrace | None:
-        """The final trace of the selected agent step, once it has one."""
+    def selected_agent_finished(self) -> AgentTraceFinished | None:
+        """The final event of the selected agent step, once it has one."""
         envelope = self.selected_agent_trace_envelope
         terminal = envelope.terminal if envelope is not None else None
-        return terminal.record if isinstance(terminal, AgentTraceFinished) else None
+        return terminal if isinstance(terminal, AgentTraceFinished) else None
+
+    @property
+    def selected_agent_header(self) -> AgentTraceHeader | None:
+        """The trace header of the selected agent step, once it finished."""
+        finished = self.selected_agent_finished
+        return finished.header if finished is not None else None
 
     @property
     def selected_agent_viewer(self) -> TraceFormatViewer | None:
-        """The viewer for the selected step's trace format, once anything arrived."""
-        record = self.selected_agent_record
-        if record is not None:
-            return viewer_for(record.header.trace_format)
+        """The viewer for the selected step's trace format, once anything arrived.
+
+        Until an event names its runtime, the common layer is shown as is.
+        """
+        header = self.selected_agent_header
+        if header is not None:
+            return viewer_for(header.trace_format)
         events = self.selected_agent_events
-        return viewer_for(events[0].native.format) if events else None
+        if not events:
+            return None
+        formats = (event_trace_format(event) for event in events)
+        trace_format = next((value for value in formats if value is not None), None)
+        return GENERIC if trace_format is None else viewer_for(trace_format)
 
     @property
     def selected_agent_outputs(self) -> Mapping[str, Any] | None:
-        """Return the newest final outputs from hydrated or live evidence."""
-        viewer = self.selected_agent_viewer
-        return viewer.outputs(self.selected_agent_events) if viewer is not None else None
+        """The step's final outputs, as its final event kept them."""
+        finished = self.selected_agent_finished
+        return finished.outputs if finished is not None else None
+
+    @property
+    def selected_agent_omitted_outputs(self) -> tuple[str, ...]:
+        """Output fields the final event left out for size."""
+        finished = self.selected_agent_finished
+        return finished.omitted_outputs if finished is not None else ()
 
     @property
     def selected_agent_turns(self) -> list[InspectionTurn]:
@@ -1257,7 +1278,6 @@ class UIStore:
             _parse_agent_envelope(node.agent_trace_json)
             if node.agent_trace_json is not None
             else AgentTraceEnvelope(
-                schema_version=2,
                 invocation_id=terminal.invocation_id,
                 status=descriptor.status,
                 events=tuple(
@@ -1732,9 +1752,9 @@ class UIStore:
                 return []
             declaration = self.selected_agent_declaration
             declared = declaration.signature.outputs if declaration is not None else ()
-            names = [field.name for field in declared]
-            names = names or list(outputs)
-            names.extend(name for name in outputs if name not in names)
+            omitted = self.selected_agent_omitted_outputs
+            names = [field.name for field in declared] or [*outputs, *omitted]
+            names.extend(name for name in (*outputs, *omitted) if name not in names)
             paths = [("output", name) for name in names]
             for name in names:
                 if name in outputs:
@@ -1799,7 +1819,7 @@ class UIStore:
                 continue
             view = viewer.turn(turn, full_output=self.trace_show_full_output)
             self._append_item_navigation_paths(paths, path, view.items)
-        if self.selected_agent_record is None:
+        if self.selected_agent_header is None:
             for pending in self.selected_agent_pending_events:
                 root = ("live", pending.event.invocation_id, str(pending.event.sequence))
                 paths.append(root)

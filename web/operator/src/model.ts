@@ -399,11 +399,12 @@ export interface TokenUsageMsg {
 /** A trace header's runtime-specific part, discriminated by its trace format. */
 export type TraceHeaderNative = AgentTraceHeader["native"];
 
-/** The summary of a finished agent invocation, with its runtime-specific part. */
+/**
+ * The summary of a finished agent invocation, with its runtime-specific part; the
+ * part's ``format`` names the trace format.
+ */
 export interface TraceHeaderMsg {
   status: AgentTraceStatus;
-  runtimeKind: string;
-  traceFormat: string;
   model?: string;
   durationMs: string;
   usage?: TokenUsageMsg;
@@ -418,8 +419,6 @@ export const TraceHeaderMsg = {
   create(value: DeepPartial<TraceHeaderMsg> = {}): TraceHeaderMsg {
     return {
       status: "succeeded",
-      runtimeKind: "predict_rlm",
-      traceFormat: "predict_rlm.run/v1",
       model: undefined,
       durationMs: "0",
       usage: undefined,
@@ -692,7 +691,8 @@ export const LogRecordDescriptorMsg = {
   },
 };
 
-export type AgentEventKind = "native" | "turn.finished" | "tool.started" | "tool.finished";
+export type AgentEventKind =
+  "native" | "run.started" | "turn.finished" | "tool.started" | "tool.finished";
 
 export interface AgentEventDescriptorMsg {
   /**
@@ -711,7 +711,7 @@ export interface AgentEventDescriptorMsg {
    * @generated from protobuf field: string invocation_id = 4
    */
   invocationId: string;
-  /** The runtime's own event kind, such as "iteration.recorded". */
+  /** The runtime's own event kind, such as "iteration.recorded"; empty for none. */
   nativeEventKind: string;
   /** The common kind, or "native" when the event has none. */
   agentEventKind: AgentEventKind;

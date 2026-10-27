@@ -11,15 +11,18 @@ from pydantic import ValidationError
 import avalanche as ava
 from avalanche._agent_evidence import capture_agent_evidence
 from avalanche.agent import AgentStepError
+from avalanche.agent.contract import PythonOutputs
 from avalanche.agent.live import (
     AGENT_EVIDENCE,
     AgentLiveEvent,
     AgentTraceFinished,
+    RunStarted,
     ToolStarted,
 )
-from avalanche.agent.native.claude_agent import MessageFinished
-from avalanche.agent.native.predict_rlm import CodeGenerated, Correlated, RunStarted
+from avalanche.agent.native.claude_agent import SessionInitialized
+from avalanche.agent.native.predict_rlm import CodeGenerated
 from avalanche.agent.steps import _InvocationEvents
+from avalanche.agent.trace import RETAINED_VALUES_LIMIT_BYTES
 from avalanche.runtimes.predict_rlm.replay import replay
 
 
@@ -43,7 +46,11 @@ def _sent():
         RunEvent("run", 3, RunEventKind.CODE_EXECUTED, 3, {"iteration": 1, "output": "1"}),
         RunEvent("run", 4, RunEventKind.ITERATION_RECORDED, 4, {"step": _step()}),
         RunEvent(
-            "run", 5, RunEventKind.RUN_SUCCEEDED, 5, {"status": "completed", "outputs": {}}
+            "run",
+            5,
+            RunEventKind.RUN_SUCCEEDED,
+            5,
+            {"status": "completed", "outputs": {"answer": "yes"}},
         ),
     ]
     trace = RunTrace(
@@ -70,11 +77,17 @@ def test_every_body_round_trips_through_json_and_turns_stream_live():
     ]
 
     assert restored == sent
-    assert [body.sequence for body in sent[:-1]] == [1, 2, 3, 4, 5]
+    # A run's success is its final event, so it sends no live event of its own.
+    assert [body.sequence for body in sent[:-1]] == [1, 2, 3, 4]
+    started, *_, turn = sent[:-1]
+    assert started.native is None
+    assert started.common == RunStarted(model=None, inputs={"q": "x"}, omitted_inputs=())
+    # A turn its live event kept whole needs no native part.
+    assert turn.native is None and turn.common.kind == "turn.finished"
     final = sent[-1]
     assert isinstance(final, AgentTraceFinished)
-    assert final.record.turns == ()
-    assert final.record.header.turn_count == 1
+    assert final.header.turn_count == 1
+    assert final.outputs == {"answer": "yes"}
 
 
 def _live(**changes) -> AgentLiveEvent:
@@ -82,36 +95,71 @@ def _live(**changes) -> AgentLiveEvent:
         "invocation_id": "invocation",
         "sequence": 1,
         "timestamp_ns": 1,
-        "runtime_kind": "predict_rlm",
-        "common": ToolStarted(call_id="t", name="lookup"),
-        "native": Correlated(kind="tool.started"),
+        "common": ToolStarted(call_id="t", name="lookup", turn=1),
+        "native": None,
     }
     fields.update(changes)
     return AgentLiveEvent.model_validate(fields)
 
 
 @pytest.mark.parametrize(
-    "changes",
+    ("changes", "runtime_kind"),
     [
-        {"common": None},
-        {"native": Correlated(kind="tool.finished")},
-        {"native": RunStarted(input_fields=(), inputs={})},
-        {"native": CodeGenerated(iteration=1, code="x")},
-        {"schema_version": 1},
+        ({}, None),
+        ({"common": None, "native": CodeGenerated(iteration=1, code="x")}, "predict_rlm"),
+        (
+            {"native": SessionInitialized(session_id="s", model=None, tools=())},
+            "claude_agent",
+        ),
     ],
-    ids=["missing-common", "other-common", "native-without-common", "common-on-native", "v1"],
+    ids=["common-only", "native-only", "both"],
 )
-def test_a_native_event_must_travel_with_its_common_event(changes):
+def test_a_live_event_has_a_common_part_a_native_part_or_both(changes, runtime_kind):
+    event = _live(**changes)
+
+    # Only a native part names the runtime that sent the event.
+    assert event.runtime_kind == runtime_kind
+    assert "runtime_kind" not in event.model_dump()
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"common": None}, {"schema_version": 1}, {"runtime_kind": "predict_rlm"}],
+    ids=["empty", "v1", "stored-runtime-kind"],
+)
+def test_a_live_event_rejects_an_invalid_body(changes):
     with pytest.raises(ValidationError):
         _live(**changes)
 
 
-def test_a_final_trace_on_the_wire_has_streamed_its_turns():
-    final = _sent()[-1]
-    unstreamed = final.record.model_copy(update={"turns_streamed": False})
+def test_the_final_event_keeps_outputs_within_the_size_limit():
+    header = _sent()[-1].header
+    events = _InvocationEvents("invocation", "predict_rlm")
+    observed = []
+    big = "x" * (RETAINED_VALUES_LIMIT_BYTES + 1)
+    with capture_agent_evidence(observed.append, errors="raise"):
+        events.finished(
+            header, outputs=PythonOutputs(values={"small": 1, "big": big}), complete=True
+        )
 
-    with pytest.raises(ValidationError, match="streamed"):
-        AgentTraceFinished(invocation_id="invocation", record=unstreamed, complete=True)
+    (final,) = observed
+    assert final.outputs == {"small": 1}
+    assert final.omitted_outputs == ("big",)
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"outputs": None, "omitted_outputs": ("answer",)},
+        {"outputs": {"answer": "a"}, "omitted_outputs": ("answer",)},
+    ],
+    ids=["omitted-without-outputs", "kept-and-omitted"],
+)
+def test_a_final_event_rejects_contradictory_outputs(changes):
+    final = _sent()[-1]
+
+    with pytest.raises(ValidationError):
+        AgentTraceFinished.model_validate({**final.model_dump(), **changes})
 
 
 def test_an_invocation_sends_one_final_trace_and_nothing_after_it():
@@ -119,9 +167,9 @@ def test_an_invocation_sends_one_final_trace_and_nothing_after_it():
     events = _InvocationEvents("invocation", "predict_rlm")
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
-        events.finished(final.record, complete=True)
+        events.finished(final.header, outputs=None, complete=True)
         with pytest.raises(AgentStepError, match="second final trace"):
-            events.finished(final.record, complete=True)
+            events.finished(final.header, outputs=None, complete=True)
         with pytest.raises(AgentStepError, match="after its final trace"):
             events.record(CodeGenerated(iteration=1, code="x"), None)
     assert [body.kind for body in observed] == ["trace_finished"]
@@ -145,9 +193,15 @@ class _SilentRuntime:
 
     async def invoke(self, request, events):
         from avalanche.agent.contract import AgentRunOutcome, JsonOutputs
+        from avalanche.runtimes.predict_rlm.trace import trace_record
 
+        trace = RunTrace(
+            status="completed", model="m", iterations=0, max_iterations=2, duration_ms=1
+        )
+        evidence = RunEvidence(run_id="run", complete=True, terminal_outcome="completed")
         return AgentRunOutcome(
-            outputs=JsonOutputs(text='{"answer": "a"}'), trace=_sent()[-1].record
+            outputs=JsonOutputs(text='{"answer": "a"}'),
+            trace=trace_record(trace, evidence, model=None, sub_model=None),
         )
 
 
@@ -187,12 +241,12 @@ def test_a_turn_travels_with_a_native_event_of_its_own_format():
     )
 
     with pytest.raises(ValidationError, match="does not belong"):
-        _live(runtime_kind="claude_agent", common=common, native=MessageFinished())
+        _live(common=common, native=SessionInitialized(session_id="s", model=None, tools=()))
 
 
-@pytest.mark.parametrize("written", [True, False], ids=["written", "missing"])
-def test_a_file_output_travels_as_its_file_reference_never_its_host_path(tmp_path, written):
-    from avalanche.runtimes.predict_rlm.events import project_event
+def test_a_file_output_travels_as_its_file_reference_never_its_host_path(tmp_path):
+    from predict_rlm import File as PredictFile
+
     from avalanche.runtimes.predict_rlm.files import AgentFileBridge, predict_signature
 
     class Redact(ava.Signature):
@@ -200,34 +254,30 @@ def test_a_file_output_travels_as_its_file_reference_never_its_host_path(tmp_pat
         redacted: ava.File = ava.OutputField()
         reviewed_at: datetime = ava.OutputField()
 
+    header = _sent()[-1].header
     workspace = ava.Workspace.from_directory(tmp_path, reference="snapshot:test")
+    observed = []
     with ava.file_reference_context(workspace, attempt="attempt-1"):
         bridge = AgentFileBridge("redact", predict_signature(Redact))
         output = bridge.output_dir / "redacted.txt"
-        if written:
-            output.write_bytes(b"[redacted]")
-        native, _ = project_event(
-            RunEvent(
-                "run",
-                1,
-                RunEventKind.RUN_SUCCEEDED,
-                1,
-                {
-                    "status": "completed",
-                    "outputs": {
-                        "redacted": {"path": str(output)},
+        output.write_bytes(b"[redacted]")
+        events = _InvocationEvents("invocation", "predict_rlm")
+        with capture_agent_evidence(observed.append, errors="raise"):
+            events.finished(
+                header,
+                outputs=PythonOutputs(
+                    values={
+                        "redacted": bridge.outputs(PredictFile(path=str(output))),
                         "reviewed_at": "2026-10-27T09:00:00",
-                    },
-                },
-            ),
-            files=bridge,
-        )
+                    }
+                ),
+                complete=True,
+            )
 
-    # Outputs without file types stay the plain data PredictRLM reported.
-    assert native.outputs["reviewed_at"] == "2026-10-27T09:00:00"
-    redacted = native.outputs["redacted"]
-    assert redacted["kind"] == ("file" if written else "unavailable")
-    if written:
-        assert redacted["workspace"] == "snapshot:test"
-        assert redacted["path"].startswith(".outputs/redact/attempt-1/")
-    assert str(tmp_path) not in native.model_dump_json()
+    (final,) = observed
+    assert final.outputs["reviewed_at"] == "2026-10-27T09:00:00"
+    redacted = final.outputs["redacted"]
+    assert redacted["kind"] == "file"
+    assert redacted["workspace"] == "snapshot:test"
+    assert redacted["path"].startswith(".outputs/redact/attempt-1/")
+    assert str(tmp_path) not in final.model_dump_json()

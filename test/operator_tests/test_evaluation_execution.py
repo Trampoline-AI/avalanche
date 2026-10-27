@@ -47,8 +47,6 @@ class NoInputs(BaseModel):
 
 TRACE = AgentTrace(
     header=AgentTraceHeader(
-        runtime_kind="predict_rlm",
-        trace_format="predict_rlm.run/v1",
         status="succeeded",
         stop_reason="submit",
         model="test-model",
@@ -63,7 +61,6 @@ TRACE = AgentTrace(
         ),
     ),
     turns=(),
-    turns_streamed=False,
 )
 
 

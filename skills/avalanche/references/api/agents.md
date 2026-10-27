@@ -204,6 +204,8 @@ The return is an `ava.agent.AgentResult`, the same for every runtime:
 
 Outputs that are missing or do not match their declared types raise `AgentOutputError` after the invocation's trace is recorded; values are never coerced or defaulted.
 
+Run views (`ava tui`, the web UI) receive the same trace while the call runs: an event when it starts, with its inputs and model, events for each tool call and finished turn, and a final event with the header and the outputs. Files and workspaces appear by their workspace reference, never their host path; an input or output too large for the trace is named rather than shown.
+
 Each step-body execution receives a fresh injected agent. Its first call constructs the predictor lazily; subsequent calls in that body reuse it. The body can make zero, one, or multiple calls. Calling a decorated step during workflow construction follows [node semantics](workflows.md), not this model-call interface.
 
 ## Skills

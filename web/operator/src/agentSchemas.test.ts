@@ -1,108 +1,47 @@
 import { describe, expect, it } from "vitest";
 
 import { parseAgentDeclaration } from "./GraphCanvas";
-import { AgentLiveEvent, AgentTrace, AgentTraceTerminal } from "./generated/agentSchemas";
-import {
-  finishedTrace,
-  predictRlmTraceHeader,
-  tokenUsage,
-  turnEvent,
-} from "./test/agentTraceFixtures";
+import { AgentLiveEvent, AgentTraceTerminal } from "./generated/agentSchemas";
+import { finishedTrace, runStartedEvent, turnEvent } from "./test/agentTraceFixtures";
 import { agentDeclarationJson } from "./test/fixtures";
 
-const record: AgentTrace = {
-  schema_version: 2,
-  turns_streamed: false,
-  header: {
-    runtime_kind: "predict_rlm",
-    trace_format: "predict_rlm.run/v1",
-    status: "succeeded",
-    stop_reason: "submit",
-    model: "openai/gpt-5.5",
-    duration_ms: 20,
-    usage: {
-      input_tokens: 10,
-      output_tokens: 5,
-      cache_read_input_tokens: null,
-      cache_creation_input_tokens: null,
-      cost_usd: null,
-    },
-    turn_count: 1,
-    tool_call_count: 1,
-    external_run_id: "run-1",
-    session_id: null,
-    native: predictRlmTraceHeader(),
-  },
-  turns: [
-    {
-      index: 1,
-      message: null,
-      reasoning: "look it up",
-      duration_ms: 7,
-      usage: null,
-      tool_calls: [
-        {
-          call_id: null,
-          caller: "code",
-          name: "lookup",
-          arguments: { args: ["q"], kwargs: {} },
-          result: "a",
-          error: null,
-          duration_ms: 2,
-        },
-      ],
-      native: {
-        format: "predict_rlm.run/v1",
-        code: "lookup('q')",
-        output: "a",
-        untruncated_output: "a",
-        error: false,
-        finish_reason: null,
-        usage: { main: tokenUsage(), sub: tokenUsage() },
-        predict_calls: [],
-      },
-    },
-  ],
-};
+const finished = finishedTrace();
+if (finished.kind !== "trace_finished") throw new Error("fixture is a finished trace");
+const { header } = finished;
 
 describe("generated agent schemas", () => {
-  it("accept a trace record shaped like the Python model", () => {
-    expect(AgentTrace.parse(record)).toEqual(record);
-  });
-
   it.each([
-    ["an unknown runtime", { ...record, header: { ...record.header, runtime_kind: "other" } }],
-    ["an unknown field", { ...record, extra: true }],
-    ["an old schema version", { ...record, schema_version: 1 }],
-    ["a negative duration", { ...record, header: { ...record.header, duration_ms: -1 } }],
+    [
+      "a stored runtime kind",
+      { ...finished, header: { ...header, runtime_kind: "predict_rlm" } },
+    ],
+    ["a stored trace format", { ...finished, header: { ...header, trace_format: "x/v1" } }],
+    ["a trace record", { ...finished, record: { header, turns: [] } }],
+    ["an unknown field", { ...finished, extra: true }],
+    ["an old schema version", { ...finished, schema_version: 1 }],
+    ["a negative duration", { ...finished, header: { ...header, duration_ms: -1 } }],
     [
       "an unknown header format",
-      { ...record, header: { ...record.header, native: { format: "other/v1" } } },
+      { ...finished, header: { ...header, native: { format: "other/v1" } } },
     ],
-    ["a native part outside the header", { ...record, native: record.header.native }],
-    [
-      "an old turn shape",
-      { ...record, turns: [{ ...record.turns[0], actions: [], text: null }] },
-    ],
-    [
-      "an unknown turn format",
-      { ...record, turns: [{ ...record.turns[0], native: { format: "other/v1" } }] },
-    ],
-  ])("reject a trace record with %s", (_case, body) => {
-    expect(AgentTrace.safeParse(body).success).toBe(false);
+    ["outputs that are not an object", { ...finished, outputs: ["done"] }],
+  ])("reject a final trace with %s", (_case, body) => {
+    expect(AgentTraceTerminal.safeParse(body).success).toBe(false);
   });
 
   it("accept live event and final trace bodies shaped like the Python models", () => {
     expect(AgentLiveEvent.parse(turnEvent(1))).toEqual(turnEvent(1));
+    expect(AgentLiveEvent.parse(runStartedEvent({ a: 1 }))).toEqual(runStartedEvent({ a: 1 }));
     expect(AgentTraceTerminal.parse(finishedTrace())).toEqual(finishedTrace());
   });
 
   it.each([
     ["a v1 body", { event_kind: "iteration.recorded", data: {} }],
     ["an old schema version", { ...turnEvent(1), schema_version: 1 }],
+    ["a stored runtime kind", { ...turnEvent(1), runtime_kind: "predict_rlm" }],
     [
       "an unknown native format",
-      { ...turnEvent(1), native: { ...turnEvent(1).native, format: "other/v1" } },
+      { ...turnEvent(1), native: { format: "other/v1", kind: "code.generated" } },
     ],
     [
       "an unknown native kind",

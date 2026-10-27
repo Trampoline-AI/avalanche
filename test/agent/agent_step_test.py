@@ -265,17 +265,18 @@ async def test_live_evidence_redacts_tool_and_model_secrets_without_losing_event
     assert result.outputs.note == "reviewed"
     live = observed[:-1]
     # Avalanche, not the runtime, numbers the live events.
-    assert [event.sequence for event in live] == list(range(1, 7))
-    assert live[0].native.inputs == {"person": {"id": 1, "name": "Ada"}}
-    assert live[-1].native.outputs == {"note": "reviewed"}
+    # The run's success is its final event, not a live one.
+    assert [event.sequence for event in live] == list(range(1, 6))
+    assert live[0].common.inputs == {"person": {"id": 1, "name": "Ada"}}
+    assert observed[-1].outputs["note"] == "reviewed"
     wire = "".join(event.model_dump_json() for event in observed)
     assert "model-secret" not in wire
     assert "tool-secret" not in wire
     terminal = observed[-1]
     assert terminal.kind == "trace_finished"
     assert terminal.complete is True
-    assert terminal.record.header.external_run_id == "run"
-    assert terminal.record.header.status == "succeeded"
+    assert terminal.header.external_run_id == "run"
+    assert terminal.header.status == "succeeded"
     assert len({event.invocation_id for event in observed}) == 1
 
 
@@ -342,8 +343,8 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
     assert len(grouped) == 2
     assert not set(grouped) & {"left", "right", "caller-left", "caller-right"}
     for events in grouped.values():
-        assert [event.kind for event in events] == ["event", "event", "trace_finished"]
-        assert events[0].native.call_id == events[-1].record.header.external_run_id
+        assert [event.kind for event in events] == ["event", "trace_finished"]
+        assert events[0].native.call_id == events[-1].header.external_run_id
         assert "caller-" not in events[0].model_dump_json()
 
 
@@ -426,8 +427,8 @@ async def test_agent_cancellation_emits_one_terminal_and_preserves_cancellation(
     assert terminal.complete is True
     if exportable_trace:
         assert terminal.kind == "trace_finished"
-        assert terminal.record.header.status == "cancelled"
-        assert terminal.record.header.external_run_id == "cancelled-run"
+        assert terminal.header.status == "cancelled"
+        assert terminal.header.external_run_id == "cancelled-run"
     else:
         assert terminal.kind == "trace_unavailable"
         assert (terminal.status, terminal.external_run_id) == ("cancelled", "cancelled-run")
@@ -532,7 +533,7 @@ async def test_agent_failure_retains_separate_evidence_without_exposing_raw_even
     assert terminal.kind == ("trace_finished" if exportable_trace else "trace_unavailable")
     assert terminal.complete is False
     if exportable_trace:
-        header = terminal.record.header
+        header = terminal.header
         assert (header.status, header.external_run_id) == ("failed", "failed-run")
     else:
         assert (terminal.status, terminal.external_run_id) == ("failed", "failed-run")
@@ -604,7 +605,6 @@ def _live_json(event, sequence=1):
         invocation_id="invocation",
         sequence=sequence,
         timestamp_ns=1,
-        runtime_kind="predict_rlm",
         common=common,
         native=native,
     ).model_dump_json()
@@ -673,7 +673,7 @@ def _retain_iteration(step):
         envelope = AgentTraceEnvelope.model_validate_json(
             operator.get_run(run.run_id).nodes["agent"].agent_trace_json
         )
-        assert envelope.terminal.record.header.status == "succeeded"
+        assert envelope.terminal.header.status == "succeeded"
         assert original_trace.steps[0] is step
         (event,) = envelope.events
         return event.common, event.native
@@ -720,7 +720,8 @@ def test_iteration_detail_survives_operator_retention_and_hydration(payloads):
     part = turn.turn.native
     assert (part.code, part.output) == (step.code, step.output)
     assert part.usage == _usage(step)
-    assert native.omissions is None
+    # A turn its live event kept whole has no native part.
+    assert native is None
     assert [call.signature for call in part.predict_calls] == ["question -> answer"] * len(
         payloads
     )
@@ -941,7 +942,7 @@ def test_all_lifecycle_errors_obey_operator_contract(event_kind, error):
     }
     event = RunEvent("sdk-run", 1, RunEventKind(event_kind), 1, data)
     retained = _retain_live_event(_live_json(event))
-    assert retained.native.kind == event_kind
+    assert retained.kind_label == event_kind
     if len(error) > 65_536:
         assert retained.error.startswith(error[:128])
         assert "unavailable" in retained.error[-128:]
@@ -986,15 +987,6 @@ def _retain_live_event(projected):
             },
             "signature",
         ),
-        ("run.started", {"inputs": {"question": "x" * (9 * 1024 * 1024)}}, "inputs"),
-        (
-            "run.succeeded",
-            {
-                "status": "completed",
-                "outputs": {"answer": "x" * (9 * 1024 * 1024)},
-            },
-            "outputs",
-        ),
         ("tool.started", {"call_id": "call", "name": "x" * (9 * 1024 * 1024)}, "name"),
     ],
 )
@@ -1006,8 +998,6 @@ def test_live_inspection_budget_covers_whole_event(event_kind, data, omitted_fie
     value = {
         "code": lambda: retained.native.code,
         "signature": lambda: retained.native.signature,
-        "inputs": lambda: retained.native.inputs,
-        "outputs": lambda: retained.native.outputs,
         "name": lambda: retained.common.name,
     }[omitted_field]()
     if isinstance(value, str):
@@ -1019,6 +1009,20 @@ def test_live_inspection_budget_covers_whole_event(event_kind, data, omitted_fie
         predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES + 1024
     )
     assert "unavailable" not in event.data[omitted_field]
+
+
+def test_run_inputs_too_large_for_the_live_event_are_named_not_kept():
+    from predict_rlm import RunEvent, RunEventKind
+
+    inputs = {"question": "x" * (9 * 1024 * 1024), "topic": "maps"}
+    event = RunEvent("sdk-run", 1, RunEventKind.RUN_STARTED, 1, {"inputs": inputs})
+    retained = _retain_live_event(_live_json(event))
+
+    assert (retained.common.inputs, retained.common.omitted_inputs) == (
+        {"topic": "maps"},
+        ("question",),
+    )
+    assert len(retained.model_dump_json().encode()) <= 1024
 
 
 def test_deep_iteration_payload_does_not_reenter_transport_at_terminal():
@@ -1070,7 +1074,7 @@ async def test_codex_lm_is_named_codex_in_declaration_and_run_trace(monkeypatch)
     with capture_agent_evidence(observed.append, errors="raise"):
         await summarize.__agent_step__.make_agent()(person=Person(id=1, name="Ada"))
     (finished,) = [event for event in observed if event.kind == "trace_finished"]
-    assert (finished.record.header.model, finished.record.header.native.sub_model) == (
+    assert (finished.header.model, finished.header.native.sub_model) == (
         "codex/gpt-5.6-terra",
         "codex/gpt-5.6-terra",
     )

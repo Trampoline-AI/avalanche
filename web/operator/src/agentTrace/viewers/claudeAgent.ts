@@ -1,5 +1,5 @@
 import type { TokenUsage } from "../../generated/agentSchemas";
-import type { AgentLiveEvent } from "../common";
+import { finishedTurn, type AgentLiveEvent } from "../common";
 import type { AgentTraceStep, TraceTurnTokens } from "../types";
 import { toolCall } from "./common";
 import type { TraceViewer } from "./index";
@@ -16,10 +16,8 @@ function tokenUsage(usage: TokenUsage | null): TraceTurnTokens | undefined {
 }
 
 function turn(event: AgentLiveEvent): AgentTraceStep {
-  const { common, native } = event;
-  if (common?.kind !== "turn.finished" || native.kind !== "message.finished") {
-    throw new Error("Claude turn events are message.finished with a finished turn");
-  }
+  const common = finishedTurn(event);
+  if (event.native !== null) throw new Error("Claude turn events have no native part");
   const { turn } = common;
   const response = turn.native;
   if (response.format !== "claude_agent.messages/v1") {
@@ -41,35 +39,11 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
   };
 }
 
-function retainedValue(event: AgentLiveEvent, kind: "inputs" | "outputs"): unknown {
-  const { native } = event;
-  if (kind === "inputs" && native.kind === "started") return native.inputs;
-  // A failed session reports no output, and an oversized one is left out of the trace.
-  if (kind !== "outputs" || native.kind !== "finished") return undefined;
-  const output = native.structured_output;
-  if (output === null || typeof output !== "object" || Array.isArray(output)) return undefined;
-  // Workspace fields hold the session's working directory, not Claude's JSON.
-  const workspaces = Object.fromEntries(
-    native.workspace_outputs.map((name) => [
-      name,
-      "workspace: the session's working directory",
-    ]),
-  );
-  return { ...output, ...workspaces };
-}
-
 export const claudeAgentViewer: TraceViewer = {
   turn,
   turnUnit: "turns",
   activityLabels: {
-    started: "Prompt sent",
     "session.initialized": "Session started",
-    "tool.used": "Calling tool",
-    "tool.returned": "Tool call finished",
-    "message.finished": "Turn finished",
     rate_limit: "Rate limit reported",
-    finished: "Session finished",
   },
-  valueEventKinds: { inputs: "started", outputs: "finished" },
-  retainedValue,
 };

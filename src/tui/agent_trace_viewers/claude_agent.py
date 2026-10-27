@@ -2,35 +2,24 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
-from pydantic import JsonValue
-
 from avalanche.agent.live import AgentLiveEvent
-from avalanche.agent.native.claude_agent import (
-    ClaudeAgentTraceHeader,
-    ClaudeAgentTurn,
-    Finished,
-)
-from avalanche.agent.trace import AgentTrace
+from avalanche.agent.native.claude_agent import ClaudeAgentTraceHeader, ClaudeAgentTurn
+from avalanche.agent.trace import AgentTraceHeader
 
 from . import InspectionTurn, PendingStep, TraceSection, TurnView
-from .generic import COMMON_LABELS, GENERIC, duration_seconds, reasoning_items, usage_label
+from .generic import GENERIC, duration_seconds, reasoning_items, usage_label
 
 _LABELS = {
-    "started": "Prompt sent",
     "session.initialized": "Session started",
-    "tool.used": COMMON_LABELS["tool.started"],
-    "tool.returned": COMMON_LABELS["tool.finished"],
-    "message.finished": COMMON_LABELS["turn.finished"],
     "rate_limit": "Rate limit reported",
-    "finished": "Session finished",
 }
 
 
-def _native(record: AgentTrace) -> ClaudeAgentTraceHeader:
-    native = record.header.native
+def _native(header: AgentTraceHeader) -> ClaudeAgentTraceHeader:
+    native = header.native
     if not isinstance(native, ClaudeAgentTraceHeader):
         raise TypeError(f"not a Claude Agent SDK trace: {native.format}")
     return native
@@ -38,9 +27,8 @@ def _native(record: AgentTrace) -> ClaudeAgentTraceHeader:
 
 @dataclass(frozen=True)
 class ClaudeAgentViewer:
-    def header(self, record: AgentTrace) -> tuple[tuple[str, str], ...]:
-        header = record.header
-        native = _native(record)
+    def header(self, header: AgentTraceHeader) -> tuple[tuple[str, str], ...]:
+        native = _native(header)
         lines = [
             (f"Model: {header.model} · Session: {header.session_id}", ""),
             (
@@ -55,11 +43,11 @@ class ClaudeAgentViewer:
         lines.extend((f"Error: {error}", "bold red") for error in native.errors)
         return tuple(lines)
 
-    def turn_limit(self, record: AgentTrace | None) -> int | None:
+    def turn_limit(self, header: AgentTraceHeader | None) -> int | None:
         return None
 
-    def submitted(self, record: AgentTrace) -> bool:
-        return record.header.status == "succeeded"
+    def submitted(self, header: AgentTraceHeader) -> bool:
+        return header.status == "succeeded"
 
     def turn(self, turn: InspectionTurn, *, full_output: bool) -> TurnView:
         view = GENERIC.turn(turn, full_output=full_output)
@@ -79,30 +67,12 @@ class ClaudeAgentViewer:
         return replace(view, items=(*body, response, *reasoning))
 
     def live_label(self, event: AgentLiveEvent) -> str:
+        if event.native is None:
+            return GENERIC.live_label(event)
         return _LABELS[event.native.kind]
 
     def pending(self, events: Sequence[AgentLiveEvent]) -> tuple[PendingStep, ...]:
         return ()
-
-    def outputs(self, events: Sequence[AgentLiveEvent]) -> Mapping[str, JsonValue] | None:
-        for event in reversed(events):
-            if isinstance(event.native, Finished):
-                output = event.native.structured_output
-                if event.native.output_omitted:
-                    # The step returned an output too large for the trace to keep.
-                    output = {"structured_output": "omitted: larger than the trace keeps"}
-                elif not isinstance(output, dict):
-                    # A failed session reports no output.
-                    return None
-                # Workspace fields hold the session's working directory, not Claude's JSON.
-                return {
-                    **output,
-                    **dict.fromkeys(
-                        event.native.workspace_outputs,
-                        "workspace: the session's working directory",
-                    ),
-                }
-        return None
 
 
 CLAUDE_AGENT = ClaudeAgentViewer()

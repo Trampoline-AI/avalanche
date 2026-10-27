@@ -306,19 +306,21 @@ def test_spawned_inline_agent_feeds_typed_downstream_result_and_retains_evidence
             ]
         page = operator.list_agent_events(run.run_id, agent_id)
         bodies = [json.loads(operator.read_detail(event.body_token)) for event in page.events]
-        assert [body["native"]["kind"] for body in bodies] == ["run.started", "run.succeeded"]
-        assert bodies[0]["native"]["inputs"] == expected_inputs
-        assert bodies[1]["native"]["outputs"] == (
+        # The run's success is its final event, which carries the outputs.
+        assert [body["common"]["kind"] for body in bodies] == ["run.started"]
+        assert bodies[0]["common"]["inputs"] == expected_inputs
+        assert len({event.invocation_id for event in page.events}) == 1
+        trace = json.loads(operator.get_run(run.run_id).nodes[agent_id].agent_trace_json)
+        terminal = trace["terminal"]
+        assert terminal["outputs"] == (
             {"decision": {"route": "billing", "priority": 6}}
             if flow_name == "single"
             else {"score": 6, "route": "billing"}
         )
-        assert len({event.invocation_id for event in page.events}) == 1
-        trace = json.loads(operator.get_run(run.run_id).nodes[agent_id].agent_trace_json)
-        record = trace["terminal"]["record"]
-        assert record["header"]["status"] == "succeeded"
+        assert terminal["header"]["status"] == "succeeded"
         assert (
-            record["header"]["native"]["max_iterations"] == calls[0]["config"]["max_iterations"]
+            terminal["header"]["native"]["max_iterations"]
+            == calls[0]["config"]["max_iterations"]
         )
         assert dict(historical.agent_instruction_lines)[agent_id] == (
             "Route a customer ticket."
@@ -355,7 +357,7 @@ def test_spawned_inline_agent_failure_never_publishes_partial_result(
         with pytest.raises(RunResultUnavailableError):
             operator.get_run_result(run.run_id)
         events = operator.list_agent_events(run.run_id, agent_id).events
-        assert events[0].native_event_kind == "run.started"
+        assert events[0].agent_event_kind == "run.started"
     finally:
         operator.close()
 
@@ -379,7 +381,7 @@ def test_spawned_running_inline_agent_cancellation_never_publishes_partial_resul
             time.sleep(0.03)
         while time.monotonic() < deadline:
             events = operator.list_agent_events(run_id, agent_id).events
-            if any(event.native_event_kind == "run.started" for event in events):
+            if any(event.agent_event_kind == "run.started" for event in events):
                 break
             time.sleep(0.03)
         else:
@@ -399,10 +401,9 @@ def test_spawned_running_inline_agent_cancellation_never_publishes_partial_resul
             node for node in cancelled.nodes.values() if node.name == "consume_decision"
         ]
         assert consumer.status != NodeStatus.SUCCESS
-        assert not any(
-            event.native_event_kind == "run.succeeded"
-            for event in operator.list_agent_events(run_id, agent_id).events
-        )
+        # No final event reports a success, so no outputs were published.
+        trace = cancelled.nodes[agent_id].trace
+        assert trace is None or trace.status != "succeeded"
         with pytest.raises(RunResultUnavailableError):
             operator.get_run_result(run_id)
     finally:

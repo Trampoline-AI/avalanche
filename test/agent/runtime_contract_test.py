@@ -85,7 +85,7 @@ class _Recorder:
     async def emit(self, native: object, common: object) -> None:
         assert not self.terminals, "live event after the final trace"
 
-    def finished(self, record: object, *, complete: bool) -> None:
+    def finished(self, header: object, *, outputs: object, complete: bool) -> None:
         self.terminals.append("finished")
 
     def unavailable(self, **detail: object) -> None:

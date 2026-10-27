@@ -1,10 +1,10 @@
 """Agent evidence on the wire: live events and the one terminal trace per invocation.
 
 While an agent runs, every event it reports crosses to the operator as an
-``AgentLiveEvent``: Avalanche's sequence number and timestamp, the common event
-when there is one, and the runtime's native payload. The invocation then ends
-with one ``AgentTraceFinished`` or ``AgentTraceUnavailable``. The final trace
-carries no turns, since they already travelled as ``turn.finished`` events.
+``AgentLiveEvent``: Avalanche's sequence number and timestamp, the common event,
+the runtime's native payload, or both. The invocation then ends with one
+``AgentTraceFinished`` (the trace header and the step's outputs) or
+``AgentTraceUnavailable``. Turns travel only as ``turn.finished`` events.
 
 Nothing here imports DSPy or a runtime SDK, so the operator, client and TUI
 validate every body without the runtime extras installed.
@@ -18,6 +18,7 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     NonNegativeInt,
     PositiveInt,
     TypeAdapter,
@@ -26,7 +27,7 @@ from pydantic import (
 
 from .kinds import RuntimeKind
 from .native import NativeEvent
-from .trace import AgentTrace, AgentTraceStatus, Turn
+from .trace import AgentTraceHeader, AgentTraceStatus, Turn
 
 # Serialized bodies always carry defaulted fields such as ``kind``; their
 # exported JSON Schema says so.
@@ -36,6 +37,21 @@ _STRICT = ConfigDict(
     extra="forbid",
     json_schema_serialization_defaults_required=True,
 )
+
+
+class RunStarted(BaseModel):
+    """The call as the runtime started it: the step's inputs and the model it asked for.
+
+    Files and workspaces appear by reference. Inputs too large for the event are
+    left out and named in ``omitted_inputs``.
+    """
+
+    model_config = _STRICT
+
+    kind: Literal["run.started"] = "run.started"
+    model: str | None
+    inputs: dict[str, JsonValue]
+    omitted_inputs: tuple[str, ...]
 
 
 class TurnFinished(BaseModel):
@@ -62,6 +78,8 @@ class ToolStarted(BaseModel):
     kind: Literal["tool.started"] = "tool.started"
     call_id: str
     name: str
+    # The turn that called the tool, when the runtime knows it.
+    turn: PositiveInt | None
 
 
 class ToolFinished(BaseModel):
@@ -70,11 +88,12 @@ class ToolFinished(BaseModel):
     kind: Literal["tool.finished"] = "tool.finished"
     call_id: str
     name: str
+    turn: PositiveInt | None
     error: str | None
 
 
 AgentEvent = Annotated[
-    TurnFinished | ToolStarted | ToolFinished,
+    RunStarted | TurnFinished | ToolStarted | ToolFinished,
     Field(discriminator="kind"),
 ]
 
@@ -89,25 +108,16 @@ class AgentLiveEvent(BaseModel):
     invocation_id: str = Field(min_length=1)
     sequence: PositiveInt
     timestamp_ns: NonNegativeInt
-    runtime_kind: RuntimeKind
     common: AgentEvent | None
-    native: NativeEvent
+    native: NativeEvent | None
 
     @model_validator(mode="after")
-    def _check_kinds(self) -> Self:
+    def _check_parts(self) -> Self:
         native = self.native
-        if native.runtime_kind != self.runtime_kind:
-            raise ValueError(
-                f"native format {native.format!r} does not belong to "
-                f"runtime {self.runtime_kind!r}"
-            )
-        expected = native.common_kinds[native.kind]
-        actual = self.common.kind if self.common is not None else None
-        if actual != expected:
-            raise ValueError(
-                f"native event {native.kind!r} travels with common event "
-                f"{expected!r}, not {actual!r}"
-            )
+        if native is None:
+            if self.common is None:
+                raise ValueError("a live event needs a common event, a native event or both")
+            return self
         if isinstance(self.common, TurnFinished) and self.common.turn.native.format != (
             native.format
         ):
@@ -118,18 +128,33 @@ class AgentLiveEvent(BaseModel):
         return self
 
     @property
+    def runtime_kind(self) -> RuntimeKind | None:
+        """The runtime that sent the event, when it has a native part to say so."""
+        return self.native.runtime_kind if self.native is not None else None
+
+    @property
+    def kind_label(self) -> str:
+        """The native kind, else the common one: what the event is called in summaries."""
+        if self.native is not None:
+            return self.native.kind
+        assert self.common is not None
+        return self.common.kind
+
+    @property
     def turn(self) -> int | None:
         match self.common:
             case TurnFinished(turn=turn):
                 return turn.index
-        return self.native.turn
+            case ToolStarted(turn=turn) | ToolFinished(turn=turn) if turn is not None:
+                return turn
+        return self.native.turn if self.native is not None else None
 
     @property
     def error(self) -> str | None:
         match self.common:
             case ToolFinished(error=error) if error is not None:
                 return error
-        return self.native.error
+        return self.native.error if self.native is not None else None
 
     @property
     def failed(self) -> bool:
@@ -143,9 +168,12 @@ class AgentLiveEvent(BaseModel):
 
 
 class AgentTraceFinished(BaseModel):
-    """The final trace of an invocation; its turns travelled as live events.
+    """The end of an invocation: its trace header and the step's outputs.
 
-    ``complete`` says whether every live event of the invocation was delivered.
+    The turns travelled as live events. ``outputs`` is ``None`` when the run
+    returned none; files and workspaces appear by reference, and fields too large
+    to keep are left out and named in ``omitted_outputs``. ``complete`` says
+    whether every live event of the invocation was delivered.
     """
 
     model_config = _STRICT
@@ -153,13 +181,17 @@ class AgentTraceFinished(BaseModel):
     kind: Literal["trace_finished"] = "trace_finished"
     schema_version: Literal[2] = 2
     invocation_id: str = Field(min_length=1)
-    record: AgentTrace
+    header: AgentTraceHeader
+    outputs: dict[str, JsonValue] | None
+    omitted_outputs: tuple[str, ...]
     complete: bool
 
     @model_validator(mode="after")
-    def _check_streamed(self) -> Self:
-        if not self.record.turns_streamed:
-            raise ValueError("a final trace on the wire must have streamed its turns")
+    def _check_outputs(self) -> Self:
+        if self.outputs is None and self.omitted_outputs:
+            raise ValueError("a run without outputs has none to omit")
+        if self.outputs is not None and set(self.outputs) & set(self.omitted_outputs):
+            raise ValueError("an omitted output must not also be kept")
         return self
 
 
@@ -192,7 +224,7 @@ AGENT_TRACE_TERMINAL: TypeAdapter[AgentTraceTerminal] = TypeAdapter(AgentTraceTe
 
 def terminal_runtime_kind(terminal: AgentTraceFinished | AgentTraceUnavailable) -> RuntimeKind:
     match terminal:
-        case AgentTraceFinished(record=record):
-            return record.header.runtime_kind
+        case AgentTraceFinished(header=header):
+            return header.runtime_kind
         case AgentTraceUnavailable(runtime_kind=runtime_kind):
             return runtime_kind

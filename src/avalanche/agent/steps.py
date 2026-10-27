@@ -23,7 +23,7 @@ from typing import (
 )
 
 import dspy
-from pydantic import JsonValue, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from .._agent_evidence import emit_agent_evidence
 from ..dag import Node, NodeFuture, NodeType, _workflow_context
@@ -34,9 +34,12 @@ from ..step_interface import (
     step_interface_from_signature,
 )
 from .contract import (
+    AgentOutputs,
     AgentRequest,
     AgentResult,
     AgentRuntime,
+    JsonOutputs,
+    PythonOutputs,
     SignatureSpec,
     ToolSpec,
 )
@@ -51,7 +54,7 @@ from .kinds import RuntimeKind
 from .live import AgentEvent, AgentLiveEvent, AgentTraceFinished, AgentTraceUnavailable
 from .native import NativeEvent
 from .signature import resolve_signature
-from .trace import AgentTrace, AgentTraceStatus
+from .trace import AgentTraceHeader, AgentTraceStatus, retained_fields
 
 InputT = TypeVar("InputT")
 OutputT = TypeVar("OutputT")
@@ -82,10 +85,10 @@ class _InvocationEvents:
         self._sequence = 0
         self.terminated = False
 
-    async def emit(self, native: NativeEvent, common: AgentEvent | None) -> None:
+    async def emit(self, native: NativeEvent | None, common: AgentEvent | None) -> None:
         self.record(native, common)
 
-    def record(self, native: NativeEvent, common: AgentEvent | None) -> None:
+    def record(self, native: NativeEvent | None, common: AgentEvent | None) -> None:
         """Stamp and send one live event; ``emit`` without the await."""
         if self.terminated:
             raise AgentStepError(
@@ -98,16 +101,24 @@ class _InvocationEvents:
                 invocation_id=self._invocation_id,
                 sequence=self._sequence,
                 timestamp_ns=time.time_ns(),
-                runtime_kind=self._runtime_kind,
                 common=common,
                 native=native,
             )
         )
 
-    def finished(self, record: AgentTrace, *, complete: bool) -> None:
+    def finished(
+        self, header: AgentTraceHeader, *, outputs: AgentOutputs | None, complete: bool
+    ) -> None:
+        kept, omitted = (
+            (None, ()) if outputs is None else retained_fields(_raw_outputs(outputs))
+        )
         self._terminate(
             AgentTraceFinished(
-                invocation_id=self._invocation_id, record=record, complete=complete
+                invocation_id=self._invocation_id,
+                header=header,
+                outputs=kept,
+                omitted_outputs=omitted,
+                complete=complete,
             )
         )
 
@@ -137,6 +148,17 @@ class _InvocationEvents:
             )
         self.terminated = True
         emit_agent_evidence(terminal)
+
+
+def _raw_outputs(outputs: AgentOutputs) -> Mapping[str, object]:
+    match outputs:
+        case PythonOutputs(values=values):
+            return values
+        case JsonOutputs(text=text):
+            return _JSON_OBJECT.validate_json(text)
+
+
+_JSON_OBJECT: TypeAdapter[dict[str, JsonValue]] = TypeAdapter(dict[str, JsonValue])
 
 
 _WORKFLOW_AGENT_DEFAULTS: ContextVar[AgentDefaults] = ContextVar(

@@ -42,13 +42,14 @@ from pydantic_core import to_json, to_jsonable_python
 
 from ...agent.contract import (
     AgentEventSink,
+    AgentOutputs,
     AgentRequest,
     AgentRunOutcome,
     JsonOutputs,
     PythonOutputs,
     ToolSpec,
 )
-from ...agent.live import ToolFinished, ToolStarted, TurnFinished
+from ...agent.live import RunStarted, ToolFinished, ToolStarted, TurnFinished
 from ...agent.native import claude_agent as native
 from ...agent.steps import AgentOutputError, AgentStepError, AgentStepExecutionError
 from ...agent.trace import (
@@ -58,7 +59,7 @@ from ...agent.trace import (
     TokenUsage,
     ToolCall,
     Turn,
-    file_input_evidence,
+    retained_fields,
 )
 from ...file import File
 from ...references import AgentOutputFolder
@@ -173,11 +174,14 @@ async def run(
             cwd=str(directory),
             add_dirs=add_dirs,
         )
-        transcript = _Transcript(events, workspace_outputs=tuple(workspace_outputs))
+        transcript = _Transcript(events)
         # The trace records file inputs by reference, never by host path.
+        inputs, omitted_inputs = retained_fields(
+            {name: getattr(request.inputs, name) for name in signature.input_model.model_fields}
+        )
         await events.emit(
-            native.Started(model=runtime.model, inputs=_trace_inputs(request)),
             None,
+            RunStarted(model=runtime.model, inputs=inputs, omitted_inputs=omitted_inputs),
         )
         try:
             # Closing the stream waits for the CLI to stop, even when handling a message
@@ -232,10 +236,8 @@ async def run(
                 f"agent step {request.step_name!r}: the Claude CLI ended without a result"
             )
         record = transcript.record(result, model=runtime.model)
-        events.finished(
-            record.model_copy(update={"turns": (), "turns_streamed": True}), complete=True
-        )
         if record.header.status != "succeeded":
+            events.finished(record.header, outputs=None, complete=True)
             detail = "; ".join(_result_errors(result)) or result.subtype
             if result.subtype == "success" and not result.is_error:
                 detail = (
@@ -246,40 +248,66 @@ async def run(
             raise AgentStepExecutionError(
                 f"agent step {request.step_name!r}: Claude did not finish: {detail}"
             )
-        if not workspace_outputs and output_folder is None:
-            return AgentRunOutcome(
-                outputs=JsonOutputs(text=json.dumps(result.structured_output)), trace=record
-            )
-        # A reference snapshot is bound to its directory, which a JSON round trip loses,
-        # so Claude's values are validated here and the snapshot joins them as an object.
-        snapshot = (
-            (workspace.snapshot() if workspace is not None else Workspace.from_path(directory))
-            if workspace_outputs
-            else None
-        )
-        outputs: dict[str, object] = dict(result.structured_output)
-        files = (
-            _output_files(request, outputs, file_outputs, output_folder, directory)
-            if output_folder is not None
-            else {}
-        )
-        for name in workspace_outputs:
-            outputs[name] = json.loads(snapshot.model_dump_json())
-        for name in file_outputs:
-            outputs[name] = json.loads(to_json(files[name]))
         try:
-            validated = signature.validate_outputs(JsonOutputs(text=json.dumps(outputs)))
-        except ValidationError as exc:
-            raise AgentOutputError(
-                f"agent step {request.step_name!r}: Claude's structured output does not match "
-                f"the signature: {exc}"
-            ) from exc
-        values = {
-            name: getattr(validated, name) for name in signature.output_model.model_fields
-        }
-        values.update(dict.fromkeys(workspace_outputs, snapshot))
-        values.update(files)
-        return AgentRunOutcome(outputs=PythonOutputs(values=values), trace=record)
+            outputs = _outputs(
+                request,
+                result.structured_output,
+                workspace=workspace,
+                directory=directory,
+                workspace_outputs=workspace_outputs,
+                file_outputs=file_outputs,
+                output_folder=output_folder,
+            )
+        except Exception:
+            # The step fails, and its final event says the run returned no outputs.
+            events.finished(record.header, outputs=None, complete=True)
+            raise
+        events.finished(record.header, outputs=outputs, complete=True)
+        return AgentRunOutcome(outputs=outputs, trace=record)
+
+
+def _outputs(
+    request: AgentRequest,
+    structured_output: dict[str, Any],
+    *,
+    workspace: Workspace | None,
+    directory: Path,
+    workspace_outputs: list[str],
+    file_outputs: Mapping[str, bool],
+    output_folder: AgentOutputFolder | None,
+) -> AgentOutputs:
+    """Claude's structured output, with the workspaces and files Avalanche returns."""
+    signature = request.signature
+    if not workspace_outputs and output_folder is None:
+        return JsonOutputs(text=json.dumps(structured_output))
+    # A reference snapshot is bound to its directory, which a JSON round trip loses,
+    # so Claude's values are validated here and the snapshot joins them as an object.
+    snapshot = (
+        (workspace.snapshot() if workspace is not None else Workspace.from_path(directory))
+        if workspace_outputs
+        else None
+    )
+    outputs: dict[str, object] = dict(structured_output)
+    files = (
+        _output_files(request, outputs, file_outputs, output_folder, directory)
+        if output_folder is not None
+        else {}
+    )
+    for name in workspace_outputs:
+        outputs[name] = json.loads(snapshot.model_dump_json())
+    for name in file_outputs:
+        outputs[name] = json.loads(to_json(files[name]))
+    try:
+        validated = signature.validate_outputs(JsonOutputs(text=json.dumps(outputs)))
+    except ValidationError as exc:
+        raise AgentOutputError(
+            f"agent step {request.step_name!r}: Claude's structured output does not match "
+            f"the signature: {exc}"
+        ) from exc
+    values = {name: getattr(validated, name) for name in signature.output_model.model_fields}
+    values.update(dict.fromkeys(workspace_outputs, snapshot))
+    values.update(files)
+    return PythonOutputs(values=values)
 
 
 def _input_files(request: AgentRequest) -> list[File]:
@@ -322,20 +350,6 @@ def _prompt_inputs(request: AgentRequest, directory: Path) -> dict[str, JsonValu
             values[name] = [_prompt_path(item.path, directory) for item in value]
         else:
             values[name] = to_jsonable_python(value)
-    return values
-
-
-def _trace_inputs(request: AgentRequest) -> dict[str, JsonValue]:
-    """The inputs as the trace keeps them: files and workspaces by reference."""
-    values: dict[str, JsonValue] = {}
-    for name, info in request.signature.input_model.model_fields.items():
-        value = getattr(request.inputs, name)
-        if info.annotation in (File, Workspace):
-            values[name] = file_input_evidence(value).model_dump(mode="json")
-        elif info.annotation == list[File]:
-            values[name] = [file_input_evidence(item).model_dump(mode="json") for item in value]
-        else:
-            values[name] = _bounded(to_jsonable_python(value))
     return values
 
 
@@ -538,14 +552,6 @@ def _within_budget(calls: tuple[ToolCall, ...]) -> tuple[ToolCall, ...]:
     return tuple(kept)
 
 
-def _structured_output(value: object) -> dict[str, JsonValue]:
-    """The result's structured output for the trace, or a note that it was too large."""
-    projected = _JSON.validate_python(to_jsonable_python(value))
-    if len(to_json(projected)) <= _MAX_VALUE_BYTES:
-        return {"structured_output": projected, "output_omitted": False}
-    return {"structured_output": None, "output_omitted": True}
-
-
 def _result_text(content: str | list[dict[str, Any]] | None) -> JsonValue:
     return _bounded(content)
 
@@ -566,9 +572,8 @@ class _PendingTurn:
 class _Transcript:
     """Turns the SDK's message stream into live events and a trace record."""
 
-    def __init__(self, events: AgentEventSink, *, workspace_outputs: tuple[str, ...]) -> None:
+    def __init__(self, events: AgentEventSink) -> None:
         self._events = events
-        self._workspace_outputs = workspace_outputs
         self._pending: _PendingTurn | None = None
         self.turns: list[Turn] = []
         self.session_id: str | None = None
@@ -619,8 +624,10 @@ class _Transcript:
                             duration_ms=None,
                         )
                         await self._events.emit(
-                            native.ToolUsed(turn_index=len(self.turns) + 1),
-                            ToolStarted(call_id=block.id, name=block.name),
+                            None,
+                            ToolStarted(
+                                call_id=block.id, name=block.name, turn=len(self.turns) + 1
+                            ),
                         )
             case UserMessage(content=list() as blocks):
                 for block in blocks:
@@ -633,19 +640,9 @@ class _Transcript:
                 )
             case ResultMessage():
                 await self._finish_turn()
+                # How the session ended travels in the final event's header.
                 self.result = message
                 self.session_id = message.session_id
-                await self._events.emit(
-                    native.Finished(
-                        subtype=message.subtype,
-                        is_error=message.is_error,
-                        num_turns=message.num_turns,
-                        **_structured_output(message.structured_output),
-                        errors=_result_errors(message),
-                        workspace_outputs=self._workspace_outputs,
-                    ),
-                    None,
-                )
             # Other system notices, prompt echoes and stream deltas carry nothing the
             # trace keeps.
 
@@ -664,8 +661,10 @@ class _Transcript:
             update={"result": None if error is not None else content, "error": error}
         )
         await self._events.emit(
-            native.ToolReturned(turn_index=len(self.turns) + 1),
-            ToolFinished(call_id=call.call_id, name=call.name, error=error),
+            None,
+            ToolFinished(
+                call_id=call.call_id, name=call.name, turn=len(self.turns) + 1, error=error
+            ),
         )
 
     async def _finish_turn(self) -> None:
@@ -695,7 +694,7 @@ class _Transcript:
         # The record keeps every call; the live event keeps those within its budget.
         kept = _within_budget(turn.tool_calls)
         await self._events.emit(
-            native.MessageFinished(),
+            None,
             TurnFinished(
                 turn=turn.model_copy(update={"tool_calls": kept}),
                 omitted_tool_calls=len(turn.tool_calls) - len(kept),
@@ -709,8 +708,6 @@ class _Transcript:
         status: AgentTraceStatus = "succeeded" if succeeded and has_output else "failed"
         return AgentTrace(
             header=AgentTraceHeader(
-                runtime_kind="claude_agent",
-                trace_format=native.FORMAT,
                 status=status,
                 stop_reason=result.subtype
                 if has_output or not succeeded
@@ -733,5 +730,4 @@ class _Transcript:
                 ),
             ),
             turns=tuple(self.turns),
-            turns_streamed=False,
         )

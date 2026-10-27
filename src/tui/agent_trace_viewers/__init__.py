@@ -1,8 +1,9 @@
 """How the TUI shows an agent trace, one viewer per trace format.
 
 A viewer turns a trace's common layer and its runtime's native details into
-plain data: header lines, a tree of sections for each turn, live-event labels,
-the steps still awaiting a turn, and the final outputs. The trace widget draws
+plain data: header lines, a tree of sections for each turn, live-event labels
+and the steps still awaiting a turn. The final outputs are common and need no
+viewer. The trace widget draws
 that data and the store walks the same trees for keyboard navigation, so the
 two cannot drift apart. Viewers know nothing about Textual.
 """
@@ -18,7 +19,7 @@ from pydantic import JsonValue
 
 from avalanche.agent.live import AgentLiveEvent, TurnFinished
 from avalanche.agent.native import NativeEvent
-from avalanche.agent.trace import AgentTrace
+from avalanche.agent.trace import AgentTraceHeader
 
 
 @dataclass(frozen=True)
@@ -47,11 +48,11 @@ TraceItem = TraceSection | TraceGroup
 
 @dataclass(frozen=True)
 class InspectionTurn:
-    """One finished turn: its common event and the runtime's native details."""
+    """One finished turn: its common event and the runtime's native details, if any."""
 
     invocation_id: str
     finished: TurnFinished
-    native: NativeEvent
+    native: NativeEvent | None
 
 
 @dataclass(frozen=True)
@@ -74,15 +75,15 @@ class PendingStep:
 
 
 class TraceFormatViewer(Protocol):
-    def header(self, record: AgentTrace) -> tuple[tuple[str, str], ...]:
+    def header(self, header: AgentTraceHeader) -> tuple[tuple[str, str], ...]:
         """Header lines with their styles, after the status line."""
         ...
 
-    def turn_limit(self, record: AgentTrace | None) -> int | None:
+    def turn_limit(self, header: AgentTraceHeader | None) -> int | None:
         """The most turns the run may take, when the runtime has a limit."""
         ...
 
-    def submitted(self, record: AgentTrace) -> bool:
+    def submitted(self, header: AgentTraceHeader) -> bool:
         """Whether the last turn returned the run's final answer."""
         ...
 
@@ -91,10 +92,6 @@ class TraceFormatViewer(Protocol):
     def live_label(self, event: AgentLiveEvent) -> str: ...
 
     def pending(self, events: Sequence[AgentLiveEvent]) -> tuple[PendingStep, ...]: ...
-
-    def outputs(self, events: Sequence[AgentLiveEvent]) -> Mapping[str, JsonValue] | None:
-        """The run's final outputs as reported live, if the runtime reports them."""
-        ...
 
 
 def _registry() -> Mapping[str, TraceFormatViewer]:
@@ -112,3 +109,12 @@ VIEWERS: Mapping[str, TraceFormatViewer] = _registry()
 
 def viewer_for(trace_format: str) -> TraceFormatViewer:
     return VIEWERS[trace_format]
+
+
+def event_trace_format(event: AgentLiveEvent) -> str | None:
+    """The trace format a live event shows, when it has a runtime-specific part."""
+    if event.native is not None:
+        return event.native.format
+    if isinstance(event.common, TurnFinished):
+        return event.common.turn.native.format
+    return None

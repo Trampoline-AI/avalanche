@@ -201,6 +201,31 @@
 - Live agent events: a PredictRLM turn trimmed for size no longer appends an
   "omitted N tool calls" note to the turn's message; the event's omission counts
   (`omitted_tool_calls` and PredictRLM's `omissions`) report it.
+- **Breaking** — Agents: the agent evidence contract is simpler. The final event
+  (`AgentTraceFinished`) carries the trace `header` and the step's `outputs` instead
+  of a `record` with no turns; `AgentTrace` (header and turns) is now only the
+  in-process trace in `result.trace` and evaluations, always with its turns, and
+  loses `turns_streamed` and `schema_version`. Outputs keep files and workspaces by
+  reference, and fields too large to keep (over 4 MiB together) are named in
+  `omitted_outputs`; a run that returned none has `outputs: null`. Every call starts
+  with a shared `run.started` event holding its inputs (large ones named in
+  `omitted_inputs`) and model, replacing PredictRLM's `run.started` and Claude's
+  `started` events. A live event now has a common part, a native part or both:
+  `native` may be `null`, and events whose runtime part held nothing of its own are
+  gone (PredictRLM's `tool.started`, `tool.finished` and `run.succeeded`; Claude's
+  `tool.used`, `tool.returned`, `message.finished` and `finished`). PredictRLM's
+  `iteration.recorded` part is sent only when a turn's event left calls out. Common
+  `tool.started` and `tool.finished` events carry the `turn` that called the tool
+  when the runtime knows it (Claude does; PredictRLM does not). `runtime_kind` and
+  `trace_format` are no longer stored on trace headers or live events; they are read
+  from the runtime part (`header.native.format`). Runtime authors: `emit` takes an
+  optional native part, and `finished(header, outputs=..., complete=...)` takes the
+  header and the run's raw outputs. The TUI's Output tab and the web UI's Run I/O
+  panel read outputs from the final event and inputs from `run.started`, and name the
+  fields left out for size. Traces saved by earlier unreleased builds are not
+  converted. BREAKING-PROTOCOL: part of Delta protocol 2.0 (live event and final
+  trace bodies change; new agent event kind `AGENT_EVENT_KIND_V2_RUN_STARTED`; an
+  agent activity's `native_event_kind` is empty for an event without a native part).
 - Web UI and TUI: each turn shows its message first and keeps model reasoning in a
   collapsed "Model reasoning" section at the end, shown only when there is some.
   PredictRLM turns show their code and output from the turn's own part and list

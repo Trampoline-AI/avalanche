@@ -8,7 +8,7 @@ import {
   type AgentTraceStepSummary,
   summarizeAgentTraceStep,
 } from "./agentTrace/types";
-import { viewerFor } from "./agentTrace/viewers";
+import { turnViewer, viewerFor } from "./agentTrace/viewers";
 
 import type { OperatorApi } from "./api";
 import { ClassifierInspector } from "./ClassifierInspector";
@@ -564,7 +564,7 @@ function AgentAndStepInspector({
           )
             return;
           const live = parseAgentLiveEvent(body);
-          const step = viewerFor(live.native.format).turn(live);
+          const step = turnViewer(live).turn(live);
           traceSummaries.current.set(key, summarizeAgentTraceStep(step));
           while (traceSummaries.current.size > DESCRIPTOR_WINDOW_SIZE) {
             const oldest = traceSummaries.current.keys().next().value;
@@ -649,7 +649,7 @@ function AgentAndStepInspector({
         : undefined
     : undefined;
   const traceHeader = run && isAgentNode ? node?.trace?.header : undefined;
-  const traceViewer = traceHeader ? viewerFor(traceHeader.traceFormat) : undefined;
+  const traceViewer = traceHeader ? viewerFor(traceHeader.native.format) : undefined;
   // PredictRLM's header part holds its sub-model, iteration limit and per-model usage.
   const predictRlmHeader =
     traceHeader?.native.format === "predict_rlm.run/v1" ? traceHeader.native : undefined;
@@ -854,6 +854,7 @@ function AgentAndStepInspector({
                           key={`${descriptorScope}\0${kind}`}
                           api={api}
                           kind={kind}
+                          trace={node?.trace}
                           fields={historicalFieldSchemas?.[kind]}
                           schemaUnavailableMessage={`Historical ${kind === "inputs" ? "input" : "output"} schema unavailable for this run.`}
                           operatorInstanceId={operatorInstanceId}
