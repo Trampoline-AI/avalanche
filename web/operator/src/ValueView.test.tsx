@@ -30,7 +30,7 @@ it("preserves arbitrary JSON objects resembling retained artifacts at every disc
     kind: "unavailable",
     reason: "An authored criterion",
     extra: {
-      kind: "predict_rlm_file",
+      kind: "file",
       path: "/a/rubric/not/a/retained/file",
       description: "This description must remain inspectable",
     },
@@ -47,7 +47,6 @@ it("preserves arbitrary JSON objects resembling retained artifacts at every disc
   expect(
     screen.getByText(JSON.stringify("This description must remain inspectable")),
   ).toBeInTheDocument();
-  expect(screen.queryByText("PredictRLM file")).not.toBeInTheDocument();
 });
 
 it("distinguishes JSON strings from null and preserves escaping after expansion", () => {

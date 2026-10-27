@@ -19,11 +19,8 @@ class AgentEventKindV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     AGENT_EVENT_KIND_V2_UNSPECIFIED: _ClassVar[AgentEventKindV2]
     AGENT_EVENT_KIND_V2_NATIVE: _ClassVar[AgentEventKindV2]
     AGENT_EVENT_KIND_V2_TURN_FINISHED: _ClassVar[AgentEventKindV2]
-    AGENT_EVENT_KIND_V2_MODEL_STARTED: _ClassVar[AgentEventKindV2]
-    AGENT_EVENT_KIND_V2_MODEL_FINISHED: _ClassVar[AgentEventKindV2]
     AGENT_EVENT_KIND_V2_TOOL_STARTED: _ClassVar[AgentEventKindV2]
     AGENT_EVENT_KIND_V2_TOOL_FINISHED: _ClassVar[AgentEventKindV2]
-    AGENT_EVENT_KIND_V2_CODE_GENERATED: _ClassVar[AgentEventKindV2]
 
 class PageOrderV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
@@ -37,11 +34,8 @@ AGENT_TRACE_STATUS_V2_CANCELLED: AgentTraceStatusV2
 AGENT_EVENT_KIND_V2_UNSPECIFIED: AgentEventKindV2
 AGENT_EVENT_KIND_V2_NATIVE: AgentEventKindV2
 AGENT_EVENT_KIND_V2_TURN_FINISHED: AgentEventKindV2
-AGENT_EVENT_KIND_V2_MODEL_STARTED: AgentEventKindV2
-AGENT_EVENT_KIND_V2_MODEL_FINISHED: AgentEventKindV2
 AGENT_EVENT_KIND_V2_TOOL_STARTED: AgentEventKindV2
 AGENT_EVENT_KIND_V2_TOOL_FINISHED: AgentEventKindV2
-AGENT_EVENT_KIND_V2_CODE_GENERATED: AgentEventKindV2
 PAGE_ORDER_V2_FORWARD: PageOrderV2
 PAGE_ORDER_V2_NEWEST_FIRST: PageOrderV2
 
@@ -862,6 +856,7 @@ class TraceHeaderV2(_message.Message):
         "external_run_id",
         "stop_reason",
         "status",
+        "native_json",
     )
     MODEL_FIELD_NUMBER: _ClassVar[int]
     DURATION_MS_FIELD_NUMBER: _ClassVar[int]
@@ -873,6 +868,7 @@ class TraceHeaderV2(_message.Message):
     EXTERNAL_RUN_ID_FIELD_NUMBER: _ClassVar[int]
     STOP_REASON_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
+    NATIVE_JSON_FIELD_NUMBER: _ClassVar[int]
     model: str
     duration_ms: int
     runtime_kind: str
@@ -883,6 +879,7 @@ class TraceHeaderV2(_message.Message):
     external_run_id: str
     stop_reason: str
     status: AgentTraceStatusV2
+    native_json: str
     def __init__(
         self,
         model: _Optional[str] = ...,
@@ -895,6 +892,7 @@ class TraceHeaderV2(_message.Message):
         external_run_id: _Optional[str] = ...,
         stop_reason: _Optional[str] = ...,
         status: _Optional[_Union[AgentTraceStatusV2, str]] = ...,
+        native_json: _Optional[str] = ...,
     ) -> None: ...
 
 class TraceDescriptorV2(_message.Message):
@@ -1051,7 +1049,6 @@ class RunActivityDescriptorV2(_message.Message):
         "tool_call_count",
         "native_event_kind",
         "agent_event_kind",
-        "model_call_count",
     )
     ACTIVITY_ID_FIELD_NUMBER: _ClassVar[int]
     RUN_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
@@ -1074,7 +1071,6 @@ class RunActivityDescriptorV2(_message.Message):
     TOOL_CALL_COUNT_FIELD_NUMBER: _ClassVar[int]
     NATIVE_EVENT_KIND_FIELD_NUMBER: _ClassVar[int]
     AGENT_EVENT_KIND_FIELD_NUMBER: _ClassVar[int]
-    MODEL_CALL_COUNT_FIELD_NUMBER: _ClassVar[int]
     activity_id: str
     run_sequence: int
     kind: str
@@ -1096,7 +1092,6 @@ class RunActivityDescriptorV2(_message.Message):
     tool_call_count: int
     native_event_kind: str
     agent_event_kind: AgentEventKindV2
-    model_call_count: int
     def __init__(
         self,
         activity_id: _Optional[str] = ...,
@@ -1120,7 +1115,6 @@ class RunActivityDescriptorV2(_message.Message):
         tool_call_count: _Optional[int] = ...,
         native_event_kind: _Optional[str] = ...,
         agent_event_kind: _Optional[_Union[AgentEventKindV2, str]] = ...,
-        model_call_count: _Optional[int] = ...,
     ) -> None: ...
 
 class ClassifierInvocationSummaryV2(_message.Message):

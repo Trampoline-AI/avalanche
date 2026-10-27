@@ -297,7 +297,7 @@ review_evaluations = ava.Evaluations(
         ),
         "grounding": ava.Metric(
             state=lambda ctx: {
-                "document": ctx.inputs["document"],
+                "document": ctx.inputs.document,
                 "summary": ctx.output.review.summary,
             },
             question={
@@ -358,16 +358,20 @@ evaluation, and their runtime failures remain separate from workflow execution.
 
 Selectors receive `ava.EvalContext(inputs, output, trace)`:
 
-- `ctx.inputs` contains the exact keyword arguments passed to the first successful
-  `await agent(...)` call to return, not the enclosing step's arguments.
+- `ctx.inputs` is the **validated inputs** of the first successful `await agent(...)`
+  call to return, not the enclosing step's arguments: an instance of the signature's
+  input model, as the runtime received it. Read fields as attributes, such as
+  `ctx.inputs.document`.
 - `ctx.output` is that call's **validated outputs**, the same object as
   `result.outputs`, with every named output field. Here, select
   `ctx.output.review.summary` or serialize `ctx.output.review.model_dump(mode="json")`;
   `return result.outputs.review` only controls the separate value sent to downstream
   workflow nodes.
 - `ctx.trace` is that invocation's complete `ava.agent.AgentTrace`, turns included:
-  `ctx.trace.header` summarizes the run, and each of `ctx.trace.turns` lists the
-  code, tool calls and model calls the agent made. It is a Pydantic model, so
+  `ctx.trace.header` summarizes the run, and each of `ctx.trace.turns` holds what
+  the model wrote (`message`), the tool calls it made (`tool_calls`) and the
+  runtime's own details (`native`, such as PredictRLM's code and output). It is a
+  Pydantic model, so
   serialize the part you select, for example `ctx.trace.header.model_dump(mode="json")`.
 
 A call whose outputs fail validation does not count as successful: its trace is
@@ -396,7 +400,7 @@ do not invent input paths.
 
 Reuse the agent signature's existing input and output types. There is no mandatory
 second context schema, `input_type`, or `output_type`. Optional selector annotations
-can use `ava.EvalContext[InputType, pydantic.BaseModel]`; they do not change runtime validation.
+can use `ava.EvalContext[pydantic.BaseModel, pydantic.BaseModel]`; they do not change runtime validation.
 
 Only selected text, JSON objects, or JSON arrays are sent to Jev. Nested numbers
 must be finite. Convert Python-only values explicitly; arbitrary objects are

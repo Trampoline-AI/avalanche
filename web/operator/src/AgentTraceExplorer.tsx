@@ -1,7 +1,7 @@
 import { type ReactNode, type RefObject, useEffect, useMemo, useRef, useState } from "react";
 
 import type {
-  AgentTracePredictGroup,
+  AgentTracePredictCall,
   AgentTraceStep,
   AgentTraceStepSummary,
   AgentTraceToolCall,
@@ -153,65 +153,47 @@ function ToolCalls({ calls }: { calls: AgentTraceToolCall[] }) {
   );
 }
 
-function PredictCalls({ groups }: { groups: AgentTracePredictGroup[] }) {
-  if (!groups.length) return <p className="m-0 text-[9px] text-muted">No predict calls.</p>;
+function PredictCalls({ calls }: { calls: AgentTracePredictCall[] }) {
+  if (!calls.length) return <p className="m-0 text-[9px] text-muted">No predict calls.</p>;
   return (
     <div className="grid gap-1.5">
-      {groups.map((group, groupIndex) => (
+      {calls.map((call, index) => (
         <details
-          className="rounded-md border border-line bg-canvas px-2.5 py-2"
-          key={`${groupIndex}:${group.signature}:${group.model}`}
+          className={`rounded-md border px-2.5 py-2 ${call.error ? "border-danger bg-[#fff8f7]" : "border-line bg-canvas"}`}
+          key={`${index}:${call.signature}:${call.model}`}
         >
           <summary className="cursor-pointer text-[10px] font-semibold text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid">
-            Predict · {group.signature}
+            {call.error ? "Failed predict" : "Predict"} · {call.signature}
             <span className="ml-1.5 font-mono text-[8px] font-normal text-muted">
-              {group.model} · {group.calls.length} call{group.calls.length === 1 ? "" : "s"}
+              {call.model} · {formatDuration(call.durationMs)}
             </span>
           </summary>
           <div className="mt-2 grid gap-2">
-            {group.instructions && (
+            {call.instructions && (
               <p className="m-0 whitespace-pre-wrap text-[9px] leading-relaxed text-secondary">
-                {group.instructions}
+                {call.instructions}
               </p>
             )}
-            <p className="m-0 font-mono text-[8px] text-muted">
-              {usageLabel(group.totalUsage)}
-            </p>
-            {group.calls.map((call, callIndex) => (
-              <details
-                className={`rounded border px-2 py-1.5 ${call.error ? "border-danger bg-[#fff8f7]" : "border-line bg-panel"}`}
-                key={callIndex}
+            <div>
+              <h5 className="m-0 mb-1 font-mono text-[8px] text-muted uppercase">Input</h5>
+              <ValueView value={call.input} />
+            </div>
+            <div>
+              <h5
+                className={`m-0 mb-1 font-mono text-[8px] uppercase ${call.error ? "text-danger" : "text-muted"}`}
               >
-                <summary className="cursor-pointer font-mono text-[9px] text-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid">
-                  Call {callIndex + 1} · {formatDuration(call.durationMs)}
-                  {call.error ? " · error" : ""}
-                </summary>
-                <div className="mt-2 grid gap-2">
-                  <div>
-                    <h5 className="m-0 mb-1 font-mono text-[8px] text-muted uppercase">
-                      Input
-                    </h5>
-                    <ValueView value={call.input} />
-                  </div>
-                  <div>
-                    <h5
-                      className={`m-0 mb-1 font-mono text-[8px] uppercase ${call.error ? "text-danger" : "text-muted"}`}
-                    >
-                      {call.error ? "Error" : "Output"}
-                    </h5>
-                    {call.error ? (
-                      <TraceErrorOutput error={call.error} />
-                    ) : (
-                      <ValueView value={call.output} />
-                    )}
-                  </div>
-                  <p className="m-0 font-mono text-[8px] text-muted">
-                    {usageLabel(call.usage)}
-                    {call.lm?.finishReason ? ` · ${call.lm.finishReason}` : ""}
-                  </p>
-                </div>
-              </details>
-            ))}
+                {call.error ? "Error" : "Output"}
+              </h5>
+              {call.error ? (
+                <TraceErrorOutput error={call.error} />
+              ) : (
+                <ValueView value={call.output} />
+              )}
+            </div>
+            <p className="m-0 font-mono text-[8px] text-muted">
+              {usageLabel(call.usage)}
+              {call.lm?.finishReason ? ` · ${call.lm.finishReason}` : ""}
+            </p>
           </div>
         </details>
       ))}
@@ -289,59 +271,55 @@ function TurnSecondaryDetails({
 
   return (
     <div className="trace-turn-detail border-t border-line px-3 pb-1">
-      {summary.outputKind === "sandbox" && (
-        <TraceSection
-          label="Generated Python"
-          onOpenChange={(open) => setSectionOpen("code", open)}
-        >
-          <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
-            {(step) => (
-              <div className="h-56 max-h-[45vh] min-h-32 overflow-auto rounded-md border border-line bg-canvas">
-                <PythonSource source={step.code ?? ""} />
-              </div>
-            )}
-          </DeferredTurnDetail>
-        </TraceSection>
+      {summary.hasExecution && (
+        <>
+          <TraceSection
+            label="Generated Python"
+            onOpenChange={(open) => setSectionOpen("code", open)}
+          >
+            <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
+              {(step) => (
+                <div className="h-56 max-h-[45vh] min-h-32 overflow-auto rounded-md border border-line bg-canvas">
+                  <PythonSource source={step.execution?.code ?? ""} />
+                </div>
+              )}
+            </DeferredTurnDetail>
+          </TraceSection>
+          <TraceSection
+            label={summary.error ? "Sandbox error output" : "Sandbox output"}
+            onOpenChange={(open) => setSectionOpen("output", open)}
+          >
+            <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
+              {(step) => {
+                const execution = step.execution;
+                if (execution === undefined) return null;
+                const outputDiffers = execution.untruncatedOutput !== execution.output;
+                return (
+                  <>
+                    <pre
+                      className={`m-0 max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-[#26332f] bg-[#111817] px-3 py-2.5 font-mono text-[8px] leading-[1.55] [overflow-wrap:anywhere] ${step.error ? "text-[#ffb4ac]" : "text-[#c7d4cf]"}`}
+                    >
+                      {showFullOutput ? execution.untruncatedOutput : execution.output}
+                    </pre>
+                    {outputDiffers && (
+                      <button
+                        type="button"
+                        className="mt-2 cursor-pointer border-0 bg-transparent p-0 font-mono text-[8px] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+                        aria-expanded={showFullOutput}
+                        onClick={onShowFullOutput}
+                      >
+                        {showFullOutput ? "Show shortened output" : "Show full output"}
+                      </button>
+                    )}
+                  </>
+                );
+              }}
+            </DeferredTurnDetail>
+          </TraceSection>
+        </>
       )}
       <TraceSection
-        label={
-          summary.outputKind === "response"
-            ? summary.error
-              ? "Error response"
-              : "Response"
-            : summary.error
-              ? "Sandbox error output"
-              : "Sandbox output"
-        }
-        onOpenChange={(open) => setSectionOpen("output", open)}
-      >
-        <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
-          {(step) => {
-            const outputDiffers = step.untruncatedOutput !== step.output;
-            return (
-              <>
-                <pre
-                  className={`m-0 max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-[#26332f] bg-[#111817] px-3 py-2.5 font-mono text-[8px] leading-[1.55] [overflow-wrap:anywhere] ${step.error ? "text-[#ffb4ac]" : "text-[#c7d4cf]"}`}
-                >
-                  {showFullOutput ? step.untruncatedOutput : step.output}
-                </pre>
-                {outputDiffers && (
-                  <button
-                    type="button"
-                    className="mt-2 cursor-pointer border-0 bg-transparent p-0 font-mono text-[8px] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
-                    aria-expanded={showFullOutput}
-                    onClick={onShowFullOutput}
-                  >
-                    {showFullOutput ? "Show shortened output" : "Show full output"}
-                  </button>
-                )}
-              </>
-            );
-          }}
-        </DeferredTurnDetail>
-      </TraceSection>
-      <TraceSection
-        label={`Tools (${descriptor.toolCallCount})`}
+        label={`Tools (${summary.toolCallCount})`}
         onOpenChange={(open) => setSectionOpen("tools", open)}
       >
         <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
@@ -350,11 +328,26 @@ function TurnSecondaryDetails({
       </TraceSection>
       {summary.usage.sub !== undefined && (
         <TraceSection
-          label={`Predict calls (${descriptor.modelCallCount})`}
+          label={`Predict calls (${summary.predictCallCount})`}
           onOpenChange={(open) => setSectionOpen("predict", open)}
         >
           <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
-            {(step) => <PredictCalls groups={step.predictCalls} />}
+            {(step) => <PredictCalls calls={step.predictCalls} />}
+          </DeferredTurnDetail>
+        </TraceSection>
+      )}
+      {/* Provider reasoning is long and rarely read: last, collapsed, and only when kept. */}
+      {summary.hasReasoning && (
+        <TraceSection
+          label="Model reasoning"
+          onOpenChange={(open) => setSectionOpen("reasoning", open)}
+        >
+          <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
+            {(step) => (
+              <p className="m-0 max-h-56 overflow-auto whitespace-pre-wrap text-[10px] leading-[1.6] text-muted [overflow-wrap:anywhere]">
+                {step.reasoning}
+              </p>
+            )}
           </DeferredTurnDetail>
         </TraceSection>
       )}
@@ -462,9 +455,9 @@ export function AgentTraceExplorer({
                   const failed = descriptor.error || step?.error;
                   const finishReason = failed ? undefined : finishLabel(step?.lm?.finishReason);
                   // Only runtimes with a sub-model make predict calls.
-                  const hasPredictCalls = step
-                    ? step.usage.sub !== undefined
-                    : descriptor.modelCallCount > 0;
+                  const hasPredictCalls = step?.usage.sub !== undefined;
+                  // Before the turn loads, the count covers predict calls too.
+                  const toolCallCount = step?.toolCallCount ?? descriptor.toolCallCount;
                   return (
                     <article
                       className={`turn-row overflow-hidden rounded-lg border bg-panel ${failed ? "border-danger" : "border-line"}`}
@@ -483,8 +476,8 @@ export function AgentTraceExplorer({
                           </strong>
                           <p className="mt-0.5 mb-0 whitespace-normal font-mono text-[8px] leading-[1.6] text-muted [overflow-wrap:anywhere]">
                             {formatDuration(step?.durationMs ?? descriptor.durationMs)}
-                            {` · ${descriptor.toolCallCount} tool${descriptor.toolCallCount === 1 ? "" : "s"}`}
-                            {hasPredictCalls ? ` · ${descriptor.modelCallCount} predict` : ""}
+                            {` · ${toolCallCount} tool${toolCallCount === 1 ? "" : "s"}`}
+                            {hasPredictCalls ? ` · ${step.predictCallCount} predict` : ""}
                             {step?.usage.main
                               ? ` · main ${turnUsageLabel(step.usage.main)}`
                               : ""}
@@ -496,17 +489,20 @@ export function AgentTraceExplorer({
                       </header>
 
                       <section className="border-t border-line px-3 py-3">
-                        <h4 className="m-0 mb-1.5 font-mono text-[8px] font-semibold tracking-[0.08em] text-muted uppercase">
-                          Reasoning
-                        </h4>
                         {step ? (
-                          <p className="m-0 whitespace-pre-wrap text-[13px] leading-[1.7] text-ink [overflow-wrap:anywhere]">
-                            {step.reasoning || "No reasoning was retained."}
-                          </p>
+                          step.message ? (
+                            <p className="m-0 whitespace-pre-wrap text-[13px] leading-[1.7] text-ink [overflow-wrap:anywhere]">
+                              {step.message}
+                            </p>
+                          ) : (
+                            <p className="m-0 text-[10px] text-muted italic">
+                              The model wrote no text this turn.
+                            </p>
+                          )
                         ) : summary.status === "error" ? (
                           <div>
                             <p className="m-0 text-[10px] text-danger" role="alert">
-                              Reasoning unavailable: {summary.error}
+                              Turn unavailable: {summary.error}
                             </p>
                             <button
                               type="button"
@@ -519,7 +515,7 @@ export function AgentTraceExplorer({
                           </div>
                         ) : (
                           <p className="m-0 text-[10px] text-muted italic" role="status">
-                            Loading reasoning…
+                            Loading turn…
                           </p>
                         )}
                       </section>

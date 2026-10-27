@@ -2,7 +2,12 @@ import { describe, expect, it } from "vitest";
 
 import { parseAgentDeclaration } from "./GraphCanvas";
 import { AgentLiveEvent, AgentTrace, AgentTraceTerminal } from "./generated/agentSchemas";
-import { finishedTrace, tokenUsage, turnEvent } from "./test/agentTraceFixtures";
+import {
+  finishedTrace,
+  predictRlmTraceHeader,
+  tokenUsage,
+  turnEvent,
+} from "./test/agentTraceFixtures";
 import { agentDeclarationJson } from "./test/fixtures";
 
 const record: AgentTrace = {
@@ -26,17 +31,17 @@ const record: AgentTrace = {
     tool_call_count: 1,
     external_run_id: "run-1",
     session_id: null,
+    native: predictRlmTraceHeader(),
   },
   turns: [
     {
       index: 1,
-      text: null,
+      message: null,
       reasoning: "look it up",
       duration_ms: 7,
       usage: null,
-      actions: [
+      tool_calls: [
         {
-          kind: "tool_call",
           call_id: null,
           caller: "code",
           name: "lookup",
@@ -46,15 +51,18 @@ const record: AgentTrace = {
           duration_ms: 2,
         },
       ],
+      native: {
+        format: "predict_rlm.run/v1",
+        code: "lookup('q')",
+        output: "a",
+        untruncated_output: "a",
+        error: false,
+        finish_reason: null,
+        usage: { main: tokenUsage(), sub: tokenUsage() },
+        predict_calls: [],
+      },
     },
   ],
-  native: {
-    format: "predict_rlm.run/v1",
-    sub_model: null,
-    max_iterations: 4,
-    usage: { main: tokenUsage(), sub: tokenUsage() },
-    telemetry_ref: null,
-  },
 };
 
 describe("generated agent schemas", () => {
@@ -68,8 +76,17 @@ describe("generated agent schemas", () => {
     ["an old schema version", { ...record, schema_version: 1 }],
     ["a negative duration", { ...record, header: { ...record.header, duration_ms: -1 } }],
     [
-      "an unknown action kind",
-      { ...record, turns: [{ ...record.turns[0], actions: [{ kind: "other" }] }] },
+      "an unknown header format",
+      { ...record, header: { ...record.header, native: { format: "other/v1" } } },
+    ],
+    ["a native part outside the header", { ...record, native: record.header.native }],
+    [
+      "an old turn shape",
+      { ...record, turns: [{ ...record.turns[0], actions: [], text: null }] },
+    ],
+    [
+      "an unknown turn format",
+      { ...record, turns: [{ ...record.turns[0], native: { format: "other/v1" } }] },
     ],
   ])("reject a trace record with %s", (_case, body) => {
     expect(AgentTrace.safeParse(body).success).toBe(false);

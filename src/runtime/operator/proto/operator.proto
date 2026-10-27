@@ -323,8 +323,8 @@ enum AgentTraceStatusV2 {
   AGENT_TRACE_STATUS_V2_CANCELLED = 3;
 }
 
-// The runtime-neutral summary of one finished agent invocation. Runtime-specific
-// details (such as PredictRLM's sub-model) stay in the trace body.
+// The summary of one finished agent invocation. Runtime-specific details (such as
+// PredictRLM's sub-model) travel in native_json.
 message TraceHeaderV2 {
   reserved 1, 3, 4, 5, 7, 8;
   reserved "sub_model", "iterations", "max_iterations", "usage_json", "telemetry_json";
@@ -339,6 +339,9 @@ message TraceHeaderV2 {
   optional string external_run_id = 14;
   optional string stop_reason = 15;
   AgentTraceStatusV2 status = 16;
+  // The runtime-specific header part as JSON, discriminated by its "format"; it
+  // matches the generated agent trace schemas.
+  string native_json = 17;
 }
 
 message TraceDescriptorV2 {
@@ -417,13 +420,14 @@ message RunActivityDescriptorV2 {
   optional string attempt = 20;
   // Agent events only: the turn the event belongs to, when it belongs to one.
   optional uint32 turn = 21;
-  // Agent events only: tool calls and nested model calls the event reports.
+  // Agent events only: tool calls the event reports, sub-model calls included.
   uint32 tool_call_count = 22;
   // Agent events only: the runtime's own event kind, such as "iteration.recorded".
   string native_event_kind = 23;
   // Agent events only: the common kind, or NATIVE when the event has none.
   AgentEventKindV2 agent_event_kind = 24;
-  uint32 model_call_count = 25;
+  reserved 25;
+  reserved "model_call_count";
 }
 
 enum AgentEventKindV2 {
@@ -431,11 +435,11 @@ enum AgentEventKindV2 {
   // A runtime event with no common equivalent, such as session setup.
   AGENT_EVENT_KIND_V2_NATIVE = 1;
   AGENT_EVENT_KIND_V2_TURN_FINISHED = 2;
-  AGENT_EVENT_KIND_V2_MODEL_STARTED = 3;
-  AGENT_EVENT_KIND_V2_MODEL_FINISHED = 4;
+  reserved 3, 4, 7;
+  reserved "AGENT_EVENT_KIND_V2_MODEL_STARTED", "AGENT_EVENT_KIND_V2_MODEL_FINISHED",
+      "AGENT_EVENT_KIND_V2_CODE_GENERATED";
   AGENT_EVENT_KIND_V2_TOOL_STARTED = 5;
   AGENT_EVENT_KIND_V2_TOOL_FINISHED = 6;
-  AGENT_EVENT_KIND_V2_CODE_GENERATED = 7;
 }
 
 message ClassifierInvocationSummaryV2 {

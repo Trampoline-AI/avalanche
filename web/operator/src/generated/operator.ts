@@ -840,8 +840,8 @@ export interface TokenUsageV2 {
     costUsd?: number;
 }
 /**
- * The runtime-neutral summary of one finished agent invocation. Runtime-specific
- * details (such as PredictRLM's sub-model) stay in the trace body.
+ * The summary of one finished agent invocation. Runtime-specific details (such as
+ * PredictRLM's sub-model) travel in native_json.
  *
  * @generated from protobuf message avalanche.operator.TraceHeaderV2
  */
@@ -888,6 +888,13 @@ export interface TraceHeaderV2 {
      * @generated from protobuf field: avalanche.operator.AgentTraceStatusV2 status = 16
      */
     status: AgentTraceStatusV2;
+    /**
+     * The runtime-specific header part as JSON, discriminated by its "format"; it
+     * matches the generated agent trace schemas.
+     *
+     * @generated from protobuf field: string native_json = 17
+     */
+    nativeJson: string;
 }
 /**
  * @generated from protobuf message avalanche.operator.TraceDescriptorV2
@@ -1125,7 +1132,7 @@ export interface RunActivityDescriptorV2 {
      */
     turn?: number;
     /**
-     * Agent events only: tool calls and nested model calls the event reports.
+     * Agent events only: tool calls the event reports, sub-model calls included.
      *
      * @generated from protobuf field: uint32 tool_call_count = 22
      */
@@ -1142,10 +1149,6 @@ export interface RunActivityDescriptorV2 {
      * @generated from protobuf field: avalanche.operator.AgentEventKindV2 agent_event_kind = 24
      */
     agentEventKind: AgentEventKindV2;
-    /**
-     * @generated from protobuf field: uint32 model_call_count = 25
-     */
-    modelCallCount: number;
 }
 /**
  * @generated from protobuf message avalanche.operator.ClassifierInvocationSummaryV2
@@ -1707,25 +1710,13 @@ export enum AgentEventKindV2 {
      */
     TURN_FINISHED = 2,
     /**
-     * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_MODEL_STARTED = 3;
-     */
-    MODEL_STARTED = 3,
-    /**
-     * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_MODEL_FINISHED = 4;
-     */
-    MODEL_FINISHED = 4,
-    /**
      * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_TOOL_STARTED = 5;
      */
     TOOL_STARTED = 5,
     /**
      * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_TOOL_FINISHED = 6;
      */
-    TOOL_FINISHED = 6,
-    /**
-     * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_CODE_GENERATED = 7;
-     */
-    CODE_GENERATED = 7
+    TOOL_FINISHED = 6
 }
 /**
  * @generated from protobuf enum avalanche.operator.PageOrderV2
@@ -4254,7 +4245,8 @@ class TraceHeaderV2$Type extends MessageType<TraceHeaderV2> {
             { no: 13, name: "usage", kind: "message", T: () => TokenUsageV2 },
             { no: 14, name: "external_run_id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 15, name: "stop_reason", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
-            { no: 16, name: "status", kind: "enum", T: () => ["avalanche.operator.AgentTraceStatusV2", AgentTraceStatusV2, "AGENT_TRACE_STATUS_V2_"] }
+            { no: 16, name: "status", kind: "enum", T: () => ["avalanche.operator.AgentTraceStatusV2", AgentTraceStatusV2, "AGENT_TRACE_STATUS_V2_"] },
+            { no: 17, name: "native_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<TraceHeaderV2>): TraceHeaderV2 {
@@ -4265,6 +4257,7 @@ class TraceHeaderV2$Type extends MessageType<TraceHeaderV2> {
         message.turnCount = "0";
         message.toolCallCount = "0";
         message.status = 0;
+        message.nativeJson = "";
         if (value !== undefined)
             reflectionMergePartial<TraceHeaderV2>(this, message, value);
         return message;
@@ -4303,6 +4296,9 @@ class TraceHeaderV2$Type extends MessageType<TraceHeaderV2> {
                     break;
                 case /* avalanche.operator.AgentTraceStatusV2 status */ 16:
                     message.status = reader.int32();
+                    break;
+                case /* string native_json */ 17:
+                    message.nativeJson = reader.string();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -4346,6 +4342,9 @@ class TraceHeaderV2$Type extends MessageType<TraceHeaderV2> {
         /* avalanche.operator.AgentTraceStatusV2 status = 16; */
         if (message.status !== 0)
             writer.tag(16, WireType.Varint).int32(message.status);
+        /* string native_json = 17; */
+        if (message.nativeJson !== "")
+            writer.tag(17, WireType.LengthDelimited).string(message.nativeJson);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -4742,8 +4741,7 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
             { no: 21, name: "turn", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
             { no: 22, name: "tool_call_count", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
             { no: 23, name: "native_event_kind", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 24, name: "agent_event_kind", kind: "enum", T: () => ["avalanche.operator.AgentEventKindV2", AgentEventKindV2, "AGENT_EVENT_KIND_V2_"] },
-            { no: 25, name: "model_call_count", kind: "scalar", T: 13 /*ScalarType.UINT32*/ }
+            { no: 24, name: "agent_event_kind", kind: "enum", T: () => ["avalanche.operator.AgentEventKindV2", AgentEventKindV2, "AGENT_EVENT_KIND_V2_"] }
         ]);
     }
     create(value?: PartialMessage<RunActivityDescriptorV2>): RunActivityDescriptorV2 {
@@ -4761,7 +4759,6 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
         message.toolCallCount = 0;
         message.nativeEventKind = "";
         message.agentEventKind = 0;
-        message.modelCallCount = 0;
         if (value !== undefined)
             reflectionMergePartial<RunActivityDescriptorV2>(this, message, value);
         return message;
@@ -4833,9 +4830,6 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
                     break;
                 case /* avalanche.operator.AgentEventKindV2 agent_event_kind */ 24:
                     message.agentEventKind = reader.int32();
-                    break;
-                case /* uint32 model_call_count */ 25:
-                    message.modelCallCount = reader.uint32();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -4912,9 +4906,6 @@ class RunActivityDescriptorV2$Type extends MessageType<RunActivityDescriptorV2> 
         /* avalanche.operator.AgentEventKindV2 agent_event_kind = 24; */
         if (message.agentEventKind !== 0)
             writer.tag(24, WireType.Varint).int32(message.agentEventKind);
-        /* uint32 model_call_count = 25; */
-        if (message.modelCallCount !== 0)
-            writer.tag(25, WireType.Varint).uint32(message.modelCallCount);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

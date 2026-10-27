@@ -1,6 +1,7 @@
 import type { PredictRLMTokenUsage } from "../../generated/agentSchemas";
-import type { AgentLiveEvent, AgentTraceTerminal } from "../common";
-import type { AgentTraceStep, TraceBodySummary, TraceTokenUsage } from "../types";
+import type { AgentLiveEvent } from "../common";
+import type { AgentTraceStep, TraceTokenUsage } from "../types";
+import { toolCall } from "./common";
 import type { TraceViewer } from "./index";
 
 function tokenUsage(usage: PredictRLMTokenUsage): TraceTokenUsage {
@@ -18,63 +19,46 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
     throw new Error("PredictRLM turn events are iteration.recorded with a finished turn");
   }
   const { turn } = common;
-  const codes = turn.actions.filter((action) => action.kind === "code_execution");
-  const code = codes[0];
-  if (codes.length !== 1 || code === undefined) {
-    throw new Error("a PredictRLM turn runs exactly one code block");
+  const part = turn.native;
+  if (part.format !== "predict_rlm.run/v1") {
+    throw new Error(`not a PredictRLM turn: ${part.format}`);
   }
+  // The turn's last tool calls are its predict calls, in the order of their details.
+  const toolCount = turn.tool_calls.length - part.predict_calls.length;
+  const predictCalls = turn.tool_calls.slice(toolCount);
+  const omissions = native.omissions;
   return {
     iteration: turn.index,
-    reasoning: turn.reasoning ?? "",
-    code: code.code,
-    outputKind: "sandbox",
-    output: code.output,
-    untruncatedOutput: native.untruncated_output,
+    message: turn.message ?? undefined,
+    reasoning: turn.reasoning ?? undefined,
+    execution: {
+      code: part.code,
+      output: part.output,
+      untruncatedOutput: part.untruncated_output,
+    },
     // Only failed code fails a turn; the code may have handled a failed tool call.
-    error: code.error !== null,
+    error: part.error,
     durationMs: turn.duration_ms ?? undefined,
-    toolCalls: turn.actions.flatMap((action) =>
-      action.kind === "tool_call"
-        ? [
-            {
-              name: action.name,
-              arguments: action.arguments,
-              result: action.result,
-              error: action.error ?? undefined,
-              durationMs: action.duration_ms ?? undefined,
-            },
-          ]
-        : [],
-    ),
-    predictCalls: native.predict_calls.map((group) => ({
-      signature: group.signature,
-      instructions: group.instructions ?? undefined,
-      model: group.model,
-      totalUsage: tokenUsage(group.total_usage),
-      calls: group.calls.map((call) => ({
-        durationMs: call.duration_ms,
-        usage: tokenUsage(call.usage),
-        input: call.input,
-        output: call.output,
+    toolCalls: turn.tool_calls.slice(0, toolCount).map(toolCall),
+    predictCalls: part.predict_calls.map((detail, index) => {
+      const call = predictCalls[index];
+      if (call === undefined) throw new Error("a predict call has no tool call");
+      return {
+        signature: detail.signature,
+        instructions: detail.instructions ?? undefined,
+        model: detail.model,
+        durationMs: call.duration_ms ?? undefined,
+        usage: tokenUsage(detail.usage),
+        input: call.arguments,
+        output: call.result,
         error: call.error ?? undefined,
-        lm: { finishReason: call.finish_reason ?? undefined },
-      })),
-    })),
-    lm: { finishReason: native.finish_reason ?? undefined },
-    usage: { main: tokenUsage(native.usage.main), sub: tokenUsage(native.usage.sub) },
-  };
-}
-
-function summary(terminal: AgentTraceTerminal): TraceBodySummary | undefined {
-  if (terminal.kind !== "trace_finished") return undefined;
-  const { native } = terminal.record;
-  if (native.format !== "predict_rlm.run/v1") {
-    throw new Error(`not a PredictRLM trace: ${native.format}`);
-  }
-  return {
-    subModel: native.sub_model ?? undefined,
-    maxIterations: native.max_iterations,
-    usage: { main: tokenUsage(native.usage.main), sub: tokenUsage(native.usage.sub) },
+        lm: { finishReason: detail.finish_reason ?? undefined },
+      };
+    }),
+    toolCallCount: toolCount + (omissions?.tool_count ?? 0),
+    predictCallCount: part.predict_calls.length + (omissions?.predict_count ?? 0),
+    lm: { finishReason: part.finish_reason ?? undefined },
+    usage: { main: tokenUsage(part.usage.main), sub: tokenUsage(part.usage.sub) },
   };
 }
 
@@ -87,10 +71,6 @@ function retainedValue(event: AgentLiveEvent, kind: "inputs" | "outputs"): unkno
 
 export const predictRlmViewer: TraceViewer = {
   turn,
-  summary,
-  // The sub-model, iteration limit and per-model usage are only in the final body.
-  usageInBody: true,
-  hasSubModel: true,
   turnUnit: "iterations",
   activityLabels: {
     "run.started": "Agent run started",

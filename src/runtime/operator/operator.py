@@ -1316,7 +1316,6 @@ class Operator:
             duration_ms=item.duration_ms,
             error=item.error,
             tool_call_count=item.tool_call_count,
-            model_call_count=item.model_call_count,
         )
 
     def _classifier_event_descriptor_locked(
@@ -2588,9 +2587,6 @@ class Operator:
                 tool_call_count=(
                     turn_finished.tool_call_count if turn_finished is not None else 0
                 ),
-                model_call_count=(
-                    turn_finished.model_call_count if turn_finished is not None else 0
-                ),
             )
             detail = []
             if evidence.turn is not None:
@@ -3780,7 +3776,7 @@ def _evaluation_metadata_mapping(value: object) -> dict[str, str]:
 
 
 def _trace_header(header: AgentTraceHeader) -> TraceHeader:
-    """The common header; the native details stay in the trace body."""
+    """The header the run snapshot carries, its runtime-specific part included."""
     return TraceHeader(
         status=header.status,
         runtime_kind=header.runtime_kind,
@@ -3792,6 +3788,7 @@ def _trace_header(header: AgentTraceHeader) -> TraceHeader:
         tool_call_count=header.tool_call_count,
         external_run_id=header.external_run_id,
         stop_reason=header.stop_reason,
+        native=header.native,
     )
 
 

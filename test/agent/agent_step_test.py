@@ -343,7 +343,7 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
     assert not set(grouped) & {"left", "right", "caller-left", "caller-right"}
     for events in grouped.values():
         assert [event.kind for event in events] == ["event", "event", "trace_finished"]
-        assert events[0].common.call_id == events[-1].record.header.external_run_id
+        assert events[0].native.call_id == events[-1].record.header.external_run_id
         assert "caller-" not in events[0].model_dump_json()
 
 
@@ -633,9 +633,9 @@ def _retain_iteration(step):
     subscription = operator.subscribe_operator_updates(
         operator.operator_instance_id, operator.current_sequence
     )
-    expected_counts = (
-        len(step.tool_calls),
-        sum(len(group.calls) for group in step.predict_calls),
+    # Sub-model calls are ``predict`` tool calls.
+    expected_count = len(step.tool_calls) + sum(
+        len(group.calls) for group in step.predict_calls
     )
     original_trace = _trace().model_copy(update={"iterations": 1, "steps": [step]})
     sent = replay(
@@ -661,7 +661,7 @@ def _retain_iteration(step):
                     if isinstance(update.change, AgentEventAppended):
                         break
                 summary = update.change.event
-                assert (summary.tool_call_count, summary.model_call_count) == expected_counts
+                assert summary.tool_call_count == expected_count
                 assert (summary.turn, summary.duration_ms) == (step.iteration, step.duration_ms)
         snapshot = operator.get_latest_run_snapshot(
             run.run_id,
@@ -669,7 +669,7 @@ def _retain_iteration(step):
         )
         page = operator.list_agent_events(page_token=snapshot.nodes[0].event_page_token)
         summary = page.events[0]
-        assert (summary.tool_call_count, summary.model_call_count) == expected_counts
+        assert summary.tool_call_count == expected_count
         envelope = AgentTraceEnvelope.model_validate_json(
             operator.get_run(run.run_id).nodes["agent"].agent_trace_json
         )
@@ -682,19 +682,15 @@ def _retain_iteration(step):
         operator.close()
 
 
-def _code(turn):
-    from avalanche.agent.trace import CodeExecutionAction
-
-    (code,) = [
-        action for action in turn.turn.actions if isinstance(action, CodeExecutionAction)
-    ]
-    return code
-
-
 def _tools(turn):
-    from avalanche.agent.trace import ToolCallAction
+    """The turn's tool calls other than its trailing ``predict`` calls."""
+    calls = turn.turn.tool_calls
+    return calls[: len(calls) - len(turn.turn.native.predict_calls)]
 
-    return [action for action in turn.turn.actions if isinstance(action, ToolCallAction)]
+
+def _predicts(turn):
+    calls = turn.turn.tool_calls
+    return calls[len(calls) - len(turn.turn.native.predict_calls) :]
 
 
 def _usage(step):
@@ -721,28 +717,31 @@ def test_iteration_detail_survives_operator_retention_and_hydration(payloads):
     assert step == original
     assert turn.turn.index == 1
     assert turn.turn.duration_ms == 12
-    assert _code(turn).code == step.code
-    assert _code(turn).output == step.output
-    assert native.usage == _usage(step)
-    assert native.predict_calls[0].signature == "question -> answer"
-    assert native.predict_count == len(payloads)
-    assert [call.usage for call in native.predict_calls[0].calls] == [
+    part = turn.turn.native
+    assert (part.code, part.output) == (step.code, step.output)
+    assert part.usage == _usage(step)
+    assert native.omissions is None
+    assert [call.signature for call in part.predict_calls] == ["question -> answer"] * len(
+        payloads
+    )
+    assert [call.usage for call in part.predict_calls] == [
         predict_rlm_events.native_token_usage(call.usage)
         for call in step.predict_calls[0].calls
     ]
-    assert (
-        len(native.model_dump_json().encode()) <= predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES
+    # The turn holds the bounded step in its own shape, within the same budget.
+    assert len(turn.model_dump_json().encode()) <= (
+        predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES + 1024
     )
-    inputs = [call.input for call in native.predict_calls[0].calls]
+    inputs = [call.arguments for call in _predicts(turn)]
     if len(json.dumps(step.model_dump(mode="json"), separators=(",", ":")).encode()) <= (
         predict_rlm_events._MAX_EVIDENCE_VALUE_BYTES
     ):
         assert inputs == [{"question": payload} for payload in payloads]
     else:
         assert any(value.get("kind") == "unavailable" for value in inputs)
-        assert [call.output for call in native.predict_calls[0].calls] == [
-            {"answer": "ready"}
-        ] * len(payloads)
+        assert [call.result for call in _predicts(turn)] == [{"answer": "ready"}] * len(
+            payloads
+        )
         if len(payloads) > 1:
             assert sum(value == {"question": payloads[0]} for value in inputs) == 2
 
@@ -768,16 +767,17 @@ def test_iteration_bounds_tool_payloads_and_text_without_changing_sdk_values():
     turn, native = _retain_iteration(step)
 
     assert step == original
-    assert "unavailable" in turn.turn.reasoning
-    assert "unavailable" in native.untruncated_output
-    assert _code(turn).code == step.code
-    assert _code(turn).output == step.output
+    part = turn.turn.native
+    assert "unavailable" in turn.turn.message
+    assert "unavailable" in part.untruncated_output
+    assert (part.code, part.output) == (step.code, step.output)
     (tool,) = _tools(turn)
     assert (tool.name, tool.duration_ms, tool.error) == ("lookup", 7, "lookup failed")
     assert tool.arguments["args"][0]["kind"] == "unavailable"
     assert tool.arguments["kwargs"]["kind"] == "unavailable"
     assert tool.result["kind"] == "unavailable"
-    assert native.tool_count == 1
+    # The tool call and the predict call.
+    assert turn.tool_call_count == 2
 
 
 def test_iteration_call_overflow_reports_omitted_counts(monkeypatch):
@@ -794,18 +794,37 @@ def test_iteration_call_overflow_reports_omitted_counts(monkeypatch):
     assert step == original
     assert turn.turn.index == step.iteration
     assert turn.turn.duration_ms == step.duration_ms
-    assert native.usage == _usage(step)
-    assert (native.tool_count, native.predict_count) == (12, 12)
+    assert turn.turn.native.usage == _usage(step)
     omissions = native.omissions
-    assert "unavailable" in turn.turn.reasoning
+    # The counts are on the event, not appended to what the model wrote.
+    assert turn.turn.message == step.reasoning
     assert omissions.tool_count + len(_tools(turn)) == 12
-    assert (
-        omissions.predict_count + sum(len(group.calls) for group in native.predict_calls) == 12
-    )
+    assert omissions.predict_count + len(turn.turn.native.predict_calls) == 12
     assert omissions.tool_count > 0
     assert omissions.predict_count > 0
     # The common turn says how many calls it left out, so counts stay true.
-    assert (turn.tool_call_count, turn.model_call_count) == (12, 12)
+    assert turn.tool_call_count == 24
+
+
+def test_repeated_predict_instructions_stay_within_the_live_turn_budget(monkeypatch):
+    from predict_rlm import RunEvent, RunEventKind
+
+    budget = 64 * 1024
+    monkeypatch.setattr(predict_rlm_events, "_MAX_EVIDENCE_VALUE_BYTES", budget)
+    step = _iteration_with_details(["q"] * 200)
+    step.predict_calls[0].instructions = "Answer carefully. " * 200
+    _, turn = predict_rlm_events.project_event(
+        RunEvent("sdk-run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": step})
+    )
+
+    # Every predict call repeats its group's instructions; the turn is measured that way,
+    # leaving only a small fixed cost per call for the turn's own field names.
+    assert len(turn.model_dump_json().encode()) <= budget + 200 * 64
+    assert all(
+        call.instructions != step.predict_calls[0].instructions
+        for call in (turn.turn.native.predict_calls)
+    )
+    assert turn.tool_call_count == 200
 
 
 def test_iteration_rejects_unrepresentable_metadata_budget_without_fabricating_usage(
@@ -985,7 +1004,7 @@ def test_live_inspection_budget_covers_whole_event(event_kind, data, omitted_fie
     event = RunEvent("sdk-run", 1, RunEventKind(event_kind), 1, data)
     retained = _retain_live_event(_live_json(event))
     value = {
-        "code": lambda: retained.common.code,
+        "code": lambda: retained.native.code,
         "signature": lambda: retained.native.signature,
         "inputs": lambda: retained.native.inputs,
         "outputs": lambda: retained.native.outputs,
@@ -1007,8 +1026,9 @@ def test_deep_iteration_payload_does_not_reenter_transport_at_terminal():
     for _ in range(80):
         payload = {"nested": payload}
     step = _iteration_with_details([payload])
-    _, native = _retain_iteration(step)
-    bounded = native.predict_calls[0].calls[0].input
+    turn, _ = _retain_iteration(step)
+    (predict,) = _predicts(turn)
+    bounded = predict.arguments
     assert "unavailable" in json.dumps(bounded)
     assert step.predict_calls[0].calls[0].input == {"question": payload}
 
@@ -1050,7 +1070,7 @@ async def test_codex_lm_is_named_codex_in_declaration_and_run_trace(monkeypatch)
     with capture_agent_evidence(observed.append, errors="raise"):
         await summarize.__agent_step__.make_agent()(person=Person(id=1, name="Ada"))
     (finished,) = [event for event in observed if event.kind == "trace_finished"]
-    assert (finished.record.header.model, finished.record.native.sub_model) == (
+    assert (finished.record.header.model, finished.record.header.native.sub_model) == (
         "codex/gpt-5.6-terra",
         "codex/gpt-5.6-terra",
     )

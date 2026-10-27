@@ -8,6 +8,7 @@ from typing import Annotated, Union, get_args, get_origin
 import dspy
 from predict_rlm import File as PredictFile
 from predict_rlm import Workspace as PredictWorkspace
+from pydantic import TypeAdapter
 
 from avalanche.file import File
 from avalanche.references import AgentOutputFolder
@@ -28,6 +29,12 @@ def _annotation(annotation):
     if origin is not None and arguments:
         return origin[tuple(_annotation(item) for item in arguments)]
     return annotation
+
+
+def _has_path_type(annotation) -> bool:
+    if annotation is PredictFile or annotation is PredictWorkspace:
+        return True
+    return any(_has_path_type(item) for item in get_args(annotation))
 
 
 def predict_signature(signature: type[dspy.Signature]) -> type[dspy.Signature]:
@@ -55,10 +62,26 @@ def mount_inputs(value):
 
 
 class AgentFileBridge:
-    def __init__(self, step_name: str):
+    def __init__(self, step_name: str, signature: type[dspy.Signature]):
         self._folder = AgentOutputFolder(step_name)
         self.workspace = self._folder.workspace
         self.output_dir = self._folder.path
+        # PredictRLM's result event holds outputs as plain data; these restore its files.
+        self._event_outputs = {
+            name: TypeAdapter(field.annotation)
+            for name, field in signature.output_fields.items()
+            if _has_path_type(field.annotation)
+        }
+
+    def event_output(self, name, value):
+        """One output of PredictRLM's result event, its files as ``ava.File`` references.
+
+        Outputs without file types are already plain data and stay as they are.
+        """
+        adapter = self._event_outputs.get(name)
+        if adapter is None:
+            return value
+        return self.outputs(adapter.validate_python(value))
 
     def outputs(self, value):
         if isinstance(value, PredictFile):

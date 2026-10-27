@@ -7,18 +7,21 @@ from dataclasses import dataclass
 
 from pydantic import JsonValue
 
-from avalanche.agent.live import AgentLiveEvent, CodeGenerated, TurnFinished
+from avalanche.agent.live import AgentLiveEvent, TurnFinished
 from avalanche.agent.native.predict_rlm import (
     CodeExecuted,
+    CodeGenerated,
     IterationRecorded,
-    PredictRLMSubCallGroup,
+    PredictRLMPredictCall,
     PredictRLMTokenUsage,
+    PredictRLMTraceHeader,
+    PredictRLMTurn,
     RunSucceeded,
 )
-from avalanche.agent.trace import AgentTrace, CodeExecutionAction, PredictRLMNativeTrace
+from avalanche.agent.trace import AgentTrace, ToolCall, Turn
 
 from . import InspectionTurn, PendingStep, TraceGroup, TraceItem, TraceSection, TurnView
-from .generic import duration_seconds, tool_group
+from .generic import duration_seconds, message_items, reasoning_items, tool_group
 
 _LABELS = {
     "run.started": "Run started",
@@ -53,9 +56,9 @@ def _usage_label(usage: PredictRLMTokenUsage) -> str:
     )
 
 
-def _native(record: AgentTrace) -> PredictRLMNativeTrace:
-    native = record.native
-    if not isinstance(native, PredictRLMNativeTrace):
+def _native(record: AgentTrace) -> PredictRLMTraceHeader:
+    native = record.header.native
+    if not isinstance(native, PredictRLMTraceHeader):
         raise TypeError(f"not a PredictRLM trace: {native.format}")
     return native
 
@@ -66,35 +69,52 @@ def _detail(turn: InspectionTurn) -> IterationRecorded:
     return turn.native
 
 
-def _predict_group(groups: tuple[PredictRLMSubCallGroup, ...]) -> TraceGroup:
+def _turn_native(turn: Turn) -> PredictRLMTurn:
+    if not isinstance(turn.native, PredictRLMTurn):
+        raise TypeError(f"not a PredictRLM turn: {turn.native.format}")
+    return turn.native
+
+
+def predict_tool_calls(turn: Turn) -> tuple[ToolCall, ...]:
+    """The turn's ``predict`` tool calls, paired in order with its native predict calls."""
+    count = len(_turn_native(turn).predict_calls)
+    return turn.tool_calls[len(turn.tool_calls) - count :]
+
+
+def _predict_group(
+    calls: tuple[ToolCall, ...], details: tuple[PredictRLMPredictCall, ...]
+) -> TraceGroup:
     return TraceGroup(
         "predict",
-        f"Predict details ({sum(len(group.calls) for group in groups)})",
+        f"Predict calls ({len(calls)})",
         "bold #b38cff",
         tuple(
             TraceGroup(
-                str(group_index),
-                f"Predict · {group.signature} · {group.model}",
+                str(index),
+                f"Predict · {detail.signature} · {detail.model}",
                 "bold magenta",
-                tuple(
-                    TraceGroup(
-                        str(call_index),
-                        f"Call {call_index + 1}",
-                        "bold",
-                        (
-                            TraceSection("input", "Input", call.input),
-                            TraceSection(
-                                "output",
-                                "Error" if call.error is not None else "Output",
-                                call.error if call.error is not None else call.output,
-                                style="red" if call.error is not None else "dim",
-                            ),
-                        ),
-                    )
-                    for call_index, call in enumerate(group.calls)
+                (
+                    TraceSection("input", "Input", call.arguments),
+                    TraceSection(
+                        "output",
+                        "Error" if call.error is not None else "Output",
+                        call.error if call.error is not None else call.result,
+                        style="red" if call.error is not None else "dim",
+                    ),
+                    TraceSection(
+                        "detail",
+                        "Detail",
+                        {
+                            "instructions": detail.instructions,
+                            "duration_ms": call.duration_ms,
+                            "finish_reason": detail.finish_reason,
+                            "usage": detail.usage.model_dump(mode="json"),
+                        },
+                        style="dim",
+                    ),
                 ),
             )
-            for group_index, group in enumerate(groups)
+            for index, (call, detail) in enumerate(zip(calls, details, strict=True))
         ),
     )
 
@@ -123,41 +143,42 @@ class PredictRLMViewer:
 
     def turn(self, turn: InspectionTurn, *, full_output: bool) -> TurnView:
         common = turn.finished.turn
-        detail = _detail(turn)
-        [code] = [
-            action for action in common.actions if isinstance(action, CodeExecutionAction)
-        ]
-        items: list[TraceItem] = []
-        if common.reasoning:
-            items.append(
-                TraceSection("reasoning", "Reasoning", common.reasoning, style="dim italic")
-            )
-        items.append(TraceSection("code", "Code", code.code, python=True))
+        native = _turn_native(common)
+        omissions = _detail(turn).omissions
+        predicts = predict_tool_calls(common)
+        tools = common.tool_calls[: len(common.tool_calls) - len(predicts)]
+        items: list[TraceItem] = message_items(common)
+        items.append(TraceSection("code", "Code", native.code, python=True))
         items.append(
             TraceSection(
                 "output",
                 "Output (full)" if full_output else "Output",
-                detail.untruncated_output if full_output else code.output,
-                style="red" if code.error is not None else "green",
+                native.untruncated_output if full_output else native.output,
+                style="red" if native.error else "green",
             )
         )
-        items.append(tool_group(common))
-        items.append(_predict_group(detail.predict_calls))
+        items.append(tool_group(tools))
+        items.append(_predict_group(predicts, native.predict_calls))
         items.append(
             TraceSection(
                 "metadata",
                 "Metadata",
                 {
-                    "finish_reason": detail.finish_reason,
-                    "usage": detail.usage.model_dump(mode="json"),
+                    "finish_reason": native.finish_reason,
+                    "usage": native.usage.model_dump(mode="json"),
                 },
             )
+        )
+        items.extend(reasoning_items(common))
+        tool_count = len(tools) + (omissions.tool_count if omissions is not None else 0)
+        predict_count = len(predicts) + (
+            omissions.predict_count if omissions is not None else 0
         )
         return TurnView(
             index=common.index,
             duration_ms=common.duration_ms,
-            counts=f"{detail.tool_count} tool · {detail.predict_count} predict",
-            failed=code.error is not None,
+            counts=f"{tool_count} tool · {predict_count} predict",
+            failed=common.failed,
             items=tuple(items),
         )
 
@@ -174,7 +195,7 @@ class PredictRLMViewer:
         for event in events:
             native = event.native
             match event.common, native:
-                case CodeGenerated(turn=turn, code=code), _:
+                case None, CodeGenerated(iteration=turn, code=code):
                     status, section = (
                         "awaiting execution",
                         TraceSection("code", "Code", code, python=True),

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 from predict_rlm import IterationStep, RunEvent, RunEventKind, RunEvidence, RunTrace
 from pydantic import ValidationError
@@ -13,10 +15,10 @@ from avalanche.agent.live import (
     AGENT_EVIDENCE,
     AgentLiveEvent,
     AgentTraceFinished,
-    CodeGenerated,
     ToolStarted,
 )
-from avalanche.agent.native.predict_rlm import Correlated, RunStarted
+from avalanche.agent.native.claude_agent import MessageFinished
+from avalanche.agent.native.predict_rlm import CodeGenerated, Correlated, RunStarted
 from avalanche.agent.steps import _InvocationEvents
 from avalanche.runtimes.predict_rlm.replay import replay
 
@@ -81,8 +83,8 @@ def _live(**changes) -> AgentLiveEvent:
         "sequence": 1,
         "timestamp_ns": 1,
         "runtime_kind": "predict_rlm",
-        "common": CodeGenerated(turn=1, code="x"),
-        "native": Correlated(kind="code.generated"),
+        "common": ToolStarted(call_id="t", name="lookup"),
+        "native": Correlated(kind="tool.started"),
     }
     fields.update(changes)
     return AgentLiveEvent.model_validate(fields)
@@ -92,11 +94,12 @@ def _live(**changes) -> AgentLiveEvent:
     "changes",
     [
         {"common": None},
-        {"common": ToolStarted(call_id="t", name="lookup")},
+        {"native": Correlated(kind="tool.finished")},
         {"native": RunStarted(input_fields=(), inputs={})},
+        {"native": CodeGenerated(iteration=1, code="x")},
         {"schema_version": 1},
     ],
-    ids=["missing-common", "other-common", "native-without-common", "v1"],
+    ids=["missing-common", "other-common", "native-without-common", "common-on-native", "v1"],
 )
 def test_a_native_event_must_travel_with_its_common_event(changes):
     with pytest.raises(ValidationError):
@@ -120,7 +123,7 @@ def test_an_invocation_sends_one_final_trace_and_nothing_after_it():
         with pytest.raises(AgentStepError, match="second final trace"):
             events.finished(final.record, complete=True)
         with pytest.raises(AgentStepError, match="after its final trace"):
-            events.record(Correlated(kind="code.generated"), CodeGenerated(turn=1, code="x"))
+            events.record(CodeGenerated(iteration=1, code="x"), None)
     assert [body.kind for body in observed] == ["trace_finished"]
 
 
@@ -174,3 +177,57 @@ def test_a_handled_tool_failure_does_not_fail_the_turn():
         RunEvent("run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": failed_code})
     )
     assert _live(common=common, native=native).failed is True
+
+
+def test_a_turn_travels_with_a_native_event_of_its_own_format():
+    from avalanche.runtimes.predict_rlm.events import project_event
+
+    _, common = project_event(
+        RunEvent("run", 1, RunEventKind.ITERATION_RECORDED, 1, {"step": _step()})
+    )
+
+    with pytest.raises(ValidationError, match="does not belong"):
+        _live(runtime_kind="claude_agent", common=common, native=MessageFinished())
+
+
+@pytest.mark.parametrize("written", [True, False], ids=["written", "missing"])
+def test_a_file_output_travels_as_its_file_reference_never_its_host_path(tmp_path, written):
+    from avalanche.runtimes.predict_rlm.events import project_event
+    from avalanche.runtimes.predict_rlm.files import AgentFileBridge, predict_signature
+
+    class Redact(ava.Signature):
+        document: str = ava.InputField()
+        redacted: ava.File = ava.OutputField()
+        reviewed_at: datetime = ava.OutputField()
+
+    workspace = ava.Workspace.from_directory(tmp_path, reference="snapshot:test")
+    with ava.file_reference_context(workspace, attempt="attempt-1"):
+        bridge = AgentFileBridge("redact", predict_signature(Redact))
+        output = bridge.output_dir / "redacted.txt"
+        if written:
+            output.write_bytes(b"[redacted]")
+        native, _ = project_event(
+            RunEvent(
+                "run",
+                1,
+                RunEventKind.RUN_SUCCEEDED,
+                1,
+                {
+                    "status": "completed",
+                    "outputs": {
+                        "redacted": {"path": str(output)},
+                        "reviewed_at": "2026-10-27T09:00:00",
+                    },
+                },
+            ),
+            files=bridge,
+        )
+
+    # Outputs without file types stay the plain data PredictRLM reported.
+    assert native.outputs["reviewed_at"] == "2026-10-27T09:00:00"
+    redacted = native.outputs["redacted"]
+    assert redacted["kind"] == ("file" if written else "unavailable")
+    if written:
+        assert redacted["workspace"] == "snapshot:test"
+        assert redacted["path"].startswith(".outputs/redact/attempt-1/")
+    assert str(tmp_path) not in native.model_dump_json()

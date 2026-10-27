@@ -8,15 +8,20 @@ import pytest
 from pydantic import ValidationError
 
 import avalanche as ava
-from avalanche.agent.native.predict_rlm import PredictRLMTokenUsage, PredictRLMUsage
+from avalanche.agent.native.claude_agent import ClaudeAgentTurn
+from avalanche.agent.native.predict_rlm import (
+    PredictRLMPredictCall,
+    PredictRLMTokenUsage,
+    PredictRLMTraceHeader,
+    PredictRLMTurn,
+    PredictRLMUsage,
+)
 from avalanche.agent.trace import (
+    TRACE_HEADER_NATIVE_LIMIT_BYTES,
     AgentTrace,
     AgentTraceHeader,
-    CodeExecutionAction,
-    ModelCallAction,
-    PredictRLMNativeTrace,
     TokenUsage,
-    ToolCallAction,
+    ToolCall,
     Turn,
     file_input_evidence,
 )
@@ -28,37 +33,49 @@ _NO_USAGE = PredictRLMUsage(
 )
 
 
-def _turn(index: int, *, tool_calls: int = 1) -> Turn:
-    tools = tuple(
-        ToolCallAction(
-            call_id=f"t{index}-{n}",
-            caller="code",
-            name="lookup",
-            arguments={"term": "x"},
-            result=["y"],
-            error=None,
-            duration_ms=3,
-        )
-        for n in range(tool_calls)
+_PREDICT_CALL = PredictRLMPredictCall(
+    signature="question -> answer",
+    instructions=None,
+    model="sub",
+    usage=_NO_USAGE.sub,
+    finish_reason="stop",
+)
+
+
+def _tool_call(name: str) -> ToolCall:
+    return ToolCall(
+        call_id=None,
+        caller="code",
+        name=name,
+        arguments={"term": "x"},
+        result=["y"],
+        error=None,
+        duration_ms=3,
     )
+
+
+def _native_turn(*, predict_calls: int = 1) -> PredictRLMTurn:
+    return PredictRLMTurn(
+        code="print(1)",
+        output="1",
+        untruncated_output="1",
+        error=False,
+        finish_reason="stop",
+        usage=_NO_USAGE,
+        predict_calls=(_PREDICT_CALL,) * predict_calls,
+    )
+
+
+def _turn(index: int, *, tool_calls: int = 1) -> Turn:
     return Turn(
         index=index,
-        text=None,
+        message=None,
         reasoning="think",
-        actions=(
-            CodeExecutionAction(language="python", code="print(1)", output="1", error=None),
-            *tools,
-            ModelCallAction(
-                call_id=None,
-                caller="code",
-                model="sub",
-                duration_ms=None,
-                usage=TokenUsage(input_tokens=1, output_tokens=2),
-                error=None,
-            ),
-        ),
+        # One sub-model call, a ``predict`` tool call after the turn's other tools.
+        tool_calls=(*(_tool_call("lookup") for _ in range(tool_calls)), _tool_call("predict")),
         duration_ms=10,
         usage=None,
+        native=_native_turn(),
     )
 
 
@@ -72,9 +89,12 @@ def _header(**changes: object) -> AgentTraceHeader:
         "duration_ms": 20,
         "usage": TokenUsage(input_tokens=10, output_tokens=5, cost_usd=None),
         "turn_count": 2,
-        "tool_call_count": 2,
+        "tool_call_count": 4,
         "external_run_id": "run-1",
         "session_id": None,
+        "native": PredictRLMTraceHeader(
+            sub_model=None, max_iterations=5, usage=_NO_USAGE, telemetry_ref=None
+        ),
     }
     fields.update(changes)
     return AgentTraceHeader.model_validate(fields)
@@ -84,9 +104,6 @@ def _record(**changes: object) -> AgentTrace:
     fields: dict[str, object] = {
         "header": _header(),
         "turns": (_turn(1), _turn(2)),
-        "native": PredictRLMNativeTrace(
-            sub_model=None, max_iterations=5, usage=_NO_USAGE, telemetry_ref=None
-        ),
         "turns_streamed": False,
     }
     fields.update(changes)
@@ -107,13 +124,25 @@ def test_record_round_trips_through_json():
     [
         {"trace_format": "claude_agent.messages/v1"},
         {"turn_count": 3},
-        {"tool_call_count": 1},
+        {"tool_call_count": 2},
     ],
     ids=["format-mismatch", "turn-count", "tool-call-count"],
 )
 def test_record_rejects_a_header_that_disagrees_with_its_body(header):
     with pytest.raises(ValidationError):
         _record(header=_header(**header))
+
+
+def test_header_rejects_a_runtime_part_too_large_for_run_snapshots():
+    large = PredictRLMTraceHeader(
+        sub_model=None,
+        max_iterations=5,
+        usage=_NO_USAGE,
+        telemetry_ref={"payload": "x" * TRACE_HEADER_NATIVE_LIMIT_BYTES},
+    )
+
+    with pytest.raises(ValidationError, match="run snapshot"):
+        _header(native=large)
 
 
 def test_record_rejects_out_of_order_turns():
@@ -132,13 +161,25 @@ def test_streamed_record_carries_counts_but_no_turns():
 @pytest.mark.parametrize(
     "change",
     [
-        lambda body: body["native"].update(format="unknown/v1"),
+        lambda body: body["header"]["native"].update(format="unknown/v1"),
+        lambda body: body.update(native=body["header"].pop("native")),
         lambda body: body["header"].update(runtime_kind="unknown"),
         lambda body: body.update(schema_version=1),
-        lambda body: body["turns"][0]["actions"][0].update(kind="unknown"),
+        lambda body: body["turns"][0]["native"].update(format="unknown/v1"),
+        lambda body: body["turns"][0]["tool_calls"][0].update(kind="tool_call"),
+        lambda body: body["turns"][0].update(text=None),
         lambda body: body.update(extra=True),
     ],
-    ids=["unknown-format", "unknown-runtime", "old-schema", "unknown-action", "extra-field"],
+    ids=[
+        "unknown-format",
+        "native-outside-header",
+        "unknown-runtime",
+        "old-schema",
+        "unknown-turn-format",
+        "old-tool-call",
+        "old-turn",
+        "extra-field",
+    ],
 )
 def test_json_body_rejects_unknown_shapes(change):
     body = _record().model_dump(mode="json")
@@ -146,6 +187,63 @@ def test_json_body_rejects_unknown_shapes(change):
 
     with pytest.raises(ValidationError):
         AgentTrace.model_validate(body)
+
+
+@pytest.mark.parametrize(
+    "tool_calls",
+    [(_tool_call("lookup"),), (_tool_call("predict"), _tool_call("lookup")), ()],
+    ids=["no-predict-call", "predict-call-not-last", "no-tool-calls"],
+)
+def test_a_predict_rlm_turn_ends_with_one_predict_call_per_native_predict_call(tool_calls):
+    with pytest.raises(ValidationError, match="predict calls"):
+        Turn(
+            index=1,
+            message=None,
+            reasoning=None,
+            tool_calls=tool_calls,
+            duration_ms=None,
+            usage=None,
+            native=_native_turn(),
+        )
+
+
+def test_record_rejects_a_turn_of_another_runtime():
+    claude_turn = Turn(
+        index=2,
+        message="hi",
+        reasoning=None,
+        tool_calls=(),
+        duration_ms=None,
+        usage=None,
+        native=ClaudeAgentTurn(message_id=None, model="m", stop_reason=None, api_error=None),
+    )
+
+    with pytest.raises(ValidationError, match="do not belong"):
+        _record(turns=(_turn(1), claude_turn), header=_header(tool_call_count=2))
+
+
+@pytest.mark.parametrize(
+    ("native", "failed"),
+    [
+        (_native_turn(predict_calls=0), False),
+        (_native_turn(predict_calls=0).model_copy(update={"error": True}), True),
+        (ClaudeAgentTurn(message_id=None, model="m", stop_reason=None, api_error=None), False),
+        (ClaudeAgentTurn(message_id=None, model="m", stop_reason=None, api_error="429"), True),
+    ],
+    ids=["code-ran", "code-failed", "claude-replied", "claude-api-error"],
+)
+def test_each_runtime_decides_when_its_turn_failed(native, failed):
+    turn = Turn(
+        index=1,
+        message=None,
+        reasoning=None,
+        tool_calls=(),
+        duration_ms=None,
+        usage=None,
+        native=native,
+    )
+
+    assert turn.failed is failed
 
 
 def test_file_evidence_records_the_reference_without_bytes_or_host_paths(tmp_path):

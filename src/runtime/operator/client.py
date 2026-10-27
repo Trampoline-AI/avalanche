@@ -1069,7 +1069,6 @@ class GrpcStateProvider:
                         duration_ms=descriptor.duration_ms,
                         error=descriptor.error,
                         tool_call_count=descriptor.tool_call_count,
-                        model_call_count=descriptor.model_call_count,
                     )
                 )
                 cursor = descriptor.event_sequence
@@ -2608,7 +2607,6 @@ class GrpcStateProvider:
                 duration_ms=descriptor.duration_ms,
                 error=descriptor.error,
                 tool_call_count=descriptor.tool_call_count,
-                model_call_count=descriptor.model_call_count,
                 size_bytes=descriptor.size_bytes,
             )
         elif isinstance(update.change, ClassifierEventAppended):

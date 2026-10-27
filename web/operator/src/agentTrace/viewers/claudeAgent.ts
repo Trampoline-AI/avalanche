@@ -1,6 +1,7 @@
 import type { TokenUsage } from "../../generated/agentSchemas";
 import type { AgentLiveEvent } from "../common";
 import type { AgentTraceStep, TraceTurnTokens } from "../types";
+import { toolCall } from "./common";
 import type { TraceViewer } from "./index";
 
 // Claude prices only the whole session, so a turn's cost is usually absent.
@@ -20,32 +21,22 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
     throw new Error("Claude turn events are message.finished with a finished turn");
   }
   const { turn } = common;
-  const text = turn.text ?? "";
+  const response = turn.native;
+  if (response.format !== "claude_agent.messages/v1") {
+    throw new Error(`not a Claude turn: ${response.format}`);
+  }
   return {
     iteration: turn.index,
-    reasoning: turn.reasoning ?? "",
-    // Claude answers in text and tool calls; it runs no generated code of its own.
-    outputKind: "response",
-    output: text,
-    untruncatedOutput: text,
+    message: turn.message ?? undefined,
+    reasoning: turn.reasoning ?? undefined,
     // Rate-limit, billing and authentication failures arrive as API-error turns.
-    error: native.api_error !== null,
+    error: response.api_error !== null,
     durationMs: turn.duration_ms ?? undefined,
-    toolCalls: turn.actions.flatMap((action) =>
-      action.kind === "tool_call"
-        ? [
-            {
-              name: action.name,
-              arguments: action.arguments,
-              result: action.result,
-              error: action.error ?? undefined,
-              durationMs: action.duration_ms ?? undefined,
-            },
-          ]
-        : [],
-    ),
+    toolCalls: turn.tool_calls.map(toolCall),
     predictCalls: [],
-    lm: { finishReason: native.stop_reason ?? undefined },
+    toolCallCount: turn.tool_calls.length + common.omitted_tool_calls,
+    predictCallCount: 0,
+    lm: { finishReason: response.stop_reason ?? undefined },
     usage: { main: tokenUsage(turn.usage) },
   };
 }
@@ -69,9 +60,6 @@ function retainedValue(event: AgentLiveEvent, kind: "inputs" | "outputs"): unkno
 
 export const claudeAgentViewer: TraceViewer = {
   turn,
-  // The common header already holds the model, usage and cost, so the body is not read.
-  usageInBody: false,
-  hasSubModel: false,
   turnUnit: "turns",
   activityLabels: {
     started: "Prompt sent",

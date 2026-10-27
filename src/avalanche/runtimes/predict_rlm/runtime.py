@@ -343,7 +343,7 @@ class PredictRLM(BaseModel):
                 raise AgentStepError("File steps own output_dir")
             from predict_rlm.compatibility import files
 
-            bridge = AgentFileBridge(request.step_name)
+            bridge = AgentFileBridge(request.step_name, internal_signature)
             predictor = self._build_for(
                 request,
                 internal_signature,
@@ -353,7 +353,7 @@ class PredictRLM(BaseModel):
                     files(input_mode="mount", output_dir=str(bridge.output_dir)),
                 ],
             )
-        prediction = await self._run(predictor, request, inputs, events=events)
+        prediction = await self._run(predictor, request, inputs, events=events, files=bridge)
         output_names = request.signature.output_model.model_fields
         # A missing field is left out, so output validation reports it.
         values = {name: prediction[name] for name in output_names if name in prediction}
@@ -383,11 +383,12 @@ class PredictRLM(BaseModel):
         inputs: Mapping[str, object],
         *,
         events: AgentEventSink,
+        files: AgentFileBridge | None,
     ) -> dspy.Prediction:
         """Run PredictRLM, sending its final trace event on every outcome."""
         from predict_rlm.trace import extract_trace_from_exc
 
-        state = _AgentInvocationState(events, inputs)
+        state = _AgentInvocationState(events, inputs, files)
         invocation_token = _AGENT_INVOCATION_STATE.set(state)
         try:
             try:

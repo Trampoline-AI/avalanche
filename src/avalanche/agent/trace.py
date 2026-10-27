@@ -1,14 +1,15 @@
 """Runtime-neutral agent trace models.
 
 Every agent runtime reports the same header and turns, named after the
-OpenTelemetry conventions for AI calls, plus one runtime-specific native
-section. The native union is closed and defined here without SDK imports, so
-the operator and TUI can validate every format without runtime extras.
+OpenTelemetry conventions for AI calls, plus a runtime-specific native part
+on the header and on each turn. The native unions are closed and defined without
+SDK imports, so the operator and TUI can validate every format without runtime
+extras.
 """
 
 from __future__ import annotations
 
-from typing import Annotated, ClassVar, Literal, Self
+from typing import Annotated, Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -24,7 +25,8 @@ from pydantic import (
 from ..file import File
 from ..workspace import Workspace
 from .kinds import RuntimeKind
-from .native.predict_rlm import PredictRLMUsage
+from .native import TraceHeaderNative, TurnNative
+from .native.predict_rlm import PredictRLMTurn
 
 # Serialized bodies always carry defaulted fields such as ``kind``; their
 # exported JSON Schema says so.
@@ -36,6 +38,9 @@ _STRICT = ConfigDict(
 )
 
 AgentTraceStatus = Literal["succeeded", "failed", "cancelled"]
+# The header, its runtime part included, travels in every run snapshot, so that part
+# stays small; anything large belongs in the turns.
+TRACE_HEADER_NATIVE_LIMIT_BYTES = 64 * 1024
 ActionCaller = Literal["model", "code"]
 
 
@@ -51,12 +56,11 @@ class TokenUsage(BaseModel):
     cost_usd: NonNegativeFloat | None = None
 
 
-class ToolCallAction(BaseModel):
+class ToolCall(BaseModel):
     """A tool invoked by the model directly or by code the agent ran."""
 
     model_config = _STRICT
 
-    kind: Literal["tool_call"] = "tool_call"
     call_id: str | None
     caller: ActionCaller
     name: str
@@ -66,48 +70,41 @@ class ToolCallAction(BaseModel):
     duration_ms: NonNegativeInt | None
 
 
-class CodeExecutionAction(BaseModel):
-    """Code the agent wrote and executed during a turn."""
-
-    model_config = _STRICT
-
-    kind: Literal["code_execution"] = "code_execution"
-    language: str
-    code: str
-    output: str
-    error: str | None
-
-
-class ModelCallAction(BaseModel):
-    """A nested model call made during a turn, for example a sub-model query."""
-
-    model_config = _STRICT
-
-    kind: Literal["model_call"] = "model_call"
-    call_id: str | None
-    caller: ActionCaller
-    model: str
-    duration_ms: NonNegativeInt | None
-    usage: TokenUsage | None
-    error: str | None
-
-
-AgentAction = Annotated[
-    ToolCallAction | CodeExecutionAction | ModelCallAction, Field(discriminator="kind")
-]
-
-
 class Turn(BaseModel):
-    """One model response and the actions that followed it."""
+    """One model response and the tool calls that followed it."""
 
     model_config = _STRICT
 
     index: PositiveInt
-    text: str | None
+    # What the model wrote this turn, as a reader would see it.
+    message: str | None
+    # The model provider's own reasoning (thinking tokens), only when the runtime
+    # exposes it; never the turn's message.
     reasoning: str | None
-    actions: tuple[AgentAction, ...]
+    tool_calls: tuple[ToolCall, ...]
     duration_ms: NonNegativeInt | None
+    # The whole turn, every model it called summed.
     usage: TokenUsage | None
+    native: TurnNative
+
+    @model_validator(mode="after")
+    def _check_native(self) -> Self:
+        if isinstance(self.native, PredictRLMTurn):
+            predict_calls = len(self.native.predict_calls)
+            tail = self.tool_calls[len(self.tool_calls) - predict_calls :]
+            if len(tail) != predict_calls or any(
+                call.name != "predict" or call.caller != "code" for call in tail
+            ):
+                raise ValueError(
+                    f"a PredictRLM turn's last {predict_calls} tool calls must be its "
+                    "predict calls"
+                )
+        return self
+
+    @property
+    def failed(self) -> bool:
+        """Whether the turn failed as its runtime decides: failed code or an API error."""
+        return self.native.failed
 
 
 class AgentTraceHeader(BaseModel):
@@ -126,43 +123,27 @@ class AgentTraceHeader(BaseModel):
     tool_call_count: NonNegativeInt
     external_run_id: str | None
     session_id: str | None
+    native: TraceHeaderNative
 
-
-class PredictRLMNativeTrace(BaseModel):
-    """PredictRLM run details that have no common-layer equivalent."""
-
-    model_config = _STRICT
-
-    runtime_kind: ClassVar[RuntimeKind] = "predict_rlm"
-
-    format: Literal["predict_rlm.run/v1"] = "predict_rlm.run/v1"
-    sub_model: str | None
-    max_iterations: PositiveInt
-    usage: PredictRLMUsage
-    # PredictRLM's compact reference for joining a partial trace to its events.
-    telemetry_ref: dict[str, JsonValue] | None
-
-
-class ClaudeAgentNativeTrace(BaseModel):
-    """Claude Agent SDK session details that have no common-layer equivalent."""
-
-    model_config = _STRICT
-
-    runtime_kind: ClassVar[RuntimeKind] = "claude_agent"
-
-    format: Literal["claude_agent.messages/v1"] = "claude_agent.messages/v1"
-    # The SDK's result subtype, such as ``success`` or ``error_max_turns``.
-    result_subtype: str | None
-    # Turns as the CLI counts them, which include tool-result round trips.
-    num_turns: NonNegativeInt
-    duration_api_ms: NonNegativeInt | None
-    permission_denials: NonNegativeInt
-    errors: tuple[str, ...]
-
-
-NativeTrace = Annotated[
-    PredictRLMNativeTrace | ClaudeAgentNativeTrace, Field(discriminator="format")
-]
+    @model_validator(mode="after")
+    def _check_native(self) -> Self:
+        if self.trace_format != self.native.format:
+            raise ValueError(
+                f"header trace_format {self.trace_format!r} does not match "
+                f"native format {self.native.format!r}"
+            )
+        if self.runtime_kind != self.native.runtime_kind:
+            raise ValueError(
+                f"header runtime_kind {self.runtime_kind!r} does not match "
+                f"native format {self.native.format!r}"
+            )
+        size = len(self.native.model_dump_json().encode())
+        if size > TRACE_HEADER_NATIVE_LIMIT_BYTES:
+            raise ValueError(
+                f"the header's {self.native.format!r} part is {size} bytes; it travels "
+                f"in every run snapshot, so the limit is {TRACE_HEADER_NATIVE_LIMIT_BYTES}"
+            )
+        return self
 
 
 class AgentTrace(BaseModel):
@@ -177,22 +158,11 @@ class AgentTrace(BaseModel):
     schema_version: Literal[2] = 2
     header: AgentTraceHeader
     turns: tuple[Turn, ...]
-    native: NativeTrace
     turns_streamed: bool
 
     @model_validator(mode="after")
     def _check_consistency(self) -> Self:
         header = self.header
-        if header.trace_format != self.native.format:
-            raise ValueError(
-                f"header trace_format {header.trace_format!r} does not match "
-                f"native format {self.native.format!r}"
-            )
-        if header.runtime_kind != self.native.runtime_kind:
-            raise ValueError(
-                f"header runtime_kind {header.runtime_kind!r} does not match "
-                f"native format {self.native.format!r}"
-            )
         if self.turns_streamed:
             if self.turns:
                 raise ValueError("a trace with streamed turns must not carry turns")
@@ -205,9 +175,13 @@ class AgentTrace(BaseModel):
                 f"header turn_count {header.turn_count} does not match "
                 f"{len(self.turns)} turns"
             )
-        tool_calls = sum(
-            isinstance(action, ToolCallAction) for turn in self.turns for action in turn.actions
-        )
+        formats = {turn.native.format for turn in self.turns} - {header.trace_format}
+        if formats:
+            raise ValueError(
+                f"turns of format {sorted(formats)} do not belong to a "
+                f"{header.trace_format!r} trace"
+            )
+        tool_calls = sum(len(turn.tool_calls) for turn in self.turns)
         if header.tool_call_count != tool_calls:
             raise ValueError(
                 f"header tool_call_count {header.tool_call_count} does not match "

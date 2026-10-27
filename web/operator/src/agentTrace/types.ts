@@ -1,15 +1,10 @@
-// What the trace explorer and inspector header show, whatever the runtime.
+// What the trace explorer shows, whatever the runtime.
 
 export interface TraceTokenUsage {
   inputTokens: number;
   outputTokens: number;
   cost: number;
   cacheHits: number;
-}
-
-export interface TraceLmUsage {
-  main: TraceTokenUsage;
-  sub: TraceTokenUsage;
 }
 
 /** A turn's tokens; the cost is absent when the runtime prices only the whole run. */
@@ -34,61 +29,70 @@ export interface AgentTraceToolCall {
   durationMs?: number;
 }
 
+/** A sub-model call the agent's code made: its ``predict`` tool call and its details. */
 export interface AgentTracePredictCall {
-  durationMs: number;
+  signature: string;
+  instructions?: string;
+  model: string;
+  durationMs?: number;
   usage: TraceTokenUsage;
-  input: Record<string, unknown>;
-  output: Record<string, unknown>;
+  input: unknown;
+  output: unknown;
   error?: string;
   lm?: TraceLmFinish;
 }
 
-export interface AgentTracePredictGroup {
-  signature: string;
-  instructions?: string;
-  model: string;
-  totalUsage: TraceTokenUsage;
-  calls: AgentTracePredictCall[];
+/** Code the agent wrote and ran in a turn, with what it printed. */
+export interface AgentTraceExecution {
+  code: string;
+  output: string;
+  untruncatedOutput: string;
 }
 
 export interface AgentTraceStep {
   iteration: number;
-  reasoning: string;
-  /** Code the agent ran; absent for runtimes that answer without running code. */
-  code?: string;
-  /** What `output` holds: a code sandbox's output, or the model's reply. */
-  outputKind: "sandbox" | "response";
-  output: string;
-  untruncatedOutput: string;
+  /** What the model wrote this turn; absent when it wrote nothing. */
+  message?: string;
+  /** The provider's own reasoning, when the runtime reports it. */
+  reasoning?: string;
+  /** Absent for runtimes that answer without running code. */
+  execution?: AgentTraceExecution;
   error: boolean;
   /** Absent when the runtime does not time its turns. */
   durationMs?: number;
+  /** Tool calls other than predict calls, as far as the live event kept them. */
   toolCalls: AgentTraceToolCall[];
-  predictCalls: AgentTracePredictGroup[];
+  predictCalls: AgentTracePredictCall[];
+  /** Both counts include calls a large turn's live event left out. */
+  toolCallCount: number;
+  predictCallCount: number;
   lm?: TraceLmFinish;
   usage: TraceTurnUsage;
 }
 
 export type AgentTraceStepSummary = Pick<
   AgentTraceStep,
-  "iteration" | "reasoning" | "error" | "durationMs" | "lm" | "usage" | "outputKind"
->;
+  | "iteration"
+  | "message"
+  | "error"
+  | "durationMs"
+  | "lm"
+  | "usage"
+  | "toolCallCount"
+  | "predictCallCount"
+> & { hasExecution: boolean; hasReasoning: boolean };
 
 export function summarizeAgentTraceStep(step: AgentTraceStep): AgentTraceStepSummary {
   return {
     iteration: step.iteration,
-    reasoning: step.reasoning,
+    message: step.message,
     error: step.error,
     durationMs: step.durationMs,
     lm: step.lm,
     usage: step.usage,
-    outputKind: step.outputKind,
+    toolCallCount: step.toolCallCount,
+    predictCallCount: step.predictCallCount,
+    hasExecution: step.execution !== undefined,
+    hasReasoning: step.reasoning !== undefined,
   };
-}
-
-/** Details a runtime keeps in its final trace body rather than the common header. */
-export interface TraceBodySummary {
-  subModel?: string;
-  maxIterations: number;
-  usage: TraceLmUsage;
 }

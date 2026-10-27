@@ -11,25 +11,15 @@ from dataclasses import dataclass
 
 from pydantic import JsonValue
 
-from avalanche.agent.live import AgentLiveEvent, CodeGenerated, TurnFinished
-from avalanche.agent.trace import (
-    AgentTrace,
-    CodeExecutionAction,
-    ModelCallAction,
-    TokenUsage,
-    ToolCallAction,
-    Turn,
-)
+from avalanche.agent.live import AgentLiveEvent
+from avalanche.agent.trace import AgentTrace, TokenUsage, ToolCall, Turn
 
 from . import InspectionTurn, PendingStep, TraceGroup, TraceItem, TraceSection, TurnView
 
 COMMON_LABELS = {
     "turn.finished": "Turn completed",
-    "model.started": "Model call started",
-    "model.finished": "Model call finished",
     "tool.started": "Tool call started",
     "tool.finished": "Tool call finished",
-    "code.generated": "Code generated",
 }
 
 
@@ -46,27 +36,7 @@ def duration_seconds(duration_ms: int) -> str:
     return f"{duration_ms / 1000:.1f}s"
 
 
-def code_sections(turn: Turn) -> list[TraceSection]:
-    """The turn's code and its output; numbered when the turn ran code more than once."""
-    actions = [action for action in turn.actions if isinstance(action, CodeExecutionAction)]
-    sections: list[TraceSection] = []
-    for number, action in enumerate(actions, start=1):
-        suffix = "" if len(actions) == 1 else f" {number}"
-        key = "" if len(actions) == 1 else str(number)
-        sections.append(TraceSection(f"code{key}", f"Code{suffix}", action.code, python=True))
-        sections.append(
-            TraceSection(
-                f"output{key}",
-                f"Output{suffix}",
-                action.error if action.error is not None else action.output,
-                style="red" if action.error is not None else "green",
-            )
-        )
-    return sections
-
-
-def tool_group(turn: Turn) -> TraceGroup:
-    calls = [action for action in turn.actions if isinstance(action, ToolCallAction)]
+def tool_group(calls: Sequence[ToolCall]) -> TraceGroup:
     return TraceGroup(
         "tools",
         f"Tools ({len(calls)})",
@@ -91,76 +61,17 @@ def tool_group(turn: Turn) -> TraceGroup:
     )
 
 
-def model_group(turn: Turn) -> TraceGroup:
-    calls = [action for action in turn.actions if isinstance(action, ModelCallAction)]
-    return TraceGroup(
-        "models",
-        f"Model calls ({len(calls)})",
-        "bold #b38cff",
-        tuple(
-            TraceGroup(
-                str(index),
-                f"Model · {call.model}",
-                "bold magenta",
-                (
-                    TraceSection(
-                        "detail",
-                        "Error" if call.error is not None else "Detail",
-                        call.error
-                        if call.error is not None
-                        else {
-                            "duration_ms": call.duration_ms,
-                            "usage": (
-                                call.usage.model_dump(mode="json")
-                                if call.usage is not None
-                                else None
-                            ),
-                        },
-                        style="red" if call.error is not None else "dim",
-                    ),
-                ),
-            )
-            for index, call in enumerate(calls)
-        ),
-    )
+def message_items(turn: Turn) -> list[TraceItem]:
+    if not turn.message:
+        return []
+    return [TraceSection("message", "Message", turn.message)]
 
 
-def turn_failed(turn: Turn) -> bool:
-    """A turn fails when code it ran failed; failed tool or model calls may be handled."""
-    return any(
-        isinstance(action, CodeExecutionAction) and action.error is not None
-        for action in turn.actions
-    )
-
-
-def common_items(turn: Turn) -> list[TraceItem]:
-    items: list[TraceItem] = []
-    if turn.reasoning:
-        items.append(TraceSection("reasoning", "Reasoning", turn.reasoning, style="dim italic"))
-    if turn.text:
-        items.append(TraceSection("text", "Text", turn.text))
-    items.extend(code_sections(turn))
-    return items
-
-
-def pending_code(events: Sequence[AgentLiveEvent]) -> list[PendingStep]:
-    """Generated code whose turn has not finished yet."""
-    finished = {
-        (event.invocation_id, event.common.turn.index)
-        for event in events
-        if isinstance(event.common, TurnFinished)
-    }
-    return [
-        PendingStep(
-            event,
-            event.common.turn,
-            "awaiting execution",
-            TraceSection("code", "Code", event.common.code, python=True),
-        )
-        for event in events
-        if isinstance(event.common, CodeGenerated)
-        and (event.invocation_id, event.common.turn) not in finished
-    ]
+def reasoning_items(turn: Turn) -> list[TraceItem]:
+    """The provider's own reasoning, last and collapsed: long, and rarely read."""
+    if not turn.reasoning:
+        return []
+    return [TraceSection("reasoning", "Model reasoning", turn.reasoning, style="dim italic")]
 
 
 @dataclass(frozen=True)
@@ -187,8 +98,8 @@ class GenericViewer:
 
     def turn(self, turn: InspectionTurn, *, full_output: bool) -> TurnView:
         common = turn.finished
-        items = common_items(common.turn)
-        items.extend((tool_group(common.turn), model_group(common.turn)))
+        items = message_items(common.turn)
+        items.append(tool_group(common.turn.tool_calls))
         items.append(
             TraceSection(
                 "metadata",
@@ -202,11 +113,12 @@ class GenericViewer:
                 },
             )
         )
+        items.extend(reasoning_items(common.turn))
         return TurnView(
             index=common.turn.index,
             duration_ms=common.turn.duration_ms,
-            counts=f"{common.tool_call_count} tool · {common.model_call_count} model",
-            failed=turn_failed(common.turn),
+            counts=f"{common.tool_call_count} tool",
+            failed=common.turn.failed,
             items=tuple(items),
         )
 
@@ -216,7 +128,7 @@ class GenericViewer:
         return event.native.kind
 
     def pending(self, events: Sequence[AgentLiveEvent]) -> tuple[PendingStep, ...]:
-        return tuple(pending_code(events))
+        return ()
 
     def outputs(self, events: Sequence[AgentLiveEvent]) -> Mapping[str, JsonValue] | None:
         return None

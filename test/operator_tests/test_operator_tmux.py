@@ -10,7 +10,6 @@ from uuid import uuid4
 
 import pytest
 
-from avalanche.agent.trace import CodeExecutionAction
 from runtime.operator.client import GrpcStateProvider, OperatorCallError
 from runtime.operator.models import RunStatus
 
@@ -520,14 +519,7 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
             assert record is not None and record.header.turn_count == 3
             turns = app.store.selected_agent_turns
             assert [turn.finished.turn.index for turn in turns] == [1, 2, 3]
-            code = [
-                next(
-                    action
-                    for action in turn.finished.turn.actions
-                    if isinstance(action, CodeExecutionAction)
-                )
-                for turn in turns
-            ]
+            code = [turn.finished.turn.native for turn in turns]
             assert "numbers = [2, 3, 5]" in code[0].code
             assert "[2, 3, 5]" in code[0].output
             assert "total = sum(numbers)" in code[1].code
@@ -550,8 +542,8 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
             assert "[2, 3, 5]" in screen_text and "10" in screen_text
             assert "total = sum(numbers)" in screen_text
             assert "SUBMIT(answer=total)" in screen_text
-            assert record.native.usage.main.input_tokens == 0
-            assert record.native.usage.main.output_tokens == 0
+            assert record.header.native.usage.main.input_tokens == 0
+            assert record.header.native.usage.main.output_tokens == 0
             assert "0 in / 0 out" in screen_text
             assert "Main:" in screen_text and "Sub:" in screen_text
             app.save_screenshot(str(evidence / "scripted-trace.svg"))

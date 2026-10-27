@@ -61,25 +61,27 @@ class IncidentHandoff(BaseModel):
 
 
 def handoff_evidence(
-    ctx: ava.EvalContext[IncidentPacket, BaseModel],
+    ctx: ava.EvalContext[BaseModel, BaseModel],
 ) -> dict[str, JsonValue]:
     """Shared evidence selection lets three independent questions use one request."""
     return {
-        "source": ctx.inputs["packet"].model_dump(mode="json"),
+        "source": ctx.inputs.packet.model_dump(mode="json"),
         "handoff": ctx.output.handoff.model_dump(mode="json"),
     }
 
 
 def handoff_trace_evidence(
-    ctx: ava.EvalContext[IncidentPacket, BaseModel],
+    ctx: ava.EvalContext[BaseModel, BaseModel],
 ) -> dict[str, JsonValue]:
-    """Keep the agent's observed actions, turn by turn, next to the source facts."""
+    """Keep the agent's tool calls and code, turn by turn, next to the source facts."""
     return {
-        "source": ctx.inputs["packet"].model_dump(mode="json"),
+        "source": ctx.inputs.packet.model_dump(mode="json"),
         "agent_actions": [
             {
                 "turn": turn.index,
-                "actions": [action.model_dump(mode="json") for action in turn.actions],
+                "tool_calls": [call.model_dump(mode="json") for call in turn.tool_calls],
+                # The runtime's own part of the turn: PredictRLM's code and its output.
+                "native": turn.native.model_dump(mode="json"),
             }
             for turn in ctx.trace.turns
         ],

@@ -1,7 +1,8 @@
-"""PredictRLM's native live-event payloads, format ``predict_rlm.run/v1``.
+"""PredictRLM's native header, turn and live-event parts, format ``predict_rlm.run/v1``.
 
-Each live event carries the common event, when there is one, plus the details
-only PredictRLM has. These models mirror the parts of PredictRLM's own records
+The header carries PredictRLM's run details, each turn its own part (its code and
+output), and each live event carries the common event, when there is one, plus the
+details only PredictRLM has. These models mirror the parts of PredictRLM's own records
 that the common layer does not hold, and import nothing from PredictRLM, so the
 operator, client and TUI validate them without the runtime installed.
 """
@@ -12,7 +13,15 @@ from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Annotated, ClassVar, Literal, get_args
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, NonNegativeFloat, NonNegativeInt
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    NonNegativeFloat,
+    NonNegativeInt,
+    PositiveInt,
+)
 
 from ..kinds import CommonEventKind, RuntimeKind
 
@@ -46,29 +55,59 @@ class PredictRLMUsage(BaseModel):
     sub: PredictRLMTokenUsage
 
 
-class PredictRLMSubCall(BaseModel):
-    """One sub-model call made by the agent's code through ``predict()``."""
+class PredictRLMPredictCall(BaseModel):
+    """One sub-model call made by the agent's code through ``predict()``.
 
-    model_config = _STRICT
-
-    duration_ms: NonNegativeInt
-    usage: PredictRLMTokenUsage
-    input: dict[str, JsonValue]
-    output: dict[str, JsonValue]
-    error: str | None
-    finish_reason: str | None
-
-
-class PredictRLMSubCallGroup(BaseModel):
-    """Sub-model calls that share one signature, instructions and model."""
+    Its inputs, outputs, error and duration are the matching ``predict`` tool call.
+    """
 
     model_config = _STRICT
 
     signature: str
     instructions: str | None
     model: str
-    total_usage: PredictRLMTokenUsage
-    calls: tuple[PredictRLMSubCall, ...]
+    usage: PredictRLMTokenUsage
+    finish_reason: str | None
+
+
+class PredictRLMTurn(BaseModel):
+    """PredictRLM's own details of one turn (iteration).
+
+    ``predict_calls`` describe the turn's last ``len(predict_calls)`` tool calls,
+    which are its ``predict`` calls, in the same order.
+    """
+
+    model_config = _STRICT
+
+    format: Literal["predict_rlm.run/v1"] = FORMAT
+    code: str
+    # The code's output as shown to the model, and in full.
+    output: str
+    untruncated_output: str
+    # The code failed.
+    error: bool
+    finish_reason: str | None
+    usage: PredictRLMUsage
+    predict_calls: tuple[PredictRLMPredictCall, ...]
+
+    @property
+    def failed(self) -> bool:
+        return self.error
+
+
+class PredictRLMTraceHeader(BaseModel):
+    """PredictRLM run details that have no common-header equivalent."""
+
+    model_config = _STRICT
+
+    runtime_kind: ClassVar[RuntimeKind] = "predict_rlm"
+
+    format: Literal["predict_rlm.run/v1"] = FORMAT
+    sub_model: str | None
+    max_iterations: PositiveInt
+    usage: PredictRLMUsage
+    # PredictRLM's compact reference for joining a partial trace to its events.
+    telemetry_ref: dict[str, JsonValue] | None
 
 
 class PredictRLMOmissions(BaseModel):
@@ -110,40 +149,58 @@ class RunStarted(_Event):
 
 
 class IterationRecorded(_Event):
-    """PredictRLM's details of a finished turn; the turn itself is the common event."""
+    """A finished turn, which is the common event; this says what its live event left out."""
 
     kind: Literal["iteration.recorded"] = "iteration.recorded"
     common_kinds = MappingProxyType({"iteration.recorded": "turn.finished"})
 
-    iteration: NonNegativeInt
-    untruncated_output: str
-    finish_reason: str | None
-    usage: PredictRLMUsage
-    predict_calls: tuple[PredictRLMSubCallGroup, ...]
-    tool_count: NonNegativeInt
-    predict_count: NonNegativeInt
     omissions: PredictRLMOmissions | None
 
 
-class PredictStarted(_Event):
-    kind: Literal["predict.started"] = "predict.started"
-    common_kinds = MappingProxyType({"predict.started": "model.started"})
+class CodeGenerated(_Event):
+    """The code of a turn still running; the finished turn carries it too."""
 
+    kind: Literal["code.generated"] = "code.generated"
+    common_kinds = MappingProxyType({"code.generated": None})
+
+    iteration: NonNegativeInt
+    code: str
+
+    @property
+    def turn(self) -> int | None:
+        return self.iteration
+
+
+class PredictStarted(_Event):
+    """A sub-model call started by the agent's code."""
+
+    kind: Literal["predict.started"] = "predict.started"
+    common_kinds = MappingProxyType({"predict.started": None})
+
+    call_id: str
     signature: str
     instructions: str | None
+    model: str
+
+
+class PredictFinished(_Event):
+    kind: Literal["predict.finished"] = "predict.finished"
+    common_kinds = MappingProxyType({"predict.finished": None})
+
+    call_id: str
+    predict_error: str | None
+
+    @property
+    def error(self) -> str | None:
+        return self.predict_error
 
 
 class Correlated(_Event):
     """Native kinds whose common event already carries everything."""
 
-    kind: Literal["predict.finished", "tool.started", "tool.finished", "code.generated"]
+    kind: Literal["tool.started", "tool.finished"]
     common_kinds = MappingProxyType(
-        {
-            "predict.finished": "model.finished",
-            "tool.started": "tool.started",
-            "tool.finished": "tool.finished",
-            "code.generated": "code.generated",
-        }
+        {"tool.started": "tool.started", "tool.finished": "tool.finished"}
     )
 
 
@@ -212,7 +269,9 @@ PredictRLMNativeEvent = Annotated[
     RunStarted
     | Lifecycle
     | IterationRecorded
+    | CodeGenerated
     | PredictStarted
+    | PredictFinished
     | Correlated
     | CodeExecuted
     | RunSucceeded

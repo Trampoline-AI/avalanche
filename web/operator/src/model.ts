@@ -7,6 +7,8 @@
  * depend on generated transport messages or the protobuf runtime.
  */
 
+import type { AgentTraceHeader } from "./generated/agentSchemas";
+
 /** Deep partial matching protobuf-ts PartialMessage semantics. */
 export type DeepPartial<T> = T extends Uint8Array
   ? T
@@ -394,7 +396,10 @@ export interface TokenUsageMsg {
   costUsd?: number;
 }
 
-/** The runtime-neutral summary of a finished agent invocation. */
+/** A trace header's runtime-specific part, discriminated by its trace format. */
+export type TraceHeaderNative = AgentTraceHeader["native"];
+
+/** The summary of a finished agent invocation, with its runtime-specific part. */
 export interface TraceHeaderMsg {
   status: AgentTraceStatus;
   runtimeKind: string;
@@ -406,6 +411,7 @@ export interface TraceHeaderMsg {
   toolCallCount: string;
   externalRunId?: string;
   stopReason?: string;
+  native: TraceHeaderNative;
 }
 
 export const TraceHeaderMsg = {
@@ -421,6 +427,16 @@ export const TraceHeaderMsg = {
       toolCallCount: "0",
       externalRunId: undefined,
       stopReason: undefined,
+      native: {
+        format: "predict_rlm.run/v1",
+        sub_model: null,
+        max_iterations: 1,
+        usage: {
+          main: { input_tokens: 0, output_tokens: 0, cost: 0, cache_hits: 0 },
+          sub: { input_tokens: 0, output_tokens: 0, cost: 0, cache_hits: 0 },
+        },
+        telemetry_ref: null,
+      },
       ...value,
     } as TraceHeaderMsg;
   },
@@ -676,14 +692,7 @@ export const LogRecordDescriptorMsg = {
   },
 };
 
-export type AgentEventKind =
-  | "native"
-  | "turn.finished"
-  | "model.started"
-  | "model.finished"
-  | "tool.started"
-  | "tool.finished"
-  | "code.generated";
+export type AgentEventKind = "native" | "turn.finished" | "tool.started" | "tool.finished";
 
 export interface AgentEventDescriptorMsg {
   /**
@@ -716,8 +725,8 @@ export interface AgentEventDescriptorMsg {
    * @generated from protobuf field: bool error = 8
    */
   error: boolean;
+  /** Tool calls the event reports, sub-model (predict) calls included. */
   toolCallCount: number;
-  modelCallCount: number;
 }
 
 export const AgentEventDescriptorMsg = {
@@ -733,7 +742,6 @@ export const AgentEventDescriptorMsg = {
       durationMs: undefined,
       error: false,
       toolCallCount: 0,
-      modelCallCount: 0,
       ...value,
     } as AgentEventDescriptorMsg;
   },
