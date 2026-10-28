@@ -494,6 +494,10 @@ export function AgentTraceExplorer({
                             <p className="m-0 whitespace-pre-wrap text-[13px] leading-[1.7] text-ink [overflow-wrap:anywhere]">
                               {step.message}
                             </p>
+                          ) : step.submitsAnswer ? (
+                            <p className="m-0 text-[10px] text-muted italic">
+                              Submitted the answer; its outputs are under Tools.
+                            </p>
                           ) : (
                             <p className="m-0 text-[10px] text-muted italic">
                               The model wrote no text this turn.

@@ -12,7 +12,16 @@ import types
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Union, get_args, get_origin, get_type_hints
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    Literal,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from claude_agent_sdk import (
     AssistantMessage,
@@ -27,6 +36,7 @@ from claude_agent_sdk import (
     Message,
     RateLimitEvent,
     ResultMessage,
+    StreamEvent,
     SystemMessage,
     TextBlock,
     ThinkingBlock,
@@ -211,7 +221,9 @@ async def run(
                 if "Read" in skill_tools
                 else None
             ),
-            system_prompt=_system_prompt(signature.instructions, runtime.system_prompt_append),
+            system_prompt=_system_prompt(
+                signature.instructions, runtime.system_prompt_append, narrate=runtime.narrate
+            ),
             output_format={
                 "type": "json_schema",
                 "schema": _output_schema(
@@ -220,6 +232,8 @@ async def run(
             },
             cwd=str(directory),
             add_dirs=add_dirs,
+            # Each response's final usage and stop reason arrive only as a stream event.
+            include_partial_messages=True,
         )
         transcript = _Transcript(events)
         # The trace records file inputs by reference, never by host path.
@@ -509,9 +523,23 @@ def _output_files(
     return files
 
 
-def _system_prompt(instructions: str, append: str | None) -> str:
-    prompt = instructions.strip()
-    return f"{prompt}\n\n{append.strip()}" if append else prompt
+_NARRATION = (
+    "While you work, keep a short running account of what you are doing. Before each "
+    "tool call, write one or two plain sentences saying what you are about to do and "
+    "why. When a result changes your plan, say how. Before you submit your final "
+    "answer, write a brief summary of what you did and what you found. Keep these "
+    "notes short: they are a progress log for the people watching this run, not the "
+    "answer."
+)
+
+
+def _system_prompt(instructions: str, append: str | None, *, narrate: bool) -> str:
+    parts = [instructions.strip()]
+    if narrate:
+        parts.append(_NARRATION)
+    if append:
+        parts.append(append.strip())
+    return "\n\n".join(parts)
 
 
 def _mentions(annotation: object, target: type, seen: frozenset[type] = frozenset()) -> bool:
@@ -627,6 +655,22 @@ class _SdkUsage(BaseModel):
     cache_creation_input_tokens: int | None = None
 
 
+class _StopDelta(BaseModel):
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    stop_reason: str | None
+
+
+class _MessageDelta(BaseModel):
+    """A response's closing stream event: its stop reason and final token counts."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    type: Literal["message_delta"]
+    delta: _StopDelta
+    usage: _SdkUsage
+
+
 class _SystemInit(BaseModel):
     model_config = ConfigDict(extra="ignore", strict=True)
 
@@ -638,7 +682,10 @@ class _SystemInit(BaseModel):
 def _usage(raw: Mapping[str, Any] | None, cost: float | None = None) -> TokenUsage | None:
     if raw is None:
         return None
-    usage = _SdkUsage.model_validate(raw)
+    return _token_usage(_SdkUsage.model_validate(raw), cost)
+
+
+def _token_usage(usage: _SdkUsage, cost: float | None = None) -> TokenUsage:
     return TokenUsage(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
@@ -683,6 +730,9 @@ class _PendingTurn:
     message: AssistantMessage
     blocks: list[object] = field(default_factory=list)
     calls: dict[str, ToolCall] = field(default_factory=dict)
+    # From the response's closing stream event; the messages carry only the counts
+    # from when the response started. API errors the CLI reports have no such event.
+    final: _MessageDelta | None = None
 
 
 class _Transcript:
@@ -710,6 +760,7 @@ class _Transcript:
             case (
                 AssistantMessage(parent_tool_use_id=str())
                 | UserMessage(parent_tool_use_id=str())
+                | StreamEvent(parent_tool_use_id=str())
             ):
                 # A subagent's own messages: its work returns to this session as the
                 # result of the tool call that started it.
@@ -745,6 +796,12 @@ class _Transcript:
                                 call_id=block.id, name=block.name, turn=len(self.turns) + 1
                             ),
                         )
+            case StreamEvent(event={"type": "message_delta"} as event):
+                if self._pending is None:
+                    raise AgentStepExecutionError(
+                        "Claude closed a response before sending any of its content"
+                    )
+                self._pending.final = _MessageDelta.model_validate(event)
             case UserMessage(content=list() as blocks):
                 for block in blocks:
                     if isinstance(block, ToolResultBlock):
@@ -798,11 +855,13 @@ class _Transcript:
             reasoning=reasoning or None,
             tool_calls=tuple(pending.calls.values()),
             duration_ms=None,
-            usage=_usage(message.usage),
+            usage=None if pending.final is None else _token_usage(pending.final.usage),
             native=native.ClaudeAgentTurn(
                 message_id=message.message_id,
                 model=message.model,
-                stop_reason=message.stop_reason,
+                stop_reason=message.stop_reason
+                if pending.final is None
+                else pending.final.delta.stop_reason,
                 api_error=message.error,
             ),
         )

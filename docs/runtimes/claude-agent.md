@@ -47,7 +47,24 @@ class ClaudeAgent:
     permission_mode: PermissionMode = "default"
     system_prompt_append: str | None = None   # added after the signature's instructions
     max_budget_usd: PositiveFloat | None = None  # most US dollars one call may spend
+    narrate: bool = True                      # ask Claude to say what it is doing (see below)
 ```
+
+With `narrate` on, Avalanche adds this paragraph to the system prompt, after the
+signature's instructions and before `system_prompt_append`, so each turn of the
+trace says what Claude did:
+
+```text
+While you work, keep a short running account of what you are doing. Before each
+tool call, write one or two plain sentences saying what you are about to do and
+why. When a result changes your plan, say how. Before you submit your final
+answer, write a brief summary of what you did and what you found. Keep these
+notes short: they are a progress log for the people watching this run, not the
+answer.
+```
+
+It is an instruction, so Claude may still skip a note. Set `narrate=False` to leave
+it out.
 
 Each call ignores your own Claude setup: your user and project settings are not
 loaded, and MCP servers and connectors from your Claude account are not offered.
@@ -57,7 +74,7 @@ The Claude CLI's own bundled skills are hidden.
 ## Trace example
 
 The `Summarize` call above, as `result.trace`. Claude looked up a term, then
-answered through the `StructuredOutput` tool.
+summed up and answered through the `StructuredOutput` tool.
 
 ```json
 {
@@ -120,7 +137,7 @@ answered through the `StructuredOutput` tool.
     },
     {
       "index": 2,
-      "message": null,
+      "message": "The glossary defines DAG, so the summary can use it.",
       "reasoning": null,
       "tool_calls": [
         {
@@ -177,7 +194,7 @@ class ClaudeAgentTurn:
     format: Literal["claude_agent.messages/v1"]
     message_id: str | None
     model: str                     # the model that answered
-    stop_reason: str | None        # e.g. "tool_use", "end_turn"
+    stop_reason: str | None        # e.g. "tool_use", "end_turn"; from the closing stream event
     api_error: str | None          # set when the API failed; the turn then counts as failed
 ```
 
@@ -231,7 +248,7 @@ The session starting, with the tools Claude can use:
 
 | `AgentRequest` | Claude |
 | --- | --- |
-| `signature` instructions | The system prompt, followed by `system_prompt_append`. |
+| `signature` instructions | The system prompt, followed by the narration paragraph when `narrate` is on, then `system_prompt_append`. |
 | `signature` outputs | The JSON schema Claude must answer with. |
 | `inputs` | The prompt: one instruction line, then the inputs as JSON. |
 | `ava.File` inputs | Read where they are, without copies. The prompt gives each file's path, relative when it is inside the working folder. Folders outside it are added to the folders Claude may access. |
@@ -318,7 +335,7 @@ One turn per Claude response.
 | `reasoning` | Claude's thinking, when shown. |
 | `tool_calls` | Each tool Claude asked for, with `caller: "model"` and `duration_ms: null`. Step tools are named `mcp__avalanche__<name>`, and their `result` is the MCP content Claude got: text blocks holding the tool's return value as JSON. Claude's answer is a `StructuredOutput` call whose `arguments` are the outputs. |
 | `duration_ms` | `null` |
-| `usage` | The response's usage, without cost. |
+| `usage` | The response's final usage, without cost, from the stream event that closes the response. `null` for an API error the CLI reports itself, which has no such event. |
 | `native` | A `ClaudeAgentTurn`. |
 
 Tool arguments and results over 256 KiB are replaced by a marker.

@@ -61,6 +61,8 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
     predictCallCount: part.predict_calls.length + (omissions?.predict_count ?? 0),
     lm: { finishReason: part.finish_reason ?? undefined },
     usage: { main: tokenUsage(part.usage.main), sub: tokenUsage(part.usage.sub) },
+    // PredictRLM submits its answer from the code it runs, not with a tool call.
+    submitsAnswer: false,
   };
 }
 

@@ -35,6 +35,7 @@ import {
   type FlowInfoMsg,
   type NodeSnapshotMsg,
   type RunSnapshotMsg,
+  type TokenUsageMsg,
 } from "./model";
 import { Markdown } from "./Markdown";
 import { PythonSource } from "./PythonSource";
@@ -89,6 +90,15 @@ type NodeSourceState = {
 
 const DETAIL_CACHE_MAX_ENTRIES = 8;
 const TOKEN_NUMBER_FORMAT = new Intl.NumberFormat();
+
+/** Every input token, prompt-cache reads and writes included. */
+function totalInputTokens(usage: TokenUsageMsg) {
+  return (
+    Number(usage.inputTokens) +
+    Number(usage.cacheReadInputTokens ?? 0) +
+    Number(usage.cacheCreationInputTokens ?? 0)
+  );
+}
 
 const EMPTY_EVENTS: AgentEventDescriptorMsg[] = [];
 const EMPTY_EVENT_PAGE: DescriptorPageState<AgentEventDescriptorMsg> = {
@@ -746,7 +756,7 @@ function AgentAndStepInspector({
                 {traceUsage
                   ? ` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.input_tokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.output_tokens)} out · $${traceUsage.main.cost.toFixed(4)}`
                   : traceHeader.usage &&
-                    ` · ${TOKEN_NUMBER_FORMAT.format(Number(traceHeader.usage.inputTokens))} in / ${TOKEN_NUMBER_FORMAT.format(Number(traceHeader.usage.outputTokens))} out${traceHeader.usage.costUsd === undefined ? "" : ` · $${traceHeader.usage.costUsd.toFixed(4)}`}`}
+                    ` · ${TOKEN_NUMBER_FORMAT.format(totalInputTokens(traceHeader.usage))} in / ${TOKEN_NUMBER_FORMAT.format(Number(traceHeader.usage.outputTokens))} out${traceHeader.usage.costUsd === undefined ? "" : ` · $${traceHeader.usage.costUsd.toFixed(4)}`}`}
               </p>
               {traceUsage && (
                 <p className="m-0 whitespace-normal text-secondary [overflow-wrap:anywhere]">

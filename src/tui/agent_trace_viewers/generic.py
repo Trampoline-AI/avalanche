@@ -25,7 +25,13 @@ COMMON_LABELS = {
 def usage_label(usage: TokenUsage | None) -> str:
     if usage is None:
         return "not reported"
-    label = f"{usage.input_tokens} in / {usage.output_tokens} out"
+    # Input counts the prompt cache, which holds most of a cached session's input.
+    input_tokens = usage.input_tokens + sum(
+        count
+        for count in (usage.cache_read_input_tokens, usage.cache_creation_input_tokens)
+        if count is not None
+    )
+    label = f"{input_tokens} in / {usage.output_tokens} out"
     if usage.cost_usd is not None:
         label += f" · ${usage.cost_usd:.6f}"
     return label

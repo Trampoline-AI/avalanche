@@ -20,6 +20,7 @@ from claude_agent_sdk import (  # noqa: E402
     CLINotFoundError,
     ResultError,
     ResultMessage,
+    StreamEvent,
     SystemMessage,
     TextBlock,
     ThinkingBlock,
@@ -40,7 +41,7 @@ from avalanche.agent.contract import ToolSpec  # noqa: E402
 from avalanche.agent.declaration import ClaudeAgentDeclaration  # noqa: E402
 from avalanche.agent.live import RunStarted, TurnFinished  # noqa: E402
 from avalanche.agent.native.claude_agent import ClaudeAgentTurn  # noqa: E402
-from avalanche.agent.trace import ToolCall  # noqa: E402
+from avalanche.agent.trace import TokenUsage, ToolCall  # noqa: E402
 from avalanche.runtimes import ClaudeAgent  # noqa: E402
 
 sdk_module = importlib.import_module("avalanche.runtimes.claude_agent._sdk")
@@ -85,6 +86,24 @@ def _assistant(*blocks, usage=None, message_id=None) -> AssistantMessage:
     )
 
 
+def _closed(stop_reason: str, *, output_tokens: int) -> StreamEvent:
+    """A response's closing stream event, with its final token counts."""
+    return StreamEvent(
+        uuid=f"event-{next(_MESSAGE_IDS)}",
+        session_id="session-1",
+        event={
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+            "usage": {
+                "input_tokens": 3,
+                "output_tokens": output_tokens,
+                "cache_read_input_tokens": 900,
+                "cache_creation_input_tokens": 40,
+            },
+        },
+    )
+
+
 def _result(
     structured_output, *, subtype="success", is_error=False, errors=None, result=None
 ) -> ResultMessage:
@@ -111,6 +130,7 @@ def _success_stream(*, tool_error: bool = False, total: object = 15) -> list[obj
             TextBlock(text="Looking up the bonus."),
             ToolUseBlock(id="call-1", name="mcp__avalanche__lookup_bonus", input={"name": "a"}),
         ),
+        _closed("tool_use", output_tokens=40),
         UserMessage(
             content=[
                 ToolResultBlock(
@@ -121,6 +141,7 @@ def _success_stream(*, tool_error: bool = False, total: object = 15) -> list[obj
             ]
         ),
         _assistant(ToolUseBlock(id="call-2", name="StructuredOutput", input={"total": total})),
+        _closed("tool_use", output_tokens=12),
         UserMessage(content=[ToolResultBlock(tool_use_id="call-2", content="ok")]),
         _result({"total": total}),
     ]
@@ -177,9 +198,20 @@ async def test_a_session_maps_onto_outputs_turns_and_live_events(replay):
     assert header.usage.cost_usd == pytest.approx(0.0004)
     first, second = result.trace.turns
     assert (first.reasoning, first.message) == ("I need the bonus.", "Looking up the bonus.")
+    # Usage and stop reason come from each response's closing event, not the
+    # counts its messages carry from when it started.
     assert first.native == ClaudeAgentTurn(
-        message_id=first.native.message_id, model=MODEL, stop_reason=None, api_error=None
+        message_id=first.native.message_id, model=MODEL, stop_reason="tool_use", api_error=None
     )
+    assert [turn.usage for turn in result.trace.turns] == [
+        TokenUsage(
+            input_tokens=3,
+            output_tokens=output_tokens,
+            cache_read_input_tokens=900,
+            cache_creation_input_tokens=40,
+        )
+        for output_tokens in (40, 12)
+    ]
     (call,) = first.tool_calls
     assert call == ToolCall(
         call_id="call-1",
@@ -225,8 +257,44 @@ async def test_a_session_maps_onto_outputs_turns_and_live_events(replay):
     assert options.output_format["schema"]["properties"] == {
         "total": {"title": "Total", "type": "integer"}
     }
-    assert "Add the numbers" in options.system_prompt
+    assert options.include_partial_messages is True
+    assert options.system_prompt.startswith("Add the numbers")
+    assert options.system_prompt != Total.instructions.strip()
     assert '"a": 2' in seen["prompt"]
+
+
+@pytest.mark.asyncio
+async def test_narration_sits_between_the_instructions_and_the_append_and_can_be_off(replay):
+    seen = replay(_success_stream())
+    await _agent(system_prompt_append="Be terse.")(a=2, b=3)
+    narrated = seen["options"].system_prompt
+    replay(_success_stream())
+    await _agent(narrate=False, system_prompt_append="Be terse.")(a=2, b=3)
+
+    instructions = Total.instructions.strip()
+    assert seen["options"].system_prompt == f"{instructions}\n\nBe terse."
+    assert narrated.startswith(f"{instructions}\n\n") and narrated.endswith("\n\nBe terse.")
+    assert len(narrated) > len(seen["options"].system_prompt)
+
+
+@pytest.mark.asyncio
+async def test_a_response_without_a_closing_event_reports_no_usage(replay):
+    # API errors the CLI reports itself arrive as a message with no stream events.
+    replay(
+        [
+            _init(),
+            _assistant(
+                ToolUseBlock(id="call-1", name="StructuredOutput", input={"total": 5}),
+                usage={"input_tokens": 3, "output_tokens": 1},
+            ),
+            UserMessage(content=[ToolResultBlock(tool_use_id="call-1", content="ok")]),
+            _result({"total": 5}),
+        ]
+    )
+    result = await _agent()(a=2, b=3)
+
+    (turn,) = result.trace.turns
+    assert (turn.usage, turn.native.stop_reason) == (None, None)
 
 
 class Note(ava.Signature):
@@ -672,6 +740,7 @@ def test_declaration_and_merging_follow_the_runtime_rules():
             "permission_mode": "default",
             "system_prompt_append": None,
             "max_budget_usd": None,
+            "narrate": True,
         },
         builtin_tools=("Read",),
     )

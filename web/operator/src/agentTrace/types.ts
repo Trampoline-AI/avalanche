@@ -68,6 +68,8 @@ export interface AgentTraceStep {
   predictCallCount: number;
   lm?: TraceLmFinish;
   usage: TraceTurnUsage;
+  /** The turn's only tool calls handed back the step's answer. */
+  submitsAnswer: boolean;
 }
 
 export type AgentTraceStepSummary = Pick<
@@ -80,6 +82,7 @@ export type AgentTraceStepSummary = Pick<
   | "usage"
   | "toolCallCount"
   | "predictCallCount"
+  | "submitsAnswer"
 > & { hasExecution: boolean; hasReasoning: boolean };
 
 export function summarizeAgentTraceStep(step: AgentTraceStep): AgentTraceStepSummary {
@@ -92,6 +95,7 @@ export function summarizeAgentTraceStep(step: AgentTraceStep): AgentTraceStepSum
     usage: step.usage,
     toolCallCount: step.toolCallCount,
     predictCallCount: step.predictCallCount,
+    submitsAnswer: step.submitsAnswer,
     hasExecution: step.execution !== undefined,
     hasReasoning: step.reasoning !== undefined,
   };

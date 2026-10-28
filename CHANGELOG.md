@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- ClaudeAgent traces say what Claude did on each turn. By default the system prompt
+  now asks Claude to write a short note before each tool call and to sum up before
+  answering; set `ava.runtimes.ClaudeAgent(narrate=False)` to leave this out. In the
+  browser UI, a turn that only hands back the step's answer says so instead of
+  "The model wrote no text this turn".
+- ClaudeAgent turns record each response's real token usage and stop reason. Before,
+  a turn's output tokens were the count from when the response started, often a
+  fraction of the true figure, and `stop_reason` was always empty. A turn for an API
+  error the Claude CLI reports itself now has no usage (`null`) rather than a partial
+  count.
+- Input token counts in the browser UI and TUI include prompt-cache reads and writes,
+  which hold most of a Claude session's input. A cached Claude turn showed as "2 in".
+- New example `examples/claude_deck_bakeoff.py`: four ClaudeAgent steps that write
+  a Word memo, turn it into two competing PowerPoint decks in parallel, and judge
+  which deck is better.
 - Upgrade dependencies with known security advisories: `filelock` now requires
   `>=4.2.1,<5`; the lockfile moves `msgpack`, `virtualenv`, `graphql-core`,
   `setuptools` and OpenTelemetry to patched releases; the browser UI moves to
