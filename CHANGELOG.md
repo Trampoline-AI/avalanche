@@ -15,6 +15,9 @@
   on the corner, and the step sidebar header shows a "Claude Agent SDK" tag. Other
   agent steps keep the purple label. The colored bar on the left of agent and
   classifier nodes is gone.
+- The run header in the browser UI's step sidebar is now drawn by each runtime's
+  trace viewer. A Claude run shows its model, usage and turn count without
+  PredictRLM's "Main" and "Sub" labels; PredictRLM runs look as before.
 - A run's topology now records each agent node's runtime (`agent_runtime_kinds`,
   for example `"claude_agent"` or `"predict_rlm"`, with workflow defaults applied),
   so past runs show the right runtime even if the workflow changed. Runs recorded

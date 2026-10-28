@@ -2,7 +2,8 @@
 // viewer here fails the TypeScript build.
 import type { AgentLiveEvent, NativeEventFormat } from "../common";
 import { finishedTurn } from "../common";
-import type { AgentTraceStep } from "../types";
+import type { TraceHeaderMsg } from "../../model";
+import type { AgentTraceStep, TraceHeaderLine } from "../types";
 import { claudeAgentViewer } from "./claudeAgent";
 import { predictRlmViewer } from "./predictRlm";
 
@@ -13,6 +14,8 @@ export interface TraceViewer {
   turnUnit: string;
   /** Labels of the runtime's own (native) event kinds. */
   activityLabels: Record<string, string>;
+  /** The run header's model, usage and turn lines, as this runtime describes them. */
+  headerLines(header: TraceHeaderMsg): TraceHeaderLine[];
 }
 
 export const TRACE_VIEWERS = {

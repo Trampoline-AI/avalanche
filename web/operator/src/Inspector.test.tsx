@@ -953,10 +953,10 @@ describe("retained run inspection", () => {
     const header = screen
       .getByRole("complementary", { name: "Run inspector" })
       .querySelector("header")!;
-    // Input counts the prompt cache, which holds most of a Claude session's input.
-    expect(within(header).getByText("Main").parentElement).toHaveTextContent(
-      "retained-model · 952 in / 3 out · $0.0100",
-    );
+    // One model, so no Main or Sub labels; input counts the prompt cache, which holds
+    // most of a Claude session's input.
+    expect(header).toHaveTextContent("retained-model · 952 in / 3 out · $0.0100");
+    expect(within(header).queryByText("Main")).toBeNull();
     expect(within(header).queryByText("Sub")).toBeNull();
     expect(header).toHaveTextContent("3 turns");
     expect(readJsonDetail).not.toHaveBeenCalledWith("trace-body", expect.anything());

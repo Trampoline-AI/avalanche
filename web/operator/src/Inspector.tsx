@@ -36,7 +36,6 @@ import {
   type FlowInfoMsg,
   type NodeSnapshotMsg,
   type RunSnapshotMsg,
-  type TokenUsageMsg,
 } from "./model";
 import { ClaudeLogo, isClaudeRuntime } from "./ClaudeLogo";
 import { Markdown } from "./Markdown";
@@ -91,16 +90,6 @@ type NodeSourceState = {
 );
 
 const DETAIL_CACHE_MAX_ENTRIES = 8;
-const TOKEN_NUMBER_FORMAT = new Intl.NumberFormat();
-
-/** Every input token, prompt-cache reads and writes included. */
-function totalInputTokens(usage: TokenUsageMsg) {
-  return (
-    Number(usage.inputTokens) +
-    Number(usage.cacheReadInputTokens ?? 0) +
-    Number(usage.cacheCreationInputTokens ?? 0)
-  );
-}
 
 const EMPTY_EVENTS: AgentEventDescriptorMsg[] = [];
 const EMPTY_EVENT_PAGE: DescriptorPageState<AgentEventDescriptorMsg> = {
@@ -663,17 +652,11 @@ function AgentAndStepInspector({
     : undefined;
   const traceHeader = run && isAgentNode ? node?.trace?.header : undefined;
   const traceViewer = traceHeader ? viewerFor(traceHeader.native.format) : undefined;
-  // PredictRLM's header part holds its sub-model, iteration limit and per-model usage.
-  const predictRlmHeader =
-    traceHeader?.native.format === "predict_rlm.run/v1" ? traceHeader.native : undefined;
-  const traceUsage = predictRlmHeader?.usage;
   const declaredModels = isUnknownRecord(workflowDeclaration?.model)
     ? workflowDeclaration.model
     : undefined;
   const declaredMainModel = declaredModelName(declaredModels?.main);
   const declaredSubModel = declaredModelName(declaredModels?.sub);
-  const mainModel = traceHeader?.model;
-  const subModel = predictRlmHeader?.sub_model ?? undefined;
   const headerSeconds = traceHeader
     ? traceDurationSeconds(traceHeader.durationMs)
     : nodeSeconds;
@@ -762,30 +745,19 @@ function AgentAndStepInspector({
               className="mt-1 block min-w-0 text-left font-mono text-[10px] [overflow-wrap:anywhere]"
             />
           )}
-          {run && traceHeader && (
+          {run && traceHeader && traceViewer && (
             <div className="mt-2 grid min-w-0 gap-0.5 font-mono text-[8px] leading-[1.5]">
-              <p className="m-0 whitespace-normal text-secondary [overflow-wrap:anywhere]">
-                <span className="mr-1.5 text-muted uppercase">Main</span>
-                {mainModel ?? "—"}
-                {traceUsage
-                  ? ` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.input_tokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.main.output_tokens)} out · $${traceUsage.main.cost.toFixed(4)}`
-                  : traceHeader.usage &&
-                    ` · ${TOKEN_NUMBER_FORMAT.format(totalInputTokens(traceHeader.usage))} in / ${TOKEN_NUMBER_FORMAT.format(Number(traceHeader.usage.outputTokens))} out${traceHeader.usage.costUsd === undefined ? "" : ` · $${traceHeader.usage.costUsd.toFixed(4)}`}`}
-              </p>
-              {traceUsage && (
-                <p className="m-0 whitespace-normal text-secondary [overflow-wrap:anywhere]">
-                  <span className="mr-1.5 text-muted uppercase">Sub</span>
-                  {subModel ?? "—"}
-                  {` · ${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.input_tokens)} in / ${TOKEN_NUMBER_FORMAT.format(traceUsage.sub.output_tokens)} out · $${traceUsage.sub.cost.toFixed(4)}`}
+              {traceViewer.headerLines(traceHeader).map((line, index) => (
+                <p
+                  key={index}
+                  className={`m-0 whitespace-normal [overflow-wrap:anywhere] ${line.muted ? "text-muted" : "text-secondary"}`}
+                >
+                  {line.label && (
+                    <span className="mr-1.5 text-muted uppercase">{line.label}</span>
+                  )}
+                  {line.text}
                 </p>
-              )}
-              <p className="m-0 text-muted">
-                <span className="text-secondary">
-                  {traceHeader.turnCount}
-                  {predictRlmHeader && ` of ${predictRlmHeader.max_iterations}`}
-                </span>{" "}
-                {traceViewer?.turnUnit ?? "turns"}
-              </p>
+              ))}
             </div>
           )}
           {node?.error && (
