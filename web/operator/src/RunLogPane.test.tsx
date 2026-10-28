@@ -41,8 +41,8 @@ function page(records: LogRecordDescriptorMsg[], nextPageToken = ""): LogDescrip
 describe("run logs", () => {
   it.each([
     "Custom message duration=1930000ms",
-    "Agent code.executed iteration=2 duration=32min10s (1930000ms)",
-    "Agent code.executed iteration=2 duration=999ms error=duration=1930000ms",
+    "Agent code.executed turn=2 duration=32min10s (1930000ms)",
+    "Agent code.executed turn=2 duration=999ms error=duration=1930000ms",
   ])("preserves unrelated payloads and already formatted durations: %s", (message) => {
     expect(formatLogDuration(message)).toBe(message);
   });
@@ -63,11 +63,10 @@ describe("run logs", () => {
     async (milliseconds, formatted) => {
       const api = createApi({
         listLogPage: async () => page([log(1)]),
-        readTextDetail: async () =>
-          `Agent code.generated iteration=2 duration=${milliseconds}ms`,
+        readTextDetail: async () => `Agent code.generated turn=2 duration=${milliseconds}ms`,
       });
       render(<RunLogPane api={api} run={run} onSelectNode={() => undefined} />);
-      await screen.findByText(`Agent code.generated iteration=2 duration=${formatted}`);
+      await screen.findByText(`Agent code.generated turn=2 duration=${formatted}`);
     },
   );
 
