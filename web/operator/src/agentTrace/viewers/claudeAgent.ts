@@ -1,7 +1,8 @@
 import type { TokenUsage } from "../../generated/agentSchemas";
 import { finishedTurn, type AgentLiveEvent } from "../common";
-import type { AgentTraceStep, TraceTurnTokens } from "../types";
-import { toolCall } from "./common";
+import type { TraceHeaderMsg } from "../../model";
+import type { AgentTraceStep, TraceHeaderLine, TraceTurnTokens } from "../types";
+import { headerUsageText, toolCall } from "./common";
 import type { TraceViewer } from "./index";
 
 // Claude prices only the whole session, so a turn's cost is usually absent. Claude's
@@ -48,8 +49,18 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
   };
 }
 
+// One model, priced for the whole session.
+function headerLines(header: TraceHeaderMsg): TraceHeaderLine[] {
+  const model = header.model ?? "—";
+  return [
+    { text: header.usage ? `${model} · ${headerUsageText(header.usage)}` : model },
+    { text: `${header.turnCount} turns`, muted: true },
+  ];
+}
+
 export const claudeAgentViewer: TraceViewer = {
   turn,
+  headerLines,
   turnUnit: "turns",
   activityLabels: {
     "session.initialized": "Session started",

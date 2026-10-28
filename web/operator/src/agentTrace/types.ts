@@ -1,5 +1,13 @@
 // What the trace explorer shows, whatever the runtime.
 
+/** One line of a run's header: an optional label, then the text. */
+export interface TraceHeaderLine {
+  label?: string;
+  text: string;
+  /** Secondary detail, drawn quieter than the lines above it. */
+  muted?: boolean;
+}
+
 export interface TraceTokenUsage {
   inputTokens: number;
   outputTokens: number;

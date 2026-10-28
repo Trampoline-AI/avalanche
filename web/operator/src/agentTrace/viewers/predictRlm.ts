@@ -1,7 +1,8 @@
 import type { PredictRLMTokenUsage } from "../../generated/agentSchemas";
 import { finishedTurn, type AgentLiveEvent } from "../common";
-import type { AgentTraceStep, TraceTokenUsage } from "../types";
-import { toolCall } from "./common";
+import type { TraceHeaderMsg } from "../../model";
+import type { AgentTraceStep, TraceHeaderLine, TraceTokenUsage } from "../types";
+import { toolCall, usageText } from "./common";
 import type { TraceViewer } from "./index";
 
 function tokenUsage(usage: PredictRLMTokenUsage): TraceTokenUsage {
@@ -66,8 +67,29 @@ function turn(event: AgentLiveEvent): AgentTraceStep {
   };
 }
 
+// The main model and its sub-model are priced separately; iterations have a limit.
+function headerLines(header: TraceHeaderMsg): TraceHeaderLine[] {
+  const native = header.native;
+  if (native.format !== "predict_rlm.run/v1") {
+    throw new Error(`not a PredictRLM trace header: ${native.format}`);
+  }
+  const { main, sub } = native.usage;
+  return [
+    {
+      label: "Main",
+      text: `${header.model ?? "—"} · ${usageText(main.input_tokens, main.output_tokens, main.cost)}`,
+    },
+    {
+      label: "Sub",
+      text: `${native.sub_model ?? "—"} · ${usageText(sub.input_tokens, sub.output_tokens, sub.cost)}`,
+    },
+    { text: `${header.turnCount} of ${native.max_iterations} iterations`, muted: true },
+  ];
+}
+
 export const predictRlmViewer: TraceViewer = {
   turn,
+  headerLines,
   turnUnit: "iterations",
   activityLabels: {
     "iteration.recorded": "Turn finished",
