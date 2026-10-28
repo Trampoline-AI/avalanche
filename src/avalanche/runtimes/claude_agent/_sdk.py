@@ -909,6 +909,8 @@ class _Transcript:
         self._events = events
         self._summary = summary
         self._pending: _PendingTurn | None = None
+        # The response the stream is on, from its message_start event.
+        self._streaming: str | None = None
         self.turns: list[Turn] = []
         self.session_id: str | None = None
         self.model: str | None = None
@@ -964,12 +966,14 @@ class _Transcript:
                                 call_id=block.id, name=block.name, turn=len(self.turns) + 1
                             ),
                         )
+            case StreamEvent(event={"type": "message_start", "message": {"id": str() as id_}}):
+                self._streaming = id_
             case StreamEvent(event={"type": "message_delta"} as event):
-                if self._pending is None:
-                    raise AgentStepExecutionError(
-                        "Claude closed a response before sending any of its content"
-                    )
-                self._pending.final = _MessageDelta.model_validate(event)
+                # A response with no content blocks reaches no message, so it has no
+                # turn; its closing event must not overwrite the open turn's.
+                pending = self._pending
+                if pending is not None and pending.message.message_id == self._streaming:
+                    pending.final = _MessageDelta.model_validate(event)
             case UserMessage(content=list() as blocks):
                 for block in blocks:
                     if isinstance(block, ToolResultBlock):
