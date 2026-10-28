@@ -202,6 +202,14 @@
   color-scheme: light;
 }
 
+/* A portal scope fills the viewport, not an embedding host. Override the
+   unlayered scope defaults here rather than relying on layered utilities. */
+.deployment-confirm-backdrop {
+  height: auto;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--color-backdrop) 50%, transparent);
+}
+
 /* Theme belongs to each embedded root, not the host document. The explicit
    ancestor selector also works when Delta puts .dark on <html>. */
 :where(.dark) .avalanche-operator-ui,

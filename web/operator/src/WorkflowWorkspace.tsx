@@ -54,13 +54,15 @@ export interface WorkspaceDeployments {
   selectedId?: string;
   /** Selects a deployment's definition; does not change the current deployment. */
   onSelect: (id: string) => void;
-  /** Optional non-current-row action with an inline confirmation. Absent: no action. */
+  /** Optional non-current-row action with a page-level confirmation modal. Absent: no action. */
   setCurrent?: {
     /** Action label, rendered lowercase. Default "set current". */
     label?: string;
+    /** Modal title. Default "Set current deployment?". */
+    confirmTitle?: string;
     /** Confirmation wording for the chosen deployment. */
     confirmText: (item: WorkspaceDeployment) => string;
-    /** Moves the current pointer. Rejected Error messages are shown inline. */
+    /** Moves the current pointer. Rejected Error messages are shown inside the modal. */
     onConfirm: (id: string) => Promise<void>;
   };
 }

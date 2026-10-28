@@ -141,7 +141,11 @@ it.each([false, true])(
     );
     const currentDeployment = screen.getByRole("button", { name: /^dpl-current-full-id,/ });
     expect(currentDeployment).toHaveAttribute("aria-current", "true");
-    expect(document.querySelector(".deployment-list-columns, [aria-hidden='true'] .truncate.normal-case")?.textContent).toBe("id");
+    expect(
+      document.querySelector(
+        ".deployment-list-columns, [aria-hidden='true'] .truncate.normal-case",
+      )?.textContent,
+    ).toBe("id");
     expect(currentDeployment.parentElement).toHaveTextContent(/current\s*●/);
     expect(currentDeployment).toHaveClass("text-left");
     expect(currentDeployment.nextElementSibling).toHaveClass("justify-end", "text-right");
@@ -160,7 +164,9 @@ it.each([false, true])(
     onSelect.mockClear();
     fireEvent.click(previous.nextElementSibling!);
     expect(onSelect).toHaveBeenLastCalledWith(deploymentItems[1].id);
-    fireEvent.click(currentDeployment.parentElement!.querySelector(".deployment-current-marker")!);
+    fireEvent.click(
+      currentDeployment.parentElement!.querySelector(".deployment-current-marker")!,
+    );
     expect(onSelect).toHaveBeenLastCalledWith(deploymentItems[0].id);
     expect(currentDeployment.parentElement!.querySelectorAll("button")).toHaveLength(1);
     expect(onSelectRun).not.toHaveBeenCalled();
@@ -251,11 +257,11 @@ it.each([false, true])(
 );
 
 it.each([
-  { result: "success", label: undefined },
-  { result: "failure", label: "Use deployment" },
+  { result: "success", label: undefined, confirmTitle: undefined },
+  { result: "failure", label: "Use deployment", confirmTitle: "Change deployment?" },
 ])(
-  "confirms set current inline with pending and $result without selecting a row",
-  async ({ result, label }) => {
+  "confirms set current in a modal with pending and $result without selecting a row",
+  async ({ result, label, confirmTitle }) => {
     const pending = Promise.withResolvers<void>();
     const onConfirm = vi.fn(() => pending.promise);
     const onSelect = vi.fn();
@@ -269,6 +275,7 @@ it.each([
       onSelect,
       setCurrent: {
         label,
+        confirmTitle,
         confirmText: (item: (typeof deploymentItems)[number]) =>
           `Use ${item.label} for new runs?`,
         onConfirm,
@@ -277,7 +284,9 @@ it.each([
     const view = render(
       <RunListPanel {...timelineProps} deployments={deployments} timelineView="deployments" />,
     );
-    const actions = await screen.findAllByRole("button", { name: (label ?? "set current").toLowerCase() });
+    const actions = await screen.findAllByRole("button", {
+      name: (label ?? "set current").toLowerCase(),
+    });
     expect(actions).toHaveLength(2);
     const [action] = actions;
     const previous = screen.getByRole("button", { name: /^dpl-previous-full-id,/ });
@@ -286,7 +295,9 @@ it.each([
     expect(current).toHaveAttribute("aria-current", "true");
     expect(current.parentElement).toHaveTextContent(/current\s*●/);
     expect(
-      within(current.parentElement!).queryByRole("button", { name: (label ?? "set current").toLowerCase() }),
+      within(current.parentElement!).queryByRole("button", {
+        name: (label ?? "set current").toLowerCase(),
+      }),
     ).not.toBeInTheDocument();
     expect(action).toBeVisible();
     expect(action).toBeEnabled();
@@ -300,7 +311,13 @@ it.each([
       "font-normal",
       "focus-visible:outline-acid",
     );
-    expect(action).not.toHaveClass("border", "border-line", "uppercase", "inline-flex", "hover:underline");
+    expect(action).not.toHaveClass(
+      "border",
+      "border-line",
+      "uppercase",
+      "inline-flex",
+      "hover:underline",
+    );
     const actionLabel = action.querySelector(".deployment-set-current-label")!;
     expect(actionLabel).toHaveClass("underline", "group-hover:no-underline", "font-normal");
     expect(actionLabel).not.toHaveClass("truncate");
@@ -318,22 +335,58 @@ it.each([
     expect(action.querySelector(".lucide-loader-circle")).toBeInTheDocument();
     expect(actions[1]).toBeDisabled();
     expect(onSelect).not.toHaveBeenCalled();
-    expect(screen.getByText("Use Previous for new runs?")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    expect(screen.queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+    const title = confirmTitle ?? "Set current deployment?";
+    let dialog = screen.getByRole("alertdialog", { name: title });
+    expect(dialog).toHaveAttribute("aria-modal", "true");
+    expect(view.container).not.toContainElement(dialog);
+    const backdrop = dialog.parentElement!;
+    expect(backdrop).toHaveClass("avalanche-operator-ui");
+    expect(backdrop.parentElement).toBe(document.body);
+    expect(dialog).toHaveAccessibleDescription(/Use Previous for new runs\?/);
+    expect(within(dialog).getByTitle(deploymentItems[1].id)).toHaveTextContent("dpl-previous…");
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: "Tab", shiftKey: true });
+    expect(within(dialog).getByRole("button", { name: "Set current" })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: "Tab" });
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(action).toHaveFocus();
+    fireEvent.click(action);
+    fireEvent.click(screen.getByRole("alertdialog").parentElement!);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(action).toHaveFocus();
+    fireEvent.click(action);
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: "Cancel" }),
+    );
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(action).toBeEnabled();
+    expect(action).toHaveFocus();
     expect(onConfirm).not.toHaveBeenCalled();
     fireEvent.click(action);
-    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    dialog = screen.getByRole("alertdialog", { name: title });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Set current" }));
     expect(onConfirm).toHaveBeenCalledExactlyOnceWith(deploymentItems[1].id);
-    expect(screen.getByRole("button", { name: "Setting current…" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Set current" })).toBeDisabled();
+    expect(
+      within(dialog)
+        .getByRole("button", { name: "Set current" })
+        .querySelector(".lucide-loader-circle"),
+    ).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    fireEvent.keyDown(dialog, { key: "Escape" });
+    fireEvent.click(dialog.parentElement!);
+    fireEvent.keyDown(dialog, { key: "Tab" });
+    expect(dialog).toBeInTheDocument();
+    expect(dialog).toHaveFocus();
     expect(action).toBeDisabled();
     expect(action).toHaveAttribute("aria-busy", "true");
     expect(actions[1]).toBeDisabled();
     if (result === "success") {
       await act(async () => pending.resolve());
-      expect(screen.queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+      expect(action).toHaveFocus();
       // The host owns the pointer refresh; apply its returned deployment state.
       view.rerender(
         <RunListPanel
@@ -361,14 +414,16 @@ it.each([
       await act(async () =>
         pending.reject(new Error("The current deployment changed; reload and retry.")),
       );
-      expect(screen.getByRole("alert")).toHaveTextContent(
+      expect(screen.getByRole("alertdialog", { name: title })).toBe(dialog);
+      expect(within(dialog).getByRole("alert")).toHaveTextContent(
         "The current deployment changed; reload and retry.",
       );
-      expect(screen.getByRole("button", { name: "Confirm" })).toBeEnabled();
+      expect(within(dialog).getByRole("button", { name: "Set current" })).toBeEnabled();
       expect(action).toBeDisabled();
       expect(action).toHaveAttribute("aria-busy", "true");
-      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
       expect(action).toBeEnabled();
+      expect(action).toHaveFocus();
     }
     expect(onSelect).not.toHaveBeenCalled();
   },

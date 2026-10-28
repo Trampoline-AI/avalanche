@@ -1,5 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { LoaderCircle } from "lucide-react";
 
 import type { WorkspaceDeployment, WorkspaceDeployments } from "./WorkflowWorkspace";
@@ -11,8 +12,124 @@ const timestampFormat = new Intl.DateTimeFormat(undefined, {
   hour: "2-digit",
   minute: "2-digit",
 });
-const actionClass =
-  "shrink-0 cursor-pointer rounded border-0 bg-transparent font-mono text-[10px] text-secondary hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-acid disabled:cursor-wait disabled:opacity-50";
+const dialogButtonClass =
+  "cursor-pointer rounded border px-3 py-2 text-xs focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid disabled:cursor-wait disabled:opacity-50";
+
+function SetCurrentDialog({
+  item,
+  setCurrent,
+  pending,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  item: WorkspaceDeployment;
+  setCurrent: NonNullable<WorkspaceDeployments["setCurrent"]>;
+  pending: boolean;
+  error?: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const id = useId();
+  const dialog = useRef<HTMLDivElement>(null);
+  const cancel = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    cancel.current?.focus();
+  }, []);
+  useEffect(() => {
+    const focusInside = (): HTMLElement[] => {
+      const buttons =
+        dialog.current?.querySelectorAll<HTMLButtonElement>("button:not(:disabled)");
+      return buttons?.length ? [...buttons] : [dialog.current!];
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!pending) onCancel();
+      } else if (event.key === "Tab") {
+        event.preventDefault();
+        event.stopPropagation();
+        const targets = focusInside();
+        const index = targets.indexOf(document.activeElement as HTMLButtonElement);
+        targets[(index + (event.shiftKey ? -1 : 1) + targets.length) % targets.length].focus();
+      }
+    };
+    const onFocus = (event: FocusEvent) => {
+      if (!dialog.current?.contains(event.target as Node)) focusInside()[0].focus();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("focusin", onFocus);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("focusin", onFocus);
+    };
+  }, [pending, onCancel]);
+
+  return createPortal(
+    <div
+      className="avalanche-operator-ui deployment-confirm-backdrop fixed inset-0 z-[1000] flex items-center justify-center p-4"
+      onClick={(event) => {
+        event.stopPropagation();
+        if (event.target === event.currentTarget && !pending) onCancel();
+      }}
+    >
+      <div
+        ref={dialog}
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby={`${id}-title`}
+        aria-describedby={`${id}-body`}
+        tabIndex={-1}
+        className="deployment-confirm-dialog max-h-full w-full max-w-md overflow-auto rounded border border-line bg-panel p-5 font-mono text-ink shadow-[0_12px_40px_var(--color-shadow-5)]"
+      >
+        <h2 id={`${id}-title`} className="m-0 mb-3 text-base font-semibold">
+          {setCurrent.confirmTitle ?? "Set current deployment?"}
+        </h2>
+        <div id={`${id}-body`} className="text-xs leading-relaxed">
+          <p className="m-0 break-words">{setCurrent.confirmText(item)}</p>
+          <p className="mt-2 mb-0 text-secondary">
+            Deployment:{" "}
+            <span title={item.id}>
+              {item.id.length > 12 ? `${item.id.slice(0, 12)}…` : item.id}
+            </span>
+          </p>
+        </div>
+        {error && (
+          <p role="alert" className="mt-3 mb-0 break-words text-xs text-danger">
+            {error}
+          </p>
+        )}
+        <div className="mt-5 flex justify-end gap-3">
+          <button
+            ref={cancel}
+            type="button"
+            disabled={pending}
+            onClick={onCancel}
+            className={`${dialogButtonClass} border-line bg-panel text-ink hover:bg-hover`}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={pending}
+            onClick={onConfirm}
+            className={`${dialogButtonClass} inline-flex items-center gap-2 border-acid bg-selected text-acid hover:bg-selected-hover`}
+          >
+            {pending && (
+              <LoaderCircle
+                aria-hidden="true"
+                className="size-3 animate-spin motion-reduce:animate-none"
+              />
+            )}
+            Set current
+          </button>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
 
 export function DeploymentList({
   deployments,
@@ -33,6 +150,10 @@ export function DeploymentList({
   const [pending, setPending] = useState(false);
   const [confirmationError, setConfirmationError] = useState<string>();
   const confirming = useRef(false);
+  const confirmationTrigger = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!confirmation) confirmationTrigger.current?.focus();
+  }, [confirmation]);
   const rowHeight = expanded ? 34 : 27.5;
   const statusColumnClass = `deployment-list-status flex shrink-0 items-center justify-end text-right ${expanded ? "mr-[20px] w-[120px] text-[11px]" : "mr-[17px] w-[100px] text-[10px]"} font-mono leading-none`;
   const virtualizer = useVirtualizer({
@@ -92,43 +213,19 @@ export function DeploymentList({
   return (
     <>
       {confirmation && setCurrent && (
-        <div
-          className="shrink-0 border-b border-run-list-line bg-panel p-3 font-mono text-[10px] text-ink"
-          role="group"
-          aria-label="Confirm current deployment"
-        >
-          <p className="m-0 mb-2 break-words">{setCurrent.confirmText(confirmation)}</p>
-          {confirmationError && (
-            <p role="alert" className="mb-2 text-danger">
-              {confirmationError}
-            </p>
-          )}
-          <div className="flex items-center gap-3">
-            <button
-              type="button"
-              className={actionClass}
-              disabled={pending}
-              onClick={(event) => {
-                event.stopPropagation();
-                void confirm();
-              }}
-            >
-              {pending ? "Setting current…" : "Confirm"}
-            </button>
-            <button
-              type="button"
-              className={actionClass}
-              disabled={pending}
-              onClick={(event) => {
-                event.stopPropagation();
-                setConfirmation(undefined);
-                setConfirmationError(undefined);
-              }}
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
+        <SetCurrentDialog
+          item={confirmation}
+          setCurrent={setCurrent}
+          pending={pending}
+          error={confirmationError}
+          onCancel={() => {
+            setConfirmation(undefined);
+            setConfirmationError(undefined);
+          }}
+          onConfirm={() => {
+            void confirm();
+          }}
+        />
       )}
       <div
         className={`flex shrink-0 items-center border-b border-run-list-line ${expanded ? "h-9" : "h-7"}`}
@@ -199,6 +296,7 @@ export function DeploymentList({
                         className="deployment-set-current group cursor-pointer whitespace-nowrap border-0 bg-transparent p-0 font-mono text-[length:inherit] leading-none font-normal text-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid disabled:cursor-wait disabled:opacity-50"
                         onClick={(event) => {
                           event.stopPropagation();
+                          confirmationTrigger.current = event.currentTarget;
                           setConfirmation(item);
                           setConfirmationError(undefined);
                         }}

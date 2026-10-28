@@ -208,18 +208,23 @@ The host's `deployments: WorkspaceDeployments` contains:
   not move the current pointer or select a run.
 - `error?: string` (default none) shows an inline error. Loading and empty states
   are rendered by operator-ui, not by the host.
-- `setCurrent?: { label?: string; confirmText: (item: WorkspaceDeployment) => string;
+- `setCurrent?: { label?: string; confirmTitle?: string; confirmText: (item: WorkspaceDeployment) => string;
 onConfirm: (id: string) => Promise<void> }` (default none) adds a non-current-row
   link-style button, labeled **set current** unless overridden (rendered lowercase),
   styled exactly like `currentRowAction`: underlined at rest, underline removed on hover,
-  text only (no icon; a small spinner shows only while confirming), no border/background/padding; keyboard focus has a visible ring.
-  It stays visible on every non-current row and opens an inline confirmation
-  with the host's wording and Confirm/Cancel buttons. Row actions are disabled
-  while confirmation is open; the requested row shows a spinner and `aria-busy`
-  throughout confirmation and the request. Confirm closes on resolve and displays
-  the rejection's `Error.message` inline on failure.
-  Neither the action nor its confirmation selects a deployment. The host updates
-  `items[].current` after success.
+  text only (no icon at rest; a small spinner shows while confirming), no border/background/padding;
+  keyboard focus has a visible ring. It opens a page-level modal `alertdialog` portalled to
+  `document.body`, outside the timeline. The portal carries the package's CSS scope class;
+  light/dark colors follow `.dark` on the host's `html` or `body`.
+  `confirmTitle` defaults to **Set current deployment?**; `confirmText(item)` supplies the body,
+  followed by the abbreviated deployment ID (full ID on hover). Initial focus is on **Cancel**;
+  Tab/Shift+Tab stay inside, Escape or backdrop click cancels and returns focus to the row action.
+  **Set current** invokes `onConfirm`. Both dialog buttons are disabled and the primary button
+  shows a spinner during the request; Escape/backdrop cannot cancel it. Success closes the modal;
+  failure leaves it open with the rejection's `Error.message` in an alert inside the modal.
+  Row actions are disabled while the modal is open; the target row shows a spinner and `aria-busy`
+  throughout confirmation and the request. Neither the action nor its confirmation selects a
+  deployment. The host updates `items[].current` after success.
 
 The pinned Current row and its optional action appear only on **Overview**, not on
 **Deployments**. Run status chips and run filters appear only in the expanded
