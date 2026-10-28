@@ -194,18 +194,20 @@ export function DeploymentList({
                         aria-label={(setCurrent.label ?? "set current").toLocaleLowerCase()}
                         aria-busy={confirmation?.id === item.id}
                         disabled={!!confirmation || pending}
-                        className="deployment-set-current inline-flex max-w-full cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-mono text-[length:inherit] leading-none text-secondary underline underline-offset-2 hover:text-ink hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid disabled:cursor-wait disabled:opacity-50"
+                        className="deployment-set-current group cursor-pointer whitespace-nowrap border-0 bg-transparent p-0 font-mono text-[length:inherit] leading-none font-normal text-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid disabled:cursor-wait disabled:opacity-50"
                         onClick={(event) => {
                           event.stopPropagation();
                           setConfirmation(item);
                           setConfirmationError(undefined);
                         }}
                       >
-                        <span className="truncate">{(setCurrent.label ?? "set current").toLocaleLowerCase()}</span>
+                        <span className="deployment-set-current-label font-normal underline underline-offset-2 group-hover:no-underline">
+                          {(setCurrent.label ?? "set current").toLocaleLowerCase()}
+                        </span>
                         {confirmation?.id === item.id && (
                           <LoaderCircle
                             aria-hidden="true"
-                            className="size-3 shrink-0 animate-spin motion-reduce:animate-none"
+                            className="ml-1 inline size-3 animate-spin align-[-2px] motion-reduce:animate-none"
                           />
                         )}
                       </button>

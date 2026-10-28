@@ -70,6 +70,8 @@ export interface WorkflowWorkspaceProps {
   currentLabel?: string;
   /** Muted trailing text action. Omitted: no action and no caret. */
   currentRowAction?: { label: string; onClick: () => void };
+  /** Render the pinned current row on the Overview tab. Default true; false hides it on every tab. */
+  showCurrentRow?: boolean;
   /** Enables Overview | Deployments tabs; omitted: the stock runs-only timeline. */
   deployments?: WorkspaceDeployments;
   /** Controlled timeline tab when set; otherwise internal state starts at "runs". */
@@ -92,7 +94,12 @@ export interface WorkflowWorkspaceProps {
 
 interface WorkflowWorkspaceSurfaceProps extends Pick<
   WorkflowWorkspaceProps,
-  "currentLabel" | "currentRowAction" | "deployments" | "timelineView" | "onTimelineViewChange"
+  | "currentLabel"
+  | "currentRowAction"
+  | "showCurrentRow"
+  | "deployments"
+  | "timelineView"
+  | "onTimelineViewChange"
 > {
   api: OperatorApi;
   state: OperatorProjection;
@@ -128,6 +135,7 @@ export function WorkflowWorkspaceSurface({
   bottomRightPanel,
   currentLabel,
   currentRowAction,
+  showCurrentRow,
   deployments,
   timelineView,
   onTimelineViewChange,
@@ -352,6 +360,7 @@ export function WorkflowWorkspaceSurface({
       onClose={closeAllRuns}
       currentLabel={currentLabel}
       currentRowAction={currentRowAction}
+      showCurrentRow={showCurrentRow}
       deployments={deployments}
       timelineView={timelineView}
       onTimelineViewChange={onTimelineViewChange}
@@ -543,6 +552,7 @@ export function WorkflowWorkspace({
   navigation,
   currentLabel,
   currentRowAction,
+  showCurrentRow,
   deployments,
   timelineView,
   onTimelineViewChange,
@@ -607,6 +617,7 @@ export function WorkflowWorkspace({
       bottomRightPanel={bottomRightPanel}
       currentLabel={currentLabel}
       currentRowAction={currentRowAction}
+      showCurrentRow={showCurrentRow}
       deployments={deployments}
       timelineView={timelineView}
       onTimelineViewChange={onTimelineViewChange}

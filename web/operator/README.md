@@ -169,7 +169,8 @@ run history. Hosts supply data and callbacks; operator-ui owns the rendered UI.
 | Prop                                                             | Default / behavior                                                                                                   |
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `currentLabel?: string`                                          | `"Current definition"` (nullish fallback). Delta uses `"Current deployment"`.                                        |
-| `currentRowAction?: { label: string; onClick: () => void }`      | No action or caret. When supplied, lowercase underlined link text (underline off on hover); does not select Current.|
+| `currentRowAction?: { label: string; onClick: () => void }`      | No action or caret. When supplied, lowercase link text, underline on the text itself (removed on hover), normal weight; does not select Current.|
+| `showCurrentRow?: boolean`                                       | `true`: pinned current row on the Overview tab. `false`: no pinned row on any tab; the list starts under the tabs.   |
 | `deployments?: WorkspaceDeployments`                             | Absent: no tabs. Present: **Overview \| Deployments** tabs in both compact and expanded headers.                         |
 | `timelineView?: "runs" \| "deployments"`                         | Omitted: internal state starts at `"runs"`. Supplied: controlled by the host. Without `deployments`, only runs show. |
 | `onTimelineViewChange?: (view: "runs" \| "deployments") => void` | No callback by default. Called on tab requests in both modes; controlled hosts must update `timelineView`.           |

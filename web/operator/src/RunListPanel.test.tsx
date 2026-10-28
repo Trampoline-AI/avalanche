@@ -13,6 +13,29 @@ const deploymentItems = [
 ];
 const timelineProps = { workflowId: workflow.workflowId, runs: {}, onSelectRun: vi.fn() };
 
+it("hides the pinned current row on every tab when showCurrentRow is false", () => {
+  render(
+    <RunListPanel
+      {...timelineProps}
+      showCurrentRow={false}
+      currentLabel="Current deployment"
+      deployments={{
+        items: deploymentItems,
+        hasMore: false,
+        loading: false,
+        onSelect: vi.fn(),
+      }}
+    />,
+  );
+  expect(screen.queryByRole("button", { name: "Current deployment" })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("tab", { name: "Deployments" }));
+  expect(screen.queryByRole("button", { name: "Current deployment" })).not.toBeInTheDocument();
+  expect(screen.getByRole("button", { name: /^dpl-current-full-id,/ })).toHaveAttribute(
+    "aria-current",
+    "true",
+  );
+});
+
 it("defaults to Current definition without a caret, action or tabs", () => {
   render(<RunListPanel {...timelineProps} />);
   const current = screen.getByRole("button", { name: "Current definition" });
@@ -59,7 +82,10 @@ it.each([false, true])(
     );
     const action = screen.getByRole("button", { name: "see all" });
     expect(current).not.toContainElement(action);
-    expect(action).toHaveClass("underline", "hover:no-underline");
+    // The decoration sits on the painted text, not the button box.
+    const actionLabel = action.querySelector(".current-row-action-label")!;
+    expect(actionLabel).toHaveClass("underline", "group-hover:no-underline", "font-normal");
+    expect(action).toHaveClass("group");
     expect(action).not.toHaveClass("border", "hover:bg-canvas");
     fireEvent.click(action);
     expect(onClick).toHaveBeenCalledOnce();
@@ -263,11 +289,14 @@ it.each([
       "bg-transparent",
       "p-0",
       "text-secondary",
-      "underline",
-      "hover:no-underline",
+      "group",
+      "font-normal",
       "focus-visible:outline-acid",
     );
-    expect(action).not.toHaveClass("border", "border-line", "uppercase", "hover:underline");
+    expect(action).not.toHaveClass("border", "border-line", "uppercase", "inline-flex", "hover:underline");
+    const actionLabel = action.querySelector(".deployment-set-current-label")!;
+    expect(actionLabel).toHaveClass("underline", "group-hover:no-underline", "font-normal");
+    expect(actionLabel).not.toHaveClass("truncate");
     // Same link style as the Current row action; text only, no icon at rest.
     expect(action.querySelector("svg")).not.toBeInTheDocument();
     expect(action.textContent).toBe((label ?? "set current").toLowerCase());
@@ -431,6 +460,13 @@ it("combines exact status, run ID and date filters without losing hidden active 
   expect(screen.getByRole("searchbox")).not.toBeVisible();
   expect(screen.queryByRole("combobox", { name: "Status" })).not.toBeInTheDocument();
   const statusGroup = screen.getByRole("group", { name: "Filter by status" });
+  // Label on its own line; every chip on one non-wrapping row under it.
+  expect(statusGroup).toHaveClass("flex-col");
+  const chipRow = statusGroup.querySelector<HTMLElement>(".status-chip-row")!;
+  expect(chipRow).toHaveClass("flex-nowrap", "overflow-x-auto");
+  expect(within(chipRow).getAllByRole("button")).toHaveLength(
+    within(statusGroup).getAllByRole("button").length,
+  );
   expect(
     within(statusGroup)
       .getAllByRole("button")

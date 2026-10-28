@@ -16,7 +16,7 @@ const EXPANDED_RUN_ROW_HEIGHT = 34;
 const RUN_ROW_OVERSCAN = 8;
 const RUN_PAGE_SIZE = 25;
 const statusChipClass = (active: boolean) =>
-  `inline-flex h-7 cursor-pointer items-center gap-1.5 rounded border px-2.5 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-acid ${active ? "border-acid bg-selected text-acid" : "border-transparent bg-panel text-ink hover:border-acid"}`;
+  `inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded border px-2 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-acid ${active ? "border-acid bg-selected text-acid" : "border-transparent bg-panel text-ink hover:border-acid"}`;
 const RUN_TIMESTAMP_FORMAT = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
@@ -26,7 +26,12 @@ const RUN_TIMESTAMP_FORMAT = new Intl.DateTimeFormat(undefined, {
 
 interface RunListPanelProps extends Pick<
   WorkflowWorkspaceProps,
-  "currentLabel" | "currentRowAction" | "deployments" | "timelineView" | "onTimelineViewChange"
+  | "currentLabel"
+  | "currentRowAction"
+  | "showCurrentRow"
+  | "deployments"
+  | "timelineView"
+  | "onTimelineViewChange"
 > {
   workflowId: string;
   runs: Record<string, RunSummaryMsg>;
@@ -67,6 +72,7 @@ export function RunListPanel({
   expanded = false,
   currentLabel,
   currentRowAction,
+  showCurrentRow = true,
   deployments,
   timelineView,
   onTimelineViewChange,
@@ -288,11 +294,12 @@ export function RunListPanel({
             <div
               role="group"
               aria-label="Filter by status"
-              className="flex flex-wrap items-center gap-2"
+              className="flex min-w-0 flex-col gap-[8px]"
             >
-              <span className="mr-1 font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase">
+              <span className="font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase">
                 Status
               </span>
+              <div className="status-chip-row flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto [scrollbar-width:none]">
               <button
                 type="button"
                 className={statusChipClass(!status)}
@@ -318,6 +325,7 @@ export function RunListPanel({
                   {value} <span className="font-mono text-secondary">{count}</span>
                 </button>
               ))}
+              </div>
             </div>
             <div className="grid grid-cols-2 gap-[12px]">
               <label className="flex min-w-0 flex-col gap-[8px] font-medium">
@@ -365,7 +373,7 @@ export function RunListPanel({
             </details>
           </div>
         )}
-        {view === "runs" && (
+        {view === "runs" && showCurrentRow && (
           <div
             className={`flex shrink-0 items-center shadow-[inset_0_-1px_var(--color-run-list-line)] ${selectedRunId === undefined ? "bg-selected" : "bg-transparent"}`}
           >
@@ -390,9 +398,11 @@ export function RunListPanel({
                   event.stopPropagation();
                   currentRowAction.onClick();
                 }}
-                className={`current-row-action shrink-0 cursor-pointer rounded border-0 bg-transparent p-0 text-[10px] text-secondary underline underline-offset-2 hover:text-ink hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid ${expanded ? "mr-[20px]" : "mr-[17px]"}`}
+                className={`current-row-action group shrink-0 cursor-pointer rounded border-0 bg-transparent p-0 text-[10px] font-normal text-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid ${expanded ? "mr-[20px]" : "mr-[17px]"}`}
               >
-                {currentRowAction.label.toLocaleLowerCase()}
+                <span className="current-row-action-label font-normal underline underline-offset-2 group-hover:no-underline">
+                  {currentRowAction.label.toLocaleLowerCase()}
+                </span>
               </button>
             )}
           </div>
