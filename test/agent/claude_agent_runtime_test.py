@@ -86,6 +86,15 @@ def _assistant(*blocks, usage=None, message_id=None) -> AssistantMessage:
     )
 
 
+def _started(message_id: str) -> StreamEvent:
+    """A response's opening stream event."""
+    return StreamEvent(
+        uuid=f"event-{next(_MESSAGE_IDS)}",
+        session_id="session-1",
+        event={"type": "message_start", "message": {"id": message_id}},
+    )
+
+
 def _closed(stop_reason: str, *, output_tokens: int, input_counts: bool = True) -> StreamEvent:
     """A response's closing stream event, with its final token counts.
 
@@ -142,10 +151,12 @@ def _success_stream(
 ) -> list[object]:
     return [
         _init(),
+        _started("msg-lookup"),
         _assistant(
             ThinkingBlock(thinking="I need the bonus.", signature="sig"),
             TextBlock(text="Looking up the bonus."),
             ToolUseBlock(id="call-1", name="mcp__avalanche__lookup_bonus", input={"name": "a"}),
+            message_id="msg-lookup",
         ),
         _closed("tool_use", output_tokens=40),
         UserMessage(
@@ -157,7 +168,11 @@ def _success_stream(
                 )
             ]
         ),
-        _assistant(ToolUseBlock(id="call-2", name="StructuredOutput", input={"total": total})),
+        _started("msg-answer"),
+        _assistant(
+            ToolUseBlock(id="call-2", name="StructuredOutput", input={"total": total}),
+            message_id="msg-answer",
+        ),
         _closed("tool_use", output_tokens=12),
         UserMessage(content=[ToolResultBlock(tool_use_id="call-2", content="ok")]),
         _result({"total": total}, summary=summary),
@@ -339,7 +354,10 @@ async def test_a_closing_event_without_input_counts_keeps_those_the_response_sta
     replay(
         [
             _init(),
-            _assistant(answer, usage={"input_tokens": 7, "output_tokens": 1}),
+            _started("msg-answer"),
+            _assistant(
+                answer, usage={"input_tokens": 7, "output_tokens": 1}, message_id="msg-answer"
+            ),
             _closed("tool_use", output_tokens=30, input_counts=False),
             UserMessage(content=[ToolResultBlock(tool_use_id="call-1", content="ok")]),
             _result({"total": 5}),
@@ -353,6 +371,7 @@ async def test_a_closing_event_without_input_counts_keeps_those_the_response_sta
     replay(
         [
             _init(),
+            _started("no-usage"),
             AssistantMessage(content=[answer], model=MODEL, message_id="no-usage"),
             _closed("tool_use", output_tokens=30, input_counts=False),
             UserMessage(content=[ToolResultBlock(tool_use_id="call-1", content="ok")]),
@@ -361,6 +380,19 @@ async def test_a_closing_event_without_input_counts_keeps_those_the_response_sta
     )
     (turn,) = (await _agent()(a=2, b=3)).trace.turns
     assert turn.usage is None
+
+
+@pytest.mark.asyncio
+async def test_a_response_with_no_content_never_takes_over_another_turns_usage(replay):
+    # An empty response reaches no message: only its opening and closing events.
+    empty = [_started("msg-empty"), _closed("end_turn", output_tokens=1)]
+    stream = _success_stream()
+    replay([stream[0], *empty, *stream[1:5], *empty, *stream[5:]])
+
+    result = await _agent()(a=2, b=3)
+
+    assert [turn.usage.output_tokens for turn in result.trace.turns] == [40, 12]
+    assert [turn.native.stop_reason for turn in result.trace.turns] == ["tool_use"] * 2
 
 
 @pytest.mark.asyncio
