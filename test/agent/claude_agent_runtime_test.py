@@ -1275,8 +1275,18 @@ def test_sdk_options_are_merged_by_name_and_never_declared():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("option", ["tools", "allowed_tools"])
-async def test_a_read_tool_listed_in_sdk_options_keeps_its_own_scope(replay, tmp_path, option):
+@pytest.mark.parametrize(
+    ("sdk_options", "guarded"),
+    [
+        ({"tools": ["Read"]}, False),
+        ({"tools": {"type": "preset", "preset": "claude_code"}}, False),
+        ({"allowed_tools": ["Read"]}, True),
+    ],
+    ids=["tools", "tools-preset", "allowed-only"],
+)
+async def test_only_a_read_enabled_in_sdk_tools_lifts_the_skill_folder_guard(
+    replay, tmp_path, sdk_options, guarded
+):
     seen = replay(_success_stream())
     script = tmp_path / "check.sh"
     script.write_text("#!/bin/sh\n")
@@ -1285,12 +1295,13 @@ async def test_a_read_tool_listed_in_sdk_options_keeps_its_own_scope(replay, tmp
     agent = ava.Agent(
         signature=Total,
         step_name="total",
-        runtime=ClaudeAgent(model=MODEL, **{option: ["Read"]}),
+        runtime=ClaudeAgent(model=MODEL, **sdk_options),
         tools=(lookup_bonus,),
         skills=(skill,),
     )
     await agent(a=2, b=3)
 
-    options = seen["options"]
-    assert "Read" in options.tools
-    assert options.hooks is None
+    hooks = seen["options"].hooks
+    assert (
+        hooks is not None and [m.matcher for m in hooks["PreToolUse"]] == ["Read"]
+    ) is guarded
