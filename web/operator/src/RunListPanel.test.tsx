@@ -95,6 +95,10 @@ it.each([false, true])(
       "true",
     );
     expect(screen.queryByRole("group", { name: "Filter by status" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Current deployment" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "See all" })).not.toBeInTheDocument();
     const previous = await screen.findByRole("button", { name: /^dpl-previous-full-id,/ });
     expect(previous).toHaveAttribute("title", deploymentItems[1].id);
     expect(previous).toHaveAttribute("aria-pressed", "true");
@@ -104,16 +108,23 @@ it.each([false, true])(
       "dateTime",
       new Date(deploymentItems[1].createdAt * 1000).toISOString(),
     );
-    expect(screen.getByRole("button", { name: /^dpl-current-full-id,/ })).toHaveTextContent(
-      "CURRENT",
-    );
+    const currentDeployment = screen.getByRole("button", { name: /^dpl-current-full-id,/ });
+    expect(currentDeployment).toHaveAttribute("aria-current", "true");
+    expect(currentDeployment.parentElement).toHaveTextContent("● CURRENT");
+    expect(
+      within(currentDeployment.parentElement!).queryByRole("button", { name: "Set current" }),
+    ).not.toBeInTheDocument();
+    fireEvent.click(currentDeployment);
+    expect(onSelect).toHaveBeenLastCalledWith(deploymentItems[0].id);
     fireEvent.click(previous);
     expect(onSelect).toHaveBeenLastCalledWith(deploymentItems[1].id);
     expect(onSelectRun).not.toHaveBeenCalled();
     expect(view.container.querySelector(".run-list-scroll")).not.toContainElement(current);
-    fireEvent.click(current);
-    expect(onSelectRun).toHaveBeenLastCalledWith(undefined);
     fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
+    const restoredCurrent = screen.getByRole("button", { name: "Current deployment" });
+    expect(screen.getByRole("button", { name: "See all" })).toBeVisible();
+    fireEvent.click(restoredCurrent);
+    expect(onSelectRun).toHaveBeenLastCalledWith(undefined);
     expect(screen.getByRole("tab", { name: "Runs" })).toHaveAttribute("aria-selected", "true");
     if (expanded) expect(screen.getByRole("group", { name: "Filter by status" })).toBeVisible();
   },
@@ -187,41 +198,89 @@ it.each([false, true])(
   },
 );
 
-it.each(["success", "failure"])(
-  "confirms set current inline with pending and %s without selecting a row",
-  async (result) => {
+it.each([
+  { result: "success", label: undefined },
+  { result: "failure", label: "Use deployment" },
+])(
+  "confirms set current inline with pending and $result without selecting a row",
+  async ({ result, label }) => {
     const pending = Promise.withResolvers<void>();
     const onConfirm = vi.fn(() => pending.promise);
     const onSelect = vi.fn();
     const deployments = {
-      items: deploymentItems,
+      items: [
+        ...deploymentItems,
+        { ...deploymentItems[1], id: "dpl-older-full-id", label: "Older" },
+      ],
       hasMore: false,
       loading: false,
       onSelect,
       setCurrent: {
-        label: "Use deployment",
+        label,
         confirmText: (item: (typeof deploymentItems)[number]) =>
           `Use ${item.label} for new runs?`,
         onConfirm,
       },
     };
-    render(
+    const view = render(
       <RunListPanel {...timelineProps} deployments={deployments} timelineView="deployments" />,
     );
-    expect(screen.getAllByRole("button", { name: "Use deployment" })).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: "Use deployment" }));
+    const actions = await screen.findAllByRole("button", { name: label ?? "Set current" });
+    expect(actions).toHaveLength(2);
+    const [action] = actions;
+    const previous = screen.getByRole("button", { name: /^dpl-previous-full-id,/ });
+    expect(previous).not.toContainElement(action);
+    const current = screen.getByRole("button", { name: /^dpl-current-full-id,/ });
+    expect(current).toHaveAttribute("aria-current", "true");
+    expect(current.parentElement).toHaveTextContent("● CURRENT");
+    expect(
+      within(current.parentElement!).queryByRole("button", { name: label ?? "Set current" }),
+    ).not.toBeInTheDocument();
+    expect(action).toBeVisible();
+    expect(action).toBeEnabled();
+    fireEvent.click(action);
+    expect(action).toBeDisabled();
+    expect(actions[1]).toBeDisabled();
+    expect(onSelect).not.toHaveBeenCalled();
     expect(screen.getByText("Use Previous for new runs?")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+    expect(action).toBeEnabled();
     expect(onConfirm).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Use deployment" }));
+    fireEvent.click(action);
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
     expect(onConfirm).toHaveBeenCalledExactlyOnceWith(deploymentItems[1].id);
     expect(screen.getByRole("button", { name: "Setting current…" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    expect(action).toBeDisabled();
+    expect(action).toHaveAttribute("aria-busy", "true");
+    expect(actions[1]).toBeDisabled();
     if (result === "success") {
       await act(async () => pending.resolve());
       expect(screen.queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+      // The host owns the pointer refresh; apply its returned deployment state.
+      view.rerender(
+        <RunListPanel
+          {...timelineProps}
+          deployments={{
+            ...deployments,
+            items: deployments.items.map((item) => ({
+              ...item,
+              current: item.id === deploymentItems[1].id,
+            })),
+          }}
+          timelineView="deployments"
+        />,
+      );
+      expect(previous).toHaveAttribute("aria-current", "true");
+      expect(previous.parentElement).toHaveTextContent("● CURRENT");
+      expect(
+        within(previous.parentElement!).queryByRole("button", { name: "Set current" }),
+      ).not.toBeInTheDocument();
+      expect(current).not.toHaveAttribute("aria-current");
+      expect(
+        within(current.parentElement!).getByRole("button", { name: "Set current" }),
+      ).toBeEnabled();
     } else {
       await act(async () =>
         pending.reject(new Error("The current deployment changed; reload and retry.")),
@@ -230,6 +289,10 @@ it.each(["success", "failure"])(
         "The current deployment changed; reload and retry.",
       );
       expect(screen.getByRole("button", { name: "Confirm" })).toBeEnabled();
+      expect(action).toBeDisabled();
+      expect(action).toHaveAttribute("aria-busy", "false");
+      fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+      expect(action).toBeEnabled();
     }
     expect(onSelect).not.toHaveBeenCalled();
   },

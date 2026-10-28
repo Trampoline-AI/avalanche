@@ -1,5 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef, useState } from "react";
+import { LoaderCircle, RotateCcw } from "lucide-react";
 
 import type { WorkspaceDeployment, WorkspaceDeployments } from "./WorkflowWorkspace";
 import { useTimelineScrollHandle } from "./useTimelineScrollHandle";
@@ -33,6 +34,7 @@ export function DeploymentList({
   const [confirmationError, setConfirmationError] = useState<string>();
   const confirming = useRef(false);
   const rowHeight = expanded ? 34 : 27.5;
+  const statusColumnClass = `deployment-list-status flex shrink-0 items-center ${expanded ? "mr-[20px] w-[120px] text-[11px]" : "mr-[17px] w-[100px] text-[10px]"} font-mono leading-none uppercase`;
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollElement.current,
@@ -135,14 +137,12 @@ export function DeploymentList({
         <div
           className={`grid min-w-0 flex-1 ${expanded ? "grid-cols-[minmax(0,1fr)_120px]" : "grid-cols-[minmax(0,1fr)_100px]"} items-center gap-3 font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase ${expanded ? "px-[20px]" : "px-[9px]"}`}
         >
-          <span>Deployment</span>
+          <span className="truncate">Deployment</span>
           <span>Created</span>
         </div>
-        {setCurrent && (
-          <span className={`${actionClass} invisible ${expanded ? "mr-[20px]" : "mr-[17px]"}`}>
-            {setCurrent.label ?? "Set current"}
-          </span>
-        )}
+        <span className={`${statusColumnClass} text-run-status-muted`}>
+          <span className="text-[9px] tracking-[0.16em]">Status</span>
+        </span>
       </div>
       <div className={`timeline-scroll-shell relative min-h-0 ${expanded ? "flex-1" : ""}`}>
         <div
@@ -168,16 +168,10 @@ export function DeploymentList({
                     title={item.id}
                     aria-label={`${item.id}, ${item.label}, ${timestampFormat.format(createdAt)}${item.current ? ", current" : ""}`}
                     aria-pressed={selectedId === item.id}
+                    aria-current={item.current ? "true" : undefined}
                     onClick={() => onSelect(item.id)}
                   >
-                    <span className="flex min-w-0 items-center gap-2">
-                      <span className="truncate">{item.label}</span>
-                      {item.current && (
-                        <span className="shrink-0 text-[9px] tracking-[0.06em] text-run-status-success">
-                          ● <span className={expanded ? "" : "sr-only"}>CURRENT</span>
-                        </span>
-                      )}
-                    </span>
+                    <span className="min-w-0 truncate">{item.label}</span>
                     <time
                       className="truncate text-secondary"
                       dateTime={createdAt.toISOString()}
@@ -186,28 +180,36 @@ export function DeploymentList({
                       {timestampFormat.format(createdAt)}
                     </time>
                   </button>
-                  {item.current && setCurrent && (
-                    <span
-                      aria-hidden="true"
-                      className={`${actionClass} invisible ${expanded ? "mr-[20px]" : "mr-[17px]"}`}
-                    >
-                      {setCurrent.label ?? "Set current"}
-                    </span>
-                  )}
-                  {!item.current && setCurrent && (
-                    <button
-                      type="button"
-                      disabled={pending}
-                      className={`${actionClass} ${expanded ? "mr-[20px]" : "mr-[17px]"}`}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setConfirmation(item);
-                        setConfirmationError(undefined);
-                      }}
-                    >
-                      {setCurrent.label ?? "Set current"}
-                    </button>
-                  )}
+                  <div className={statusColumnClass}>
+                    {item.current ? (
+                      <span className="whitespace-nowrap tracking-[0.06em] text-acid">
+                        ● CURRENT
+                      </span>
+                    ) : setCurrent ? (
+                      <button
+                        type="button"
+                        aria-label={setCurrent.label ?? "Set current"}
+                        aria-busy={pending && confirmation?.id === item.id}
+                        disabled={!!confirmation || pending}
+                        className="inline-flex max-w-full cursor-pointer items-center gap-1 rounded border border-line bg-transparent px-1.5 py-0.5 font-mono text-[length:inherit] leading-none text-secondary uppercase hover:border-acid hover:bg-selected hover:text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid disabled:cursor-wait disabled:opacity-50"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setConfirmation(item);
+                          setConfirmationError(undefined);
+                        }}
+                      >
+                        {pending && confirmation?.id === item.id ? (
+                          <LoaderCircle
+                            aria-hidden="true"
+                            className="size-3 shrink-0 animate-spin motion-reduce:animate-none"
+                          />
+                        ) : (
+                          <RotateCcw aria-hidden="true" className="size-3 shrink-0" />
+                        )}
+                        <span className="truncate">{setCurrent.label ?? "Set current"}</span>
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
               );
             })}

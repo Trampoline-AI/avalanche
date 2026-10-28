@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The Deployments tab marks the current deployment in its Status column and keeps
+  the pinned Current row on Runs only. Non-current deployments have visible bordered
+  Set current buttons with confirmation, pending feedback, and keyboard focus rings.
+
 - The browser timeline header now shows Runs / Deployments as keyboard-navigable
   tabs with a primary-color selection underline, or a non-clickable Runs label
   without deployments. The expand action is icon-only; the Timeline heading is gone.

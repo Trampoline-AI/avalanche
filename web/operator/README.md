@@ -193,7 +193,8 @@ The host's `deployments: WorkspaceDeployments` contains:
 - `items: WorkspaceDeployment[]`: newest-first, workflow-filtered
   `{ id: string; label: string; createdAt: number; current: boolean }` rows.
   `createdAt` is epoch seconds. `label` is displayed; full `id` is in the title
-  and accessible name. Mark at most one item `current` for the green current marker.
+  and accessible name. Mark at most one item `current` for the primary-color
+  **● CURRENT** marker in the Status column and `aria-current="true"` on its row.
 - `hasMore: boolean`, `loading: boolean`, `loadMore?: () => void`: virtualized
   infinite scrolling requests a page within four row-heights of the bottom.
   It latches each request to avoid duplicate scroll calls until the item count
@@ -208,14 +209,18 @@ The host's `deployments: WorkspaceDeployments` contains:
   are rendered by operator-ui, not by the host.
 - `setCurrent?: { label?: string; confirmText: (item: WorkspaceDeployment) => string;
 onConfirm: (id: string) => Promise<void> }` (default none) adds a non-current-row
-  action, labeled **Set current** unless overridden. It opens an inline confirmation
-  with the host's wording and Confirm/Cancel buttons. Confirm shows pending,
-  closes on resolve, and displays the rejection's `Error.message` inline on failure.
+  button, labeled **Set current** unless overridden, with a border and leading icon.
+  It stays visible on every non-current row and opens an inline confirmation
+  with the host's wording and Confirm/Cancel buttons. Row actions are disabled
+  while confirmation is open; the requested row shows a spinner and `aria-busy`
+  during the request. Confirm closes on resolve and displays the rejection's
+  `Error.message` inline on failure.
   Neither the action nor its confirmation selects a deployment. The host updates
   `items[].current` after success.
 
-The pinned Current row remains available in either tab. Run status chips and
-run filters appear only in the expanded **Runs** view. Changing tabs does not
+The pinned Current row and its optional action appear only on **Runs**, not on
+**Deployments**. Run status chips and run filters appear only in the expanded
+**Runs** view. Changing tabs does not
 change run selection or expand/collapse the timeline.
 
 The header shows **Runs | Deployments** tabs when `deployments` is supplied, or a

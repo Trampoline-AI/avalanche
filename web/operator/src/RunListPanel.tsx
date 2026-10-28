@@ -365,36 +365,38 @@ export function RunListPanel({
             </details>
           </div>
         )}
-        <div
-          className={`flex shrink-0 items-center shadow-[inset_0_-1px_var(--color-run-list-line)] ${selectedRunId === undefined ? "bg-selected" : "bg-transparent"}`}
-        >
-          <button
-            type="button"
-            aria-pressed={selectedRunId === undefined}
-            onClick={() => onSelectRun(undefined)}
-            style={{
-              height: currentHeight,
-              paddingTop: currentPadding,
-              paddingBottom: currentPadding,
-            }}
-            className={`run-list-current flex min-w-0 flex-1 cursor-pointer items-center gap-2 border-0 border-b border-run-list-line text-left font-mono font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid ${expanded ? "px-[20px] text-xs" : "pl-[9px] pr-[17px] text-[10px]"} ${selectedRunId === undefined ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
+        {view === "runs" && (
+          <div
+            className={`flex shrink-0 items-center shadow-[inset_0_-1px_var(--color-run-list-line)] ${selectedRunId === undefined ? "bg-selected" : "bg-transparent"}`}
           >
-            <Workflow aria-hidden="true" className="size-3.5 shrink-0 text-secondary" />
-            <span className="flex-1 truncate">{currentLabel ?? "Current definition"}</span>
-          </button>
-          {currentRowAction && (
             <button
               type="button"
-              onClick={(event) => {
-                event.stopPropagation();
-                currentRowAction.onClick();
+              aria-pressed={selectedRunId === undefined}
+              onClick={() => onSelectRun(undefined)}
+              style={{
+                height: currentHeight,
+                paddingTop: currentPadding,
+                paddingBottom: currentPadding,
               }}
-              className={`shrink-0 cursor-pointer rounded border-0 bg-transparent text-[10px] text-secondary hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-acid ${expanded ? "mr-[20px]" : "mr-[17px]"}`}
+              className={`run-list-current flex min-w-0 flex-1 cursor-pointer items-center gap-2 border-0 border-b border-run-list-line text-left font-mono font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid ${expanded ? "px-[20px] text-xs" : "pl-[9px] pr-[17px] text-[10px]"} ${selectedRunId === undefined ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
             >
-              {currentRowAction.label}
+              <Workflow aria-hidden="true" className="size-3.5 shrink-0 text-secondary" />
+              <span className="flex-1 truncate">{currentLabel ?? "Current definition"}</span>
             </button>
-          )}
-        </div>
+            {currentRowAction && (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  currentRowAction.onClick();
+                }}
+                className={`shrink-0 cursor-pointer rounded border-0 bg-transparent text-[10px] text-secondary hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-acid ${expanded ? "mr-[20px]" : "mr-[17px]"}`}
+              >
+                {currentRowAction.label}
+              </button>
+            )}
+          </div>
+        )}
         {view === "deployments" && deployments ? (
           <DeploymentList deployments={deployments} expanded={expanded} />
         ) : (
