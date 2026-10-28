@@ -211,7 +211,7 @@ The host's `deployments: WorkspaceDeployments` contains:
 onConfirm: (id: string) => Promise<void> }` (default none) adds a non-current-row
   link-style button, labeled **set current** unless overridden (rendered lowercase),
   styled exactly like `currentRowAction`: underlined at rest, underline removed on hover,
-  trailing icon, no border/background/padding; keyboard focus has a visible ring.
+  text only (no icon; a small spinner shows only while confirming), no border/background/padding; keyboard focus has a visible ring.
   It stays visible on every non-current row and opens an inline confirmation
   with the host's wording and Confirm/Cancel buttons. Row actions are disabled
   while confirmation is open; the requested row shows a spinner and `aria-busy`

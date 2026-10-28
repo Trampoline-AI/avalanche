@@ -1,6 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useRef, useState } from "react";
-import { LoaderCircle, RotateCcw } from "lucide-react";
+import { LoaderCircle } from "lucide-react";
 
 import type { WorkspaceDeployment, WorkspaceDeployments } from "./WorkflowWorkspace";
 import { useTimelineScrollHandle } from "./useTimelineScrollHandle";
@@ -137,7 +137,7 @@ export function DeploymentList({
         <div
           className={`grid min-w-0 flex-1 ${expanded ? "grid-cols-[minmax(0,1fr)_120px]" : "grid-cols-[minmax(0,1fr)_100px]"} items-center gap-3 font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase ${expanded ? "px-[20px]" : "px-[9px]"}`}
         >
-          <span className="truncate">Deployment</span>
+          <span className="truncate normal-case">id</span>
           <span>Created</span>
         </div>
         <span className={`${statusColumnClass} text-run-status-muted uppercase`}>
@@ -202,13 +202,11 @@ export function DeploymentList({
                         }}
                       >
                         <span className="truncate">{(setCurrent.label ?? "set current").toLocaleLowerCase()}</span>
-                        {confirmation?.id === item.id ? (
+                        {confirmation?.id === item.id && (
                           <LoaderCircle
                             aria-hidden="true"
                             className="size-3 shrink-0 animate-spin motion-reduce:animate-none"
                           />
-                        ) : (
-                          <RotateCcw aria-hidden="true" className="size-3 shrink-0" />
                         )}
                       </button>
                     ) : null}

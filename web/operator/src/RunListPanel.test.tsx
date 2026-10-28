@@ -115,6 +115,7 @@ it.each([false, true])(
     );
     const currentDeployment = screen.getByRole("button", { name: /^dpl-current-full-id,/ });
     expect(currentDeployment).toHaveAttribute("aria-current", "true");
+    expect(document.querySelector(".deployment-list-columns, [aria-hidden='true'] .truncate.normal-case")?.textContent).toBe("id");
     expect(currentDeployment.parentElement).toHaveTextContent(/current\s*●/);
     expect(currentDeployment).toHaveClass("text-left");
     expect(currentDeployment.nextElementSibling).toHaveClass("justify-end", "text-right");
@@ -267,9 +268,9 @@ it.each([
       "focus-visible:outline-acid",
     );
     expect(action).not.toHaveClass("border", "border-line", "uppercase", "hover:underline");
-    // Same link style as the Current row action; label text first, icon trailing.
-    expect(action.firstElementChild?.tagName).toBe("SPAN");
-    expect(action.lastElementChild?.tagName.toLowerCase()).toBe("svg");
+    // Same link style as the Current row action; text only, no icon at rest.
+    expect(action.querySelector("svg")).not.toBeInTheDocument();
+    expect(action.textContent).toBe((label ?? "set current").toLowerCase());
     const marker = current.parentElement!.querySelector(".deployment-current-marker")!;
     expect(marker.tagName).toBe("SPAN");
     expect(marker).not.toHaveClass("underline");
