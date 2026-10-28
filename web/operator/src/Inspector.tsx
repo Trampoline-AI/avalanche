@@ -2,6 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 import { X } from "lucide-react";
 
 import { AgentTraceExplorer, type AgentTraceTurn } from "./AgentTraceExplorer";
+import { formatElapsedSeconds } from "./elapsedDuration";
 import { parseAgentLiveEvent } from "./agentTrace/common";
 import {
   type AgentTraceStep,
@@ -97,16 +98,12 @@ const EMPTY_EVENT_PAGE: DescriptorPageState<AgentEventDescriptorMsg> = {
   nextCursor: "0",
 };
 
-function formatSeconds(seconds: number) {
-  return `${Math.max(0, seconds).toFixed(2)}s`;
-}
-
-function formatTraceDuration(durationMs: string) {
+function traceDurationSeconds(durationMs: string) {
   const parsed = Number(durationMs);
   if (!Number.isFinite(parsed) || parsed < 0) {
     throw new Error("Trace duration must be a non-negative number");
   }
-  return formatSeconds(parsed / 1000);
+  return parsed / 1000;
 }
 
 function declaredModelName(value: unknown): string | undefined {
@@ -641,11 +638,11 @@ function AgentAndStepInspector({
 
   if (!nodeId || (!run && !currentNodeExists)) return null;
   const activePageError = pageError?.key === pageKey ? pageError.value : undefined;
-  const nodeDuration = node
+  const nodeSeconds = node
     ? node.status === "running" && node.runningElapsedSeconds !== undefined
-      ? formatSeconds(node.runningElapsedSeconds)
+      ? Math.max(0, node.runningElapsedSeconds)
       : node.startedAt > 0 && node.endedAt >= node.startedAt
-        ? formatSeconds(node.endedAt - node.startedAt)
+        ? node.endedAt - node.startedAt
         : undefined
     : undefined;
   const traceHeader = run && isAgentNode ? node?.trace?.header : undefined;
@@ -661,9 +658,9 @@ function AgentAndStepInspector({
   const declaredSubModel = declaredModelName(declaredModels?.sub);
   const mainModel = traceHeader?.model;
   const subModel = predictRlmHeader?.sub_model ?? undefined;
-  const headerDuration = traceHeader
-    ? formatTraceDuration(traceHeader.durationMs)
-    : nodeDuration;
+  const headerSeconds = traceHeader
+    ? traceDurationSeconds(traceHeader.durationMs)
+    : nodeSeconds;
   const nodeStatusClass =
     node?.status === "success"
       ? "status-success text-success"
@@ -728,8 +725,13 @@ function AgentAndStepInspector({
                 {node.status}
               </span>
             )}
-            {headerDuration && (
-              <span className="font-mono text-[9px] text-muted">{headerDuration}</span>
+            {headerSeconds !== undefined && (
+              <span
+                className="font-mono text-[9px] text-muted"
+                title={`${headerSeconds.toFixed(1)} seconds`}
+              >
+                {formatElapsedSeconds(headerSeconds)}
+              </span>
             )}
           </div>
           {composites && (

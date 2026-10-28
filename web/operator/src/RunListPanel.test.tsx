@@ -233,3 +233,23 @@ it("preserves compact timeline scrolling across status and unrelated workflow up
   view.rerender(<RunListPanel {...props} runs={withNewRun} selectedRunId={newestRun.runId} />);
   expect(scroll.scrollTop).toBe(0);
 });
+
+it.each([
+  [42.25, "42.3s"],
+  [142.3, "2m 22s"],
+  [4140.1, "1h 9m 0s"],
+])("shows a %s second run duration as %s with total seconds on hover", (seconds, label) => {
+  const run = RunSummaryMsg.create({ ...summary, startedAt: 100, endedAt: 100 + seconds });
+  render(
+    <RunListPanel
+      workflowId={workflow.workflowId}
+      runs={{ [run.runId]: run }}
+      onSelectRun={vi.fn()}
+    />,
+  );
+  const row = screen.getByRole("button", { name: new RegExp(`^${run.runId}, .*, ${label},`) });
+  expect(within(row).getByText(label)).toHaveAttribute(
+    "title",
+    `${seconds.toFixed(1)} seconds`,
+  );
+});
