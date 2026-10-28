@@ -1272,3 +1272,25 @@ def test_sdk_options_are_merged_by_name_and_never_declared():
     declaration = step.declaration(workflow_default=default)
     assert "secret" not in declaration.model_dump_json()
     assert "effort" not in declaration.settings
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("option", ["tools", "allowed_tools"])
+async def test_a_read_tool_listed_in_sdk_options_keeps_its_own_scope(replay, tmp_path, option):
+    seen = replay(_success_stream())
+    script = tmp_path / "check.sh"
+    script.write_text("#!/bin/sh\n")
+    skill = _skill(tmp_path)
+    skill = skill.model_copy(update={"files": {**skill.files, "scripts/check.sh": script}})
+    agent = ava.Agent(
+        signature=Total,
+        step_name="total",
+        runtime=ClaudeAgent(model=MODEL, **{option: ["Read"]}),
+        tools=(lookup_bonus,),
+        skills=(skill,),
+    )
+    await agent(a=2, b=3)
+
+    options = seen["options"]
+    assert "Read" in options.tools
+    assert options.hooks is None
