@@ -252,4 +252,16 @@ it.each([
     "title",
     `${seconds.toFixed(1)} seconds`,
   );
+  const timestamp = new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(run.startedAt * 1000));
+  expect(row.querySelector(".run-triggered-at")?.parentElement).toHaveTextContent(
+    `${timestamp} · ${label}`,
+  );
+  expect(row).toHaveAttribute("title", run.runId);
+  expect(row.querySelector(".run-status-text")).toHaveTextContent(run.status);
+  expect(row.querySelector(".run-status-text")).toHaveAttribute("data-status", run.status);
 });

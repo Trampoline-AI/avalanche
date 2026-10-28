@@ -4,14 +4,17 @@ import { ChevronRight, Maximize2, Minimize2, Workflow } from "lucide-react";
 
 import { formatElapsedSeconds } from "./elapsedDuration";
 import type { RunSummaryMsg } from "./model";
+import { RunStatusBadge } from "./RunStatusBadge";
 
 const RUN_ROW_HEIGHT = 32;
 const RUN_ROW_OVERSCAN = 8;
 const RUN_PAGE_SIZE = 25;
 const TIMELINE_RUN_LIMIT = 20;
 const RUN_TIMESTAMP_FORMAT = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "short",
-  timeStyle: "short",
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
 });
 
 interface RunListPanelProps {
@@ -351,50 +354,44 @@ export function RunListPanel({
                 );
               }
               const summary = filteredRuns[pageOffset + virtualRow.index - 1];
-              const triggeredAt = runTriggeredAt(summary);
+              const triggeredAt = summary.startedAt
+                ? new Date(summary.startedAt * 1000)
+                : runTriggeredAt(summary);
               const elapsedSeconds = runElapsedSeconds(summary);
               return (
                 <button
                   type="button"
-                  className={`run-list-row absolute top-0 left-0 grid w-full cursor-pointer grid-cols-[8px_minmax(0,1fr)_auto_minmax(38px,auto)] items-center border-0 border-b border-[#eef1ef] text-left text-ink leading-none [&_code]:truncate [&_code]:text-[#36423c] ${expanded ? "grid-rows-[16px_14px] gap-x-[10px] gap-y-[4px] px-[20px] py-[11px] [&_code]:text-[11px]" : "grid-rows-[12px_12px] gap-x-[7px] gap-y-0 pl-[9px] pr-[17px] py-1 [&_code]:text-[9px]"} ${selectedRunId === summary.runId ? "active bg-[#edf3ff] shadow-[inset_2px_0_#2563eb] hover:bg-[#e4edff]" : "bg-transparent hover:bg-[#f4f6f5]"}`}
+                  className={`run-list-row absolute top-0 left-0 flex w-full cursor-pointer items-center justify-between gap-2 border-0 border-b border-[#eef1ef] text-left text-ink leading-none ${expanded ? "px-[20px] text-[11px]" : "pl-[9px] pr-[17px] text-[9px]"} ${selectedRunId === summary.runId ? "active bg-[#edf3ff] shadow-[inset_2px_0_#2563eb] hover:bg-[#e4edff]" : "bg-transparent hover:bg-[#f4f6f5]"}`}
                   key={summary.runId}
                   onClick={() => onSelectRun(summary.runId)}
                   aria-pressed={selectedRunId === summary.runId}
                   style={rowStyle}
+                  title={summary.runId}
                   aria-label={`${summary.runId}, ${summary.status}, ${runDuration(elapsedSeconds)}, ${
                     triggeredAt
                       ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
                       : "trigger time not recorded"
                   }`}
                 >
-                  <span
-                    className={`row-span-2 ${summary.status === "requesting" ? "bg-amber" : summary.status === "success" ? "status-success bg-success" : summary.status === "failed" ? "status-failed bg-danger" : summary.status === "running" ? "status-running bg-acid" : "bg-muted"} size-[7px] rounded-full`}
-                    aria-hidden="true"
-                  />
-                  <code title={summary.runId}>{summary.runId}</code>
-                  <span
-                    className={`run-status-text capitalize ${expanded ? "text-[11px]" : "text-[8px]"} ${summary.status === "requesting" ? "text-amber" : summary.status === "success" ? "status-success text-success" : summary.status === "failed" ? "status-failed text-danger" : summary.status === "running" ? "status-running text-acid" : ""}`}
-                  >
-                    {summary.status}
+                  <span className="min-w-0 truncate font-mono text-secondary">
+                    <time className="run-triggered-at" dateTime={triggeredAt?.toISOString()}>
+                      {triggeredAt
+                        ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
+                        : "Start time not recorded"}
+                    </time>
+                    {" · "}
+                    <span
+                      className="run-duration"
+                      title={
+                        elapsedSeconds === undefined
+                          ? undefined
+                          : `${elapsedSeconds.toFixed(1)} seconds`
+                      }
+                    >
+                      {runDuration(elapsedSeconds)}
+                    </span>
                   </span>
-                  <time
-                    title={
-                      elapsedSeconds === undefined
-                        ? undefined
-                        : `${elapsedSeconds.toFixed(1)} seconds`
-                    }
-                    className={`run-duration whitespace-nowrap text-right font-mono text-secondary ${expanded ? "text-[11px]" : "text-[8px]"}`}
-                  >
-                    {runDuration(elapsedSeconds)}
-                  </time>
-                  <time
-                    className={`run-triggered-at col-start-2 col-end-5 font-mono text-secondary ${expanded ? "text-[11px]" : "text-[8px]"}`}
-                    dateTime={triggeredAt?.toISOString()}
-                  >
-                    {triggeredAt
-                      ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
-                      : "Trigger time not recorded"}
-                  </time>
+                  <RunStatusBadge status={summary.status} />
                 </button>
               );
             })}

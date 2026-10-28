@@ -71,6 +71,7 @@
   --radius-md: var(--radius-ui);
   --radius-lg: var(--radius-ui);
   --radius-xl: var(--radius-ui);
+  --color-status-active: #edf3ff;
   --color-ink: #17211c;
   --color-canvas: #f6f8f7;
   --color-panel: #ffffff;
