@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -29,6 +31,7 @@ from ..theme import (
 )
 
 _SELECTED_BG = Style(bgcolor="#2a4a6a")
+_STATS_FAILED_STYLE = Style(color="#ff5555", bold=True)
 _HEADER_STYLE = Style(color=ICE_STEEL, bold=True)
 
 RUN_STATUS_STYLES: dict[RunStatus, Style] = {
@@ -64,6 +67,26 @@ class RunHistoryWidget(Static):
         super().__init__(**kwargs)
         self._display_order: list[RunState] = []
         self._test_store = None
+        self._stats_runs: list[RunState] = []
+        self.stats_line = Text()
+
+    def start_stats_refresh(self, provider, workflow_selector: str) -> None:
+        """Keep a one-line success summary of the workflow's runs up to date."""
+
+        def refresh() -> None:
+            while True:
+                try:
+                    self._stats_runs = provider.list_runs(workflow_selector)
+                except Exception:
+                    continue
+                failed = sum(run.status == RunStatus.FAILED for run in self._stats_runs)
+                line = Text(f"{len(self._stats_runs)} runs, ")
+                line.append(f"{failed} failed", _STATS_FAILED_STYLE)
+                self.stats_line = line
+                self.refresh()
+                time.sleep(2)
+
+        threading.Thread(target=refresh, daemon=True).start()
 
     @staticmethod
     def render_header() -> Text:

@@ -20,6 +20,7 @@ export type {
   OperatorUiProps,
   OperatorUiSelection,
 } from "./ui/types";
+export { RunStatsBar } from "./RunStatsBar";
 export { WorkflowWorkspace } from "./WorkflowWorkspace";
 export type { WorkflowWorkspaceProps } from "./WorkflowWorkspace";
 export * from "./model";
