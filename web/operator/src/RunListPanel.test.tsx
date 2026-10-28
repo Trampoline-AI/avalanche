@@ -41,6 +41,22 @@ it("paginates filtered runs and recovers when live history shrinks", async () =>
   expect(onSelectRun).toHaveBeenLastCalledWith("run-000");
   expect(screen.getByRole("button", { name: "Next page" })).toBeDisabled();
 
+  const statusGroup = screen.getByRole("group", { name: "Filter by status" });
+  const running = within(statusGroup).getByRole("button", { name: "running 52" });
+  fireEvent.click(running);
+  expect(running).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: "Previous page" })).toBeDisabled();
+  await screen.findByRole("button", { name: /run-051,/ });
+  expect(view.container.querySelector(".run-list-scroll")!.scrollTop).toBe(0);
+  fireEvent.click(screen.getByRole("button", { name: "Next page" }));
+  fireEvent.click(running);
+  expect(within(statusGroup).getByRole("button", { name: "All 52" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(screen.getByRole("button", { name: "Previous page" })).toBeDisabled();
+  await screen.findByRole("button", { name: /run-051,/ });
+
   fireEvent.click(screen.getByText("Advanced filters"));
   fireEvent.change(screen.getByRole("searchbox"), { target: { value: "run-051" } });
   await screen.findByRole("button", { name: /run-051,/ });
@@ -81,9 +97,30 @@ it("combines exact status, run ID and date filters without losing hidden active 
   const props = { expanded: true, workflowId: workflow.workflowId, runs, onSelectRun };
   const view = render(<RunListPanel {...props} />);
   expect(screen.getByRole("searchbox")).not.toBeVisible();
-  fireEvent.change(screen.getByRole("combobox", { name: "Status" }), {
-    target: { value: "failed" },
-  });
+  expect(screen.queryByRole("combobox", { name: "Status" })).not.toBeInTheDocument();
+  const statusGroup = screen.getByRole("group", { name: "Filter by status" });
+  expect(within(statusGroup).getAllByRole("button").map((chip) => chip.textContent)).toEqual([
+    "All 3",
+    "failed 2",
+    "success 1",
+  ]);
+  const all = within(statusGroup).getByRole("button", { name: "All 3" });
+  const failed = within(statusGroup).getByRole("button", { name: "failed 2" });
+  expect(all).toHaveAttribute("aria-pressed", "true");
+  expect(failed).toHaveAttribute("aria-pressed", "false");
+  fireEvent.click(failed);
+  expect(failed).toHaveAttribute("aria-pressed", "true");
+  expect(all).toHaveAttribute("aria-pressed", "false");
+  expect(within(statusGroup).getAllByRole("button", { pressed: true })).toEqual([failed]);
+  expect(failed).toHaveClass("rounded", "border-acid", "bg-selected", "text-acid");
+  fireEvent.click(failed);
+  expect(all).toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(within(statusGroup).getByRole("button", { name: "success 1" }));
+  expect(failed).toHaveAttribute("aria-pressed", "false");
+  expect(screen.queryByRole("button", { name: /failed-later,/ })).not.toBeInTheDocument();
+  fireEvent.click(all);
+  expect(all).toHaveAttribute("aria-pressed", "true");
+  fireEvent.click(failed);
   await screen.findByRole("button", { name: /failed-later,/ });
   expect(screen.queryByRole("button", { name: /failed-in-name,/ })).not.toBeInTheDocument();
   fireEvent.change(screen.getByLabelText("From"), { target: { value: "2026-09-10" } });
@@ -100,8 +137,22 @@ it("combines exact status, run ID and date filters without losing hidden active 
   view.rerender(
     <RunListPanel {...props} runs={{ "failed-in-name": runs["failed-in-name"] }} />,
   );
-  expect(screen.getByRole("combobox", { name: "Status" })).toHaveValue("failed");
+  expect(within(statusGroup).getByRole("button", { name: "failed 0" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(within(statusGroup).getByRole("button", { name: "All 1" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
   expect(screen.getByText("No matching runs")).toBeInTheDocument();
+  fireEvent.click(within(statusGroup).getByRole("button", { name: "failed 0" }));
+  expect(within(statusGroup).getByRole("button", { name: "All 1" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(screen.getByLabelText("From")).toHaveValue("2026-09-10");
+  expect(screen.getByRole("searchbox")).toHaveValue("later");
 });
 
 it("orders the timeline newest first and keeps one workflow or run selected", async () => {

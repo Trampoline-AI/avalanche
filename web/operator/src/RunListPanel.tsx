@@ -12,6 +12,8 @@ const RUN_ROW_HEIGHT = 27.5;
 const EXPANDED_RUN_ROW_HEIGHT = 34;
 const RUN_ROW_OVERSCAN = 8;
 const RUN_PAGE_SIZE = 25;
+const statusChipClass = (active: boolean) =>
+  `inline-flex h-7 cursor-pointer items-center gap-1.5 rounded border px-2.5 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-acid ${active ? "border-acid bg-selected text-acid" : "border-transparent bg-panel text-ink hover:border-acid"}`;
 const RUN_TIMESTAMP_FORMAT = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
@@ -85,12 +87,13 @@ export function RunListPanel({
   );
   const newestRunId = workflowRuns[0]?.runId;
   const statuses = useMemo(() => {
-    const values = new Set<string>();
+    const counts = new Map<string, number>();
     for (const run of workflowRuns) {
-      if (run.status) values.add(run.status);
+      if (run.status) counts.set(run.status, (counts.get(run.status) ?? 0) + 1);
     }
-    if (status) values.add(status);
-    return [...values].sort();
+    // Keep an active filter clearable when live history no longer contains it.
+    if (status && !counts.has(status)) counts.set(status, 0);
+    return [...counts.entries()].sort(([left], [right]) => left.localeCompare(right));
   }, [status, workflowRuns]);
   const filteredRuns = useMemo(() => {
     if (!expanded) return workflowRuns;
@@ -271,24 +274,40 @@ export function RunListPanel({
       </header>
       {expanded && (
         <div className="all-runs-filters flex shrink-0 flex-col gap-[20px] border-b-2 border-line p-[20px] text-xs text-secondary">
-          <label className="flex flex-col gap-[8px] font-medium">
-            Status
-            <select
-              value={status}
-              onChange={(event) => {
-                setStatus(event.target.value);
+          <div
+            role="group"
+            aria-label="Filter by status"
+            className="flex flex-wrap items-center gap-2"
+          >
+            <span className="mr-1 font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase">
+              Status
+            </span>
+            <button
+              type="button"
+              className={statusChipClass(!status)}
+              aria-pressed={!status}
+              onClick={() => {
+                setStatus("");
                 setPage(0);
               }}
-              className="h-9 min-w-0 rounded border border-line bg-panel px-3 py-2 text-xs font-normal text-ink outline-acid"
             >
-              <option value="">All statuses</option>
-              {statuses.map((value) => (
-                <option key={value} value={value}>
-                  {value.charAt(0).toUpperCase() + value.slice(1)}
-                </option>
-              ))}
-            </select>
-          </label>
+              All <span className="font-mono text-secondary">{workflowRuns.length}</span>
+            </button>
+            {statuses.map(([value, count]) => (
+              <button
+                key={value}
+                type="button"
+                className={statusChipClass(status === value)}
+                aria-pressed={status === value}
+                onClick={() => {
+                  setStatus(status === value ? "" : value);
+                  setPage(0);
+                }}
+              >
+                {value} <span className="font-mono text-secondary">{count}</span>
+              </button>
+            ))}
+          </div>
           <div className="grid grid-cols-2 gap-[12px]">
             <label className="flex min-w-0 flex-col gap-[8px] font-medium">
               From
