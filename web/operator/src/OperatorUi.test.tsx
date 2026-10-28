@@ -784,7 +784,7 @@ describe("operator workflows", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: /^dpl-host-full-id,/ }));
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("dpl-host-full-id");
-    fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
     expect(screen.getByRole("tab", { name: "Deployments" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -1411,7 +1411,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     const logHeight = logPane.style.flexBasis;
     expect(logHeight).toBe("276px");
     const inspectorDivider = screen.getByRole("separator", { name: "Resize Inspector" });
-    fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
     const allRuns = screen.getByRole("region", { name: "Timeline" });
     const timeline = allRuns.closest(".workspace-timeline")!;
     const canvas = logPane.closest(".canvas")!;
@@ -1445,9 +1445,9 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(timeline).not.toHaveClass("relative", "shrink-0");
     expect(screen.getByRole("region", { name: "Run logs" })).toBe(logPane);
     expect(logPane.style.flexBasis).toBe(logHeight);
-    expect(screen.getByRole("button", { name: "View all" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Expand timeline" })).toHaveFocus();
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
     expect(within(allRuns).getByLabelText("From")).toHaveValue("2026-09-10");
     expect(within(allRuns).getByLabelText("To")).toHaveValue("2026-09-10");
@@ -1455,7 +1455,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
     fireEvent.click(within(allRuns).getByRole("button", { name: "Collapse timeline" }));
     expect(screen.getByRole("region", { name: "Timeline" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "View all" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Expand timeline" })).toHaveFocus();
   });
 });
 

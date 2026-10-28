@@ -18,6 +18,13 @@ it("defaults to Current definition without a caret, action or tabs", () => {
   const current = screen.getByRole("button", { name: "Current definition" });
   expect(current.querySelector(".lucide-chevron-right")).toBeNull();
   expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+  const panel = screen.getByRole("region", { name: "Timeline" });
+  expect(within(panel).queryByRole("heading")).not.toBeInTheDocument();
+  const runs = within(panel).getByText("Runs");
+  expect(runs.tagName).toBe("SPAN");
+  expect(runs).toHaveClass("font-semibold", "text-ink", "after:bg-acid");
+  expect(runs).not.toHaveAttribute("tabindex");
   expect(screen.getAllByRole("button")).toEqual([current]);
 });
 
@@ -52,8 +59,36 @@ it.each([false, true])(
     fireEvent.click(action);
     expect(onClick).toHaveBeenCalledOnce();
     expect(onSelectRun).not.toHaveBeenCalled();
-    expect(screen.getByRole("tab", { name: "Runs" })).toHaveAttribute("aria-selected", "true");
-    fireEvent.click(screen.getByRole("tab", { name: "Deployments" }));
+    const tabs = screen.getByRole("tablist", { name: "Timeline view" });
+    const runsTab = within(tabs).getByRole("tab", { name: "Runs" });
+    const deploymentsTab = within(tabs).getByRole("tab", { name: "Deployments" });
+    expect(screen.queryByRole("heading", { name: "Timeline" })).not.toBeInTheDocument();
+    expect(runsTab).toHaveAttribute("aria-selected", "true");
+    expect(runsTab).toHaveAttribute("tabindex", "0");
+    expect(runsTab).toHaveClass("font-semibold", "text-ink", "after:bg-acid");
+    expect(deploymentsTab).toHaveAttribute("aria-selected", "false");
+    expect(deploymentsTab).toHaveAttribute("tabindex", "-1");
+    expect(deploymentsTab).toHaveClass("text-run-status-muted");
+    expect(deploymentsTab).not.toHaveClass("after:bg-acid");
+    const tabPanel = screen.getByRole("tabpanel", { name: "Runs" });
+    expect(runsTab).toHaveAttribute("aria-controls", tabPanel.id);
+    expect(tabPanel).toHaveAttribute("aria-labelledby", runsTab.id);
+    runsTab.focus();
+    for (const key of ["ArrowRight", "ArrowLeft", "End"]) {
+      fireEvent.keyDown(runsTab, { key });
+      expect(deploymentsTab).toHaveFocus();
+      expect(deploymentsTab).toHaveAttribute("aria-selected", "true");
+      expect(deploymentsTab).toHaveAttribute("tabindex", "0");
+      expect(runsTab).toHaveAttribute("tabindex", "-1");
+      expect(screen.getByRole("tabpanel", { name: "Deployments" })).toHaveAttribute(
+        "id",
+        deploymentsTab.getAttribute("aria-controls"),
+      );
+      fireEvent.keyDown(deploymentsTab, { key: key === "End" ? "Home" : "ArrowRight" });
+      expect(runsTab).toHaveFocus();
+      expect(runsTab).toHaveAttribute("aria-selected", "true");
+    }
+    fireEvent.click(deploymentsTab);
     expect(onTimelineViewChange).toHaveBeenLastCalledWith("deployments");
     expect(screen.getByRole("tab", { name: "Deployments" })).toHaveAttribute(
       "aria-selected",
@@ -89,7 +124,8 @@ it("keeps the timeline tab controlled and falls back to runs when deployments ar
   const deployments = { items: [], hasMore: false, loading: false, onSelect: vi.fn() };
   const props = { ...timelineProps, deployments, onTimelineViewChange };
   const view = render(<RunListPanel {...props} timelineView="runs" />);
-  fireEvent.click(screen.getByRole("tab", { name: "Deployments" }));
+  fireEvent.keyDown(screen.getByRole("tab", { name: "Runs" }), { key: "ArrowRight" });
+  expect(screen.getByRole("tab", { name: "Deployments" })).toHaveFocus();
   expect(onTimelineViewChange).toHaveBeenCalledWith("deployments");
   expect(screen.getByRole("tab", { name: "Runs" })).toHaveAttribute("aria-selected", "true");
   view.rerender(<RunListPanel {...props} timelineView="deployments" />);
@@ -408,11 +444,15 @@ it("loads successive compact pages near the bottom and pins Current above the sc
   expect(current).toHaveStyle({ height: "30px", paddingTop: "7px", paddingBottom: "7px" });
   expect(virtual).toHaveStyle({ height: `${25 * 27.5}px` });
   expect(view.container.querySelector("footer")).not.toBeInTheDocument();
-  const viewAll = screen.getByRole("button", { name: "View all" });
+  const viewAll = screen.getByRole("button", { name: "Expand timeline" });
   expect(viewAll.closest("header")).not.toBeNull();
-  expect(within(scroll).queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
+  expect(
+    within(scroll).queryByRole("button", { name: "Expand timeline" }),
+  ).not.toBeInTheDocument();
   expect(viewAll).toHaveAttribute("aria-label", "Expand timeline");
-  fireEvent.click(within(viewAll).getByText("View all"));
+  expect(viewAll).toHaveTextContent("");
+  expect(screen.queryByText("View all")).not.toBeInTheDocument();
+  fireEvent.click(viewAll);
   fireEvent.click(viewAll.querySelector("svg")!);
   expect(onViewAll).toHaveBeenCalledTimes(2);
 
@@ -449,7 +489,7 @@ it("loads successive compact pages near the bottom and pins Current above the sc
     paddingBottom: "9.75px",
   });
   expect(scroll).not.toContainElement(current);
-  expect(screen.queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Expand timeline" })).not.toBeInTheDocument();
 });
 
 it("preserves compact timeline scrolling across status and unrelated workflow updates", async () => {
@@ -474,8 +514,10 @@ it("preserves compact timeline scrolling across status and unrelated workflow up
   const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
   const bottom = 20 * 27.5 - 192;
   await scrollTimelineTo(scroll, bottom);
-  expect(await screen.findByRole("button", { name: "View all" })).toBeVisible();
-  expect(within(scroll).queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "Expand timeline" })).toBeVisible();
+  expect(
+    within(scroll).queryByRole("button", { name: "Expand timeline" }),
+  ).not.toBeInTheDocument();
 
   const updatedRuns = {
     ...runs,
@@ -494,7 +536,7 @@ it("preserves compact timeline scrolling across status and unrelated workflow up
     <RunListPanel {...props} runs={{ ...updatedRuns, [otherRun.runId]: otherRun }} />,
   );
   expect(scroll.scrollTop).toBe(bottom);
-  fireEvent.click(screen.getByRole("button", { name: "View all" }));
+  fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
   expect(props.onViewAll).toHaveBeenCalledOnce();
 
   const newestRun = RunSummaryMsg.create({

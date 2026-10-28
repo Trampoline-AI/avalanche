@@ -84,10 +84,10 @@ for inspection, alongside a loading indicator. Until the run's own topology arri
 the graph previews the current workflow definition; it does not represent execution
 state. The preview stays visible through the prepared-snapshot refresh, then switches
 to the run's topology and enables inspection.
-The floating **Timeline** pins **Current definition** above a virtualized run list.
+The floating timeline pins **Current definition** above a virtualized run list.
 It reveals loaded history in 25-run batches near the bottom, with no twenty-run cap.
-The header's **View all** action opens expanded history. Selection highlights
-Current definition or the selected run; the Current row has no trailing caret.
+The header's icon-only **Expand timeline** action opens expanded history. Selection
+highlights Current definition or the selected run; the Current row has no trailing caret.
 Both floating and expanded timelines use a trackless scroll handle that stays faintly
 visible whenever the list can scroll, and reaches full opacity while hovering over
 the timeline or dragging the handle. Rows extend beneath it with text padded clear.
@@ -218,9 +218,16 @@ The pinned Current row remains available in either tab. Run status chips and
 run filters appear only in the expanded **Runs** view. Changing tabs does not
 change run selection or expand/collapse the timeline.
 
-The floating timeline's **View all** action expands it into a wider, full-height
-**Timeline** panel on the left of the workspace, independently of node inspection on
-the right. Above 1000px it occupies its own column beside the canvas and logs;
+The header shows **Runs | Deployments** tabs when `deployments` is supplied, or a
+non-clickable selected **Runs** label in stock mode. The selected label has a 2px
+primary-color underline on the header border; inactive tabs are muted. ArrowLeft,
+ArrowRight, Home and End focus and request the corresponding tab. Controlled hosts
+remain responsible for updating `timelineView`.
+
+The floating timeline's icon-only **Expand timeline** action (also its tooltip and
+accessible name) expands it into a wider, full-height timeline panel on the left of
+the workspace, independently of node inspection on the right. Above 1000px it
+occupies its own column beside the canvas and logs;
 below that breakpoint it remains an overlay. It paginates the runs supplied by
 the API baseline in 25-run pages, with single-select status count chips and
 inclusive local-date filtering. Run-ID search is available

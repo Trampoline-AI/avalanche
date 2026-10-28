@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The browser timeline header now shows Runs / Deployments as keyboard-navigable
+  tabs with a primary-color selection underline, or a non-clickable Runs label
+  without deployments. The expand action is icon-only; the Timeline heading is gone.
+
 - The browser workspace's pinned row now says "Current definition" without a caret.
   Embedding hosts can optionally override that label, add an independent text action,
   and supply a Runs | Deployments timeline with controlled or local tab state,
