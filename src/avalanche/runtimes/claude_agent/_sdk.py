@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import inspect
 import json
 import shutil
@@ -71,6 +72,7 @@ from ...agent.trace import (
 from ...file import File
 from ...references import AgentOutputFolder
 from ...workspace import Workspace
+from .runtime import unknown_sdk_options
 
 if TYPE_CHECKING:
     from .runtime import ClaudeAgent
@@ -221,6 +223,7 @@ async def run(
             cwd=str(directory),
             add_dirs=add_dirs,
         )
+        options = _with_sdk_options(options, runtime.sdk_options, step_name=request.step_name)
         transcript = _Transcript(events)
         # The trace records file inputs by reference, never by host path.
         inputs, omitted_inputs = retained_fields(
@@ -355,6 +358,70 @@ def _outputs(
     values.update(dict.fromkeys(workspace_outputs, snapshot))
     values.update(files)
     return PythonOutputs(values=values)
+
+
+# SDK options Avalanche fills that are combined with the user's, by the shape they need.
+_COMBINED_OPTIONS: Mapping[str, type] = types.MappingProxyType(
+    {
+        "mcp_servers": dict,
+        "hooks": dict,
+        "plugins": list,
+        "allowed_tools": list,
+        "add_dirs": list,
+    }
+)
+
+
+def _with_sdk_options(
+    options: ClaudeAgentOptions, given: Mapping[str, Any], *, step_name: str
+) -> ClaudeAgentOptions:
+    """Avalanche's options for the step with the SDK options the user gave.
+
+    Collections Avalanche fills are combined with the user's entries; any other
+    option the user gives replaces Avalanche's value.
+    """
+    if problem := unknown_sdk_options(
+        given.keys(), {option.name for option in dataclasses.fields(ClaudeAgentOptions)}
+    ):
+        raise AgentStepError(f"agent step {step_name!r}: {problem}")
+    for name, shape in _COMBINED_OPTIONS.items():
+        if name in given and not isinstance(given[name], shape):
+            raise AgentStepError(
+                f"agent step {step_name!r}: ClaudeAgent {name} must be a {shape.__name__}, "
+                "which Avalanche combines with its own entries for the step"
+            )
+    changes = dict(given)
+    if "mcp_servers" in given:
+        if _SERVER in given["mcp_servers"]:
+            raise AgentStepError(
+                f"agent step {step_name!r}: the MCP server name {_SERVER!r} is reserved for "
+                "the step's tools; give your server another name"
+            )
+        assert isinstance(options.mcp_servers, dict)
+        changes["mcp_servers"] = {**options.mcp_servers, **given["mcp_servers"]}
+    if "hooks" in given:
+        hooks = {event: list(matchers) for event, matchers in (options.hooks or {}).items()}
+        for event, matchers in given["hooks"].items():
+            hooks.setdefault(event, []).extend(matchers)
+        changes["hooks"] = hooks
+    if "plugins" in given:
+        changes["plugins"] = [*options.plugins, *given["plugins"]]
+    for name in ("allowed_tools", "add_dirs"):
+        if name in given:
+            changes[name] = _union(getattr(options, name), given[name])
+    # A tool preset or ``"all"`` skills already include the step's tools and skills.
+    if isinstance(given.get("tools"), list):
+        assert isinstance(options.tools, list)
+        changes["tools"] = _union(options.tools, given["tools"])
+    if isinstance(given.get("skills"), list):
+        assert options.skills != "all"
+        changes["skills"] = _union(options.skills or [], given["skills"])
+    return dataclasses.replace(options, **changes)
+
+
+def _union[T](first: list[T], second: list[T]) -> list[T]:
+    """``first`` then the entries of ``second`` it lacks, in order."""
+    return [*first, *(entry for entry in second if entry not in first)]
 
 
 def _write_skill_plugin(root: Path, skills: tuple[Skill, ...]) -> Path:

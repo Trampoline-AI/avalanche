@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Agents: `ava.runtimes.ClaudeAgent` now passes any other keyword to the Claude
+  Agent SDK as a `ClaudeAgentOptions` field, such as
+  `ClaudeAgent(model="claude-sonnet-5-5", effort="low", mcp_servers={...})`.
+  Your MCP servers, hooks, plugins, allowed tools, extra folders and tool or skill
+  lists are added to what Avalanche sets for the step; `system_prompt`,
+  `output_format` and `cwd` are rejected, and an unknown option name raises. Any
+  other option replaces Avalanche's value. These options are never published or
+  recorded.
 - Upgrade dependencies with known security advisories: `filelock` now requires
   `>=4.2.1,<5`; the lockfile moves `msgpack`, `virtualenv`, `graphql-core`,
   `setuptools` and OpenTelemetry to patched releases; the browser UI moves to

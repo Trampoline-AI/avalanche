@@ -1142,3 +1142,133 @@ async def test_a_listed_read_tool_keeps_its_own_scope(replay, tmp_path):
 
     options = seen["options"]
     assert (options.tools, options.hooks) == (["Read", "Skill"], None)
+
+
+def _hook_matcher(matcher: str):
+    from claude_agent_sdk import HookMatcher
+
+    async def allow(hook_input, tool_use_id, context):
+        return {}
+
+    return HookMatcher(matcher=matcher, hooks=[allow])
+
+
+@pytest.mark.asyncio
+async def test_sdk_options_reach_claude_and_replace_avalanches_values(replay):
+    seen = replay(_success_stream())
+    await _agent(
+        effort="low",
+        fallback_model="claude-sonnet-5-5",
+        env={"DEBUG": "1"},
+        setting_sources=["project"],
+        strict_mcp_config=False,
+    )(a=2, b=3)
+
+    options = seen["options"]
+    assert (options.effort, options.fallback_model, options.env) == (
+        "low",
+        "claude-sonnet-5-5",
+        {"DEBUG": "1"},
+    )
+    assert (options.setting_sources, options.strict_mcp_config) == (["project"], False)
+    assert options.model == MODEL
+
+
+@pytest.mark.asyncio
+async def test_collections_avalanche_fills_are_combined_with_the_users(replay, tmp_path):
+    seen = replay(_success_stream())
+    docs = {"type": "http", "url": "https://example.test/mcp"}
+    script = tmp_path / "check.sh"
+    script.write_text("#!/bin/sh\n")
+    skill = _skill(tmp_path)
+    skill = skill.model_copy(update={"files": {**skill.files, "scripts/check.sh": script}})
+    user_hook = _hook_matcher("Bash")
+    stop_hook = _hook_matcher("")
+    agent = ava.Agent(
+        signature=Total,
+        step_name="total",
+        runtime=ClaudeAgent(
+            model=MODEL,
+            mcp_servers={"docs": docs},
+            hooks={"PreToolUse": [user_hook], "Stop": [stop_hook]},
+            plugins=[{"type": "local", "path": "/plugins/mine"}],
+            allowed_tools=["mcp__docs__search", "mcp__avalanche__lookup_bonus"],
+            add_dirs=["/data/reference"],
+            tools=["Grep"],
+            skills=["mine:review"],
+        ),
+        tools=(lookup_bonus,),
+        skills=(skill,),
+    )
+    await agent(a=2, b=3)
+
+    options = seen["options"]
+    assert set(options.mcp_servers) == {"avalanche", "docs"}
+    assert options.mcp_servers["docs"] == docs
+    guard, added = options.hooks["PreToolUse"]
+    assert (guard.matcher, added) == ("Read", user_hook)
+    assert options.hooks["Stop"] == [stop_hook]
+    [avalanche_plugin, user_plugin] = options.plugins
+    assert user_plugin == {"type": "local", "path": "/plugins/mine"}
+    assert options.allowed_tools.count("mcp__avalanche__lookup_bonus") == 1
+    assert "mcp__docs__search" in options.allowed_tools
+    assert {avalanche_plugin["path"], "/data/reference"} <= set(options.add_dirs)
+    assert options.tools == ["Skill", "Read", "Grep"]
+    assert options.skills == ["avalanche:bonus-rules", "mine:review"]
+
+
+@pytest.mark.parametrize(
+    ("option", "value", "pointer"),
+    [
+        ("system_prompt", "Be brief.", "system_prompt_append"),
+        ("output_format", {"type": "json_schema", "schema": {}}, "outputs"),
+        ("cwd", "/tmp", "ava.Workspace"),
+    ],
+)
+def test_options_avalanche_needs_for_the_answer_are_rejected(option, value, pointer):
+    with pytest.raises(ValueError, match=pointer):
+        ClaudeAgent(**{option: value})
+
+
+def test_an_unknown_option_fails_when_the_runtime_is_built():
+    with pytest.raises(ValueError, match="effortt"):
+        ClaudeAgent(effortt="low")
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_option_fails_the_step_when_the_sdk_was_missing_at_build(
+    monkeypatch, replay
+):
+    runtime_module = importlib.import_module("avalanche.runtimes.claude_agent.runtime")
+    monkeypatch.setattr(runtime_module, "_sdk_option_names", lambda: None)
+    agent = _agent(effortt="low")
+    seen = replay(_success_stream())
+
+    with pytest.raises(AgentStepError, match="effortt"):
+        await agent(a=2, b=3)
+    assert "options" not in seen
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mcp_servers",
+    [{"avalanche": {"type": "http", "url": "https://example.test"}}, "/etc/mcp.json"],
+    ids=["reserved-name", "config-file"],
+)
+async def test_mcp_servers_that_cannot_be_combined_fail_the_step(replay, mcp_servers):
+    seen = replay(_success_stream())
+
+    with pytest.raises(AgentStepError, match="mcp_servers|avalanche"):
+        await _agent(mcp_servers=mcp_servers)(a=2, b=3)
+    assert "options" not in seen
+
+
+def test_sdk_options_are_merged_by_name_and_never_declared():
+    default = ClaudeAgent(model=MODEL, effort="high", env={"API_TOKEN": "secret"})
+    step = ClaudeAgent(effort="low")
+
+    merged = step.merged_over(default)
+    assert merged.sdk_options == {"effort": "low", "env": {"API_TOKEN": "secret"}}
+    declaration = step.declaration(workflow_default=default)
+    assert "secret" not in declaration.model_dump_json()
+    assert "effort" not in declaration.settings

@@ -51,8 +51,68 @@ class ClaudeAgent:
 
 Each call ignores your own Claude setup: your user and project settings are not
 loaded, and MCP servers and connectors from your Claude account are not offered.
-Claude sees only the step's tools and skills, and the `builtin_tools` you list.
-The Claude CLI's own bundled skills are hidden.
+Claude sees only the step's tools and skills, the `builtin_tools` you list, and
+what you add through [SDK options](#claude-agent-sdk-options). The Claude CLI's
+own bundled skills are hidden.
+
+### Claude Agent SDK options
+
+Any other keyword is a field of the SDK's
+[`ClaudeAgentOptions`](https://github.com/anthropics/claude-agent-sdk-python),
+passed to the SDK as you give it, with the SDK's own types:
+
+```python
+from claude_agent_sdk import HookMatcher
+
+
+async def check_command(hook_input, tool_use_id, context):
+    return {}  # an empty answer lets the command run
+
+
+runtime = ava.runtimes.ClaudeAgent(
+    model="claude-sonnet-5-5",
+    effort="low",
+    fallback_model="claude-haiku-5-5",
+    mcp_servers={"docs": {"type": "http", "url": "https://docs.example.com/mcp"}},
+    allowed_tools=["mcp__docs__search"],
+    hooks={"PreToolUse": [HookMatcher(matcher="Bash", hooks=[check_command])]},
+)
+```
+
+Avalanche checks the option's name, not its value: the SDK and the CLI check
+values, and using an option correctly is up to you. An unknown name raises
+`ValueError` when you build the runtime if the `claude` extra is installed there,
+and `AgentStepError` naming the option when the step runs otherwise.
+
+Avalanche fills some options for every call. How yours combine with them:
+
+| SDK option | With yours |
+| --- | --- |
+| `mcp_servers` | Your servers are added next to Avalanche's `avalanche` server, which carries the step's tools. It must be a dict: a configuration file path raises `AgentStepError`, and so does a server of yours named `avalanche`. |
+| `hooks` | Your matchers are added after Avalanche's, event by event. Avalanche's only hook keeps `Read` inside the skill folder when step skills have files. |
+| `plugins` | Your plugins are added next to the temporary `avalanche` plugin that carries the step's skills. |
+| `allowed_tools`, `add_dirs` | Your entries are added after Avalanche's, without repeats. |
+| `tools` | A list is added after the `builtin_tools` and the skill tools. A preset or `None` replaces them. |
+| `skills` | A list is added after the step's skills. `"all"` replaces them. |
+| `system_prompt` | Rejected with `ValueError`: the step's instructions are the system prompt. Use `system_prompt_append`. |
+| `output_format` | Rejected with `ValueError`: the signature's outputs define Claude's answer. |
+| `cwd` | Rejected with `ValueError`: give the step an `ava.Workspace` input to choose the folder Claude works in. |
+| Any other option | Yours replaces Avalanche's value. |
+
+Replacing `setting_sources` or `strict_mcp_config` gives up the isolation
+described above: your Claude settings, or the MCP servers and connectors of your
+Claude account, reach the step.
+
+A step's options replace the workflow default's option by option: a step's
+`mcp_servers` replaces the default's `mcp_servers` whole.
+
+SDK options are never published or recorded: they are not part of the step's
+declaration, its live events or its trace, so `env` values and MCP server
+credentials stay in the process that runs the step. With `RayExecutor`, the
+runtime travels to the worker, so every option value must pickle with
+`cloudpickle`. Hooks and in-process MCP servers from `create_sdk_mcp_server` do,
+but they run as copies on the worker: state they change stays there. Prefer the
+step's `tools=` for Python tools.
 
 ## Trace example
 
