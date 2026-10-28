@@ -92,7 +92,7 @@ async def summarize(document: str, *, agent: ava.Agent) -> str:
     return result.outputs.summary
 ```
 
-A runtime value only holds settings. Creating one starts nothing and imports nothing optional, so it can be used at workflow definition time and sent to Ray workers.
+A runtime value only holds settings. Creating one starts nothing and needs nothing optional, so it can be used at workflow definition time and sent to Ray workers. A `ClaudeAgent` given SDK options imports the SDK when it is installed, to check their names.
 
 ### PredictRLM
 
@@ -125,6 +125,19 @@ ava.runtimes.ClaudeAgent(model="claude-haiku-5-5", max_turns=10, builtin_tools=(
 | `permission_mode` | `"default"`, `"acceptEdits"`, `"plan"`, `"bypassPermissions"` or `"dontAsk"`; default `"default"` | Claude Code permission mode. |
 | `system_prompt_append` | `str \| None`; default `None` | Text added after the signature's instructions in the system prompt. |
 | `max_budget_usd` | positive `float \| None`; default `None` | Spending limit for the session. |
+
+Any other keyword is a field of the Claude Agent SDK's `ClaudeAgentOptions`, passed to the SDK with the SDK's own types:
+
+```python
+ava.runtimes.ClaudeAgent(
+    model="claude-sonnet-5-5",
+    effort="low",
+    mcp_servers={"docs": {"type": "http", "url": "https://docs.example.com/mcp"}},
+    allowed_tools=["mcp__docs__search"],
+)
+```
+
+Avalanche checks only the name: an unknown one raises `ValueError` when the runtime is built if the `claude` extra is installed there, and `AgentStepError` when the step runs otherwise. `mcp_servers`, `hooks`, `plugins`, `allowed_tools`, `add_dirs`, and lists given as `tools` or `skills`, are added to what Avalanche sets for the step; a server named `avalanche` raises `AgentStepError`. `system_prompt`, `output_format` and `cwd` raise `ValueError`: use `system_prompt_append`, the signature's outputs and an `ava.Workspace` input instead. Any other option replaces Avalanche's value; replacing `setting_sources` or `strict_mcp_config` lets your own Claude settings or MCP servers reach the step. A step's options replace the workflow default's option by option. These options are never published or recorded, so `env` values and MCP credentials stay in the process that runs the step; with `RayExecutor` they must pickle. The full rules are on the [ClaudeAgent runtime](../runtimes/claude-agent.md#claude-agent-sdk-options) page.
 
 **Setup.** Install the `claude` extra and the Claude Code CLI on every machine that runs the step, Ray workers included. A workflow that only declares Claude steps imports and publishes without them; running a step without the SDK raises `AgentStepExecutionError` naming the extra.
 
