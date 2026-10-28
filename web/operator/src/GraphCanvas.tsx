@@ -28,6 +28,7 @@ import { isUnknownRecord } from "./guards";
 import { decodeClassifierDeclaration, decodeEvaluationDeclaration } from "./classifier";
 import { decodeStepInterface } from "./stepInterface";
 import type { EvaluationRecord } from "./evaluations";
+import { formatElapsedSeconds } from "./elapsedDuration";
 import { CompositeSummary } from "./CompositeSummary";
 import { arrangeGraph, createGraphLayout, type RoutedEdgeData } from "./graphLayout";
 import { highlightConnectedEdges } from "./graphSelection";
@@ -183,15 +184,6 @@ function firstInstructionLine(instructions: string | undefined): string | undefi
 
 const NODE_DETAIL_ZOOM_THRESHOLD = 1.0;
 
-function formatNodeDuration(seconds: number): string {
-  if (seconds <= 120) return `${seconds.toFixed(1)}s`;
-  const wholeSeconds = Math.floor(seconds);
-  const minutes = Math.floor(wholeSeconds / 60);
-  const remainingSeconds = wholeSeconds % 60;
-  if (seconds <= 69 * 60) return `${minutes}m ${remainingSeconds}s`;
-  return `${Math.floor(minutes / 60)}h ${minutes % 60}m ${remainingSeconds}s`;
-}
-
 export const NodeDuration = memo(
   ({
     startedAt,
@@ -243,7 +235,7 @@ export const NodeDuration = memo(
         className={`node-duration absolute font-mono text-muted transition-[font-size] duration-150 ease-out motion-reduce:transition-none ${compact ? "top-3 right-3 text-sm" : "top-4 right-4 text-[9px]"}`}
         title={`${elapsedSeconds.toFixed(1)} seconds`}
       >
-        {formatNodeDuration(elapsedSeconds)}
+        {formatElapsedSeconds(elapsedSeconds)}
       </span>
     );
   },

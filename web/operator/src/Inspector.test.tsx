@@ -942,7 +942,7 @@ describe("retained run inspection", () => {
         "retained-model · 12 in / 3 out · $0.0100",
       );
       expect(header).toHaveTextContent("2 of 4 iterations");
-      expect(header).toHaveTextContent("0.13s");
+      expect(header).toHaveTextContent("0.1s");
       if (tab === "Trace") {
         // The header holds every detail, so the final event is not read for it.
         expect(readJsonDetail).not.toHaveBeenCalledWith("trace-body", expect.anything());
