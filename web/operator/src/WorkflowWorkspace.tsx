@@ -70,7 +70,7 @@ export interface WorkflowWorkspaceProps {
   currentLabel?: string;
   /** Muted trailing text action. Omitted: no action and no caret. */
   currentRowAction?: { label: string; onClick: () => void };
-  /** Enables Runs | Deployments tabs; omitted: the stock runs-only timeline. */
+  /** Enables Overview | Deployments tabs; omitted: the stock runs-only timeline. */
   deployments?: WorkspaceDeployments;
   /** Controlled timeline tab when set; otherwise internal state starts at "runs". */
   timelineView?: "runs" | "deployments";

@@ -790,7 +790,7 @@ describe("operator workflows", () => {
       "true",
     );
     expect(screen.queryByRole("group", { name: "Filter by status" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
     expect(screen.getByRole("group", { name: "Filter by status" })).toBeVisible();
   });
 

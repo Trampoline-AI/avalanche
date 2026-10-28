@@ -2,17 +2,20 @@
 
 ## Unreleased
 
-- The Deployments tab marks the current deployment in its Status column and keeps
-  the pinned Current row on Runs only. Non-current deployments have visible bordered
-  Set current buttons with confirmation, pending feedback, and keyboard focus rings.
+- The Deployments tab marks the current deployment in its right-aligned Status
+  column and keeps the pinned Current row on Overview only. Non-current deployments
+  have visible primary-colour link-style Set current buttons: no border, background,
+  padding or underline, with confirmation, busy feedback and keyboard focus rings.
+  Overview run statuses and their header are right-aligned too; dates stay left.
 
-- The browser timeline header now shows Runs / Deployments as keyboard-navigable
-  tabs with a primary-color selection underline, or a non-clickable Runs label
-  without deployments. The expand action is icon-only; the Timeline heading is gone.
+- The browser timeline header now shows Overview / Deployments as keyboard-navigable
+  tabs with a primary-color selection underline, or a non-clickable Overview label
+  without deployments. The public `"runs"` view value is unchanged. The expand action
+  is icon-only; the Timeline heading is gone.
 
 - The browser workspace's pinned row now says "Current definition" without a caret.
   Embedding hosts can optionally override that label, add an independent text action,
-  and supply a Runs | Deployments timeline with controlled or local tab state,
+  and supply an Overview | Deployments timeline with controlled or local tab state,
   virtualized deployment paging, selection, and confirmed set-current actions.
 
 - Agents: `ava.runtimes.ClaudeAgent` now passes any other keyword to the Claude

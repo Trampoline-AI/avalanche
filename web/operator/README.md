@@ -170,7 +170,7 @@ run history. Hosts supply data and callbacks; operator-ui owns the rendered UI.
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `currentLabel?: string`                                          | `"Current definition"` (nullish fallback). Delta uses `"Current deployment"`.                                        |
 | `currentRowAction?: { label: string; onClick: () => void }`      | No action or caret. When supplied, a separate muted 10px button; clicking it does not select Current.                |
-| `deployments?: WorkspaceDeployments`                             | Absent: no tabs. Present: **Runs \| Deployments** tabs in both compact and expanded headers.                         |
+| `deployments?: WorkspaceDeployments`                             | Absent: no tabs. Present: **Overview \| Deployments** tabs in both compact and expanded headers.                         |
 | `timelineView?: "runs" \| "deployments"`                         | Omitted: internal state starts at `"runs"`. Supplied: controlled by the host. Without `deployments`, only runs show. |
 | `onTimelineViewChange?: (view: "runs" \| "deployments") => void` | No callback by default. Called on tab requests in both modes; controlled hosts must update `timelineView`.           |
 
@@ -209,25 +209,30 @@ The host's `deployments: WorkspaceDeployments` contains:
   are rendered by operator-ui, not by the host.
 - `setCurrent?: { label?: string; confirmText: (item: WorkspaceDeployment) => string;
 onConfirm: (id: string) => Promise<void> }` (default none) adds a non-current-row
-  button, labeled **Set current** unless overridden, with a border and leading icon.
+  link-style button, labeled **Set current** unless overridden, in the primary colour
+  with a leading icon, no border/background/padding, and no underline even on hover.
+  Hover shifts only the text colour; keyboard focus has a visible ring.
   It stays visible on every non-current row and opens an inline confirmation
   with the host's wording and Confirm/Cancel buttons. Row actions are disabled
   while confirmation is open; the requested row shows a spinner and `aria-busy`
-  during the request. Confirm closes on resolve and displays the rejection's
-  `Error.message` inline on failure.
+  throughout confirmation and the request. Confirm closes on resolve and displays
+  the rejection's `Error.message` inline on failure.
   Neither the action nor its confirmation selects a deployment. The host updates
   `items[].current` after success.
 
-The pinned Current row and its optional action appear only on **Runs**, not on
+The pinned Current row and its optional action appear only on **Overview**, not on
 **Deployments**. Run status chips and run filters appear only in the expanded
-**Runs** view. Changing tabs does not
+**Overview** view. Changing tabs does not
 change run selection or expand/collapse the timeline.
 
-The header shows **Runs | Deployments** tabs when `deployments` is supplied, or a
-non-clickable selected **Runs** label in stock mode. The selected label has a 2px
+The header shows **Overview | Deployments** tabs when `deployments` is supplied, or a
+non-clickable selected **Overview** label in stock mode. The selected label has a 2px
 primary-color underline on the header border; inactive tabs are muted. ArrowLeft,
 ArrowRight, Home and End focus and request the corresponding tab. Controlled hosts
-remain responsible for updating `timelineView`.
+remain responsible for updating `timelineView`. The visible **Overview** label keeps
+its public `timelineView` / `onTimelineViewChange` value `"runs"` unchanged.
+Only the Status header and status/action column are right-aligned in both lists;
+deployment IDs, created dates and run timestamps stay left-aligned.
 
 The floating timeline's icon-only **Expand timeline** action (also its tooltip and
 accessible name) expands it into a wider, full-height timeline panel on the left of

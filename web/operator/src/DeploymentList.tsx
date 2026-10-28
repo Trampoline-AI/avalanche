@@ -34,7 +34,7 @@ export function DeploymentList({
   const [confirmationError, setConfirmationError] = useState<string>();
   const confirming = useRef(false);
   const rowHeight = expanded ? 34 : 27.5;
-  const statusColumnClass = `deployment-list-status flex shrink-0 items-center ${expanded ? "mr-[20px] w-[120px] text-[11px]" : "mr-[17px] w-[100px] text-[10px]"} font-mono leading-none uppercase`;
+  const statusColumnClass = `deployment-list-status flex shrink-0 items-center justify-end text-right ${expanded ? "mr-[20px] w-[120px] text-[11px]" : "mr-[17px] w-[100px] text-[10px]"} font-mono leading-none uppercase`;
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollElement.current,
@@ -189,16 +189,16 @@ export function DeploymentList({
                       <button
                         type="button"
                         aria-label={setCurrent.label ?? "Set current"}
-                        aria-busy={pending && confirmation?.id === item.id}
+                        aria-busy={confirmation?.id === item.id}
                         disabled={!!confirmation || pending}
-                        className="inline-flex max-w-full cursor-pointer items-center gap-1 rounded border border-line bg-transparent px-1.5 py-0.5 font-mono text-[length:inherit] leading-none text-secondary uppercase hover:border-acid hover:bg-selected hover:text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid disabled:cursor-wait disabled:opacity-50"
+                        className="inline-flex max-w-full cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-mono text-[length:inherit] leading-none text-acid uppercase no-underline hover:text-acid-hover hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid disabled:cursor-wait disabled:opacity-50"
                         onClick={(event) => {
                           event.stopPropagation();
                           setConfirmation(item);
                           setConfirmationError(undefined);
                         }}
                       >
-                        {pending && confirmation?.id === item.id ? (
+                        {confirmation?.id === item.id ? (
                           <LoaderCircle
                             aria-hidden="true"
                             className="size-3 shrink-0 animate-spin motion-reduce:animate-none"

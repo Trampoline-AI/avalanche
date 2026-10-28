@@ -21,7 +21,7 @@ it("defaults to Current definition without a caret, action or tabs", () => {
   expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   const panel = screen.getByRole("region", { name: "Timeline" });
   expect(within(panel).queryByRole("heading")).not.toBeInTheDocument();
-  const runs = within(panel).getByText("Runs");
+  const runs = within(panel).getByText("Overview");
   expect(runs.tagName).toBe("SPAN");
   expect(runs).toHaveClass("font-semibold", "text-ink", "after:bg-acid");
   expect(runs).not.toHaveAttribute("tabindex");
@@ -54,13 +54,16 @@ it.each([false, true])(
       />,
     );
     const current = screen.getByRole("button", { name: "Current deployment" });
+    expect(view.container.querySelector(".run-list-columns > :last-child")).toHaveClass(
+      "text-right",
+    );
     const action = screen.getByRole("button", { name: "See all" });
     expect(current).not.toContainElement(action);
     fireEvent.click(action);
     expect(onClick).toHaveBeenCalledOnce();
     expect(onSelectRun).not.toHaveBeenCalled();
     const tabs = screen.getByRole("tablist", { name: "Timeline view" });
-    const runsTab = within(tabs).getByRole("tab", { name: "Runs" });
+    const runsTab = within(tabs).getByRole("tab", { name: "Overview" });
     const deploymentsTab = within(tabs).getByRole("tab", { name: "Deployments" });
     expect(screen.queryByRole("heading", { name: "Timeline" })).not.toBeInTheDocument();
     expect(runsTab).toHaveAttribute("aria-selected", "true");
@@ -70,7 +73,7 @@ it.each([false, true])(
     expect(deploymentsTab).toHaveAttribute("tabindex", "-1");
     expect(deploymentsTab).toHaveClass("text-run-status-muted");
     expect(deploymentsTab).not.toHaveClass("after:bg-acid");
-    const tabPanel = screen.getByRole("tabpanel", { name: "Runs" });
+    const tabPanel = screen.getByRole("tabpanel", { name: "Overview" });
     expect(runsTab).toHaveAttribute("aria-controls", tabPanel.id);
     expect(tabPanel).toHaveAttribute("aria-labelledby", runsTab.id);
     runsTab.focus();
@@ -111,6 +114,12 @@ it.each([false, true])(
     const currentDeployment = screen.getByRole("button", { name: /^dpl-current-full-id,/ });
     expect(currentDeployment).toHaveAttribute("aria-current", "true");
     expect(currentDeployment.parentElement).toHaveTextContent("● CURRENT");
+    expect(currentDeployment).toHaveClass("text-left");
+    expect(currentDeployment.nextElementSibling).toHaveClass("justify-end", "text-right");
+    expect(view.container.querySelector(".deployment-list-status")).toHaveClass(
+      "justify-end",
+      "text-right",
+    );
     expect(
       within(currentDeployment.parentElement!).queryByRole("button", { name: "Set current" }),
     ).not.toBeInTheDocument();
@@ -120,12 +129,16 @@ it.each([false, true])(
     expect(onSelect).toHaveBeenLastCalledWith(deploymentItems[1].id);
     expect(onSelectRun).not.toHaveBeenCalled();
     expect(view.container.querySelector(".run-list-scroll")).not.toContainElement(current);
-    fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(onTimelineViewChange).toHaveBeenLastCalledWith("runs");
     const restoredCurrent = screen.getByRole("button", { name: "Current deployment" });
     expect(screen.getByRole("button", { name: "See all" })).toBeVisible();
     fireEvent.click(restoredCurrent);
     expect(onSelectRun).toHaveBeenLastCalledWith(undefined);
-    expect(screen.getByRole("tab", { name: "Runs" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
     if (expanded) expect(screen.getByRole("group", { name: "Filter by status" })).toBeVisible();
   },
 );
@@ -135,10 +148,13 @@ it("keeps the timeline tab controlled and falls back to runs when deployments ar
   const deployments = { items: [], hasMore: false, loading: false, onSelect: vi.fn() };
   const props = { ...timelineProps, deployments, onTimelineViewChange };
   const view = render(<RunListPanel {...props} timelineView="runs" />);
-  fireEvent.keyDown(screen.getByRole("tab", { name: "Runs" }), { key: "ArrowRight" });
+  fireEvent.keyDown(screen.getByRole("tab", { name: "Overview" }), { key: "ArrowRight" });
   expect(screen.getByRole("tab", { name: "Deployments" })).toHaveFocus();
   expect(onTimelineViewChange).toHaveBeenCalledWith("deployments");
-  expect(screen.getByRole("tab", { name: "Runs" })).toHaveAttribute("aria-selected", "true");
+  expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
   view.rerender(<RunListPanel {...props} timelineView="deployments" />);
   expect(screen.getByText("No deployments")).toBeVisible();
   view.rerender(<RunListPanel {...props} deployments={undefined} timelineView="deployments" />);
@@ -238,8 +254,22 @@ it.each([
     ).not.toBeInTheDocument();
     expect(action).toBeVisible();
     expect(action).toBeEnabled();
+    expect(action).toHaveAttribute("type", "button");
+    expect(action).toHaveClass(
+      "border-0",
+      "bg-transparent",
+      "p-0",
+      "text-acid",
+      "no-underline",
+      "hover:no-underline",
+      "focus-visible:outline-acid",
+    );
+    expect(action).not.toHaveClass("border", "border-line", "underline", "hover:underline");
+    expect(action.parentElement).toHaveClass("justify-end", "text-right");
     fireEvent.click(action);
     expect(action).toBeDisabled();
+    expect(action).toHaveAttribute("aria-busy", "true");
+    expect(action.querySelector(".lucide-loader-circle")).toBeInTheDocument();
     expect(actions[1]).toBeDisabled();
     expect(onSelect).not.toHaveBeenCalled();
     expect(screen.getByText("Use Previous for new runs?")).toBeVisible();
@@ -290,7 +320,7 @@ it.each([
       );
       expect(screen.getByRole("button", { name: "Confirm" })).toBeEnabled();
       expect(action).toBeDisabled();
-      expect(action).toHaveAttribute("aria-busy", "false");
+      expect(action).toHaveAttribute("aria-busy", "true");
       fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
       expect(action).toBeEnabled();
     }
@@ -647,4 +677,6 @@ it.each([
   expect(row.querySelector(".run-status-text")).toHaveAttribute("data-status", run.status);
   expect(row.querySelector(".run-status-glyph")).toHaveAttribute("data-glyph", "running");
   expect(row.querySelector(".run-status-text")).not.toHaveClass("border", "rounded");
+  expect(row.lastElementChild).toHaveClass("justify-self-end", "text-right");
+  expect(row).toHaveClass("text-left");
 });

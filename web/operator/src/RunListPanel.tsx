@@ -242,12 +242,12 @@ export function RunListPanel({
                   }}
                   className={`${tabClass(view === tab)} cursor-pointer focus-visible:outline-2 focus-visible:-outline-offset-4 focus-visible:outline-acid`}
                 >
-                  {tab === "runs" ? "Runs" : "Deployments"}
+                  {tab === "runs" ? "Overview" : "Deployments"}
                 </button>
               ))}
             </div>
           ) : (
-            <span className={tabClass(true)}>Runs</span>
+            <span className={tabClass(true)}>Overview</span>
           )}
         </div>
         <div className={`flex items-center ${expanded ? "gap-3" : "gap-2"}`}>
@@ -406,7 +406,7 @@ export function RunListPanel({
               aria-hidden="true"
             >
               <span>Run</span>
-              <span>Status</span>
+              <span className="text-right">Status</span>
             </div>
             <div
               className={`timeline-scroll-shell relative min-h-0 ${expanded ? "flex-1" : ""}`}
@@ -471,7 +471,9 @@ export function RunListPanel({
                             {runDuration(elapsedSeconds)}
                           </span>
                         </span>
-                        <RunStatus status={summary.status} />
+                        <span className="justify-self-end text-right">
+                          <RunStatus status={summary.status} />
+                        </span>
                       </button>
                     );
                   })}
