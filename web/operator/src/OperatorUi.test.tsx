@@ -58,7 +58,9 @@ import {
   WorkflowTopologyMsg,
 } from "./model";
 import {
+  agentDeclarationJson,
   baseline,
+  claudeAgentDeclarationJson,
   createApi,
   envelope,
   eventUlid,
@@ -92,6 +94,47 @@ describe("node inspection viewport", () => {
     });
     expect(open).toHaveBeenCalledWith("fetch");
     expect(setCenter).not.toHaveBeenCalled();
+  });
+});
+
+describe("agent runtime on graph nodes", () => {
+  const agents = FlowInfoMsg.create({
+    ...workflow,
+    nodeIds: ["claude", "predict"],
+    graph: { claude: { children: [] }, predict: { children: [] } },
+    nodeTypes: { claude: "step", predict: "step" },
+    displayNames: { claude: "Claude step", predict: "Predict step" },
+    agentNodeIds: ["claude", "predict"],
+    agentDeclarationsJson: {
+      claude: claudeAgentDeclarationJson(),
+      predict: agentDeclarationJson({}),
+    },
+  });
+  const claudeLogo = (name: string) =>
+    within(
+      screen.getByRole("button", { name: `Inspect ${name}` }).closest("article")!,
+    ).queryByRole("img", { name: /claude agent sdk/i });
+
+  it("marks only the agents that run on ClaudeAgent in the current workflow", () => {
+    render(<GraphCanvas workflow={agents} onOpenNode={vi.fn()} />);
+
+    expect(claudeLogo("Claude step")).toBeInTheDocument();
+    expect(claudeLogo("Predict step")).toBeNull();
+  });
+
+  it("marks them in a run from the runtime the run recorded", () => {
+    const topology = WorkflowTopologyMsg.create({
+      nodeIds: agents.nodeIds,
+      graph: agents.graph,
+      nodeTypes: agents.nodeTypes,
+      displayNames: agents.displayNames,
+      agentFieldSchemasJson: { claude: "{}", predict: "{}" },
+      agentRuntimeKinds: { claude: "claude_agent", predict: "predict_rlm" },
+    });
+    render(<GraphCanvas runTopology={topology} onOpenNode={vi.fn()} />);
+
+    expect(claudeLogo("Claude step")).toBeInTheDocument();
+    expect(claudeLogo("Predict step")).toBeNull();
   });
 });
 

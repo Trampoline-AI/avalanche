@@ -34,6 +34,7 @@ from .models import display_name_from_id
 from .registry import (
     agent_field_schemas_for_workflow,
     agent_instruction_lines_for_workflow,
+    agent_runtime_kinds_for_workflow,
     classifier_metadata_for_workflow,
     evaluation_metadata_for_workflow,
 )
@@ -368,6 +369,7 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
         "display_names": {node_id: display_name_from_id(node_id) for node_id in node_ids},
         "agent_field_schemas_json": agent_field_schemas_for_workflow(workflow, node_ids),
         "agent_instruction_lines": agent_instruction_lines_for_workflow(workflow, node_ids),
+        "agent_runtime_kinds": agent_runtime_kinds_for_workflow(workflow, node_ids),
         "classifier_metadata_json": classifier_metadata_for_workflow(workflow, node_ids),
         "evaluation_metadata_json": evaluation_metadata_for_workflow(workflow, node_ids),
         "step_interface_json": step_interface_for_workflow(workflow, node_ids),

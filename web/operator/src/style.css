@@ -78,6 +78,7 @@
   --color-success: #22c55e;
   --color-failed: var(--color-danger);
   --color-agent: var(--color-violet-500);
+  --color-claude: #d97757;
   --color-classifier: #0e7490;
   --color-classifier-light: #ecfeff;
   --font-sans: "Nacelle", Inter, Helvetica, sans-serif;

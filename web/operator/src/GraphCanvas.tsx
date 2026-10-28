@@ -33,6 +33,7 @@ import { CompositeSummary } from "./CompositeSummary";
 import { arrangeGraph, createGraphLayout, type RoutedEdgeData } from "./graphLayout";
 import { highlightConnectedEdges } from "./graphSelection";
 import { useGraphOrientation } from "./useGraphOrientation";
+import { ClaudeLogo, isClaudeRuntime } from "./ClaudeLogo";
 
 interface FieldMetadata {
   name: string;
@@ -61,6 +62,8 @@ export interface AgentFieldSchemas {
 
 export interface AgentDeclaration extends AgentFieldSchemas {
   instructions: string;
+  /** The runtime the step runs on, such as "predict_rlm" or "claude_agent". */
+  runtimeKind: string;
   model?: unknown;
   runtime?: unknown;
   skills: SkillMetadata[];
@@ -71,6 +74,8 @@ interface CardData extends Record<string, unknown> {
   label: string;
   nodeType: string;
   isAgent: boolean;
+  /** The agent runs on ClaudeAgent, the Claude Agent SDK runtime. */
+  isClaude: boolean;
   isClassifier: boolean;
   classifierSummary?: string;
   evaluationCount?: number;
@@ -137,6 +142,7 @@ export function parseAgentDeclaration(raw: string | undefined): AgentDeclaration
   if (runtime.kind === "claude_agent") {
     return {
       ...signature,
+      runtimeKind: runtime.kind,
       model: { main: { source: "step override", identity: runtime.model } },
       runtime: { ...runtime.settings, builtin_tools: runtime.builtin_tools },
       skills: stepSkills,
@@ -145,6 +151,7 @@ export function parseAgentDeclaration(raw: string | undefined): AgentDeclaration
   }
   return {
     ...signature,
+    runtimeKind: runtime.kind,
     model: runtime.models,
     runtime: runtime.settings,
     // The step's Agent Skills, then PredictRLM's own.
@@ -248,9 +255,9 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
   const hasEvaluations = data.evaluationCount !== undefined || data.evaluationDeclarationError;
   const hasEvaluationRow = hasEvaluations || Boolean(data.composites);
   const designationClass = data.isClassifier
-    ? "node-classifier before:pointer-events-none before:absolute before:inset-y-3 before:left-0 before:w-[3px] before:rounded-r-full before:bg-classifier before:content-['']"
+    ? "node-classifier"
     : data.isAgent
-      ? "node-agent before:pointer-events-none before:absolute before:inset-y-3 before:left-0 before:w-[3px] before:rounded-r-full before:bg-agent before:content-['']"
+      ? `node-agent${data.isClaude ? " node-claude" : ""}`
       : "";
   const statusColorClass =
     data.status === "success"
@@ -268,13 +275,19 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
           : "blueprint";
   return (
     <article
-      className={`node-card ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded-xl border border-line bg-panel text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${selected && data.status !== "running" ? "border-acid!" : ""} ${designationClass} ${statusClass}`}
+      className={`node-card ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded-xl border ${data.isClaude ? "border-claude" : "border-line"} bg-panel text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${selected && data.status !== "running" ? "border-acid!" : ""} ${designationClass} ${statusClass}`}
       style={
         selected && isCompact ? { outline: `${2 / zoom}px solid var(--color-acid)` } : undefined
       }
       data-node-kind={data.isClassifier ? "classifier" : data.isAgent ? "agent" : "standard"}
       aria-disabled={data.inspectionDisabled || undefined}
     >
+      {data.isClaude && (
+        <ClaudeLogo
+          title="Runs on the Claude Agent SDK"
+          className={`node-claude-logo pointer-events-none absolute z-[3] transition-[width,height] duration-150 ease-out motion-reduce:transition-none ${isCompact ? "top-3 left-3 size-7" : "top-[17px] left-4 size-4"}`}
+        />
+      )}
       <Handle
         id="target-left"
         className="node-handle pointer-events-none size-px! min-h-0! min-w-0! border-0! bg-transparent! opacity-0"
@@ -325,7 +338,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         }`}
       >
         <span
-          className={`${data.isClassifier || data.isAgent ? `mb-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 ${data.isClassifier ? "node-classifier-identity bg-classifier-light text-classifier" : "node-agent-identity bg-agent/10 text-agent"}` : "node-card-meta text-secondary"} node-kicker font-mono ${isCompact && data.isAgent ? "text-sm" : "text-[8px]"} tracking-[.12em] uppercase`}
+          className={`${data.isClassifier || data.isAgent ? `mb-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 ${data.isClassifier ? "node-classifier-identity bg-classifier-light text-classifier" : data.isClaude ? `node-agent-identity bg-claude/10 text-claude ${isCompact ? "" : "ml-6"}` : "node-agent-identity bg-agent/10 text-agent"}` : "node-card-meta text-secondary"} node-kicker font-mono ${isCompact && data.isAgent ? "text-sm" : "text-[8px]"} tracking-[.12em] uppercase`}
         >
           {data.isClassifier ? (
             <ListFilter aria-hidden="true" className="size-3" />
@@ -761,6 +774,9 @@ function GraphCanvasView({
               : undefined,
           nodeType: topology.nodeTypes[nodeId] || runtimeNode?.nodeType || "step",
           isAgent: agentNodeIds.has(nodeId),
+          isClaude: isClaudeRuntime(
+            runTopology ? runTopology.agentRuntimeKinds[nodeId] : agentDeclaration?.runtimeKind,
+          ),
           isClassifier: Object.hasOwn(topology.classifierMetadataJson, nodeId),
           classifierSummary: classifierCard?.summary,
           evaluationCount: evaluationCards[nodeId]?.count,

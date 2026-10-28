@@ -74,6 +74,7 @@ def workflow_topology_to_v2(topology: WorkflowTopology) -> pb.WorkflowTopologyV2
         display_names=dict(topology.display_names),
         agent_field_schemas_json=dict(topology.agent_field_schemas_json),
         agent_instruction_lines=dict(topology.agent_instruction_lines),
+        agent_runtime_kinds=dict(topology.agent_runtime_kinds),
         standard_step_docstring_lines=dict(topology.standard_step_docstring_lines),
         classifier_metadata_json=dict(topology.classifier_metadata_json),
         evaluation_metadata_json=dict(topology.evaluation_metadata_json),
@@ -723,6 +724,11 @@ def workflow_topology_from_v2(msg: pb.WorkflowTopologyV2) -> WorkflowTopology:
             (node_id, msg.agent_instruction_lines[node_id])
             for node_id in node_ids
             if node_id in msg.agent_instruction_lines
+        ),
+        agent_runtime_kinds=tuple(
+            (node_id, msg.agent_runtime_kinds[node_id])
+            for node_id in node_ids
+            if node_id in msg.agent_runtime_kinds
         ),
         standard_step_docstring_lines=tuple(
             (node_id, msg.standard_step_docstring_lines[node_id])

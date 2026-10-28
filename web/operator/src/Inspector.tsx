@@ -38,6 +38,7 @@ import {
   type RunSnapshotMsg,
   type TokenUsageMsg,
 } from "./model";
+import { ClaudeLogo, isClaudeRuntime } from "./ClaudeLogo";
 import { Markdown } from "./Markdown";
 import { PythonSource } from "./PythonSource";
 import { InspectorFields, InspectorResources } from "./InspectorDefinition";
@@ -271,6 +272,11 @@ function AgentAndStepInspector({
     () => parseAgentDeclaration(rawAgentDeclaration),
     [rawAgentDeclaration],
   );
+  const runsOnClaude =
+    isAgentNode &&
+    isClaudeRuntime(
+      run ? run.topology?.agentRuntimeKinds[nodeId ?? ""] : workflowDeclaration?.runtimeKind,
+    );
   const historicalFieldSchemas = useMemo(
     () => parseAgentFieldSchemas(rawHistoricalFieldSchemas),
     [rawHistoricalFieldSchemas],
@@ -744,6 +750,12 @@ function AgentAndStepInspector({
               </span>
             )}
           </div>
+          {runsOnClaude && (
+            <p className="inspector-runtime m-0 mt-1.5 inline-flex items-center gap-1.5 rounded border border-claude/30 bg-claude/10 px-1.5 py-0.5 font-mono text-[9px] text-claude">
+              <ClaudeLogo className="size-3" />
+              Claude Agent SDK
+            </p>
+          )}
           {composites && (
             <CompositeSummary
               composites={composites}

@@ -458,6 +458,14 @@ export interface WorkflowTopologyV2 {
     evaluationMetadataJson: {
         [key: string]: string;
     };
+    /**
+     * Each agent node's runtime kind, such as "predict_rlm" or "claude_agent".
+     *
+     * @generated from protobuf field: map<string, string> agent_runtime_kinds = 11
+     */
+    agentRuntimeKinds: {
+        [key: string]: string;
+    };
 }
 /**
  * @generated from protobuf message avalanche.operator.ScanTargetV2
@@ -2879,7 +2887,8 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
             { no: 7, name: "standard_step_docstring_lines", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 8, name: "classifier_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 9, name: "step_interface_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
-            { no: 10, name: "evaluation_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
+            { no: 10, name: "evaluation_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
+            { no: 11, name: "agent_runtime_kinds", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
         ]);
     }
     create(value?: PartialMessage<WorkflowTopologyV2>): WorkflowTopologyV2 {
@@ -2894,6 +2903,7 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         message.classifierMetadataJson = {};
         message.stepInterfaceJson = {};
         message.evaluationMetadataJson = {};
+        message.agentRuntimeKinds = {};
         if (value !== undefined)
             reflectionMergePartial<WorkflowTopologyV2>(this, message, value);
         return message;
@@ -2932,6 +2942,9 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
                     break;
                 case /* map<string, string> evaluation_metadata_json */ 10:
                     this.binaryReadMap10(message.evaluationMetadataJson, reader, options);
+                    break;
+                case /* map<string, string> agent_runtime_kinds */ 11:
+                    this.binaryReadMap11(message.agentRuntimeKinds, reader, options);
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -3088,6 +3101,22 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         }
         map[key ?? ""] = val ?? "";
     }
+    private binaryReadMap11(map: WorkflowTopologyV2["agentRuntimeKinds"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof WorkflowTopologyV2["agentRuntimeKinds"] | undefined, val: WorkflowTopologyV2["agentRuntimeKinds"][any] | undefined;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case 1:
+                    key = reader.string();
+                    break;
+                case 2:
+                    val = reader.string();
+                    break;
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.WorkflowTopologyV2.agent_runtime_kinds");
+            }
+        }
+        map[key ?? ""] = val ?? "";
+    }
     internalBinaryWrite(message: WorkflowTopologyV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
         /* repeated string node_ids = 1; */
         for (let i = 0; i < message.nodeIds.length; i++)
@@ -3123,6 +3152,9 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         /* map<string, string> evaluation_metadata_json = 10; */
         for (let k of globalThis.Object.keys(message.evaluationMetadataJson))
             writer.tag(10, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.evaluationMetadataJson[k]).join();
+        /* map<string, string> agent_runtime_kinds = 11; */
+        for (let k of globalThis.Object.keys(message.agentRuntimeKinds))
+            writer.tag(11, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.agentRuntimeKinds[k]).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

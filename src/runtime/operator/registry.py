@@ -102,6 +102,17 @@ def agent_field_schemas_for_workflow(workflow: Workflow, node_ids: list[str]) ->
     return schemas_by_node
 
 
+def agent_runtime_kinds_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, str]:
+    """Each agent invocation's runtime kind, workflow defaults applied."""
+    kinds_by_node: dict[str, str] = {}
+    for node_id in node_ids:
+        spec = getattr(workflow.nodes[node_id].node.fn, "__agent_step__", None)
+        if spec is None:
+            continue
+        kinds_by_node[node_id] = spec.declaration(workflow.agent_defaults).runtime.kind
+    return kinds_by_node
+
+
 def agent_instruction_lines_for_workflow(
     workflow: Workflow, node_ids: list[str]
 ) -> dict[str, str]:

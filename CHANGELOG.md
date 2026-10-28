@@ -10,6 +10,15 @@
   `output_format` and `cwd` are rejected, and an unknown option name raises. Any
   other option replaces Avalanche's value. These options are never published or
   recorded.
+- The browser UI shows which agent steps run on the Claude Agent SDK. Their workflow
+  graph nodes have a Claude-orange border, an orange "Agent" label and a Claude logo
+  on the corner, and the step sidebar header shows a "Claude Agent SDK" tag. Other
+  agent steps keep the purple label. The colored bar on the left of agent and
+  classifier nodes is gone.
+- A run's topology now records each agent node's runtime (`agent_runtime_kinds`,
+  for example `"claude_agent"` or `"predict_rlm"`, with workflow defaults applied),
+  so past runs show the right runtime even if the workflow changed. Runs recorded
+  before this change show no runtime.
 - ClaudeAgent traces say what Claude did. By default the system prompt now asks
   Claude to write a short note before each tool call, and Claude's answer must
   include a `run_summary` of what it did, shown as the answering turn's message and

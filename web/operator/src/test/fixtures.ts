@@ -57,6 +57,22 @@ export function agentDeclarationJson({
   return JSON.stringify(declaration);
 }
 
+/** A published ClaudeAgent declaration, as JSON. */
+export function claudeAgentDeclarationJson(instructions = ""): string {
+  const declaration: AgentDeclaration = {
+    signature: { name: "Signature", instructions, inputs: [], outputs: [] },
+    tools: [],
+    skills: [],
+    runtime: {
+      kind: "claude_agent",
+      model: "claude-haiku-5-5",
+      settings: {},
+      builtin_tools: [],
+    },
+  };
+  return JSON.stringify(declaration);
+}
+
 export function eventUlid(sequence: number | string): string {
   return Number(sequence).toString(16).toUpperCase().padStart(26, "0");
 }
