@@ -13,19 +13,27 @@ from pydantic import Field
 from .claude_agent import ClaudeAgentNativeEvent, ClaudeAgentTraceHeader, ClaudeAgentTurn
 from .openai_agent import OpenAIAgentNativeEvent, OpenAIAgentTraceHeader, OpenAIAgentTurn
 from .predict_rlm import PredictRLMNativeEvent, PredictRLMTraceHeader, PredictRLMTurn
+from .pydantic_ai import PydanticAINativeEvent, PydanticAITraceHeader, PydanticAITurn
 
 NativeEvent = Annotated[
-    PredictRLMNativeEvent | ClaudeAgentNativeEvent | OpenAIAgentNativeEvent,
+    PredictRLMNativeEvent
+    | ClaudeAgentNativeEvent
+    | OpenAIAgentNativeEvent
+    | PydanticAINativeEvent,
     Field(discriminator="format"),
 ]
 # A turn's runtime-specific part, discriminated by its trace format.
 TurnNative = Annotated[
-    PredictRLMTurn | ClaudeAgentTurn | OpenAIAgentTurn, Field(discriminator="format")
+    PredictRLMTurn | ClaudeAgentTurn | OpenAIAgentTurn | PydanticAITurn,
+    Field(discriminator="format"),
 ]
 
 # A trace header's runtime-specific part, discriminated by its trace format.
 TraceHeaderNative = Annotated[
-    PredictRLMTraceHeader | ClaudeAgentTraceHeader | OpenAIAgentTraceHeader,
+    PredictRLMTraceHeader
+    | ClaudeAgentTraceHeader
+    | OpenAIAgentTraceHeader
+    | PydanticAITraceHeader,
     Field(discriminator="format"),
 ]
 
