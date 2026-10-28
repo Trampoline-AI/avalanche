@@ -9,7 +9,7 @@ function readableDuration(milliseconds: number): string {
 export function formatLogDuration(message: string): string {
   // Only format the operator's agent-event duration field, not user log payloads.
   return message.replace(
-    /^(Agent [\w.]+(?: iteration=\d+)? duration=)(\d+)ms(?=\s|$)(?! \()/,
+    /^(Agent [\w.]+(?: turn=\d+)? duration=)(\d+)ms(?=\s|$)(?! \()/,
     (match: string, prefix: string, rawMilliseconds: string) => {
       const milliseconds = Number(rawMilliseconds);
       if (!Number.isSafeInteger(milliseconds) || milliseconds < 1000) return match;
