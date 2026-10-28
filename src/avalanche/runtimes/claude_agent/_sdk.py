@@ -183,6 +183,9 @@ async def run(
             # reads nothing outside the plugin, whatever the permission mode.
             if any(skill.files for skill in request.skills) and "Read" not in builtin_tools:
                 skill_tools.append("Read")
+        # A Read the user lists through SDK options keeps its usual scope, as one in
+        # builtin_tools does.
+        read_guard = "Read" in skill_tools and not _lists_read(runtime.sdk_options)
         options = ClaudeAgentOptions(
             model=runtime.model,
             max_turns=runtime.max_turns,
@@ -210,7 +213,7 @@ async def run(
             strict_mcp_config=True,
             hooks=(
                 {"PreToolUse": [HookMatcher(matcher="Read", hooks=[_read_only_inside(plugin)])]}
-                if "Read" in skill_tools
+                if read_guard
                 else None
             ),
             system_prompt=_system_prompt(signature.instructions, runtime.system_prompt_append),
@@ -417,6 +420,14 @@ def _with_sdk_options(
         assert options.skills != "all"
         changes["skills"] = _union(options.skills or [], given["skills"])
     return dataclasses.replace(options, **changes)
+
+
+def _lists_read(given: Mapping[str, Any]) -> bool:
+    """Whether the user's SDK ``tools`` or ``allowed_tools`` list the whole Read tool."""
+    return any(
+        isinstance(given.get(name), list) and "Read" in given[name]
+        for name in ("tools", "allowed_tools")
+    )
 
 
 def _union[T](first: list[T], second: list[T]) -> list[T]:
