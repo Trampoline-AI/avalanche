@@ -9,7 +9,7 @@ All models are frozen, strict Pydantic models that reject unknown fields.
 and `AgentResult` hold live Python objects and are never serialized.
 
 ```python
-RuntimeKind = Literal["predict_rlm", "claude_agent", "openai_agent"]   # avalanche.agent.kinds
+RuntimeKind = Literal["predict_rlm", "claude_agent", "openai_agent", "pydantic_ai"]   # avalanche.agent.kinds
 ```
 
 ## Request
@@ -196,11 +196,15 @@ class WorkspaceReferenceInputEvidence:
 
 ```python
 TraceHeaderNative = Annotated[
-    PredictRLMTraceHeader | ClaudeAgentTraceHeader | OpenAIAgentTraceHeader,
+    PredictRLMTraceHeader
+    | ClaudeAgentTraceHeader
+    | OpenAIAgentTraceHeader
+    | PydanticAITraceHeader,
     Field(discriminator="format"),
 ]
 TurnNative = Annotated[
-    PredictRLMTurn | ClaudeAgentTurn | OpenAIAgentTurn, Field(discriminator="format")
+    PredictRLMTurn | ClaudeAgentTurn | OpenAIAgentTurn | PydanticAITurn,
+    Field(discriminator="format"),
 ]
 ```
 
@@ -285,6 +289,24 @@ class OpenAIAgentTurn:
     reasoning_tokens: NonNegativeInt | None
     refusal: str | None
     answer: bool
+```
+
+PydanticAIAgent, `avalanche.agent.native.pydantic_ai`:
+
+```python
+class PydanticAITraceHeader:
+    format: Literal["pydantic_ai.messages/v1"] = "pydantic_ai.messages/v1"
+    requests: NonNegativeInt
+    retries: NonNegativeInt
+    error: str | None                    # at most 4096 characters
+
+
+class PydanticAITurn:
+    format: Literal["pydantic_ai.messages/v1"] = "pydantic_ai.messages/v1"
+    model: str | None
+    provider: str | None
+    provider_response_id: str | None
+    finish_reason: str | None
 ```
 
 ## Live events
@@ -378,7 +400,10 @@ class AgentTraceUnavailable:
 
 ```python
 NativeEvent = Annotated[
-    PredictRLMNativeEvent | ClaudeAgentNativeEvent | OpenAIAgentNativeEvent,
+    PredictRLMNativeEvent
+    | ClaudeAgentNativeEvent
+    | OpenAIAgentNativeEvent
+    | PydanticAINativeEvent,
     Field(discriminator="format"),
 ]
 ```
@@ -489,4 +514,31 @@ class AgentStarted:                      # None
     agent_name: str
     model: str | None
     tools: tuple[str, ...]
+```
+
+PydanticAIAgent, `avalanche.agent.native.pydantic_ai`. Every class also has
+`format: Literal["pydantic_ai.messages/v1"] = "pydantic_ai.messages/v1"`; the
+comment is the `common` event it travels with.
+
+```python
+PydanticAINativeEvent = Annotated[
+    RunInitialized | ToolRetried,
+    Field(discriminator="kind"),
+]
+
+
+class RunInitialized:                    # None
+    kind: Literal["run.initialized"] = "run.initialized"
+    run_id: str
+    conversation_id: str
+    model: str
+    tools: tuple[str, ...]
+    skills: tuple[str, ...]
+
+
+class ToolRetried:                       # tool.finished
+    kind: Literal["tool.retried"] = "tool.retried"
+    call_id: str
+    attempt: PositiveInt
+    max_retries: NonNegativeInt
 ```

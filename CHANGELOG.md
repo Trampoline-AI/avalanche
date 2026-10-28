@@ -153,6 +153,22 @@
   and supply an Overview | Deployments timeline with controlled or local tab state,
   virtualized deployment paging, selection, and confirmed set-current actions.
 
+- Agents: new `ava.runtimes.PydanticAIAgent` runs agent steps through Pydantic AI,
+  on any model it supports, such as
+  `PydanticAIAgent(model="openai:gpt-5.4-nano")` or `"anthropic:claude-haiku-5-5"`.
+  Install the new `pydantic-ai` extra (`avalanche-ai[pydantic-ai]`) and set the
+  provider's key, such as `OPENAI_API_KEY`. The model calls the step's tools and
+  answers through Pydantic AI's validated `final_result` tool; a tool that raises is
+  reported to the model instead of failing the step. `ava.File` inputs are attached
+  to the prompt; an `ava.Workspace` gets `list_files`, `read_file` and `write_file`
+  tools that stay inside it; `ava.File` outputs come back as text files written to
+  the run workspace. Step skills become Pydantic AI capabilities the model loads on
+  demand. Any other keyword is a `pydantic_ai.Agent` argument, such as
+  `model_settings`, `toolsets` or `capabilities`; their values are never published.
+  Traces record each model response with its usage, cost when Pydantic AI knows it,
+  finish reason and timing, and the TUI and browser UI show them through their own
+  viewer. Workflows that only declare these steps import and publish without the
+  extra.
 - Agents: `ava.runtimes.ClaudeAgent` now passes any other keyword to the Claude
   Agent SDK as a `ClaudeAgentOptions` field, such as
   `ClaudeAgent(model="claude-sonnet-5-5", effort="low", mcp_servers={...})`.
