@@ -10,6 +10,8 @@ import {
   Panel,
   Position,
   ReactFlow,
+  useReactFlow,
+  useStore,
   useViewport,
   type Edge,
   type EdgeProps,
@@ -522,6 +524,24 @@ const VERTICAL_FIT_VIEW_OPTIONS: FitViewOptions = {
   padding: { top: "160px", bottom: "90px", left: "40px", right: "80px" },
 };
 
+function FitGraphOnWidthChange({ options }: { options: FitViewOptions }) {
+  const width = useStore((state) => state.width);
+  const { fitView } = useReactFlow();
+  const previousWidth = useRef(width);
+
+  useEffect(() => {
+    const previous = previousWidth.current;
+    previousWidth.current = width;
+    // Initial fitting belongs to React Flow. Re-fit only after its resize observer
+    // has committed a changed canvas width (timeline, inspector or window resize).
+    if (previous <= 0 || width <= 0 || previous === width) return;
+    const frame = requestAnimationFrame(() => void fitView(options));
+    return () => cancelAnimationFrame(frame);
+  }, [width, fitView, options]);
+
+  return null;
+}
+
 function invocationIdentity(nodeId: string, label: string): string {
   const suffix = nodeId.startsWith(`${label}_`) ? nodeId.slice(label.length + 1) : "";
   return suffix && /^\d+$/.test(suffix) ? `#${suffix}` : nodeId;
@@ -835,6 +855,9 @@ function GraphCanvasView({
         onPaneClick={onClearNode}
         proOptions={{ hideAttribution: true }}
       >
+        <FitGraphOnWidthChange
+          options={orientation === "vertical" ? VERTICAL_FIT_VIEW_OPTIONS : FIT_VIEW_OPTIONS}
+        />
         {bottomRightPanel && (
           <Panel
             position="bottom-right"

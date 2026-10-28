@@ -323,7 +323,15 @@ export function WorkflowWorkspaceSurface({
         className={`workflow-workspace relative grid min-h-0 min-w-0 w-full flex-1 overflow-hidden grid-cols-[minmax(0,1fr)_var(--workspace-inspector-divider-width)_var(--workspace-inspector-column-width)] max-[1000px]:grid-cols-[minmax(0,1fr)] ${inspectorOpen ? "with-inspector" : ""}`}
         style={workspaceStyle}
       >
-        <section className="canvas-shell relative col-start-1 flex min-h-0 min-w-0 flex-col overflow-hidden bg-canvas-shell">
+        <section className="canvas-shell relative col-start-1 flex min-h-0 min-w-0 flex-row overflow-hidden bg-canvas-shell">
+          {runListPanel && (
+            <div
+              ref={timelineElement}
+              className={`workspace-timeline z-20 ${timelineExpanded ? "relative w-[410px] max-w-full shrink-0 max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:left-0" : "absolute top-3.5 left-3.5 w-[300px] max-w-[calc(100vw-3rem)]"}`}
+            >
+              {runListPanel}
+            </div>
+          )}
           <div
             className={`canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${run ? "run-canvas bg-run-canvas" : "blueprint-canvas bg-panel"}`}
           >
@@ -409,14 +417,6 @@ export function WorkflowWorkspaceSurface({
               </div>
             )}
           </div>
-          {runListPanel && (
-            <div
-              ref={timelineElement}
-              className={`workspace-timeline absolute z-20 ${timelineExpanded ? "inset-y-0 left-0 w-[410px] max-w-full" : "top-3.5 left-3.5 w-[300px] max-w-[calc(100vw-3rem)]"}`}
-            >
-              {runListPanel}
-            </div>
-          )}
         </section>
         {inspectorOpen && (
           <>

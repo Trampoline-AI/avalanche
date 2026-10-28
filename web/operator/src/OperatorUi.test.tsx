@@ -17,8 +17,10 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
   Handle: () => null,
   Panel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   useViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
+  useStore: (selector: (state: { width: number }) => unknown) => selector({ width: 0 }),
   useReactFlow: () => ({
     screenToFlowPosition: () => ({ x: 0, y: 0 }),
+    fitView: vi.fn(),
     setCenter,
   }),
   ReactFlow: ({
@@ -1348,8 +1350,25 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
+    const logPane = screen.getByRole("region", { name: "Run logs" });
+    const logResize = screen.getByRole("separator", { name: "Resize logs" });
+    fireEvent.keyDown(logResize, { key: "ArrowUp" });
+    const logHeight = logPane.style.flexBasis;
+    expect(logHeight).toBe("276px");
+    const inspectorDivider = screen.getByRole("separator", { name: "Resize Inspector" });
     fireEvent.click(screen.getByRole("button", { name: "View all" }));
     const allRuns = screen.getByRole("region", { name: "Timeline" });
+    const timeline = allRuns.closest(".workspace-timeline")!;
+    const canvas = logPane.closest(".canvas")!;
+    expect(timeline.parentElement).toHaveClass("canvas-shell", "flex-row");
+    expect(timeline.parentElement).toBe(canvas.parentElement);
+    expect(timeline).toHaveClass("relative", "shrink-0", "w-[410px]");
+    expect(timeline).not.toHaveClass("absolute");
+    expect(timeline).toHaveClass("max-[1000px]:absolute");
+    expect(timeline).not.toContainElement(logPane);
+    expect(screen.getByRole("separator", { name: "Resize logs" })).toBe(logResize);
+    expect(screen.getByRole("separator", { name: "Resize Inspector" })).toBe(inspectorDivider);
+    expect(logPane.style.flexBasis).toBe(logHeight);
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
     expect(within(allRuns).getByRole("button", { name: "Collapse timeline" })).toHaveFocus();
     fireEvent.click(within(allRuns).getByText("Advanced filters"));
@@ -1367,6 +1386,10 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(within(allRuns).queryByRole("button", { name: /run-1,/ })).not.toBeInTheDocument();
     fireEvent.keyDown(within(allRuns).getByRole("searchbox"), { key: "Escape" });
     expect(within(allRuns).queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(timeline).toHaveClass("absolute", "w-[300px]");
+    expect(timeline).not.toHaveClass("relative", "shrink-0");
+    expect(screen.getByRole("region", { name: "Run logs" })).toBe(logPane);
+    expect(logPane.style.flexBasis).toBe(logHeight);
     expect(screen.getByRole("button", { name: "View all" })).toHaveFocus();
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "View all" }));
