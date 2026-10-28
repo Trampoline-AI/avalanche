@@ -757,9 +757,13 @@ def _fmt_elapsed(secs: float | None) -> str:
         return ""
     if secs < 10:
         return f"{secs:.2f}s"
-    if secs < 100:
+    if secs < 60:
         return f"{secs:.1f}s"
-    return f"{int(secs)}s"
+    # Long durations read like the console's formatDuration (run-format.ts).
+    minutes, seconds = divmod(int(round(secs)), 60)
+    if minutes < 60:
+        return f"{minutes}m {seconds}s"
+    return f"{minutes // 60}h {minutes % 60}m"
 
 
 def append_node(
