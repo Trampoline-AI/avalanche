@@ -2,6 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { ChevronRight, Maximize2, Minimize2, Workflow } from "lucide-react";
 
+import { formatElapsedSeconds } from "./elapsedDuration";
 import type { RunSummaryMsg } from "./model";
 
 const RUN_ROW_HEIGHT = 32;
@@ -30,9 +31,13 @@ export function compareNewestRun(left: RunSummaryMsg, right: RunSummaryMsg) {
   return leftSequence < rightSequence ? 1 : -1;
 }
 
-function runDuration(summary: RunSummaryMsg) {
-  if (!summary.startedAt || !summary.endedAt) return "—";
-  return `${Math.max(0, summary.endedAt - summary.startedAt).toFixed(1)}s`;
+function runElapsedSeconds(summary: RunSummaryMsg): number | undefined {
+  if (!summary.startedAt || !summary.endedAt) return undefined;
+  return Math.max(0, summary.endedAt - summary.startedAt);
+}
+
+function runDuration(elapsedSeconds: number | undefined) {
+  return elapsedSeconds === undefined ? "—" : formatElapsedSeconds(elapsedSeconds);
 }
 
 function runTriggeredAt(summary: RunSummaryMsg): Date | undefined {
@@ -347,15 +352,16 @@ export function RunListPanel({
               }
               const summary = filteredRuns[pageOffset + virtualRow.index - 1];
               const triggeredAt = runTriggeredAt(summary);
+              const elapsedSeconds = runElapsedSeconds(summary);
               return (
                 <button
                   type="button"
-                  className={`run-list-row absolute top-0 left-0 grid w-full cursor-pointer grid-cols-[8px_minmax(0,1fr)_auto_38px] items-center border-0 border-b border-[#eef1ef] text-left text-ink leading-none [&_code]:truncate [&_code]:text-[#36423c] ${expanded ? "grid-rows-[16px_14px] gap-x-[10px] gap-y-[4px] px-[20px] py-[11px] [&_code]:text-[11px]" : "grid-rows-[12px_12px] gap-x-[7px] gap-y-0 pl-[9px] pr-[17px] py-1 [&_code]:text-[9px]"} ${selectedRunId === summary.runId ? "active bg-[#edf3ff] shadow-[inset_2px_0_#2563eb] hover:bg-[#e4edff]" : "bg-transparent hover:bg-[#f4f6f5]"}`}
+                  className={`run-list-row absolute top-0 left-0 grid w-full cursor-pointer grid-cols-[8px_minmax(0,1fr)_auto_minmax(38px,auto)] items-center border-0 border-b border-[#eef1ef] text-left text-ink leading-none [&_code]:truncate [&_code]:text-[#36423c] ${expanded ? "grid-rows-[16px_14px] gap-x-[10px] gap-y-[4px] px-[20px] py-[11px] [&_code]:text-[11px]" : "grid-rows-[12px_12px] gap-x-[7px] gap-y-0 pl-[9px] pr-[17px] py-1 [&_code]:text-[9px]"} ${selectedRunId === summary.runId ? "active bg-[#edf3ff] shadow-[inset_2px_0_#2563eb] hover:bg-[#e4edff]" : "bg-transparent hover:bg-[#f4f6f5]"}`}
                   key={summary.runId}
                   onClick={() => onSelectRun(summary.runId)}
                   aria-pressed={selectedRunId === summary.runId}
                   style={rowStyle}
-                  aria-label={`${summary.runId}, ${summary.status}, ${runDuration(summary)}, ${
+                  aria-label={`${summary.runId}, ${summary.status}, ${runDuration(elapsedSeconds)}, ${
                     triggeredAt
                       ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
                       : "trigger time not recorded"
@@ -372,9 +378,14 @@ export function RunListPanel({
                     {summary.status}
                   </span>
                   <time
-                    className={`run-duration text-right font-mono text-secondary ${expanded ? "text-[11px]" : "text-[8px]"}`}
+                    title={
+                      elapsedSeconds === undefined
+                        ? undefined
+                        : `${elapsedSeconds.toFixed(1)} seconds`
+                    }
+                    className={`run-duration whitespace-nowrap text-right font-mono text-secondary ${expanded ? "text-[11px]" : "text-[8px]"}`}
                   >
-                    {runDuration(summary)}
+                    {runDuration(elapsedSeconds)}
                   </time>
                   <time
                     className={`run-triggered-at col-start-2 col-end-5 font-mono text-secondary ${expanded ? "text-[11px]" : "text-[8px]"}`}
