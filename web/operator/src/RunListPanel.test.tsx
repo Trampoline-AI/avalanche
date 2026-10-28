@@ -155,13 +155,13 @@ it("caps the compact timeline at twenty runs and pins the history action outside
   );
   await screen.findByRole("button", { name: /run-18,/ });
   const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
-  await scrollTimelineTo(scroll, 20 * 32 - 192);
+  await scrollTimelineTo(scroll, 20 * 44 - 192);
   await within(scroll).findByRole("button", { name: /run-0,/ });
   expect(within(scroll).queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Current" })).not.toBeInTheDocument();
 
   view.rerender(<RunListPanel {...props} runs={Object.fromEntries(entries.slice(0, 20))} />);
-  await scrollTimelineTo(scroll, 21 * 32 - 192);
+  await scrollTimelineTo(scroll, 21 * 44 - 192);
   expect(await screen.findByRole("button", { name: "View all" })).toBeInTheDocument();
   expect(within(scroll).queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
 
@@ -199,7 +199,7 @@ it("preserves compact timeline scrolling across status and unrelated workflow up
   const view = render(<RunListPanel {...props} />);
   await screen.findByRole("button", { name: /run-19,/ });
   const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
-  const bottom = 21 * 32 - 192;
+  const bottom = 21 * 44 - 192;
   await scrollTimelineTo(scroll, bottom);
   expect(await screen.findByRole("button", { name: "View all" })).toBeVisible();
   expect(within(scroll).queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
@@ -266,4 +266,6 @@ it.each([
   expect(row).toHaveAttribute("title", run.runId);
   expect(row.querySelector(".run-status-text")).toHaveTextContent(run.status);
   expect(row.querySelector(".run-status-text")).toHaveAttribute("data-status", run.status);
+  expect(row.querySelector(".run-status-glyph")).toHaveAttribute("data-glyph", "running");
+  expect(row.querySelector(".run-status-text")).not.toHaveClass("border", "rounded");
 });

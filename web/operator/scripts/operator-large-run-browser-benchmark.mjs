@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const RUN_COUNT = 10_000;
 const DOM_ROW_LIMIT = 120;
-const RUN_ROW_HEIGHT = 32;
+const RUN_ROW_HEIGHT = 44;
 const RENDER_BUDGET_MS = 3_000;
 const INTERACTION_BUDGET_MS = 1_000;
 const VITE_START_BUDGET_MS = 10_000;
@@ -497,7 +497,7 @@ async function run() {
   let selectedRunId = "";
   const renderStartedAt = performance.now();
   createRoot(rootElement).render(
-    <div className="h-[222px] w-[300px] [&_.run-list-panel]:h-[222px]">
+    <div className="h-[258px] w-[300px] [&_.run-list-panel]:h-[258px]">
       <RunListPanel
         workflowId={workflowId}
         runs={runs}
@@ -519,7 +519,7 @@ async function run() {
   );
   await until(
     () => Array.from(document.querySelectorAll<HTMLButtonElement>(".run-list-row"))
-      .some((row) => row.textContent?.includes("run-09999")) ? virtualList : undefined,
+      .some((row) => row.title === "run-09999") ? virtualList : undefined,
     RENDER_BUDGET_MS,
     "production virtualizer did not emit the initial visible range",
   );
@@ -539,7 +539,7 @@ async function run() {
   scrollElement.dispatchEvent(new Event("scroll"));
   const oldestRun = await until(
     () => Array.from(document.querySelectorAll<HTMLButtonElement>(".run-list-row"))
-      .find((button) => button.textContent?.includes("run-09980")),
+      .find((button) => button.title === "run-09980"),
     INTERACTION_BUDGET_MS,
     "scroll did not render the twentieth run",
   );

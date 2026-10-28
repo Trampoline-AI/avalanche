@@ -71,7 +71,11 @@
   --radius-md: var(--radius-ui);
   --radius-lg: var(--radius-ui);
   --radius-xl: var(--radius-ui);
-  --color-status-active: #edf3ff;
+  --color-run-status-active: #363cff;
+  --color-run-status-success: oklch(0.48 0.17 150);
+  --color-run-status-danger: #b42318;
+  --color-run-status-muted: #61616c;
+  --color-run-list-line: #bebebe;
   --color-ink: #17211c;
   --color-canvas: #f6f8f7;
   --color-panel: #ffffff;
@@ -219,7 +223,11 @@
   --color-claude: #eda184;
   --color-classifier: #6bd1e7;
   --color-classifier-light: #16313a;
-  --color-status-active: #1c304d;
+  --color-run-status-active: #6e73ff;
+  --color-run-status-success: oklch(0.72 0.17 150);
+  --color-run-status-danger: #ff7a6e;
+  --color-run-status-muted: #9a9aa8;
+  --color-run-list-line: #3a3b4a;
   --color-field-ink: #c7d4cd;
   --color-line-subtle: #29362f;
   --color-selected: #1c304d;
@@ -756,4 +764,14 @@
 }
 .avalanche-operator-ui :is(.react-flow__controls, .react-flow__minimap) {
   border-radius: var(--radius-ui);
+}
+
+/* Unboxed TUI status: glyph is decorative; the real runtime word stays text. */
+.avalanche-operator-ui .run-status-glyph {
+  display: inline-block;
+  width: 1em;
+  text-align: center;
+}
+.avalanche-operator-ui .run-status-glyph::before {
+  content: attr(data-char);
 }

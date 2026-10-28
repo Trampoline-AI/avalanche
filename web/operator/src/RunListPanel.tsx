@@ -4,9 +4,9 @@ import { ChevronRight, Maximize2, Minimize2, Workflow } from "lucide-react";
 
 import { formatElapsedSeconds } from "./elapsedDuration";
 import type { RunSummaryMsg } from "./model";
-import { RunStatusBadge } from "./RunStatusBadge";
+import { RunStatus } from "./RunStatus";
 
-const RUN_ROW_HEIGHT = 32;
+const RUN_ROW_HEIGHT = 44;
 const RUN_ROW_OVERSCAN = 8;
 const RUN_PAGE_SIZE = 25;
 const TIMELINE_RUN_LIMIT = 20;
@@ -298,6 +298,13 @@ export function RunListPanel({
           </details>
         </div>
       )}
+      <div
+        className={`run-list-columns grid shrink-0 grid-cols-[minmax(0,1fr)_100px] items-center gap-3 border-b border-run-list-line font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase ${expanded ? "h-9 px-[20px]" : "h-7 px-[9px]"}`}
+        aria-hidden="true"
+      >
+        <span>Run</span>
+        <span>Status</span>
+      </div>
       <div className={`timeline-scroll-shell relative min-h-0 ${expanded ? "flex-1" : ""}`}>
         <div
           className={
@@ -324,7 +331,7 @@ export function RunListPanel({
                     aria-pressed={selectedRunId === undefined}
                     onClick={() => onSelectRun(undefined)}
                     style={rowStyle}
-                    className={`absolute top-0 left-0 flex w-full cursor-pointer items-center gap-2 border-0 border-b border-line text-left font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid ${expanded ? "px-[20px] text-xs" : "pl-[9px] pr-[17px] text-[10px]"} ${selectedRunId === undefined ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
+                    className={`absolute top-0 left-0 flex w-full cursor-pointer items-center gap-2 border-0 border-b border-run-list-line text-left font-mono font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid ${expanded ? "px-[20px] text-xs" : "pl-[9px] pr-[17px] text-[10px]"} ${selectedRunId === undefined ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
                   >
                     <Workflow aria-hidden="true" className="size-3.5 shrink-0 text-secondary" />
                     <span className="flex-1">Current</span>
@@ -343,7 +350,7 @@ export function RunListPanel({
               return (
                 <button
                   type="button"
-                  className={`run-list-row absolute top-0 left-0 flex w-full cursor-pointer items-center justify-between gap-2 border-0 border-b border-line-subtle text-left text-ink leading-none ${expanded ? "px-[20px] text-[11px]" : "pl-[9px] pr-[17px] text-[9px]"} ${selectedRunId === summary.runId ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
+                  className={`run-list-row run-list-columns absolute top-0 left-0 grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_100px] items-center gap-3 border-0 border-b border-run-list-line text-left font-mono text-ink leading-none ${expanded ? "px-[20px] text-[11px]" : "px-[9px] text-[10px]"} ${selectedRunId === summary.runId ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
                   key={summary.runId}
                   onClick={() => onSelectRun(summary.runId)}
                   aria-pressed={selectedRunId === summary.runId}
@@ -373,7 +380,7 @@ export function RunListPanel({
                       {runDuration(elapsedSeconds)}
                     </span>
                   </span>
-                  <RunStatusBadge status={summary.status} />
+                  <RunStatus status={summary.status} />
                 </button>
               );
             })}

@@ -52,7 +52,7 @@ describe("large-run resource bounds", () => {
 
     // The compact timeline keeps Current plus its twenty newest runs in the scroll range.
     const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
-    scroll.scrollTop = 21 * 32 - 192;
+    scroll.scrollTop = 21 * 44 - 192;
     fireEvent.scroll(scroll);
     const oldest = await within(region).findByRole("button", { name: /run-09980,/ });
     expect(within(region).getAllByRole("button").length).toBeLessThan(100);
