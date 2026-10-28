@@ -63,12 +63,14 @@ class ClaudeAgent(BaseModel):
     agent may use without asking, such as ``"Read"`` or ``"Bash"``; none are
     enabled by default. The step's own tools are always available. With
     ``narrate`` on, the system prompt asks Claude to note what it is about to do
-    before each tool call and to summarize its work before answering, so every
-    turn of the trace says what happened.
+    before each tool call, and its answer must carry a ``run_summary`` that the
+    trace shows on the answering turn.
 
-    Steps run the ``claude`` CLI, which must be installed wherever the step runs,
-    Ray workers included. It authenticates as it does in a terminal: with a
-    ``claude`` login, ``CLAUDE_CODE_OAUTH_TOKEN`` from ``claude setup-token``, or
+    Steps run the Claude Code CLI that ships with the Claude Agent SDK package
+    (the ``claude`` extra), which must be installed wherever the step runs, Ray
+    workers included; a separately installed ``claude`` is used only when the
+    package has none. It authenticates as it does in a terminal: with a ``claude``
+    login, ``CLAUDE_CODE_OAUTH_TOKEN`` from ``claude setup-token``, or
     ``ANTHROPIC_API_KEY``.
 
     Any other keyword is a ``claude_agent_sdk.ClaudeAgentOptions`` field passed to
