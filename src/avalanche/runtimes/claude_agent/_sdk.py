@@ -144,6 +144,12 @@ async def run(
             f"agent step {request.step_name!r}: ClaudeAgent outputs that hold files must be "
             f"typed exactly ava.File, list[ava.File] or ava.Workspace {unsupported_outputs}"
         )
+    if runtime.narrate and _SUMMARY_FIELD in signature.output_model.model_fields:
+        raise AgentStepError(
+            f"agent step {request.step_name!r}: with narrate on, ClaudeAgent asks Claude for "
+            f"its own {_SUMMARY_FIELD!r} answer field; rename the signature's output or set "
+            "narrate=False"
+        )
     workspace: Workspace | None = None
     with contextlib.ExitStack() as stack:
         if workspace_inputs:
@@ -232,7 +238,10 @@ async def run(
             output_format={
                 "type": "json_schema",
                 "schema": _output_schema(
-                    signature.output_model, workspace_outputs, file_outputs
+                    signature.output_model,
+                    workspace_outputs,
+                    file_outputs,
+                    summary=runtime.narrate,
                 ),
             },
             cwd=str(directory),
@@ -241,7 +250,7 @@ async def run(
             include_partial_messages=True,
         )
         options = _with_sdk_options(options, runtime.sdk_options, step_name=request.step_name)
-        transcript = _Transcript(events)
+        transcript = _Transcript(events, summary=runtime.narrate)
         # The trace records file inputs by reference, never by host path.
         inputs, omitted_inputs = retained_fields(
             {name: getattr(request.inputs, name) for name in signature.input_model.model_fields}
@@ -318,7 +327,7 @@ async def run(
         try:
             outputs = _outputs(
                 request,
-                result.structured_output,
+                _answer(request, result.structured_output, summary=runtime.narrate),
                 workspace=workspace,
                 directory=directory,
                 workspace_outputs=workspace_outputs,
@@ -331,6 +340,27 @@ async def run(
             raise
         events.finished(record.header, outputs=outputs, complete=True)
         return AgentRunOutcome(outputs=outputs, trace=record)
+
+
+def _answer(
+    request: AgentRequest, structured_output: dict[str, Any], *, summary: bool
+) -> dict[str, Any]:
+    """Claude's structured output without the run summary Avalanche asked for."""
+    if not summary:
+        return structured_output
+    if _summary_of(structured_output) is None:
+        raise AgentOutputError(
+            f"agent step {request.step_name!r}: Claude's answer has no {_SUMMARY_FIELD!r} text"
+        )
+    return {name: value for name, value in structured_output.items() if name != _SUMMARY_FIELD}
+
+
+def _summary_of(structured_output: object) -> str | None:
+    """The run summary in Claude's answer; a failed session may have no answer."""
+    if not isinstance(structured_output, dict):
+        return None
+    summary = structured_output.get(_SUMMARY_FIELD)
+    return summary if isinstance(summary, str) else None
 
 
 def _outputs(
@@ -605,11 +635,14 @@ def _output_files(
     return files
 
 
+# The answer field holding the run summary that narration asks for.
+_SUMMARY_FIELD = "run_summary"
+
 _NARRATION = (
     "While you work, keep a short running account of what you are doing. Before each "
     "tool call, write one or two plain sentences saying what you are about to do and "
-    "why. When a result changes your plan, say how. Before you submit your final "
-    "answer, write a brief summary of what you did and what you found. Keep these "
+    "why. When a result changes your plan, say how. When you submit your answer, put a "
+    f"brief summary of what you did and what you found in {_SUMMARY_FIELD}. Keep these "
     "notes short: they are a progress log for the people watching this run, not the "
     "answer."
 )
@@ -670,10 +703,27 @@ def _result_errors(result: ResultMessage) -> tuple[str, ...]:
 
 
 def _output_schema(
-    model: type[BaseModel], workspace_outputs: list[str], file_outputs: Mapping[str, bool]
+    model: type[BaseModel],
+    workspace_outputs: list[str],
+    file_outputs: Mapping[str, bool],
+    *,
+    summary: bool,
 ) -> dict[str, Any]:
-    """The signature's output schema; Avalanche fills workspaces, files are paths."""
+    """The signature's output schema; Avalanche fills workspaces, files are paths.
+
+    With ``summary``, the schema also requires the run summary that becomes the
+    answering turn's message; it is removed before the outputs are built.
+    """
     schema = model.model_json_schema()
+    if summary:
+        schema["properties"][_SUMMARY_FIELD] = {
+            "type": "string",
+            "description": (
+                "A few plain sentences for the people watching this run: what you did and "
+                "what you found. Not part of the answer."
+            ),
+        }
+        schema["required"] = [*schema.get("required", ()), _SUMMARY_FIELD]
     for name in workspace_outputs:
         del schema["properties"][name]
         schema["required"] = [field for field in schema.get("required", ()) if field != name]
@@ -820,8 +870,9 @@ class _PendingTurn:
 class _Transcript:
     """Turns the SDK's message stream into live events and a trace record."""
 
-    def __init__(self, events: AgentEventSink) -> None:
+    def __init__(self, events: AgentEventSink, *, summary: bool) -> None:
         self._events = events
+        self._summary = summary
         self._pending: _PendingTurn | None = None
         self.turns: list[Turn] = []
         self.session_id: str | None = None
@@ -894,7 +945,10 @@ class _Transcript:
                     None,
                 )
             case ResultMessage():
-                await self._finish_turn()
+                # The answering turn says what Claude did, in the summary it answered with.
+                await self._finish_turn(
+                    summary=_summary_of(message.structured_output) if self._summary else None
+                )
                 # How the session ended travels in the final event's header.
                 self.result = message
                 self.session_id = message.session_id
@@ -922,12 +976,15 @@ class _Transcript:
             ),
         )
 
-    async def _finish_turn(self) -> None:
+    async def _finish_turn(self, *, summary: str | None = None) -> None:
         pending, self._pending = self._pending, None
         if pending is None:
             return
         message = pending.message
-        text = "".join(block.text for block in pending.blocks if isinstance(block, TextBlock))
+        written = "".join(
+            block.text for block in pending.blocks if isinstance(block, TextBlock)
+        )
+        text = "\n\n".join(part for part in (written, summary) if part)
         reasoning = "".join(
             block.thinking for block in pending.blocks if isinstance(block, ThinkingBlock)
         )

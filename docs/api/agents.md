@@ -125,7 +125,7 @@ ava.runtimes.ClaudeAgent(model="claude-haiku-5-5", max_turns=10, builtin_tools=(
 | `permission_mode` | `"default"`, `"acceptEdits"`, `"plan"`, `"bypassPermissions"` or `"dontAsk"`; default `"default"` | Claude Code permission mode. |
 | `system_prompt_append` | `str \| None`; default `None` | Text added after the signature's instructions in the system prompt. |
 | `max_budget_usd` | positive `float \| None`; default `None` | Spending limit for the session. |
-| `narrate` | `bool`; default `True` | Adds a paragraph to the system prompt, after the signature's instructions and before `system_prompt_append`, asking Claude to say what it is about to do before each tool call and to sum up its work before answering. Claude may still skip a note. See [narration](../runtimes/claude-agent.md#settings). |
+| `narrate` | `bool`; default `True` | Adds a paragraph to the system prompt, after the signature's instructions and before `system_prompt_append`, asking Claude to say what it is about to do before each tool call, and requires a `run_summary` string in Claude's answer. Claude may skip a note, but every answer has a summary; Avalanche removes it from the outputs and shows it as the answering turn's message. A signature output named `run_summary` needs `narrate=False`. See [narration](../runtimes/claude-agent.md#settings). |
 
 Any other keyword is a field of the Claude Agent SDK's `ClaudeAgentOptions`, passed to the SDK with the SDK's own types:
 

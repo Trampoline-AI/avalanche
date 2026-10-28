@@ -81,7 +81,7 @@ def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monke
             is_error=False,
             num_turns=1,
             session_id="session-1",
-            structured_output={"total": 5},
+            structured_output={"total": 5, "run_summary": "Added 2 and 3."},
         )
 
     monkeypatch.setattr(sdk, "_session", query)
