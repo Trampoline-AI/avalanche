@@ -140,8 +140,22 @@ class ClaudeAgentDeclaration(BaseModel):
     builtin_tools: tuple[str, ...]
 
 
+class OpenAIAgentDeclaration(BaseModel):
+    """What an OpenAI Agents SDK runtime contributes to a declaration.
+
+    ``model`` is ``None`` when the step leaves the choice to the SDK.
+    """
+
+    model_config = _STRICT
+
+    kind: Literal["openai_agent"] = "openai_agent"
+    model: str | None
+    settings: dict[str, JsonValue]
+
+
 RuntimeDeclaration = Annotated[
-    PredictRLMDeclaration | ClaudeAgentDeclaration, Field(discriminator="kind")
+    PredictRLMDeclaration | ClaudeAgentDeclaration | OpenAIAgentDeclaration,
+    Field(discriminator="kind"),
 ]
 
 

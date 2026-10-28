@@ -46,6 +46,9 @@ lance = [
 claude = [
     "claude-agent-sdk>=0.2.174",
 ]
+openai = [
+    "openai-agents>=0.24.0",
+]
 
 [dependency-groups]
 dev = [

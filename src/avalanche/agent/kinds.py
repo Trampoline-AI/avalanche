@@ -5,4 +5,4 @@ from __future__ import annotations
 from typing import Literal
 
 # Every agent runtime Avalanche knows; a new runtime adds its kind here.
-RuntimeKind = Literal["predict_rlm", "claude_agent"]
+RuntimeKind = Literal["predict_rlm", "claude_agent", "openai_agent"]
