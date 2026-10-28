@@ -28,7 +28,7 @@ describe.each(["horizontal", "vertical"] as const)(
       for (const edge of highlighted) {
         const connected = edge.source === "selected" || edge.target === "selected";
         expect(edge.style).toMatchObject({
-          stroke: connected ? "#2563eb" : "#87938d",
+          stroke: connected ? "var(--color-acid)" : "var(--color-edge)",
           strokeDasharray: connected ? undefined : "6 4",
         });
         expect(edge.markerEnd).toMatchObject({ color: edge.style?.stroke });
@@ -45,7 +45,8 @@ describe.each(["horizontal", "vertical"] as const)(
       expect(
         highlightConnectedEdges(edges).every(
           (edge) =>
-            edge.style?.stroke === "#87938d" && edge.style.strokeDasharray === undefined,
+            edge.style?.stroke === "var(--color-edge)" &&
+            edge.style.strokeDasharray === undefined,
         ),
       ).toBe(true);
       expect(

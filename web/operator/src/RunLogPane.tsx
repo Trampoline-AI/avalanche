@@ -453,7 +453,7 @@ export function RunLogPane({
   return (
     <section
       ref={paneElement}
-      className={`run-log-pane relative z-[6] grid min-h-0 min-w-0 flex-[0_0_35px] grid-rows-[35px_minmax(0,1fr)] border-t border-line bg-[rgba(255,255,255,.98)] shadow-[0_-5px_18px_rgba(20,31,26,.08)] ${expanded ? "expanded min-h-[140px] max-h-[75%]" : ""}`}
+      className={`run-log-pane relative z-[6] grid min-h-0 min-w-0 flex-[0_0_35px] grid-rows-[35px_minmax(0,1fr)] border-t border-line bg-overlay-log shadow-[0_-5px_18px_var(--color-shadow-3)] ${expanded ? "expanded min-h-[140px] max-h-[75%]" : ""}`}
       style={paneStyle}
       aria-label="Run logs"
     >
@@ -605,7 +605,7 @@ export function RunLogPane({
                     : entry.nodeId;
                   return (
                     <article
-                      className="run-log-row absolute top-0 left-0 grid min-h-9 w-full grid-cols-[78px_minmax(120px,180px)_52px_minmax(12rem,1fr)] items-start gap-2 border-b border-[#edf0ee] bg-[#fbfcfb] px-[9px] py-1.5 font-mono text-[9px]/[1.45] text-secondary [&>time]:whitespace-nowrap [&>time]:text-muted [&>pre]:m-0 [&>pre]:min-w-0 [&>pre]:whitespace-pre-wrap [&>pre]:text-[#27332d] [&>pre]:[overflow-wrap:anywhere]"
+                      className="run-log-row absolute top-0 left-0 grid min-h-9 w-full grid-cols-[78px_minmax(120px,180px)_52px_minmax(12rem,1fr)] items-start gap-2 border-b border-log-line bg-log-surface px-[9px] py-1.5 font-mono text-[9px]/[1.45] text-secondary [&>time]:whitespace-nowrap [&>time]:text-muted [&>pre]:m-0 [&>pre]:min-w-0 [&>pre]:whitespace-pre-wrap [&>pre]:text-log-ink [&>pre]:[overflow-wrap:anywhere]"
                       key={entry.sequence}
                       data-index={virtualRow.index}
                       ref={virtualizer.measureElement}

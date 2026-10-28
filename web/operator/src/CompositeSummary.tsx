@@ -34,7 +34,7 @@ export function CompositeSummary({
       </span>
       {hiddenCount > 0 && (
         <span
-          className={`shrink-0 whitespace-nowrap text-black ${compact ? "text-[9px]" : "text-[8px]"}`}
+          className={`shrink-0 whitespace-nowrap text-score-ink ${compact ? "text-[9px]" : "text-[8px]"}`}
         >
           and {hiddenCount} more
         </span>

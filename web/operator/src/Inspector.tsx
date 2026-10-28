@@ -345,7 +345,7 @@ function AgentAndStepInspector({
 
   const panelLayout = embedded
     ? "relative h-full w-full"
-    : "fixed right-0 bottom-0 top-[58px] h-auto w-[min(var(--workspace-inspector-width),100vw)] shadow-[-20px_0_50px_rgba(20,31,26,.14)] max-[700px]:w-screen min-[1001px]:static min-[1001px]:z-auto min-[1001px]:h-full min-[1001px]:w-auto min-[1001px]:shadow-none";
+    : "fixed right-0 bottom-0 top-[58px] h-auto w-[min(var(--workspace-inspector-width),100vw)] shadow-[-20px_0_50px_var(--color-shadow-0)] max-[700px]:w-screen min-[1001px]:static min-[1001px]:z-auto min-[1001px]:h-full min-[1001px]:w-auto min-[1001px]:shadow-none";
 
   function cacheKey(format: DetailFormat, token: string) {
     return `${format}\0${token}`;

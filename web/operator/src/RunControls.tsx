@@ -27,10 +27,14 @@ function JsonEditor({ value, onChange }: JsonEditorProps) {
             "aria-label": "Workflow input JSON",
           }),
           EditorView.theme({
-            "&": { backgroundColor: "#ffffff", color: "#17211c" },
-            ".cm-content": { caretColor: "#2563eb", minHeight: "110px" },
-            ".cm-gutters": { backgroundColor: "#f6f8f7", color: "#7b8680", border: "0" },
-            "&.cm-focused": { outline: "1px solid #9bb6f5" },
+            "&": { backgroundColor: "var(--color-panel)", color: "var(--color-ink)" },
+            ".cm-content": { caretColor: "var(--color-acid)", minHeight: "110px" },
+            ".cm-gutters": {
+              backgroundColor: "var(--color-canvas)",
+              color: "var(--color-code-gutter)",
+              border: "0",
+            },
+            "&.cm-focused": { outline: "1px solid var(--color-code-focus)" },
           }),
           EditorView.updateListener.of((update) => {
             if (update.docChanged) onChange(update.state.doc.toString());
@@ -110,7 +114,7 @@ export function RunControls({
         <>
           <button
             type="button"
-            className="run-button inline-flex cursor-pointer items-center gap-1.5 rounded border border-acid bg-acid px-[11px] py-[7px] text-[10px] font-bold text-white hover:border-[#1d4ed8] hover:bg-[#1d4ed8] [&_svg]:size-[11px] [&_svg]:fill-current"
+            className="run-button inline-flex cursor-pointer items-center gap-1.5 rounded border border-acid bg-acid px-[11px] py-[7px] text-[10px] font-bold text-on-accent hover:border-acid-hover hover:bg-acid-hover [&_svg]:size-[11px] [&_svg]:fill-current"
             onClick={() => void start()}
           >
             <svg aria-hidden="true" viewBox="0 0 12 12">
@@ -120,7 +124,7 @@ export function RunControls({
           </button>
           <button
             type="button"
-            className={`input-toggle cursor-pointer border-0 bg-transparent p-0.5 text-[9px] text-acid underline underline-offset-2 hover:text-[#1d4ed8] ${showInput ? "active text-[#1d4ed8]" : ""}`}
+            className={`input-toggle cursor-pointer border-0 bg-transparent p-0.5 text-[9px] text-acid underline underline-offset-2 hover:text-acid-hover ${showInput ? "active text-acid-hover" : ""}`}
             onClick={() => setShowInput((value) => !value)}
           >
             {showInput ? "Hide JSON input" : "Add JSON input"}
@@ -130,7 +134,7 @@ export function RunControls({
       {active && run?.summary && runActionsEnabled && (
         <button
           type="button"
-          className="cancel-button cursor-pointer rounded border border-[#e0a6a1] bg-white px-[11px] py-[7px] text-[10px] text-[#a92f29] hover:bg-[#fff3f2]"
+          className="cancel-button cursor-pointer rounded border border-cancel-line bg-panel px-[11px] py-[7px] text-[10px] text-cancel-ink hover:bg-cancel-hover"
           disabled={pending?.kind === "cancel"}
           onClick={() => {
             setError(undefined);
@@ -144,7 +148,7 @@ export function RunControls({
       )}
       {run?.terminalSeal && (
         <div
-          className="terminal-seal flex items-center gap-1.5 rounded border border-[#cbd2ce] bg-[#f6f8f7] px-[11px] py-[7px] text-[10px] text-secondary"
+          className="terminal-seal flex items-center gap-1.5 rounded border border-line-strong bg-canvas px-[11px] py-[7px] text-[10px] text-secondary"
           data-terminal-status={run.terminalSeal.terminalStatus}
         >
           <span className="terminal-seal-status font-bold">
@@ -156,7 +160,7 @@ export function RunControls({
         </div>
       )}
       {showInput && workflow && runActionsEnabled && (
-        <div className="input-popover absolute right-0 bottom-[43px] z-20 w-[390px] rounded border border-[#cbd2ce] bg-white p-[13px] shadow-[0_18px_50px_rgba(20,31,26,.16)] max-[700px]:w-[calc(100vw-32px)] [&>div:first-child]:mb-[9px] [&>div:first-child]:flex [&>div:first-child]:justify-between [&_strong]:text-[11px] [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#6d7872]">
+        <div className="input-popover absolute right-0 bottom-[43px] z-20 w-[390px] rounded border border-line-strong bg-panel p-[13px] shadow-[0_18px_50px_var(--color-shadow-1)] max-[700px]:w-[calc(100vw-32px)] [&>div:first-child]:mb-[9px] [&>div:first-child]:flex [&>div:first-child]:justify-between [&_strong]:text-[11px] [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-input-muted">
           <div>
             <strong>Workflow input</strong>
           </div>
@@ -165,7 +169,7 @@ export function RunControls({
       )}
       {error && (
         <div
-          className={`action-error absolute right-0 z-[21] w-[390px] rounded border border-[#efb9b5] bg-[#fff1f0] px-[18px] py-2 text-xs text-[#9d2923] max-[700px]:w-[calc(100vw-32px)] ${showInput ? "bottom-[205px]" : "bottom-11"}`}
+          className={`action-error absolute right-0 z-[21] w-[390px] rounded border border-error-line bg-error-surface px-[18px] py-2 text-xs text-error-ink max-[700px]:w-[calc(100vw-32px)] ${showInput ? "bottom-[205px]" : "bottom-11"}`}
         >
           {error}
         </div>

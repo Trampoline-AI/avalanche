@@ -516,7 +516,7 @@ function ClassifierHistory({
                   onClick={() =>
                     setSelection({ api, invocationId: selected ? null : event.invocationId })
                   }
-                  className={`cursor-pointer align-top ${selected ? "" : "border-b border-[#eef1ef] hover:bg-canvas"}`}
+                  className={`cursor-pointer align-top ${selected ? "" : "border-b border-line-subtle hover:bg-canvas"}`}
                 >
                   <th scope="row" className="px-3 py-2.5 font-normal">
                     <button
@@ -640,7 +640,7 @@ function ClassifierHistory({
       )}
       <nav
         aria-label="Call pagination"
-        className="flex shrink-0 flex-col gap-3 border-t border-[#eef1ef] px-3 py-3 text-xs text-secondary"
+        className="flex shrink-0 flex-col gap-3 border-t border-line-subtle px-3 py-3 text-xs text-secondary"
       >
         <span role="status">
           {events.length
@@ -796,7 +796,7 @@ export function ClassifierInspector({
     : workflow?.displayNames[nodeId] || nodeId;
   const panelLayout = embedded
     ? "relative h-full w-full"
-    : "fixed right-0 bottom-0 top-[58px] h-auto w-[min(var(--workspace-inspector-width),100vw)] shadow-[-20px_0_50px_rgba(20,31,26,.14)] max-[700px]:w-screen min-[1001px]:static min-[1001px]:z-auto min-[1001px]:h-full min-[1001px]:w-auto min-[1001px]:shadow-none";
+    : "fixed right-0 bottom-0 top-[58px] h-auto w-[min(var(--workspace-inspector-width),100vw)] shadow-[-20px_0_50px_var(--color-shadow-0)] max-[700px]:w-screen min-[1001px]:static min-[1001px]:z-auto min-[1001px]:h-full min-[1001px]:w-auto min-[1001px]:shadow-none";
   return (
     <aside
       className={`inspector ${run ? "inspector-run" : "inspector-declaration"} z-30 flex min-h-0 min-w-0 flex-col overflow-hidden border-l border-line bg-panel ${panelLayout}`}

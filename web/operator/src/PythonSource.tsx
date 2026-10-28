@@ -1,6 +1,6 @@
 import { python } from "@codemirror/lang-python";
 import { EditorState } from "@codemirror/state";
-import { githubLightInit } from "@uiw/codemirror-theme-github";
+import { createCodeTheme } from "./codeTheme";
 import { EditorView } from "@codemirror/view";
 import { useEffect, useRef } from "react";
 
@@ -8,9 +8,7 @@ interface PythonSourceProps {
   source: string;
 }
 
-const sourceColorTheme = githubLightInit({
-  settings: { background: "var(--color-canvas)" },
-});
+const sourceColorTheme = createCodeTheme("var(--color-canvas)");
 
 const sourceLayout = EditorView.theme({
   "&": {

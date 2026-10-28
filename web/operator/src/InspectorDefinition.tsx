@@ -158,7 +158,7 @@ export function InspectorResources({ declaration }: { declaration: AgentDeclarat
       <dialog
         ref={dialogRef}
         aria-labelledby={titleId}
-        className="skill-markdown-dialog m-auto max-h-[85dvh] w-[min(52rem,calc(100vw-2rem))] overflow-hidden rounded border border-line bg-panel p-0 text-ink shadow-xl backdrop:bg-black/40"
+        className="skill-markdown-dialog m-auto max-h-[85dvh] w-[min(52rem,calc(100vw-2rem))] overflow-hidden rounded border border-line bg-panel p-0 text-ink shadow-xl backdrop:bg-backdrop/40"
         onClose={() => {
           setSelectedSkillName(undefined);
           triggerRef.current?.focus();

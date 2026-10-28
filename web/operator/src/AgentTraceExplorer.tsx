@@ -120,7 +120,7 @@ function ToolCalls({ calls }: { calls: AgentTraceToolCall[] }) {
     <div className="grid gap-1.5">
       {calls.map((call, index) => (
         <details
-          className={`rounded border px-2.5 py-2 ${call.error ? "border-danger bg-[#fff8f7]" : "border-line bg-canvas"}`}
+          className={`rounded border px-2.5 py-2 ${call.error ? "border-danger bg-error-soft" : "border-line bg-canvas"}`}
           key={`${index}:${call.name}`}
         >
           <summary className="cursor-pointer text-[10px] font-semibold text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid">
@@ -159,7 +159,7 @@ function PredictCalls({ calls }: { calls: AgentTracePredictCall[] }) {
     <div className="grid gap-1.5">
       {calls.map((call, index) => (
         <details
-          className={`rounded border px-2.5 py-2 ${call.error ? "border-danger bg-[#fff8f7]" : "border-line bg-canvas"}`}
+          className={`rounded border px-2.5 py-2 ${call.error ? "border-danger bg-error-soft" : "border-line bg-canvas"}`}
           key={`${index}:${call.signature}:${call.model}`}
         >
           <summary className="cursor-pointer text-[10px] font-semibold text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid">
@@ -297,7 +297,7 @@ function TurnSecondaryDetails({
                 return (
                   <>
                     <pre
-                      className={`m-0 max-h-56 overflow-auto whitespace-pre-wrap rounded border border-[#26332f] bg-[#111817] px-3 py-2.5 font-mono text-[8px] leading-[1.55] [overflow-wrap:anywhere] ${step.error ? "text-[#ffb4ac]" : "text-[#c7d4cf]"}`}
+                      className={`m-0 max-h-56 overflow-auto whitespace-pre-wrap rounded border border-terminal-line bg-terminal-surface px-3 py-2.5 font-mono text-[8px] leading-[1.55] [overflow-wrap:anywhere] ${step.error ? "text-terminal-error" : "text-terminal-ink"}`}
                     >
                       {showFullOutput ? execution.untruncatedOutput : execution.output}
                     </pre>
@@ -417,7 +417,7 @@ export function AgentTraceExplorer({
         <div className="flex min-h-full min-w-0 flex-col gap-3 px-5 pt-[18px] pb-[30px]">
           {running && currentActivity && (
             <div
-              className="trace-current-activity flex items-center gap-2 rounded border border-[#d9d1ff] bg-[#f8f6ff] px-2.5 py-2 text-[9px] text-secondary"
+              className="trace-current-activity flex items-center gap-2 rounded border border-agent-line bg-agent-surface px-2.5 py-2 text-[9px] text-secondary"
               role="status"
             >
               <span className="relative flex size-2 flex-none" aria-hidden="true">

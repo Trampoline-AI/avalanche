@@ -36,6 +36,11 @@ export default defineConfig({
           prefix: ".avalanche-operator-ui",
           transform(prefix, selector, prefixedSelector) {
             if (selector === ":root" || selector === ":host") return prefix;
+            // This selector intentionally starts outside the embedded scope.
+            // Prefixing it would require .dark to be inside the operator UI.
+            if (selector === `:where(.dark) ${prefix}` || selector === `${prefix}.dark`) {
+              return selector;
+            }
             if (selector === prefix || selector.startsWith(`${prefix} `)) return selector;
             if (!selector.startsWith(".")) return prefixedSelector;
 

@@ -44,7 +44,7 @@ const WorkflowRow = memo(function WorkflowRow({
     >
       <span
         aria-hidden="true"
-        className="grid size-8 shrink-0 place-items-center rounded border border-[#9ca3af] text-sm font-medium"
+        className="grid size-8 shrink-0 place-items-center rounded border border-icon-line text-sm font-medium"
       >
         {workflow.displayName.slice(0, 1).toUpperCase() +
           workflow.displayName.slice(1, 2).toLowerCase()}
@@ -108,7 +108,7 @@ function ExplorerView({
       id="operator-explorer"
       className={`explorer relative col-start-1 row-start-1 flex h-full w-[var(--workspace-explorer-visible-width)] min-w-0 flex-col overflow-hidden border-r border-line bg-panel transition-[width,box-shadow] duration-200 ease-out motion-reduce:transition-none ${
         !pinned ? "z-30" : "z-20"
-      } ${expanded && !pinned ? "shadow-[18px_0_45px_rgba(20,31,26,.16)]" : ""} max-[700px]:fixed max-[700px]:top-[58px] max-[700px]:bottom-0 max-[700px]:h-auto max-[700px]:left-0 max-[700px]:z-[31] max-[700px]:w-[min(320px,100vw)] max-[700px]:shadow-[18px_0_45px_rgba(20,31,26,.16)] ${
+      } ${expanded && !pinned ? "shadow-[18px_0_45px_var(--color-shadow-1)]" : ""} max-[700px]:fixed max-[700px]:top-[58px] max-[700px]:bottom-0 max-[700px]:h-auto max-[700px]:left-0 max-[700px]:z-[31] max-[700px]:w-[min(320px,100vw)] max-[700px]:shadow-[18px_0_45px_var(--color-shadow-1)] ${
         open ? "max-[700px]:flex" : "max-[700px]:hidden"
       }`}
       aria-label="Explorer"
@@ -121,7 +121,7 @@ function ExplorerView({
         >
           {contentVisible && visibleDiagnostics.length > 0 && !diagnosticsDismissed && (
             <details
-              className="diagnostics relative m-2 rounded border border-[#ead1a2] bg-[#fff8eb] p-[9px] text-[10px] [&>summary]:cursor-pointer [&>summary]:pr-6 [&>summary]:text-amber [&>div]:mt-[9px] [&>div]:border-t [&>div]:border-[#ead1a2] [&>div]:pt-2 [&_strong]:block [&_span]:block [&_span]:overflow-hidden [&_span]:text-ellipsis [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#8b7655] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[#735b37]"
+              className="diagnostics relative m-2 rounded border border-warning-line bg-warning-surface p-[9px] text-[10px] [&>summary]:cursor-pointer [&>summary]:pr-6 [&>summary]:text-amber [&>div]:mt-[9px] [&>div]:border-t [&>div]:border-warning-line [&>div]:pt-2 [&_strong]:block [&_span]:block [&_span]:overflow-hidden [&_span]:text-ellipsis [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-warning-muted [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-warning-ink"
               open
             >
               <summary>
@@ -130,7 +130,7 @@ function ExplorerView({
               </summary>
               <button
                 type="button"
-                className="absolute top-1.5 right-1.5 grid size-5 cursor-pointer place-items-center rounded text-amber hover:bg-[#f7e8c8] focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-amber"
+                className="absolute top-1.5 right-1.5 grid size-5 cursor-pointer place-items-center rounded text-amber hover:bg-warning-hover focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-amber"
                 aria-label="Dismiss reload issues"
                 onClick={() => setDismissedDiagnosticKey(currentDiagnosticKey)}
               >

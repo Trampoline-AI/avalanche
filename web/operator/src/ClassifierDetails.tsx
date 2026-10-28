@@ -2,7 +2,7 @@ import { json } from "@codemirror/lang-json";
 import { foldGutter, foldKeymap } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
-import { githubLightInit } from "@uiw/codemirror-theme-github";
+import { createCodeTheme } from "./codeTheme";
 import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
@@ -21,7 +21,7 @@ import { Percentage, percentageColor } from "./Percentage";
 
 const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 });
 
-const inputColorTheme = githubLightInit({ settings: { background: "var(--color-panel)" } });
+const inputColorTheme = createCodeTheme();
 const inputLayout = EditorView.theme({
   "&": { fontSize: "11px" },
   ".cm-content": { fontFamily: "var(--font-mono)", lineHeight: "1.65", padding: "8px 0" },

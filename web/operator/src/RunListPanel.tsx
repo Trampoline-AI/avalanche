@@ -186,7 +186,7 @@ export function RunListPanel({
       className={
         expanded
           ? "all-runs-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-line bg-panel"
-          : "run-list-panel flex h-full w-full flex-col overflow-hidden rounded border border-line bg-[rgba(255,255,255,.96)] shadow-[0_6px_20px_rgba(20,31,26,.1)]"
+          : "run-list-panel flex h-full w-full flex-col overflow-hidden rounded border border-line bg-overlay-panel shadow-[0_6px_20px_var(--color-shadow-2)]"
       }
       aria-labelledby={headingId}
       onKeyDown={(event) => {
@@ -197,7 +197,7 @@ export function RunListPanel({
       }}
     >
       <header
-        className={`flex shrink-0 items-center justify-between ${expanded ? "h-14 border-b border-[#eef1ef] px-[20px]" : "h-9 border-b-2 border-line px-[9px]"}`}
+        className={`flex shrink-0 items-center justify-between ${expanded ? "h-14 border-b border-line-subtle px-[20px]" : "h-9 border-b-2 border-line px-[9px]"}`}
       >
         <h2
           id={headingId}
@@ -242,7 +242,7 @@ export function RunListPanel({
                 setStatus(event.target.value);
                 setPage(0);
               }}
-              className="h-9 min-w-0 rounded border border-line bg-white px-3 py-2 text-xs font-normal text-ink outline-acid"
+              className="h-9 min-w-0 rounded border border-line bg-panel px-3 py-2 text-xs font-normal text-ink outline-acid"
             >
               <option value="">All statuses</option>
               {statuses.map((value) => (
@@ -262,7 +262,7 @@ export function RunListPanel({
                   setFromDate(event.target.value);
                   setPage(0);
                 }}
-                className="h-9 min-w-0 rounded border border-line bg-white px-3 py-2 text-xs font-normal text-ink outline-acid"
+                className="h-9 min-w-0 rounded border border-line bg-panel px-3 py-2 text-xs font-normal text-ink outline-acid"
               />
             </label>
             <label className="flex min-w-0 flex-col gap-[8px] font-medium">
@@ -274,7 +274,7 @@ export function RunListPanel({
                   setToDate(event.target.value);
                   setPage(0);
                 }}
-                className="h-9 min-w-0 rounded border border-line bg-white px-3 py-2 text-xs font-normal text-ink outline-acid"
+                className="h-9 min-w-0 rounded border border-line bg-panel px-3 py-2 text-xs font-normal text-ink outline-acid"
               />
             </label>
           </div>
@@ -292,7 +292,7 @@ export function RunListPanel({
                   setPage(0);
                 }}
                 placeholder="Search by run ID"
-                className="h-9 min-w-0 rounded border border-line bg-white px-3 py-2 text-xs font-normal text-ink outline-acid"
+                className="h-9 min-w-0 rounded border border-line bg-panel px-3 py-2 text-xs font-normal text-ink outline-acid"
               />
             </label>
           </details>
@@ -324,7 +324,7 @@ export function RunListPanel({
                     aria-pressed={selectedRunId === undefined}
                     onClick={() => onSelectRun(undefined)}
                     style={rowStyle}
-                    className={`absolute top-0 left-0 flex w-full cursor-pointer items-center gap-2 border-0 border-b border-line text-left font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid ${expanded ? "px-[20px] text-xs" : "pl-[9px] pr-[17px] text-[10px]"} ${selectedRunId === undefined ? "active bg-[#edf3ff] shadow-[inset_2px_0_#2563eb] hover:bg-[#e4edff]" : "bg-transparent hover:bg-[#f4f6f5]"}`}
+                    className={`absolute top-0 left-0 flex w-full cursor-pointer items-center gap-2 border-0 border-b border-line text-left font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid ${expanded ? "px-[20px] text-xs" : "pl-[9px] pr-[17px] text-[10px]"} ${selectedRunId === undefined ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
                   >
                     <Workflow aria-hidden="true" className="size-3.5 shrink-0 text-secondary" />
                     <span className="flex-1">Current</span>
@@ -343,7 +343,7 @@ export function RunListPanel({
               return (
                 <button
                   type="button"
-                  className={`run-list-row absolute top-0 left-0 flex w-full cursor-pointer items-center justify-between gap-2 border-0 border-b border-[#eef1ef] text-left text-ink leading-none ${expanded ? "px-[20px] text-[11px]" : "pl-[9px] pr-[17px] text-[9px]"} ${selectedRunId === summary.runId ? "active bg-[#edf3ff] shadow-[inset_2px_0_#2563eb] hover:bg-[#e4edff]" : "bg-transparent hover:bg-[#f4f6f5]"}`}
+                  className={`run-list-row absolute top-0 left-0 flex w-full cursor-pointer items-center justify-between gap-2 border-0 border-b border-line-subtle text-left text-ink leading-none ${expanded ? "px-[20px] text-[11px]" : "pl-[9px] pr-[17px] text-[9px]"} ${selectedRunId === summary.runId ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
                   key={summary.runId}
                   onClick={() => onSelectRun(summary.runId)}
                   aria-pressed={selectedRunId === summary.runId}
@@ -352,7 +352,7 @@ export function RunListPanel({
                   aria-label={`${summary.runId}, ${summary.status}, ${runDuration(elapsedSeconds)}, ${
                     triggeredAt
                       ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
-                      : "trigger time not recorded"
+                      : "start time not recorded"
                   }`}
                 >
                   <span className="min-w-0 truncate font-mono text-secondary">
@@ -389,7 +389,7 @@ export function RunListPanel({
         <div ref={scrollHandle} className="timeline-scroll-handle" aria-hidden="true" />
       </div>
       {showTimelineFooter && (
-        <footer className="shrink-0 border-t border-line bg-panel">
+        <footer className="mt-auto shrink-0 border-t border-line bg-panel">
           <button
             type="button"
             onClick={onViewAll}
@@ -403,7 +403,7 @@ export function RunListPanel({
       {expanded && (
         <nav
           aria-label="Run pagination"
-          className="flex shrink-0 flex-col gap-3 border-t border-[#eef1ef] px-[20px] py-[16px] text-xs text-secondary"
+          className="flex shrink-0 flex-col gap-3 border-t border-line-subtle px-[20px] py-[16px] text-xs text-secondary"
         >
           <span role="status">
             {filteredRuns.length

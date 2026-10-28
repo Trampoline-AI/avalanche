@@ -323,9 +323,9 @@ export function WorkflowWorkspaceSurface({
         className={`workflow-workspace relative grid min-h-0 min-w-0 w-full flex-1 overflow-hidden grid-cols-[minmax(0,1fr)_var(--workspace-inspector-divider-width)_var(--workspace-inspector-column-width)] max-[1000px]:grid-cols-[minmax(0,1fr)] ${inspectorOpen ? "with-inspector" : ""}`}
         style={workspaceStyle}
       >
-        <section className="canvas-shell relative col-start-1 flex min-h-0 min-w-0 flex-col overflow-hidden bg-[#f7f9f8]">
+        <section className="canvas-shell relative col-start-1 flex min-h-0 min-w-0 flex-col overflow-hidden bg-canvas-shell">
           <div
-            className={`canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${run ? "run-canvas bg-[#fafaf8]" : "blueprint-canvas bg-white"}`}
+            className={`canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${run ? "run-canvas bg-run-canvas" : "blueprint-canvas bg-panel"}`}
           >
             {workflow || run ? (
               <>
@@ -384,7 +384,7 @@ export function WorkflowWorkspaceSurface({
                       </span>
                     </div>
                   ) : run ? (
-                    <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded border border-[#dfc99e] bg-[rgba(255,252,245,.96)] px-3 py-[9px] text-[9px] text-[#766548] shadow-[0_4px_14px_rgba(54,44,25,.08)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
+                    <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
                       <span>Viewing a run snapshot</span>This view does not represent the
                       workflow&apos;s current state.
                     </div>
@@ -456,7 +456,7 @@ export function WorkflowWorkspaceSurface({
           role="status"
           aria-live="polite"
         >
-          <div className="flex items-center gap-2.5 rounded border border-white/10 bg-[#1d2923] px-3.5 py-2.5 text-[11px] font-medium tracking-[-0.01em] text-white shadow-[0_10px_30px_rgba(15,25,20,.22)]">
+          <div className="flex items-center gap-2.5 rounded border border-on-notice-line/10 bg-notice-surface px-3.5 py-2.5 text-[11px] font-medium tracking-[-0.01em] text-notice-ink shadow-[0_10px_30px_var(--color-shadow-5)]">
             <span className="relative flex size-2" aria-hidden="true">
               <span className="absolute inline-flex size-full animate-ping rounded-full bg-acid opacity-60 motion-reduce:animate-none" />
               <span className="relative inline-flex size-2 rounded-full bg-acid" />

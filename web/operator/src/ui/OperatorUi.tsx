@@ -118,7 +118,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
           explorerPinned ? "explorer-pinned" : "explorer-unpinned"
         } ${explorerExpanded ? "explorer-expanded" : "explorer-collapsed"}`}
       >
-        <header className="topbar relative z-10 grid min-h-[58px] grid-cols-[minmax(max-content,1fr)_minmax(0,max-content)_minmax(max-content,1fr)] items-center gap-x-4 border-b border-line bg-white px-5 shadow-[0_1px_2px_rgba(20,31,26,.04)] max-[700px]:grid-cols-[auto_minmax(0,1fr)_auto] max-[700px]:gap-2 max-[700px]:px-2.5">
+        <header className="topbar relative z-10 grid min-h-[58px] grid-cols-[minmax(max-content,1fr)_minmax(0,max-content)_minmax(max-content,1fr)] items-center gap-x-4 border-b border-line bg-panel px-5 shadow-[0_1px_2px_var(--color-shadow-8)] max-[700px]:grid-cols-[auto_minmax(0,1fr)_auto] max-[700px]:gap-2 max-[700px]:px-2.5">
           <div className="brand flex items-center gap-[11px]">
             <img
               className="brand-mark size-[30px] object-contain"
@@ -131,7 +131,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
             </div>
           </div>
           <div
-            className="breadcrumb min-w-0 truncate py-1 text-left text-xs text-muted [direction:rtl] max-[700px]:hidden [&_i]:mx-[9px] [&_i]:opacity-40 [&_strong]:font-semibold [&_strong]:text-[#26322c]"
+            className="breadcrumb min-w-0 truncate py-1 text-left text-xs text-muted [direction:rtl] max-[700px]:hidden [&_i]:mx-[9px] [&_i]:opacity-40 [&_strong]:font-semibold [&_strong]:text-breadcrumb"
             title={workflow?.rootAlias || presentation.rootLabel}
           >
             <bdi dir="ltr">
@@ -176,7 +176,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
           </button>
         </header>
         {state.error && (
-          <div className="connection-error border-b border-[#efb9b5] bg-[#fff1f0] px-[18px] py-2 text-xs text-[#9d2923]">
+          <div className="connection-error border-b border-error-line bg-error-surface px-[18px] py-2 text-xs text-error-ink">
             {state.error}
           </div>
         )}
