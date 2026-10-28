@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const RUN_COUNT = 10_000;
 const DOM_ROW_LIMIT = 120;
-const RUN_ROW_HEIGHT = 44;
+const RUN_ROW_HEIGHT = 27.5;
 const RENDER_BUDGET_MS = 3_000;
 const INTERACTION_BUDGET_MS = 1_000;
 const VITE_START_BUDGET_MS = 10_000;
@@ -497,7 +497,7 @@ async function run() {
   let selectedRunId = "";
   const renderStartedAt = performance.now();
   createRoot(rootElement).render(
-    <div className="h-[258px] w-[300px] [&_.run-list-panel]:h-[258px]">
+    <div className="h-[288px] w-[300px] [&_.run-list-panel]:h-[288px]">
       <RunListPanel
         workflowId={workflowId}
         runs={runs}
@@ -527,21 +527,31 @@ async function run() {
   if (renderMs > RENDER_BUDGET_MS) {
     throw new Error("initial render exceeded " + RENDER_BUDGET_MS + "ms: " + renderMs);
   }
-  if (virtualList.getBoundingClientRect().height > 21 * RUN_ROW_HEIGHT) {
-    throw new Error("compact timeline exceeded Current plus twenty runs");
+  if (virtualList.getBoundingClientRect().height !== 25 * RUN_ROW_HEIGHT) {
+    throw new Error("compact timeline did not start with one 25-run page");
   }
   assertDomBound();
   const scrollElement = panel.querySelector<HTMLElement>(".run-list-scroll");
   if (!scrollElement) throw new Error("run list scroll element missing");
 
+  const current = panel.querySelector<HTMLElement>(".run-list-current");
+  if (!current || scrollElement.contains(current)) throw new Error("Current must be outside scroll");
+  const currentTop = current.getBoundingClientRect().top;
   const interactionStartedAt = performance.now();
+  scrollElement.scrollTop = scrollElement.scrollHeight - scrollElement.clientHeight;
+  scrollElement.dispatchEvent(new Event("scroll"));
+  await until(
+    () => virtualList.getBoundingClientRect().height === 50 * RUN_ROW_HEIGHT ? virtualList : undefined,
+    INTERACTION_BUDGET_MS,
+    "near-bottom scroll did not append the second page",
+  );
   scrollElement.scrollTop = scrollElement.scrollHeight - scrollElement.clientHeight;
   scrollElement.dispatchEvent(new Event("scroll"));
   const oldestRun = await until(
     () => Array.from(document.querySelectorAll<HTMLButtonElement>(".run-list-row"))
-      .find((button) => button.title === "run-09980"),
+      .find((button) => button.title === "run-09950"),
     INTERACTION_BUDGET_MS,
-    "scroll did not render the twentieth run",
+    "scroll did not render the fiftieth run",
   );
   const interactionMs = performance.now() - interactionStartedAt;
   if (interactionMs > INTERACTION_BUDGET_MS) {
@@ -550,8 +560,10 @@ async function run() {
     );
   }
   assertDomBound();
+  if (current.getBoundingClientRect().top !== currentTop) throw new Error("Current scrolled away");
+  if (panel.querySelector("footer")) throw new Error("obsolete timeline footer remains");
   oldestRun.click();
-  if (selectedRunId !== "run-09980") throw new Error("twentieth run interaction failed");
+  if (selectedRunId !== "run-09950") throw new Error("fiftieth run interaction failed");
 
   document.body.dataset.benchmarkStatus = "pass";
   document.body.dataset.domRows = String(rows().length);

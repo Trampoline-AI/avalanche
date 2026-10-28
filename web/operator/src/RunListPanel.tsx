@@ -6,10 +6,12 @@ import { formatElapsedSeconds } from "./elapsedDuration";
 import type { RunSummaryMsg } from "./model";
 import { RunStatus } from "./RunStatus";
 
-const RUN_ROW_HEIGHT = 44;
+// Halve the centered vertical insets without changing the 10px/11px content
+// or 1px divider: 44 - 16.5 = 27.5; 56 - 22 = 34.
+const RUN_ROW_HEIGHT = 27.5;
+const EXPANDED_RUN_ROW_HEIGHT = 34;
 const RUN_ROW_OVERSCAN = 8;
 const RUN_PAGE_SIZE = 25;
-const TIMELINE_RUN_LIMIT = 20;
 const RUN_TIMESTAMP_FORMAT = new Intl.DateTimeFormat(undefined, {
   month: "short",
   day: "numeric",
@@ -59,6 +61,7 @@ export function RunListPanel({
   const scrollElement = useRef<HTMLDivElement>(null);
   const scrollHandle = useRef<HTMLDivElement>(null);
   const headingId = useId();
+  const viewAllLabelId = useId();
   const toggleButton = useRef<HTMLButtonElement>(null);
   const previousExpanded = useRef(expanded);
   const [search, setSearch] = useState("");
@@ -66,7 +69,13 @@ export function RunListPanel({
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
   const [page, setPage] = useState(0);
-  const rowHeight = expanded ? 56 : RUN_ROW_HEIGHT;
+  const [timelinePageCount, setTimelinePageCount] = useState(1);
+  const [loadingPage, setLoadingPage] = useState(false);
+  const rowHeight = expanded ? EXPANDED_RUN_ROW_HEIGHT : RUN_ROW_HEIGHT;
+  const rowPadding = expanded ? 11 : 8.25;
+  // Current's unchanged line boxes are 15px compact / 16px expanded.
+  const currentHeight = expanded ? 36.5 : 30;
+  const currentPadding = expanded ? 9.75 : 7;
   const workflowRuns = useMemo(
     () =>
       Object.values(runs)
@@ -102,9 +111,36 @@ export function RunListPanel({
   const pageOffset = expanded ? pageIndex * RUN_PAGE_SIZE : 0;
   const visibleRunCount = expanded
     ? Math.min(RUN_PAGE_SIZE, filteredRuns.length - pageOffset)
-    : Math.min(TIMELINE_RUN_LIMIT, filteredRuns.length);
-  const showTimelineFooter =
-    !expanded && workflowRuns.length >= TIMELINE_RUN_LIMIT && Boolean(onViewAll);
+    : Math.min(timelinePageCount * RUN_PAGE_SIZE, filteredRuns.length);
+  useEffect(() => {
+    setTimelinePageCount(1);
+  }, [workflowId]);
+  useEffect(() => {
+    setLoadingPage(false);
+    const viewport = scrollElement.current;
+    if (expanded || !viewport || visibleRunCount >= workflowRuns.length) return;
+    let frame: number | undefined;
+    const loadNearBottom = () => {
+      if (
+        frame !== undefined ||
+        visibleRunCount * rowHeight - viewport.scrollTop - viewport.clientHeight > rowHeight * 4
+      )
+        return;
+      // Expanded history already pages the hydrated runs prop. Reveal the next
+      // same-sized page on the next frame; never introduce a second API path.
+      setLoadingPage(true);
+      frame = requestAnimationFrame(() => {
+        setTimelinePageCount((count) => count + 1);
+        setLoadingPage(false);
+      });
+    };
+    viewport.addEventListener("scroll", loadNearBottom, { passive: true });
+    loadNearBottom();
+    return () => {
+      if (frame !== undefined) cancelAnimationFrame(frame);
+      viewport.removeEventListener("scroll", loadNearBottom);
+    };
+  }, [expanded, rowHeight, visibleRunCount, workflowId, workflowRuns.length]);
   useEffect(() => {
     if (scrollElement.current) scrollElement.current.scrollTop = 0;
   }, [workflowId, search, status, fromDate, toDate, pageIndex]);
@@ -118,11 +154,10 @@ export function RunListPanel({
     previousExpanded.current = expanded;
   }, [expanded]);
   const virtualizer = useVirtualizer({
-    count: visibleRunCount + 1,
+    count: visibleRunCount,
     getScrollElement: () => scrollElement.current,
     estimateSize: () => rowHeight,
-    getItemKey: (index) =>
-      index === 0 ? "current" : `run:${filteredRuns[pageOffset + index - 1].runId}`,
+    getItemKey: (index) => `run:${filteredRuns[pageOffset + index].runId}`,
     overscan: RUN_ROW_OVERSCAN,
   });
   useEffect(() => {
@@ -211,10 +246,12 @@ export function RunListPanel({
               ref={toggleButton}
               type="button"
               aria-label="Expand timeline"
+              aria-labelledby={viewAllLabelId}
               title="Expand timeline"
               onClick={onViewAll}
-              className="grid size-5 cursor-pointer place-items-center rounded border-0 bg-transparent text-secondary hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-acid"
+              className="flex h-5 cursor-pointer items-center gap-1.5 rounded border-0 bg-transparent text-[10px] text-secondary hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-acid"
             >
+              <span id={viewAllLabelId}>View all</span>
               <Maximize2 aria-hidden="true" className="size-3" />
             </button>
           )}
@@ -298,6 +335,21 @@ export function RunListPanel({
           </details>
         </div>
       )}
+      <button
+        type="button"
+        aria-pressed={selectedRunId === undefined}
+        onClick={() => onSelectRun(undefined)}
+        style={{
+          height: currentHeight,
+          paddingTop: currentPadding,
+          paddingBottom: currentPadding,
+        }}
+        className={`run-list-current flex w-full shrink-0 cursor-pointer items-center gap-2 border-0 border-b border-run-list-line text-left font-mono font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid ${expanded ? "px-[20px] text-xs" : "pl-[9px] pr-[17px] text-[10px]"} ${selectedRunId === undefined ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
+      >
+        <Workflow aria-hidden="true" className="size-3.5 shrink-0 text-secondary" />
+        <span className="flex-1">Current</span>
+        <ChevronRight aria-hidden="true" className="size-3 shrink-0 text-secondary" />
+      </button>
       <div
         className={`run-list-columns grid shrink-0 grid-cols-[minmax(0,1fr)_100px] items-center gap-3 border-b border-run-list-line font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase ${expanded ? "h-9 px-[20px]" : "h-7 px-[9px]"}`}
         aria-hidden="true"
@@ -321,28 +373,11 @@ export function RunListPanel({
             {virtualizer.getVirtualItems().map((virtualRow) => {
               const rowStyle = {
                 height: virtualRow.size,
+                paddingTop: rowPadding,
+                paddingBottom: rowPadding,
                 transform: `translateY(${virtualRow.start}px)`,
               };
-              if (virtualRow.index === 0) {
-                return (
-                  <button
-                    key="current"
-                    type="button"
-                    aria-pressed={selectedRunId === undefined}
-                    onClick={() => onSelectRun(undefined)}
-                    style={rowStyle}
-                    className={`absolute top-0 left-0 flex w-full cursor-pointer items-center gap-2 border-0 border-b border-run-list-line text-left font-mono font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid ${expanded ? "px-[20px] text-xs" : "pl-[9px] pr-[17px] text-[10px]"} ${selectedRunId === undefined ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
-                  >
-                    <Workflow aria-hidden="true" className="size-3.5 shrink-0 text-secondary" />
-                    <span className="flex-1">Current</span>
-                    <ChevronRight
-                      aria-hidden="true"
-                      className="size-3 shrink-0 text-secondary"
-                    />
-                  </button>
-                );
-              }
-              const summary = filteredRuns[pageOffset + virtualRow.index - 1];
+              const summary = filteredRuns[pageOffset + virtualRow.index];
               const triggeredAt = summary.startedAt
                 ? new Date(summary.startedAt * 1000)
                 : runTriggeredAt(summary);
@@ -385,6 +420,14 @@ export function RunListPanel({
               );
             })}
           </div>
+          {loadingPage && !expanded && (
+            <div
+              role="status"
+              className="run-list-loading px-[9px] py-1 text-[10px] text-secondary"
+            >
+              Loading runs…
+            </div>
+          )}
           {filteredRuns.length === 0 && (
             <span
               className={`run-list-empty block font-mono text-secondary ${expanded ? "min-h-0 flex-1 overflow-auto px-[20px] py-[24px] text-xs" : "p-2.5 text-[8px]"}`}
@@ -395,18 +438,6 @@ export function RunListPanel({
         </div>
         <div ref={scrollHandle} className="timeline-scroll-handle" aria-hidden="true" />
       </div>
-      {showTimelineFooter && (
-        <footer className="mt-auto shrink-0 border-t border-line bg-panel">
-          <button
-            type="button"
-            onClick={onViewAll}
-            className="flex h-8 w-full cursor-pointer items-center gap-1.5 border-0 bg-transparent pl-[9px] pr-[17px] text-left text-[10px] font-medium text-acid hover:bg-canvas focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid"
-          >
-            View all
-            <Maximize2 aria-hidden="true" className="size-3 shrink-0" />
-          </button>
-        </footer>
-      )}
       {expanded && (
         <nav
           aria-label="Run pagination"

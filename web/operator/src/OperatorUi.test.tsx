@@ -1348,7 +1348,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
+    fireEvent.click(screen.getByRole("button", { name: "View all" }));
     const allRuns = screen.getByRole("region", { name: "Timeline" });
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
     expect(within(allRuns).getByRole("button", { name: "Collapse timeline" })).toHaveFocus();
@@ -1367,9 +1367,9 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(within(allRuns).queryByRole("button", { name: /run-1,/ })).not.toBeInTheDocument();
     fireEvent.keyDown(within(allRuns).getByRole("searchbox"), { key: "Escape" });
     expect(within(allRuns).queryByRole("searchbox")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Expand timeline" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "View all" })).toHaveFocus();
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
+    fireEvent.click(screen.getByRole("button", { name: "View all" }));
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
     expect(within(allRuns).getByLabelText("From")).toHaveValue("2026-09-10");
     expect(within(allRuns).getByLabelText("To")).toHaveValue("2026-09-10");
@@ -1377,7 +1377,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
     fireEvent.click(within(allRuns).getByRole("button", { name: "Collapse timeline" }));
     expect(screen.getByRole("region", { name: "Timeline" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Expand timeline" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "View all" })).toHaveFocus();
   });
 });
 

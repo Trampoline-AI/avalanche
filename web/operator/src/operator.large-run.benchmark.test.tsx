@@ -25,7 +25,7 @@ import {
 afterEach(() => vi.restoreAllMocks());
 
 describe("large-run resource bounds", () => {
-  it("caps a 10,000-run timeline while keeping the twentieth run reachable by scrolling", async () => {
+  it("pages a 10,000-run timeline while keeping older runs reachable with bounded DOM", async () => {
     const runs = Object.fromEntries(
       Array.from({ length: 10_000 }, (_, index) => {
         const runId = `run-${index.toString().padStart(5, "0")}`;
@@ -50,16 +50,24 @@ describe("large-run resource bounds", () => {
     fireEvent.click(newest);
     expect(selected).toHaveBeenLastCalledWith("run-09999");
 
-    // The compact timeline keeps Current plus its twenty newest runs in the scroll range.
+    // Each near-bottom scroll reveals the next existing 25-run page, not a fixed cap.
     const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
-    scroll.scrollTop = 21 * 44 - 192;
+    const virtual = view.container.querySelector<HTMLElement>(".run-list-virtual")!;
+    expect(virtual).toHaveStyle({ height: `${25 * 27.5}px` });
+    scroll.scrollTop = 25 * 27.5 - 192;
     fireEvent.scroll(scroll);
-    const oldest = await within(region).findByRole("button", { name: /run-09980,/ });
+    await waitFor(() => expect(virtual).toHaveStyle({ height: `${50 * 27.5}px` }));
+    scroll.scrollTop = 50 * 27.5 - 192;
+    fireEvent.scroll(scroll);
+    const oldest = await within(region).findByRole("button", { name: /run-09950,/ });
     expect(within(region).getAllByRole("button").length).toBeLessThan(100);
     fireEvent.click(oldest);
-    expect(selected).toHaveBeenLastCalledWith("run-09980");
-    expect(screen.queryByRole("button", { name: /run-09979,/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Current" })).not.toBeInTheDocument();
+    expect(selected).toHaveBeenLastCalledWith("run-09950");
+    expect(screen.queryByRole("button", { name: /run-09999,/ })).not.toBeInTheDocument();
+    const current = screen.getByRole("button", { name: "Current" });
+    expect(current).toBeVisible();
+    expect(scroll).not.toContainElement(current);
+    await waitFor(() => expect(virtual).toHaveStyle({ height: `${75 * 27.5}px` }));
   });
 
   it("yields between live-update batches without losing order or the final status", async () => {

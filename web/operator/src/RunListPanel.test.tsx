@@ -140,42 +140,71 @@ it("orders the timeline newest first and keeps one workflow or run selected", as
   expect(screen.getAllByRole("button", { pressed: true })).toEqual([buttons[0]]);
 });
 
-it("caps the compact timeline at twenty runs and pins the history action outside the scroll range", async () => {
-  const entries = Array.from({ length: 21 }, (_, index) => {
-    const runId = `run-${index}`;
-    return [
-      runId,
-      RunSummaryMsg.create({ ...summary, runId, createdSequence: String(index + 1) }),
-    ] as const;
-  });
-  const onViewAll = vi.fn();
-  const props = { workflowId: workflow.workflowId, onSelectRun: vi.fn(), onViewAll };
-  const view = render(
-    <RunListPanel {...props} runs={Object.fromEntries(entries.slice(0, 19))} />,
+it("loads successive compact pages near the bottom and pins Current above the scrolling runs", async () => {
+  const runs = Object.fromEntries(
+    Array.from({ length: 52 }, (_, index) => {
+      const runId = `run-${index}`;
+      return [
+        runId,
+        RunSummaryMsg.create({ ...summary, runId, createdSequence: String(index + 1) }),
+      ];
+    }),
   );
-  await screen.findByRole("button", { name: /run-18,/ });
+  const onViewAll = vi.fn();
+  const onSelectRun = vi.fn();
+  const props = { workflowId: workflow.workflowId, runs, onSelectRun, onViewAll };
+  const view = render(<RunListPanel {...props} />);
+  await screen.findByRole("button", { name: /run-51,/ });
   const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
-  await scrollTimelineTo(scroll, 20 * 44 - 192);
-  await within(scroll).findByRole("button", { name: /run-0,/ });
+  const virtual = view.container.querySelector<HTMLElement>(".run-list-virtual")!;
+  const current = screen.getByRole("button", { name: "Current" });
+  expect(current).toBeVisible();
+  expect(scroll).not.toContainElement(current);
+  expect(current).toHaveAttribute("aria-pressed", "true");
+  expect(current).toHaveStyle({ height: "30px", paddingTop: "7px", paddingBottom: "7px" });
+  expect(virtual).toHaveStyle({ height: `${25 * 27.5}px` });
+  expect(view.container.querySelector("footer")).not.toBeInTheDocument();
+  const viewAll = screen.getByRole("button", { name: "View all" });
+  expect(viewAll.closest("header")).not.toBeNull();
   expect(within(scroll).queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Current" })).not.toBeInTheDocument();
+  expect(viewAll).toHaveAttribute("aria-label", "Expand timeline");
+  fireEvent.click(within(viewAll).getByText("View all"));
+  fireEvent.click(viewAll.querySelector("svg")!);
+  expect(onViewAll).toHaveBeenCalledTimes(2);
 
-  view.rerender(<RunListPanel {...props} runs={Object.fromEntries(entries.slice(0, 20))} />);
-  await scrollTimelineTo(scroll, 21 * 44 - 192);
-  expect(await screen.findByRole("button", { name: "View all" })).toBeInTheDocument();
-  expect(within(scroll).queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
+  vi.useFakeTimers();
+  try {
+    scroll.scrollTop = 25 * 27.5 - 192 - 27.5;
+    fireEvent.scroll(scroll);
+    fireEvent.scroll(scroll);
+    expect(within(scroll).getByRole("status")).toHaveTextContent("Loading");
+    expect(virtual).toHaveStyle({ height: `${25 * 27.5}px` });
+    await act(() => vi.runOnlyPendingTimersAsync());
+    expect(virtual).toHaveStyle({ height: `${50 * 27.5}px` });
+    expect(within(scroll).queryByRole("status")).not.toBeInTheDocument();
+  } finally {
+    vi.useRealTimers();
+  }
+  await scrollTimelineTo(scroll, 50 * 27.5 - 192);
+  expect(virtual).toHaveStyle({ height: `${52 * 27.5}px` });
+  await scrollTimelineTo(scroll, 52 * 27.5 - 192);
+  fireEvent.click(await within(scroll).findByRole("button", { name: /run-0,/ }));
+  expect(onSelectRun).toHaveBeenLastCalledWith("run-0");
+  expect(current).toBeVisible();
+  fireEvent.click(current);
+  expect(onSelectRun).toHaveBeenLastCalledWith(undefined);
+  expect(within(scroll).queryByRole("status")).not.toBeInTheDocument();
+  expect(virtual).toHaveStyle({ height: `${52 * 27.5}px` });
 
-  view.rerender(<RunListPanel {...props} runs={Object.fromEntries(entries)} />);
-  await within(scroll).findByRole("button", { name: /run-1,/ });
-  expect(within(scroll).queryByRole("button", { name: /run-0,/ })).not.toBeInTheDocument();
-  fireEvent.click(screen.getByRole("button", { name: "View all" }));
-  expect(onViewAll).toHaveBeenCalledOnce();
-
-  await scrollTimelineTo(scroll, 0);
-  expect(await screen.findByRole("button", { name: "Current" })).toBeInTheDocument();
-  view.rerender(<RunListPanel {...props} expanded runs={Object.fromEntries(entries)} />);
-  await scrollTimelineTo(scroll, 22 * 56 - 192);
-  expect(await within(scroll).findByRole("button", { name: /run-0,/ })).toBeInTheDocument();
+  view.rerender(<RunListPanel {...props} expanded />);
+  await scrollTimelineTo(scroll, 25 * 34 - 192);
+  expect(await within(scroll).findByRole("button", { name: /run-27,/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Current" })).toHaveStyle({
+    height: "36.5px",
+    paddingTop: "9.75px",
+    paddingBottom: "9.75px",
+  });
+  expect(scroll).not.toContainElement(current);
   expect(screen.queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
 });
 
@@ -199,7 +228,7 @@ it("preserves compact timeline scrolling across status and unrelated workflow up
   const view = render(<RunListPanel {...props} />);
   await screen.findByRole("button", { name: /run-19,/ });
   const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
-  const bottom = 21 * 44 - 192;
+  const bottom = 20 * 27.5 - 192;
   await scrollTimelineTo(scroll, bottom);
   expect(await screen.findByRole("button", { name: "View all" })).toBeVisible();
   expect(within(scroll).queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
@@ -263,6 +292,7 @@ it.each([
   expect(row.querySelector(".run-triggered-at")?.parentElement).toHaveTextContent(
     `${timestamp} · ${label}`,
   );
+  expect(row).toHaveStyle({ height: "27.5px", paddingTop: "8.25px", paddingBottom: "8.25px" });
   expect(row).toHaveAttribute("title", run.runId);
   expect(row.querySelector(".run-status-text")).toHaveTextContent(run.status);
   expect(row.querySelector(".run-status-text")).toHaveAttribute("data-status", run.status);
