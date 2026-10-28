@@ -35,7 +35,7 @@ const EMPTY_PAGE: DescriptorPageState<ClassifierEventDescriptorMsg> = {
 const DETAIL_CACHE_MAX_ENTRIES = 8;
 const CALL_PAGE_SIZE = 25;
 const PAGE_BUTTON_CLASS =
-  "cursor-pointer rounded-md border border-line bg-transparent px-3 py-2 text-ink hover:bg-canvas focus-visible:outline-2 focus-visible:outline-classifier disabled:cursor-not-allowed disabled:opacity-40";
+  "cursor-pointer rounded border border-line bg-transparent px-3 py-2 text-ink hover:bg-canvas focus-visible:outline-2 focus-visible:outline-classifier disabled:cursor-not-allowed disabled:opacity-40";
 const BUTTON_CLASS =
   "cursor-pointer rounded border border-line bg-panel px-2 py-1 text-[11px] text-secondary hover:text-ink disabled:cursor-default disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-acid";
 
@@ -820,7 +820,7 @@ export function ClassifierInspector({
         </div>
         <button
           type="button"
-          className="icon-button grid size-[30px] shrink-0 cursor-pointer place-items-center rounded-[7px] border border-line bg-panel p-0 text-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-acid"
+          className="icon-button grid size-[30px] shrink-0 cursor-pointer place-items-center rounded border border-line bg-panel p-0 text-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-acid"
           onClick={onClose}
           aria-label="Close"
         >

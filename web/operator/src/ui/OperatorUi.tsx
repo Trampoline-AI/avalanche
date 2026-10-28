@@ -143,7 +143,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
                     type="button"
                     aria-label={`View current state for ${workflow.displayName}`}
                     aria-current={selection?.kind === "workflow" ? "page" : undefined}
-                    className="cursor-pointer border-0 bg-transparent p-0 text-inherit hover:underline focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+                    className="cursor-pointer border-0 bg-transparent p-0 text-inherit hover:underline focus-visible:rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
                     onClick={() => selectWorkflowRun(undefined)}
                   >
                     <strong>{workflow.displayName}</strong>
@@ -166,7 +166,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
           </div>
           <button
             type="button"
-            className="explorer-toggle hidden size-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-muted hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid max-[700px]:flex"
+            className="explorer-toggle hidden size-8 cursor-pointer items-center justify-center rounded border-0 bg-transparent text-muted hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid max-[700px]:flex"
             aria-label="Toggle workflows"
             aria-controls="operator-explorer"
             aria-expanded={explorerOpen}

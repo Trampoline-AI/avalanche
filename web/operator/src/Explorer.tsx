@@ -44,7 +44,7 @@ const WorkflowRow = memo(function WorkflowRow({
     >
       <span
         aria-hidden="true"
-        className="grid size-8 shrink-0 place-items-center rounded-md border border-[#9ca3af] text-sm font-medium"
+        className="grid size-8 shrink-0 place-items-center rounded border border-[#9ca3af] text-sm font-medium"
       >
         {workflow.displayName.slice(0, 1).toUpperCase() +
           workflow.displayName.slice(1, 2).toLowerCase()}
@@ -121,7 +121,7 @@ function ExplorerView({
         >
           {contentVisible && visibleDiagnostics.length > 0 && !diagnosticsDismissed && (
             <details
-              className="diagnostics relative m-2 rounded-lg border border-[#ead1a2] bg-[#fff8eb] p-[9px] text-[10px] [&>summary]:cursor-pointer [&>summary]:pr-6 [&>summary]:text-amber [&>div]:mt-[9px] [&>div]:border-t [&>div]:border-[#ead1a2] [&>div]:pt-2 [&_strong]:block [&_span]:block [&_span]:overflow-hidden [&_span]:text-ellipsis [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#8b7655] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[#735b37]"
+              className="diagnostics relative m-2 rounded border border-[#ead1a2] bg-[#fff8eb] p-[9px] text-[10px] [&>summary]:cursor-pointer [&>summary]:pr-6 [&>summary]:text-amber [&>div]:mt-[9px] [&>div]:border-t [&>div]:border-[#ead1a2] [&>div]:pt-2 [&_strong]:block [&_span]:block [&_span]:overflow-hidden [&_span]:text-ellipsis [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#8b7655] [&_p]:mt-1 [&_p]:mb-0 [&_p]:text-[#735b37]"
               open
             >
               <summary>
@@ -196,7 +196,7 @@ function ExplorerView({
         <footer className="mt-auto flex h-12 shrink-0 items-center justify-start bg-panel px-2 max-[700px]:hidden">
           <button
             type="button"
-            className={`flex h-8 cursor-pointer items-center rounded-md border-0 bg-transparent text-muted transition-colors hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid ${
+            className={`flex h-8 cursor-pointer items-center rounded border-0 bg-transparent text-muted transition-colors hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid ${
               pinned ? "w-8 justify-center p-0" : "w-full justify-start gap-2 px-2"
             }`}
             aria-label={pinned ? "Collapse Explorer" : "Pin Explorer open"}

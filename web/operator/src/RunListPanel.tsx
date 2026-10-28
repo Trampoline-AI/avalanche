@@ -187,7 +187,7 @@ export function RunListPanel({
       className={
         expanded
           ? "all-runs-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-line bg-panel"
-          : "run-list-panel h-full w-full overflow-hidden rounded-[9px] border border-line bg-[rgba(255,255,255,.96)] shadow-[0_6px_20px_rgba(20,31,26,.1)]"
+          : "run-list-panel h-full w-full overflow-hidden rounded border border-line bg-[rgba(255,255,255,.96)] shadow-[0_6px_20px_rgba(20,31,26,.1)]"
       }
       aria-labelledby={headingId}
       onKeyDown={(event) => {
@@ -226,7 +226,7 @@ export function RunListPanel({
               aria-label="Collapse timeline"
               title="Collapse timeline"
               onClick={onClose}
-              className="grid size-8 cursor-pointer place-items-center rounded-md border-0 bg-transparent text-lg text-secondary hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-acid"
+              className="grid size-8 cursor-pointer place-items-center rounded border-0 bg-transparent text-lg text-secondary hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-acid"
             >
               <Minimize2 aria-hidden="true" className="size-4" />
             </button>
@@ -243,7 +243,7 @@ export function RunListPanel({
                 setStatus(event.target.value);
                 setPage(0);
               }}
-              className="h-9 min-w-0 rounded-md border border-line bg-white px-3 py-2 text-xs font-normal text-ink outline-acid"
+              className="h-9 min-w-0 rounded border border-line bg-white px-3 py-2 text-xs font-normal text-ink outline-acid"
             >
               <option value="">All statuses</option>
               {statuses.map((value) => (
@@ -263,7 +263,7 @@ export function RunListPanel({
                   setFromDate(event.target.value);
                   setPage(0);
                 }}
-                className="h-9 min-w-0 rounded-md border border-line bg-white px-3 py-2 text-xs font-normal text-ink outline-acid"
+                className="h-9 min-w-0 rounded border border-line bg-white px-3 py-2 text-xs font-normal text-ink outline-acid"
               />
             </label>
             <label className="flex min-w-0 flex-col gap-[8px] font-medium">
@@ -275,7 +275,7 @@ export function RunListPanel({
                   setToDate(event.target.value);
                   setPage(0);
                 }}
-                className="h-9 min-w-0 rounded-md border border-line bg-white px-3 py-2 text-xs font-normal text-ink outline-acid"
+                className="h-9 min-w-0 rounded border border-line bg-white px-3 py-2 text-xs font-normal text-ink outline-acid"
               />
             </label>
           </div>
@@ -293,7 +293,7 @@ export function RunListPanel({
                   setPage(0);
                 }}
                 placeholder="Search by run ID"
-                className="h-9 min-w-0 rounded-md border border-line bg-white px-3 py-2 text-xs font-normal text-ink outline-acid"
+                className="h-9 min-w-0 rounded border border-line bg-white px-3 py-2 text-xs font-normal text-ink outline-acid"
               />
             </label>
           </details>
@@ -425,7 +425,7 @@ export function RunListPanel({
               aria-label="Previous page"
               disabled={pageIndex === 0}
               onClick={() => setPage(pageIndex - 1)}
-              className="cursor-pointer rounded-md border border-line bg-transparent px-3 py-2 text-ink hover:bg-canvas focus-visible:outline-2 focus-visible:outline-acid disabled:cursor-not-allowed disabled:opacity-40"
+              className="cursor-pointer rounded border border-line bg-transparent px-3 py-2 text-ink hover:bg-canvas focus-visible:outline-2 focus-visible:outline-acid disabled:cursor-not-allowed disabled:opacity-40"
             >
               Previous
             </button>
@@ -437,7 +437,7 @@ export function RunListPanel({
               aria-label="Next page"
               disabled={pageIndex === pageCount - 1}
               onClick={() => setPage(pageIndex + 1)}
-              className="cursor-pointer rounded-md border border-line bg-transparent px-3 py-2 text-ink hover:bg-canvas focus-visible:outline-2 focus-visible:outline-acid disabled:cursor-not-allowed disabled:opacity-40"
+              className="cursor-pointer rounded border border-line bg-transparent px-3 py-2 text-ink hover:bg-canvas focus-visible:outline-2 focus-visible:outline-acid disabled:cursor-not-allowed disabled:opacity-40"
             >
               Next
             </button>

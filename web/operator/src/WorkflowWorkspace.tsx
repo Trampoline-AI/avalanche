@@ -353,7 +353,7 @@ export function WorkflowWorkspaceSurface({
                   )}
                   {historical && !loadedRun && (
                     <div
-                      className="absolute right-3 top-3 max-w-[240px] rounded-lg border border-line bg-panel p-3 text-xs text-secondary"
+                      className="absolute right-3 top-3 max-w-[240px] rounded border border-line bg-panel p-3 text-xs text-secondary"
                       role={state.selectedRunStatus === "error" ? "alert" : "status"}
                     >
                       {state.selectedRunStatus === "error" ? (
@@ -368,7 +368,7 @@ export function WorkflowWorkspaceSurface({
                   )}
                   {requestingRun ? (
                     <div
-                      className="pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[240px] rounded-lg border border-line bg-panel px-3 py-2.5 text-xs text-secondary shadow-sm max-[700px]:top-auto max-[700px]:bottom-16"
+                      className="pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[240px] rounded border border-line bg-panel px-3 py-2.5 text-xs text-secondary shadow-sm max-[700px]:top-auto max-[700px]:bottom-16"
                       role="status"
                       aria-label="Run preparation"
                     >
@@ -384,7 +384,7 @@ export function WorkflowWorkspaceSurface({
                       </span>
                     </div>
                   ) : run ? (
-                    <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded-lg border border-[#dfc99e] bg-[rgba(255,252,245,.96)] px-3 py-[9px] text-[9px] text-[#766548] shadow-[0_4px_14px_rgba(54,44,25,.08)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
+                    <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded border border-[#dfc99e] bg-[rgba(255,252,245,.96)] px-3 py-[9px] text-[9px] text-[#766548] shadow-[0_4px_14px_rgba(54,44,25,.08)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
                       <span>Viewing a run snapshot</span>This view does not represent the
                       workflow&apos;s current state.
                     </div>
@@ -456,7 +456,7 @@ export function WorkflowWorkspaceSurface({
           role="status"
           aria-live="polite"
         >
-          <div className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-[#1d2923] px-3.5 py-2.5 text-[11px] font-medium tracking-[-0.01em] text-white shadow-[0_10px_30px_rgba(15,25,20,.22)]">
+          <div className="flex items-center gap-2.5 rounded border border-white/10 bg-[#1d2923] px-3.5 py-2.5 text-[11px] font-medium tracking-[-0.01em] text-white shadow-[0_10px_30px_rgba(15,25,20,.22)]">
             <span className="relative flex size-2" aria-hidden="true">
               <span className="absolute inline-flex size-full animate-ping rounded-full bg-acid opacity-60 motion-reduce:animate-none" />
               <span className="relative inline-flex size-2 rounded-full bg-acid" />

@@ -20,7 +20,7 @@ const sourceLayout = EditorView.theme({
     marginTop: "4px",
     marginRight: "8px",
     marginBottom: "8px",
-    borderRadius: "5px",
+    borderRadius: "var(--radius-ui)",
   },
   ".cm-content": {
     fontFamily: "var(--font-mono)",

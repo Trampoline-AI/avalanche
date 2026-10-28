@@ -686,7 +686,7 @@ function AgentAndStepInspector({
   const closeButton = (
     <button
       type="button"
-      className="icon-button grid size-[30px] shrink-0 cursor-pointer place-items-center rounded-[7px] border border-line bg-panel p-0 text-secondary hover:border-secondary hover:bg-panel hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+      className="icon-button grid size-[30px] shrink-0 cursor-pointer place-items-center rounded border border-line bg-panel p-0 text-secondary hover:border-secondary hover:bg-panel hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
       onClick={closeInspector}
       aria-label="Close"
     >

@@ -65,7 +65,7 @@ function ClassifierInput({ value }: { value: Exclude<ClassifierEntry, null> }) {
     });
     return () => view.destroy();
   }, [source]);
-  return <div ref={parent} className="min-w-0 overflow-hidden rounded-md border border-line" />;
+  return <div ref={parent} className="min-w-0 overflow-hidden rounded border border-line" />;
 }
 
 function JsonValue({ value }: { value: ClassifierEntry }) {
@@ -111,10 +111,10 @@ export function AnswerSummary({
           aria-valuemax={1}
           aria-valuenow={answer.noul}
           aria-valuetext={`${percent.format(answer.noul)} true`}
-          className="h-1 w-24 max-w-full overflow-hidden rounded-full bg-line"
+          className="h-1 w-24 max-w-full overflow-hidden rounded bg-line"
         >
           <span
-            className="block h-full rounded-full"
+            className="block h-full rounded"
             style={{
               width: `${answer.noul * 100}%`,
               backgroundColor: percentageColor(answer.noul),

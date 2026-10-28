@@ -120,7 +120,7 @@ function ToolCalls({ calls }: { calls: AgentTraceToolCall[] }) {
     <div className="grid gap-1.5">
       {calls.map((call, index) => (
         <details
-          className={`rounded-md border px-2.5 py-2 ${call.error ? "border-danger bg-[#fff8f7]" : "border-line bg-canvas"}`}
+          className={`rounded border px-2.5 py-2 ${call.error ? "border-danger bg-[#fff8f7]" : "border-line bg-canvas"}`}
           key={`${index}:${call.name}`}
         >
           <summary className="cursor-pointer text-[10px] font-semibold text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid">
@@ -159,7 +159,7 @@ function PredictCalls({ calls }: { calls: AgentTracePredictCall[] }) {
     <div className="grid gap-1.5">
       {calls.map((call, index) => (
         <details
-          className={`rounded-md border px-2.5 py-2 ${call.error ? "border-danger bg-[#fff8f7]" : "border-line bg-canvas"}`}
+          className={`rounded border px-2.5 py-2 ${call.error ? "border-danger bg-[#fff8f7]" : "border-line bg-canvas"}`}
           key={`${index}:${call.signature}:${call.model}`}
         >
           <summary className="cursor-pointer text-[10px] font-semibold text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid">
@@ -228,7 +228,7 @@ function DeferredTurnDetail({
       {(detail.status === "idle" || detail.retryable) && (
         <button
           type="button"
-          className="w-fit cursor-pointer rounded-md border border-line bg-panel px-2 py-1 font-mono text-[9px] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+          className="w-fit cursor-pointer rounded border border-line bg-panel px-2 py-1 font-mono text-[9px] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
           onClick={onLoadTurn}
         >
           {detail.status === "error" ? "Retry step detail" : "Reload step detail"}
@@ -279,7 +279,7 @@ function TurnSecondaryDetails({
           >
             <DeferredTurnDetail detail={detail} onLoadTurn={onLoadTurn}>
               {(step) => (
-                <div className="h-56 max-h-[45vh] min-h-32 overflow-auto rounded-md border border-line bg-canvas">
+                <div className="h-56 max-h-[45vh] min-h-32 overflow-auto rounded border border-line bg-canvas">
                   <PythonSource source={step.execution?.code ?? ""} />
                 </div>
               )}
@@ -297,7 +297,7 @@ function TurnSecondaryDetails({
                 return (
                   <>
                     <pre
-                      className={`m-0 max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-[#26332f] bg-[#111817] px-3 py-2.5 font-mono text-[8px] leading-[1.55] [overflow-wrap:anywhere] ${step.error ? "text-[#ffb4ac]" : "text-[#c7d4cf]"}`}
+                      className={`m-0 max-h-56 overflow-auto whitespace-pre-wrap rounded border border-[#26332f] bg-[#111817] px-3 py-2.5 font-mono text-[8px] leading-[1.55] [overflow-wrap:anywhere] ${step.error ? "text-[#ffb4ac]" : "text-[#c7d4cf]"}`}
                     >
                       {showFullOutput ? execution.untruncatedOutput : execution.output}
                     </pre>
@@ -417,7 +417,7 @@ export function AgentTraceExplorer({
         <div className="flex min-h-full min-w-0 flex-col gap-3 px-5 pt-[18px] pb-[30px]">
           {running && currentActivity && (
             <div
-              className="trace-current-activity flex items-center gap-2 rounded-md border border-[#d9d1ff] bg-[#f8f6ff] px-2.5 py-2 text-[9px] text-secondary"
+              className="trace-current-activity flex items-center gap-2 rounded border border-[#d9d1ff] bg-[#f8f6ff] px-2.5 py-2 text-[9px] text-secondary"
               role="status"
             >
               <span className="relative flex size-2 flex-none" aria-hidden="true">
@@ -433,7 +433,7 @@ export function AgentTraceExplorer({
 
           {error && (
             <p
-              className="inspector-error rounded-[7px] border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]"
+              className="inspector-error rounded border border-danger p-2.5 text-[10px] text-danger [overflow-wrap:anywhere]"
               role="alert"
             >
               {error}
@@ -460,7 +460,7 @@ export function AgentTraceExplorer({
                   const toolCallCount = step?.toolCallCount ?? descriptor.toolCallCount;
                   return (
                     <article
-                      className={`turn-row overflow-hidden rounded-lg border bg-panel ${failed ? "border-danger" : "border-line"}`}
+                      className={`turn-row overflow-hidden rounded border bg-panel ${failed ? "border-danger" : "border-line"}`}
                       key={turnKey}
                     >
                       <header className="grid grid-cols-[auto_minmax(0,1fr)] items-start gap-2.5 bg-canvas px-3 py-2.5">
@@ -510,7 +510,7 @@ export function AgentTraceExplorer({
                             </p>
                             <button
                               type="button"
-                              className="mt-2 cursor-pointer rounded-md border border-line bg-panel px-2 py-1 font-mono text-[9px] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+                              className="mt-2 cursor-pointer rounded border border-line bg-panel px-2 py-1 font-mono text-[9px] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
                               onClick={() => onLoadTurn(descriptor)}
                               aria-label={`Retry turn ${iteration}`}
                             >
@@ -570,7 +570,7 @@ export function AgentTraceExplorer({
           {hasMore && (
             <button
               type="button"
-              className="descriptor-page-action cursor-pointer rounded-md border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid disabled:cursor-wait disabled:text-muted"
+              className="descriptor-page-action cursor-pointer rounded border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid disabled:cursor-wait disabled:text-muted"
               disabled={loading}
               aria-busy={loading}
               onClick={onLoadMore}

@@ -35,7 +35,7 @@ export function InspectorFields({
           {field.description && <p>{field.description}</p>}
           {values && Object.hasOwn(values, field.name) && (
             <div
-              className="mt-2 min-w-0 rounded-md bg-canvas p-2"
+              className="mt-2 min-w-0 rounded bg-canvas p-2"
               aria-label={`${field.name} value`}
             >
               <ValueView value={values[field.name]} />
@@ -54,7 +54,7 @@ export function InspectorFields({
           ) : (
             <p>Retained value is not present in the historical schema.</p>
           )}
-          <div className="mt-2 min-w-0 rounded-md bg-canvas p-2" aria-label={`${name} value`}>
+          <div className="mt-2 min-w-0 rounded bg-canvas p-2" aria-label={`${name} value`}>
             <ValueView value={value} />
           </div>
         </div>
@@ -77,7 +77,7 @@ function ToolDetails({ tool }: { tool: ToolMetadata }) {
       {open &&
         (tool.sourceCode ? (
           <div
-            className="mt-2 grid max-h-[min(14rem,45vh)] min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] overflow-hidden rounded-md border border-line bg-canvas"
+            className="mt-2 grid max-h-[min(14rem,45vh)] min-h-0 min-w-0 grid-rows-[minmax(0,1fr)] overflow-hidden rounded border border-line bg-canvas"
             role="region"
             aria-label={`${tool.name} source`}
           >
@@ -158,7 +158,7 @@ export function InspectorResources({ declaration }: { declaration: AgentDeclarat
       <dialog
         ref={dialogRef}
         aria-labelledby={titleId}
-        className="skill-markdown-dialog m-auto max-h-[85dvh] w-[min(52rem,calc(100vw-2rem))] overflow-hidden rounded-xl border border-line bg-panel p-0 text-ink shadow-xl backdrop:bg-black/40"
+        className="skill-markdown-dialog m-auto max-h-[85dvh] w-[min(52rem,calc(100vw-2rem))] overflow-hidden rounded border border-line bg-panel p-0 text-ink shadow-xl backdrop:bg-black/40"
         onClose={() => {
           setSelectedSkillName(undefined);
           triggerRef.current?.focus();
@@ -171,7 +171,7 @@ export function InspectorResources({ declaration }: { declaration: AgentDeclarat
           type="button"
           aria-label="Close skill"
           onClick={() => dialogRef.current?.close()}
-          className="icon-button absolute top-3 right-6 grid size-[30px] cursor-pointer place-items-center rounded-[7px] border border-line bg-panel p-0 text-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+          className="icon-button absolute top-3 right-6 grid size-[30px] cursor-pointer place-items-center rounded border border-line bg-panel p-0 text-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
         >
           <X aria-hidden="true" className="size-4" strokeWidth={1.8} />
         </button>

@@ -513,7 +513,7 @@ export function RunLogPane({
         {expanded && (
           <button
             type="button"
-            className={`toggle run-log-autoscroll inline-flex flex-none cursor-pointer items-center gap-[5px] rounded-full border bg-panel px-2 py-[5px] font-mono text-[8px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>span]:text-xs [&>span]:leading-none [&>span]:text-acid ${following ? "active border-acid text-acid" : "border-line text-secondary"}`}
+            className={`toggle run-log-autoscroll inline-flex flex-none cursor-pointer items-center gap-[5px] rounded border bg-panel px-2 py-[5px] font-mono text-[8px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>span]:text-xs [&>span]:leading-none [&>span]:text-acid ${following ? "active border-acid text-acid" : "border-line text-secondary"}`}
             aria-label="Auto-scroll logs"
             aria-pressed={following}
             title={
@@ -539,7 +539,7 @@ export function RunLogPane({
         >
           {pageError && (
             <p
-              className="inspector-error mb-1.5 rounded-[7px] border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]"
+              className="inspector-error mb-1.5 rounded border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]"
               role="alert"
             >
               {pageError}
@@ -547,7 +547,7 @@ export function RunLogPane({
           )}
           {decodeError && (
             <p
-              className="inspector-error mb-1.5 rounded-[7px] border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]"
+              className="inspector-error mb-1.5 rounded border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]"
               role="alert"
             >
               {decodeError}
@@ -556,7 +556,7 @@ export function RunLogPane({
           {activePage.nextPageToken && (
             <button
               type="button"
-              className="descriptor-page-action run-log-older-action mb-1.5 cursor-pointer justify-self-start rounded-md border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid disabled:cursor-wait disabled:text-muted"
+              className="descriptor-page-action run-log-older-action mb-1.5 cursor-pointer justify-self-start rounded border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid disabled:cursor-wait disabled:text-muted"
               disabled={pageLoading}
               aria-busy={pageLoading}
               onClick={loadOlderLogs}

@@ -42,7 +42,7 @@ function JsonEditor({ value, onChange }: JsonEditorProps) {
   }, []);
   return (
     <div
-      className="json-editor overflow-hidden rounded-[7px] border border-line text-[10px]"
+      className="json-editor overflow-hidden rounded border border-line text-[10px]"
       ref={parent}
     />
   );
@@ -110,7 +110,7 @@ export function RunControls({
         <>
           <button
             type="button"
-            className="run-button inline-flex cursor-pointer items-center gap-1.5 rounded-[7px] border border-acid bg-acid px-[11px] py-[7px] text-[10px] font-bold text-white hover:border-[#1d4ed8] hover:bg-[#1d4ed8] [&_svg]:size-[11px] [&_svg]:fill-current"
+            className="run-button inline-flex cursor-pointer items-center gap-1.5 rounded border border-acid bg-acid px-[11px] py-[7px] text-[10px] font-bold text-white hover:border-[#1d4ed8] hover:bg-[#1d4ed8] [&_svg]:size-[11px] [&_svg]:fill-current"
             onClick={() => void start()}
           >
             <svg aria-hidden="true" viewBox="0 0 12 12">
@@ -130,7 +130,7 @@ export function RunControls({
       {active && run?.summary && runActionsEnabled && (
         <button
           type="button"
-          className="cancel-button cursor-pointer rounded-[7px] border border-[#e0a6a1] bg-white px-[11px] py-[7px] text-[10px] text-[#a92f29] hover:bg-[#fff3f2]"
+          className="cancel-button cursor-pointer rounded border border-[#e0a6a1] bg-white px-[11px] py-[7px] text-[10px] text-[#a92f29] hover:bg-[#fff3f2]"
           disabled={pending?.kind === "cancel"}
           onClick={() => {
             setError(undefined);
@@ -144,7 +144,7 @@ export function RunControls({
       )}
       {run?.terminalSeal && (
         <div
-          className="terminal-seal flex items-center gap-1.5 rounded-[7px] border border-[#cbd2ce] bg-[#f6f8f7] px-[11px] py-[7px] text-[10px] text-secondary"
+          className="terminal-seal flex items-center gap-1.5 rounded border border-[#cbd2ce] bg-[#f6f8f7] px-[11px] py-[7px] text-[10px] text-secondary"
           data-terminal-status={run.terminalSeal.terminalStatus}
         >
           <span className="terminal-seal-status font-bold">
@@ -156,7 +156,7 @@ export function RunControls({
         </div>
       )}
       {showInput && workflow && runActionsEnabled && (
-        <div className="input-popover absolute right-0 bottom-[43px] z-20 w-[390px] rounded-[9px] border border-[#cbd2ce] bg-white p-[13px] shadow-[0_18px_50px_rgba(20,31,26,.16)] max-[700px]:w-[calc(100vw-32px)] [&>div:first-child]:mb-[9px] [&>div:first-child]:flex [&>div:first-child]:justify-between [&_strong]:text-[11px] [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#6d7872]">
+        <div className="input-popover absolute right-0 bottom-[43px] z-20 w-[390px] rounded border border-[#cbd2ce] bg-white p-[13px] shadow-[0_18px_50px_rgba(20,31,26,.16)] max-[700px]:w-[calc(100vw-32px)] [&>div:first-child]:mb-[9px] [&>div:first-child]:flex [&>div:first-child]:justify-between [&_strong]:text-[11px] [&_span]:font-mono [&_span]:text-[8px] [&_span]:text-[#6d7872]">
           <div>
             <strong>Workflow input</strong>
           </div>
@@ -165,7 +165,7 @@ export function RunControls({
       )}
       {error && (
         <div
-          className={`action-error absolute right-0 z-[21] w-[390px] rounded-[7px] border border-[#efb9b5] bg-[#fff1f0] px-[18px] py-2 text-xs text-[#9d2923] max-[700px]:w-[calc(100vw-32px)] ${showInput ? "bottom-[205px]" : "bottom-11"}`}
+          className={`action-error absolute right-0 z-[21] w-[390px] rounded border border-[#efb9b5] bg-[#fff1f0] px-[18px] py-2 text-xs text-[#9d2923] max-[700px]:w-[calc(100vw-32px)] ${showInput ? "bottom-[205px]" : "bottom-11"}`}
         >
           {error}
         </div>
