@@ -45,8 +45,9 @@ and result definitions. Other pages likewise link the APIs they accept or return
 
 Python 3.13 is required. Agent and classifier support is included in the
 base installation; Lance storage needs `uv add 'avalanche-ai[lance]'`, Claude agent
-steps (`ava.runtimes.ClaudeAgent`) need `uv add 'avalanche-ai[claude]'`, and OpenAI
-agent steps (`ava.runtimes.OpenAIAgent`) need `uv add 'avalanche-ai[openai]'`. Avalanche
+steps (`ava.runtimes.ClaudeAgent`) need `uv add 'avalanche-ai[claude]'`, OpenAI
+agent steps (`ava.runtimes.OpenAIAgent`) need `uv add 'avalanche-ai[openai]'`, and Pydantic AI
+agent steps (`ava.runtimes.PydanticAIAgent`) need `uv add 'avalanche-ai[pydantic-ai]'`. Avalanche
 remains an early-release, local-development toolkit.
 
 ## Offline skill reference
