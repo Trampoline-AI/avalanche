@@ -248,3 +248,45 @@ export function openaiTurnEvent(index: number): AgentLiveEvent {
     native: null,
   });
 }
+
+/** A Pydantic AI turn: a message, thinking, one tool call and the answer it hands back. */
+export function pydanticAiTurnEvent(index: number): AgentLiveEvent {
+  return live(index, {
+    common: {
+      kind: "turn.finished",
+      omitted_tool_calls: 0,
+      turn: {
+        index,
+        message: `Answer text ${index}.`,
+        reasoning: `Thinking ${index}.`,
+        duration_ms: 900,
+        usage: {
+          input_tokens: 3,
+          output_tokens: 5,
+          cost_usd: 0.0004,
+          cache_read_input_tokens: 900,
+          cache_creation_input_tokens: 0,
+        },
+        tool_calls: [
+          {
+            call_id: `call-${index}`,
+            caller: "model",
+            name: "lookup",
+            arguments: { name: "a" },
+            result: 10,
+            error: null,
+            duration_ms: 2,
+          },
+        ],
+        native: {
+          format: "pydantic_ai.messages/v1",
+          model: "gpt-5.4-nano",
+          provider: "openai",
+          provider_response_id: `resp-${index}`,
+          finish_reason: "tool_call",
+        },
+      },
+    },
+    native: null,
+  });
+}
