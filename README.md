@@ -456,11 +456,12 @@ probability semantics, and local evidence retention limits.
 | `ray`    | Ray-backed workflow execution |
 | `lance`  | Lance storage backend         |
 | `claude` | `ava.runtimes.ClaudeAgent`, which runs agent steps with Claude through the Claude Agent SDK; also needs the Claude Code CLI |
+| `openai` | `ava.runtimes.OpenAIAgent`, which runs agent steps with OpenAI models through the OpenAI Agents SDK |
 
 The remaining extras can be combined:
 
 ```bash
-uv add "avalanche-ai[ray,lance,claude]"
+uv add "avalanche-ai[ray,lance,claude,openai]"
 ```
 
 ## Documentation

@@ -9,7 +9,7 @@ All models are frozen, strict Pydantic models that reject unknown fields.
 and `AgentResult` hold live Python objects and are never serialized.
 
 ```python
-RuntimeKind = Literal["predict_rlm", "claude_agent"]   # avalanche.agent.kinds
+RuntimeKind = Literal["predict_rlm", "claude_agent", "openai_agent"]   # avalanche.agent.kinds
 ```
 
 ## Request
@@ -196,9 +196,12 @@ class WorkspaceReferenceInputEvidence:
 
 ```python
 TraceHeaderNative = Annotated[
-    PredictRLMTraceHeader | ClaudeAgentTraceHeader, Field(discriminator="format")
+    PredictRLMTraceHeader | ClaudeAgentTraceHeader | OpenAIAgentTraceHeader,
+    Field(discriminator="format"),
 ]
-TurnNative = Annotated[PredictRLMTurn | ClaudeAgentTurn, Field(discriminator="format")]
+TurnNative = Annotated[
+    PredictRLMTurn | ClaudeAgentTurn | OpenAIAgentTurn, Field(discriminator="format")
+]
 ```
 
 PredictRLM, `avalanche.agent.native.predict_rlm`:
@@ -261,6 +264,27 @@ class ClaudeAgentTurn:
     model: str
     stop_reason: str | None
     api_error: str | None
+```
+
+OpenAIAgent, `avalanche.agent.native.openai_agent`:
+
+```python
+class OpenAIAgentTraceHeader:
+    format: Literal["openai_agents.responses/v1"] = "openai_agents.responses/v1"
+    max_turns: PositiveInt
+    requests: NonNegativeInt
+    reasoning_tokens: NonNegativeInt | None
+    last_response_id: str | None
+    errors: tuple[str, ...]              # at most one, of at most 4096 characters
+
+
+class OpenAIAgentTurn:
+    format: Literal["openai_agents.responses/v1"] = "openai_agents.responses/v1"
+    response_id: str | None
+    model: str
+    reasoning_tokens: NonNegativeInt | None
+    refusal: str | None
+    answer: bool
 ```
 
 ## Live events
@@ -354,7 +378,8 @@ class AgentTraceUnavailable:
 
 ```python
 NativeEvent = Annotated[
-    PredictRLMNativeEvent | ClaudeAgentNativeEvent, Field(discriminator="format")
+    PredictRLMNativeEvent | ClaudeAgentNativeEvent | OpenAIAgentNativeEvent,
+    Field(discriminator="format"),
 ]
 ```
 
@@ -449,4 +474,19 @@ class RateLimited:                       # None
     kind: Literal["rate_limit"] = "rate_limit"
     status: str
     limit_type: str | None
+```
+
+OpenAIAgent, `avalanche.agent.native.openai_agent`. Every class also has
+`format: Literal["openai_agents.responses/v1"] = "openai_agents.responses/v1"`;
+the comment is the `common` event it travels with.
+
+```python
+OpenAIAgentNativeEvent = Annotated[AgentStarted, Field(discriminator="kind")]
+
+
+class AgentStarted:                      # None
+    kind: Literal["agent.started"] = "agent.started"
+    agent_name: str
+    model: str | None
+    tools: tuple[str, ...]
 ```

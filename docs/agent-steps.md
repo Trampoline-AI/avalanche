@@ -212,8 +212,9 @@ async def summarize(document: str, *, agent: ava.Agent) -> str:
     return (await agent(document=document)).outputs.summary
 ```
 
-`ava.runtimes.ClaudeAgent` runs these skills. PredictRLM does not support them
-yet: a PredictRLM step with `skills=` fails before the agent starts. PredictRLM has
+`ava.runtimes.ClaudeAgent` and `ava.runtimes.OpenAIAgent` run these skills;
+OpenAIAgent's model reads them but cannot run their scripts. PredictRLM does not
+support them yet: a PredictRLM step with `skills=` fails before the agent starts. PredictRLM has
 its own skills, which bundle instructions with sandbox packages, modules and
 tools; pass them on its runtime. The built-in ones are
 `ava.runtimes.predict_rlm.skills.pdf`, `.docx` and `.spreadsheet`:
@@ -285,6 +286,27 @@ existing `claude` login. A workflow default and a step runtime of different kind
 not merge: a `ClaudeAgent` step ignores a PredictRLM workflow default. See
 [runtimes](api/agents.md#runtimes) for every setting, for file and workspace
 inputs, and for how Claude runs a step's skills.
+
+### OpenAI agent steps
+
+`ava.runtimes.OpenAIAgent` runs a step with an OpenAI model through the OpenAI
+Agents SDK. Install the `openai` extra, set `OPENAI_API_KEY` where the step runs,
+pick a model, and use the step exactly as before:
+
+```python
+@ava.agent_step(
+    Summarize,
+    runtime=ava.runtimes.OpenAIAgent(model="gpt-5.4-mini", max_turns=8),
+    tools=[lookup_policy],
+)
+async def summarize(document: str, *, agent: ava.Agent) -> str:
+    return (await agent(document=document)).outputs.summary
+```
+
+The model calls the step's tools and nothing else: `ava.File` inputs are attached
+to its message, `ava.File` outputs are text files it answers with, and
+`ava.Workspace` fields are rejected. See [runtimes](api/agents.md#openaiagent) for
+every setting.
 
 ## Native evaluations
 
