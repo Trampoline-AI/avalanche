@@ -10,11 +10,13 @@
   `output_format` and `cwd` are rejected, and an unknown option name raises. Any
   other option replaces Avalanche's value. These options are never published or
   recorded.
-- ClaudeAgent traces say what Claude did on each turn. By default the system prompt
-  now asks Claude to write a short note before each tool call and to sum up before
-  answering; set `ava.runtimes.ClaudeAgent(narrate=False)` to leave this out. In the
-  browser UI, a turn that only hands back the step's answer says so instead of
-  "The model wrote no text this turn".
+- ClaudeAgent traces say what Claude did. By default the system prompt now asks
+  Claude to write a short note before each tool call, and Claude's answer must
+  include a `run_summary` of what it did, shown as the answering turn's message and
+  removed from the step's outputs. A signature output named `run_summary` now
+  raises `AgentStepError` unless `ava.runtimes.ClaudeAgent(narrate=False)`, which
+  leaves out both. In the browser UI, a turn that only hands back the step's answer
+  without text says so instead of "The model wrote no text this turn".
 - ClaudeAgent turns record each response's real token usage and stop reason. Before,
   a turn's output tokens were the count from when the response started, often a
   fraction of the true figure, and `stop_reason` was always empty. A turn for an API

@@ -104,9 +104,21 @@ def _closed(stop_reason: str, *, output_tokens: int) -> StreamEvent:
     )
 
 
+SUMMARY = "Looked up the bonus and added it."
+
+
 def _result(
-    structured_output, *, subtype="success", is_error=False, errors=None, result=None
+    structured_output,
+    *,
+    subtype="success",
+    is_error=False,
+    errors=None,
+    result=None,
+    summary: str | None = SUMMARY,
 ) -> ResultMessage:
+    """The session's result; an object answer carries the run summary narration asks for."""
+    if isinstance(structured_output, dict) and summary is not None:
+        structured_output = {**structured_output, "run_summary": summary}
     return ResultMessage(
         subtype=subtype,
         duration_ms=1200,
@@ -122,7 +134,9 @@ def _result(
     )
 
 
-def _success_stream(*, tool_error: bool = False, total: object = 15) -> list[object]:
+def _success_stream(
+    *, tool_error: bool = False, total: object = 15, summary: str | None = SUMMARY
+) -> list[object]:
     return [
         _init(),
         _assistant(
@@ -143,7 +157,7 @@ def _success_stream(*, tool_error: bool = False, total: object = 15) -> list[obj
         _assistant(ToolUseBlock(id="call-2", name="StructuredOutput", input={"total": total})),
         _closed("tool_use", output_tokens=12),
         UserMessage(content=[ToolResultBlock(tool_use_id="call-2", content="ok")]),
-        _result({"total": total}),
+        _result({"total": total}, summary=summary),
     ]
 
 
@@ -254,9 +268,13 @@ async def test_a_session_maps_onto_outputs_turns_and_live_events(replay):
     assert options.strict_mcp_config is True
     assert options.tools == []
     assert options.allowed_tools == ["mcp__avalanche__lookup_bonus"]
-    assert options.output_format["schema"]["properties"] == {
-        "total": {"title": "Total", "type": "integer"}
-    }
+    schema = options.output_format["schema"]
+    assert schema["properties"]["total"] == {"title": "Total", "type": "integer"}
+    assert schema["properties"]["run_summary"]["type"] == "string"
+    assert schema["required"] == ["total", "run_summary"]
+    # The summary Claude answered with is the answering turn's message, never an output.
+    assert second.message == SUMMARY
+    assert "run_summary" not in observed[-1].outputs
     assert options.include_partial_messages is True
     assert options.system_prompt.startswith("Add the numbers")
     assert options.system_prompt != Total.instructions.strip()
@@ -268,13 +286,46 @@ async def test_narration_sits_between_the_instructions_and_the_append_and_can_be
     seen = replay(_success_stream())
     await _agent(system_prompt_append="Be terse.")(a=2, b=3)
     narrated = seen["options"].system_prompt
-    replay(_success_stream())
-    await _agent(narrate=False, system_prompt_append="Be terse.")(a=2, b=3)
+    replay(_success_stream(summary=None))
+    result = await _agent(narrate=False, system_prompt_append="Be terse.")(a=2, b=3)
 
     instructions = Total.instructions.strip()
     assert seen["options"].system_prompt == f"{instructions}\n\nBe terse."
     assert narrated.startswith(f"{instructions}\n\n") and narrated.endswith("\n\nBe terse.")
     assert len(narrated) > len(seen["options"].system_prompt)
+    # Without narration Claude is not asked for a summary, and its answer is used as is.
+    assert "run_summary" not in seen["options"].output_format["schema"]["properties"]
+    assert result.outputs.total == 15
+    assert result.trace.turns[-1].message is None
+
+
+@pytest.mark.asyncio
+async def test_an_answer_without_its_run_summary_fails_the_step(replay):
+    replay(_success_stream(summary=None))
+
+    with pytest.raises(AgentOutputError, match="run_summary"):
+        await _agent()(a=2, b=3)
+
+
+class Reported(ava.Signature):
+    """Report on the numbers."""
+
+    a: int = ava.InputField()
+    run_summary: str = ava.OutputField()
+
+
+@pytest.mark.asyncio
+async def test_a_signature_output_named_like_the_run_summary_needs_narration_off(replay):
+    replay([_init(), _result({"run_summary": "mine"}, summary=None)])
+    agent = ava.Agent(signature=Reported, step_name="report", runtime=ClaudeAgent())
+
+    with pytest.raises(AgentStepError, match="narrate=False"):
+        await agent(a=1)
+
+    quiet = ava.Agent(
+        signature=Reported, step_name="report", runtime=ClaudeAgent(narrate=False)
+    )
+    assert (await quiet(a=1)).outputs.run_summary == "mine"
 
 
 @pytest.mark.asyncio
@@ -903,7 +954,8 @@ async def test_a_response_split_across_messages_and_subagent_traffic_form_one_tu
         ("call-1", "10"),
         ("call-2", "checked"),
     ]
-    assert second.message == "Done."
+    # The answering turn shows what Claude wrote, then the summary it answered with.
+    assert second.message == f"Done.\n\n{SUMMARY}"
     assert result.trace.header.turn_count == 2
 
 

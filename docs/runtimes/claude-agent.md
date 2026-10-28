@@ -51,20 +51,23 @@ class ClaudeAgent:
 ```
 
 With `narrate` on, Avalanche adds this paragraph to the system prompt, after the
-signature's instructions and before `system_prompt_append`, so each turn of the
-trace says what Claude did:
+signature's instructions and before `system_prompt_append`:
 
 ```text
 While you work, keep a short running account of what you are doing. Before each
 tool call, write one or two plain sentences saying what you are about to do and
-why. When a result changes your plan, say how. Before you submit your final
-answer, write a brief summary of what you did and what you found. Keep these
-notes short: they are a progress log for the people watching this run, not the
-answer.
+why. When a result changes your plan, say how. When you submit your answer, put a
+brief summary of what you did and what you found in run_summary. Keep these notes
+short: they are a progress log for the people watching this run, not the answer.
 ```
 
-It is an instruction, so Claude may still skip a note. Set `narrate=False` to leave
-it out.
+The notes before tool calls are an instruction, so Claude may skip some. The
+summary is not: the answer Claude must give gets a required `run_summary` string
+field, so every successful call ends with one. Avalanche removes it from the
+answer before the outputs are built and shows it as the answering turn's
+`message`, after any text Claude wrote in that turn. A signature output named
+`run_summary` raises `AgentStepError` unless `narrate=False`. Set `narrate=False`
+to leave out both the paragraph and the field.
 
 Each call ignores your own Claude setup: your user and project settings are not
 loaded, and MCP servers and connectors from your Claude account are not offered.
@@ -134,7 +137,7 @@ step's `tools=` for Python tools.
 ## Trace example
 
 The `Summarize` call above, as `result.trace`. Claude looked up a term, then
-summed up and answered through the `StructuredOutput` tool.
+answered through the `StructuredOutput` tool with its run summary.
 
 ```json
 {
@@ -197,14 +200,18 @@ summed up and answered through the `StructuredOutput` tool.
     },
     {
       "index": 2,
-      "message": "The glossary defines DAG, so the summary can use it.",
+      "message": "Looked up DAG in the glossary and summarized the document in three words.",
       "reasoning": null,
       "tool_calls": [
         {
           "call_id": "toolu_02",
           "caller": "model",
           "name": "StructuredOutput",
-          "arguments": {"summary": "Avalanche runs DAGs.", "word_count": 3},
+          "arguments": {
+            "summary": "Avalanche runs DAGs.",
+            "word_count": 3,
+            "run_summary": "Looked up DAG in the glossary and summarized the document in three words."
+          },
           "result": "Structured output provided successfully",
           "error": null,
           "duration_ms": null
@@ -309,7 +316,7 @@ The session starting, with the tools Claude can use:
 | `AgentRequest` | Claude |
 | --- | --- |
 | `signature` instructions | The system prompt, followed by the narration paragraph when `narrate` is on, then `system_prompt_append`. |
-| `signature` outputs | The JSON schema Claude must answer with. |
+| `signature` outputs | The JSON schema Claude must answer with, plus a required `run_summary` string when `narrate` is on. |
 | `inputs` | The prompt: one instruction line, then the inputs as JSON. |
 | `ava.File` inputs | Read where they are, without copies. The prompt gives each file's path, relative when it is inside the working folder. Folders outside it are added to the folders Claude may access. |
 | `ava.Workspace` input | The working folder. At most one. Without one, Claude works in an empty temporary folder. |
@@ -356,7 +363,7 @@ Sent once the session has ended and its outputs, if any, are built.
 
 | Final event | Claude |
 | --- | --- |
-| `trace_finished` | The session returned a result. `outputs` is Claude's JSON answer, with `ava.File` outputs as file references and `ava.Workspace` outputs by reference (see [file and workspace values](../agent-runtime-contract.md#file-and-workspace-values)). `outputs` is `None` when the header's `status` is `"failed"`, or when turning the answer into outputs failed, for example a file path outside the output folder; the step then raises. |
+| `trace_finished` | The session returned a result. `outputs` is Claude's JSON answer without `run_summary`, with `ava.File` outputs as file references and `ava.Workspace` outputs by reference (see [file and workspace values](../agent-runtime-contract.md#file-and-workspace-values)). `outputs` is `None` when the header's `status` is `"failed"`, or when turning the answer into outputs failed, for example a file path outside the output folder; the step then raises. |
 | `trace_unavailable` | The call was cancelled, the Claude CLI is not installed, the SDK raised, or the CLI ended without a result. |
 
 The final event of the call above:
@@ -391,9 +398,9 @@ One turn per Claude response.
 
 | Turn field | Claude |
 | --- | --- |
-| `message` | What Claude wrote. |
+| `message` | What Claude wrote. In the turn that answers, followed by the answer's `run_summary` when `narrate` is on. |
 | `reasoning` | Claude's thinking, when shown. |
-| `tool_calls` | Each tool Claude asked for, with `caller: "model"` and `duration_ms: null`. Step tools are named `mcp__avalanche__<name>`, and their `result` is the MCP content Claude got: text blocks holding the tool's return value as JSON. Claude's answer is a `StructuredOutput` call whose `arguments` are the outputs. |
+| `tool_calls` | Each tool Claude asked for, with `caller: "model"` and `duration_ms: null`. Step tools are named `mcp__avalanche__<name>`, and their `result` is the MCP content Claude got: text blocks holding the tool's return value as JSON. Claude's answer is a `StructuredOutput` call whose `arguments` are the outputs, with `run_summary` when `narrate` is on. |
 | `duration_ms` | `null` |
 | `usage` | The response's final usage, without cost, from the stream event that closes the response. `null` for an API error the CLI reports itself, which has no such event. |
 | `native` | A `ClaudeAgentTurn`. |
