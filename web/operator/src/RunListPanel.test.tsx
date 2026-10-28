@@ -59,6 +59,8 @@ it.each([false, true])(
     );
     const action = screen.getByRole("button", { name: "See all" });
     expect(current).not.toContainElement(action);
+    expect(action).toHaveClass("underline", "hover:no-underline");
+    expect(action).not.toHaveClass("border", "hover:bg-canvas");
     fireEvent.click(action);
     expect(onClick).toHaveBeenCalledOnce();
     expect(onSelectRun).not.toHaveBeenCalled();
