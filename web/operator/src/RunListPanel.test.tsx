@@ -156,6 +156,13 @@ it.each([false, true])(
     expect(onSelect).toHaveBeenLastCalledWith(deploymentItems[0].id);
     fireEvent.click(previous);
     expect(onSelect).toHaveBeenLastCalledWith(deploymentItems[1].id);
+    // The status cell and right padding belong to the row's click target too.
+    onSelect.mockClear();
+    fireEvent.click(previous.nextElementSibling!);
+    expect(onSelect).toHaveBeenLastCalledWith(deploymentItems[1].id);
+    fireEvent.click(currentDeployment.parentElement!.querySelector(".deployment-current-marker")!);
+    expect(onSelect).toHaveBeenLastCalledWith(deploymentItems[0].id);
+    expect(currentDeployment.parentElement!.querySelectorAll("button")).toHaveLength(1);
     expect(onSelectRun).not.toHaveBeenCalled();
     expect(view.container.querySelector(".run-list-scroll")).not.toContainElement(current);
     fireEvent.click(screen.getByRole("tab", { name: "Overview" }));

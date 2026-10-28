@@ -159,8 +159,11 @@ export function DeploymentList({
               return (
                 <div
                   key={item.id}
-                  className={`absolute top-0 left-0 flex w-full items-center shadow-[inset_0_-1px_var(--color-run-list-line)] ${selectedId === item.id ? "bg-selected" : "bg-transparent hover:bg-hover"}`}
+                  className={`deployment-list-item absolute top-0 left-0 flex w-full cursor-pointer items-center shadow-[inset_0_-1px_var(--color-run-list-line)] ${selectedId === item.id ? "bg-selected" : "bg-transparent hover:bg-hover"}`}
                   style={{ height: row.size, transform: `translateY(${row.start}px)` }}
+                  // The whole row selects; the inner button keeps the single tab stop and its
+                  // Enter/Space clicks bubble here. "set current" stops propagation.
+                  onClick={() => onSelect(item.id)}
                 >
                   <button
                     type="button"
@@ -169,7 +172,6 @@ export function DeploymentList({
                     aria-label={`${item.id}, ${item.label}, ${timestampFormat.format(createdAt)}${item.current ? ", current" : ""}`}
                     aria-pressed={selectedId === item.id}
                     aria-current={item.current ? "true" : undefined}
-                    onClick={() => onSelect(item.id)}
                   >
                     <span className="min-w-0 truncate">{item.label}</span>
                     <time
