@@ -2273,3 +2273,34 @@ def test_openai_declarations_fill_the_metadata_sections(store):
     assert sections["runtime"] == {"max_turns": 4, "narrate": True, "builtin_tools": ["shell"]}
     assert [tool["name"] for tool in sections["tools"]] == ["lookup"]
     assert sections["skills"] == {}
+
+
+def test_pydantic_ai_declarations_fill_the_metadata_sections(store):
+    from avalanche.agent.declaration import (
+        AgentDeclaration,
+        PydanticAIDeclaration,
+        SignatureDeclaration,
+        ToolDeclaration,
+    )
+
+    declaration = AgentDeclaration(
+        signature=SignatureDeclaration(name="Sum", instructions="Add.", inputs=(), outputs=()),
+        tools=(ToolDeclaration(name="lookup", description="", source_code=""),),
+        skills=(),
+        runtime=PydanticAIDeclaration(
+            model="openai:gpt-5.4-nano",
+            settings={"max_turns": 4},
+            agent_options=("retries",),
+        ),
+    )
+    store.current_workflow = replace(
+        store.current_workflow, agent_declarations={"agent": declaration}
+    )
+    store.select_node(store.all_nodes[0])
+
+    sections = store.agent_declaration_sections()
+
+    assert sections["models"] == {"main": "openai:gpt-5.4-nano"}
+    assert sections["runtime"] == {"max_turns": 4, "agent_options": ["retries"]}
+    assert [tool["name"] for tool in sections["tools"]] == ["lookup"]
+    assert sections["skills"] == {}
