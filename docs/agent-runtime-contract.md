@@ -8,6 +8,7 @@ three:
 | `ava.runtimes.PredictRLM(...)` (default) | [PredictRLM](runtimes/predict-rlm.md) |
 | `ava.runtimes.ClaudeAgent(...)` | [ClaudeAgent](runtimes/claude-agent.md) |
 | `ava.runtimes.OpenAIAgent(...)` | [OpenAIAgent](runtimes/openai-agent.md) |
+| `ava.runtimes.PydanticAIAgent(...)` | [PydanticAIAgent](runtimes/pydantic-ai.md) |
 
 Your step, its result and its trace look the same whatever runtime runs it. This
 page shows that shared data. Each runtime page shows the runtime's settings, the
@@ -218,11 +219,17 @@ class AgentTraceHeader:
     tool_call_count: int          # across all turns
     external_run_id: str | None   # the runtime's own ID for this run
     session_id: str | None        # the runtime's session ID, when it has one
-    native: PredictRLMTraceHeader | ClaudeAgentTraceHeader | OpenAIAgentTraceHeader
-                                  # see each runtime page
+    native: (
+        PredictRLMTraceHeader
+        | ClaudeAgentTraceHeader
+        | OpenAIAgentTraceHeader
+        | PydanticAITraceHeader
+    )                             # see each runtime page
 
     @property
-    def runtime_kind(self) -> Literal["predict_rlm", "claude_agent", "openai_agent"]: ...
+    def runtime_kind(
+        self,
+    ) -> Literal["predict_rlm", "claude_agent", "openai_agent", "pydantic_ai"]: ...
                                   # from native
     @property
     def trace_format(self) -> str: ...  # native.format, the shape of every native part
@@ -246,11 +253,13 @@ class Turn:
     tool_calls: tuple[ToolCall, ...]  # in order
     duration_ms: int | None
     usage: TokenUsage | None      # this turn, every model it called added up
-    native: PredictRLMTurn | ClaudeAgentTurn | OpenAIAgentTurn  # see each runtime page
+    native: PredictRLMTurn | ClaudeAgentTurn | OpenAIAgentTurn | PydanticAITurn
+                                  # see each runtime page
 ```
 
 A turn has failed when its runtime says so: PredictRLM's code failed, Claude
-got an API error, or an OpenAI model refused.
+got an API error, an OpenAI model refused, or a Pydantic AI response finished
+with an error.
 
 ### `ToolCall`
 
@@ -300,8 +309,8 @@ class TokenUsage:
 A file or workspace in the call's inputs or outputs is recorded by its reference,
 never its bytes or host path (see [file references](file-references.md)), in the
 `run.started` event and the final event alike, whatever the runtime. Tool values
-depend on the runtime: PredictRLM records files in tool arguments and results the
-same way. ClaudeAgent records a tool's result as the JSON Claude got, so an
+depend on the runtime: PredictRLM and PydanticAIAgent record files in tool arguments
+and results the same way. ClaudeAgent records a tool's result as the JSON Claude got, so an
 `ava.File` a tool returns appears in its JSON form, and an `ava.Workspace` holding
 its files appears with their contents. OpenAIAgent records a tool's result as the
 JSON text the model got, with the same forms.
@@ -354,12 +363,19 @@ class AgentLiveEvent:
     sequence: int                 # from 1, in order within the call
     timestamp_ns: int             # when Avalanche received it
     common: AgentEvent | None     # None when the event means nothing outside its runtime
-    native: PredictRLMNativeEvent | ClaudeAgentNativeEvent | OpenAIAgentNativeEvent | None
-                                  # see each runtime page;
+    native: (
+        PredictRLMNativeEvent
+        | ClaudeAgentNativeEvent
+        | OpenAIAgentNativeEvent
+        | PydanticAINativeEvent
+        | None
+    )                             # see each runtime page;
                                   # None when common says everything
 
     @property
-    def runtime_kind(self) -> Literal["predict_rlm", "claude_agent", "openai_agent"] | None: ...
+    def runtime_kind(
+        self,
+    ) -> Literal["predict_rlm", "claude_agent", "openai_agent", "pydantic_ai"] | None: ...
 ```
 
 At least one of `common` and `native` is set. `runtime_kind` is read from the
@@ -513,7 +529,7 @@ class AgentTraceUnavailable:      # the call ended without a trace
     kind: Literal["trace_unavailable"]
     schema_version: Literal[2]
     invocation_id: str
-    runtime_kind: Literal["predict_rlm", "claude_agent", "openai_agent"]
+    runtime_kind: Literal["predict_rlm", "claude_agent", "openai_agent", "pydantic_ai"]
     status: Literal["succeeded", "failed", "cancelled"]
     error: str
     external_run_id: str | None
@@ -629,9 +645,8 @@ class JsonOutputs:                # a JSON document, validated in strict JSON mo
     text: str
 ```
 
-PredictRLM returns `PythonOutputs`. ClaudeAgent returns `JsonOutputs`, or
-`PythonOutputs` when the signature has `ava.File` or `ava.Workspace` outputs.
-OpenAIAgent returns `JsonOutputs`, or `PythonOutputs` when the signature has
+PredictRLM and PydanticAIAgent return `PythonOutputs`. ClaudeAgent and
+OpenAIAgent return `JsonOutputs`, or `PythonOutputs` when the signature has
 `ava.File` or `ava.Workspace` outputs.
 
 ```python
