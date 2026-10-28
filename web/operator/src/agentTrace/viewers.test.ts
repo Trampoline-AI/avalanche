@@ -130,5 +130,37 @@ describe("agent trace viewers", () => {
       },
     });
     expect(viewer.turn(apiError).error).toBe(true);
+    expect(viewer.turn(event).submitsAnswer).toBe(false);
+  });
+
+  it("counts a Claude turn's prompt-cache input and marks a turn that only answers", () => {
+    const body = claudeTurnEvent(4);
+    if (body.common?.kind !== "turn.finished") throw new Error("fixture is a turn");
+    const { turn } = body.common;
+    const event = parseAgentLiveEvent({
+      ...body,
+      common: {
+        ...body.common,
+        turn: {
+          ...turn,
+          message: null,
+          usage: {
+            ...turn.usage!,
+            cache_read_input_tokens: 900,
+            cache_creation_input_tokens: 40,
+          },
+          tool_calls: turn.tool_calls.map((call) => ({
+            ...call,
+            name: "StructuredOutput",
+            arguments: { total: 15 },
+          })),
+        },
+      },
+    });
+
+    const step = turnViewer(event).turn(event);
+
+    expect(step.usage.main).toMatchObject({ inputTokens: 943, outputTokens: 5 });
+    expect(step.submitsAnswer).toBe(true);
   });
 });

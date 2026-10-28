@@ -125,6 +125,7 @@ ava.runtimes.ClaudeAgent(model="claude-haiku-5-5", max_turns=10, builtin_tools=(
 | `permission_mode` | `"default"`, `"acceptEdits"`, `"plan"`, `"bypassPermissions"` or `"dontAsk"`; default `"default"` | Claude Code permission mode. |
 | `system_prompt_append` | `str \| None`; default `None` | Text added after the signature's instructions in the system prompt. |
 | `max_budget_usd` | positive `float \| None`; default `None` | Spending limit for the session. |
+| `narrate` | `bool`; default `True` | Adds a paragraph to the system prompt, after the signature's instructions and before `system_prompt_append`, asking Claude to say what it is about to do before each tool call and to sum up its work before answering. Claude may still skip a note. See [narration](../runtimes/claude-agent.md#settings). |
 
 Any other keyword is a field of the Claude Agent SDK's `ClaudeAgentOptions`, passed to the SDK with the SDK's own types:
 
@@ -154,7 +155,7 @@ To run steps on your subscription, unset `ANTHROPIC_API_KEY` where the step runs
 
 **Skills.** A step's `skills=` are written, for that call only, into a temporary Claude Code plugin named `avalanche` outside your Claude configuration and removed when the call ends, whatever its outcome. Claude sees each skill as `avalanche:<name>` with its description, and loads its instructions with the `Skill` tool, which is added for the call. When a skill has files and neither `builtin_tools` nor the SDK option `tools` enables `Read`, the `Read` tool is added too, and a hook denies every read outside the plugin folder, in every permission mode, `bypassPermissions` included. A `Read` you enable yourself, in either of those, keeps its usual scope; listing it only in the SDK option `allowed_tools` does not lift the limit. The Claude CLI's own bundled skills stay hidden from the agent, but a prompt input that starts with `/<name>` could still start one of them.
 
-**Inputs and outputs.** The signature's instructions are the system prompt. Inputs are sent as JSON; outputs come back as Claude's structured output and are validated against the signature like every runtime's.
+**Inputs and outputs.** The signature's instructions are the system prompt, followed by the `narrate` paragraph and `system_prompt_append`. Inputs are sent as JSON; outputs come back as Claude's structured output and are validated against the signature like every runtime's.
 
 **Files and workspaces.**
 

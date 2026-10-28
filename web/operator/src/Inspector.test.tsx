@@ -22,6 +22,7 @@ import {
 } from "./model";
 import type { AgentEventKind } from "./model";
 import {
+  claudeTurnEvent,
   predictRlmTraceHeader,
   finishedTrace,
   runStartedEvent,
@@ -879,7 +880,13 @@ describe("retained run inspection", () => {
             header: {
               ...run.nodes[0].trace!.header!,
               turnCount: "3",
-              usage: { inputTokens: "12", outputTokens: "3", costUsd: 0.01 },
+              usage: {
+                inputTokens: "12",
+                outputTokens: "3",
+                cacheReadInputTokens: "900",
+                cacheCreationInputTokens: "40",
+                costUsd: 0.01,
+              },
               native: {
                 format: "claude_agent.messages/v1",
                 result_subtype: "success",
@@ -906,8 +913,9 @@ describe("retained run inspection", () => {
     const header = screen
       .getByRole("complementary", { name: "Run inspector" })
       .querySelector("header")!;
+    // Input counts the prompt cache, which holds most of a Claude session's input.
     expect(within(header).getByText("Main").parentElement).toHaveTextContent(
-      "retained-model · 12 in / 3 out · $0.0100",
+      "retained-model · 952 in / 3 out · $0.0100",
     );
     expect(within(header).queryByText("Sub")).toBeNull();
     expect(header).toHaveTextContent("3 turns");
@@ -1107,6 +1115,35 @@ describe("retained run inspection", () => {
 });
 
 describe("trace detail retention and recovery", () => {
+  it("says a Claude turn that only handed back the answer submitted it", async () => {
+    const body = claudeTurnEvent(1);
+    if (body.common?.kind !== "turn.finished") throw new Error("fixture is a turn");
+    const answerOnly = {
+      ...body,
+      common: {
+        ...body.common,
+        turn: {
+          ...body.common.turn,
+          message: null,
+          tool_calls: body.common.turn.tool_calls.map((call) => ({
+            ...call,
+            name: "StructuredOutput",
+            arguments: { total: 15 },
+          })),
+        },
+      },
+    };
+    const api = createApi({
+      listAgentEventPage: async () => eventPage([traceEvent(1)]),
+      readJsonDetail: async () => answerOnly,
+    });
+    render(<Inspector api={api} run={run} nodeId={node.nodeId} onClose={() => undefined} />);
+
+    const turn = await waitFor(() => traceTurn(1));
+    expect(await within(turn).findByText(/submitted the answer/i)).toBeVisible();
+    expect(within(turn).queryByText(/wrote no text/i)).toBeNull();
+  });
+
   it("keeps every open section across later summary hydration and releases a turn after its last section closes", async () => {
     const laterDetails = Array.from({ length: 8 }, () => Promise.withResolvers<unknown>());
     const readJsonDetail = vi.fn<OperatorApi["readJsonDetail"]>(async (token) => {

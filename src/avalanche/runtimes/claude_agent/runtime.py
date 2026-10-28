@@ -61,7 +61,10 @@ class ClaudeAgent(BaseModel):
     ``model`` selects the Claude model, such as ``"claude-haiku-5-5"``; ``None``
     lets the Claude CLI choose. ``builtin_tools`` names Claude Code tools the
     agent may use without asking, such as ``"Read"`` or ``"Bash"``; none are
-    enabled by default. The step's own tools are always available.
+    enabled by default. The step's own tools are always available. With
+    ``narrate`` on, the system prompt asks Claude to note what it is about to do
+    before each tool call and to summarize its work before answering, so every
+    turn of the trace says what happened.
 
     Steps run the ``claude`` CLI, which must be installed wherever the step runs,
     Ray workers included. It authenticates as it does in a terminal: with a
@@ -87,6 +90,7 @@ class ClaudeAgent(BaseModel):
     permission_mode: PermissionMode = "default"
     system_prompt_append: str | None = None
     max_budget_usd: PositiveFloat | None = None
+    narrate: bool = True
 
     @model_validator(mode="after")
     def _check_sdk_options(self) -> Self:
@@ -126,6 +130,7 @@ class ClaudeAgent(BaseModel):
                 "permission_mode": effective.permission_mode,
                 "system_prompt_append": effective.system_prompt_append,
                 "max_budget_usd": effective.max_budget_usd,
+                "narrate": effective.narrate,
             },
             builtin_tools=tuple(effective.builtin_tools),
         )

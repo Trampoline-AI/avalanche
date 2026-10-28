@@ -129,3 +129,19 @@ def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monke
     assert final.outputs == {"total": 5}
     # Events without a Claude part are named from their common kind.
     assert all(viewer.live_label(event) for event in events)
+
+
+def test_usage_counts_prompt_cache_input():
+    from avalanche.agent.trace import TokenUsage
+    from tui.agent_trace_viewers.generic import usage_label
+
+    cached = TokenUsage(
+        input_tokens=3,
+        output_tokens=5,
+        cache_read_input_tokens=900,
+        cache_creation_input_tokens=40,
+    )
+    uncached = TokenUsage(input_tokens=3, output_tokens=5)
+
+    assert usage_label(cached).startswith("943 in / 5 out")
+    assert usage_label(uncached).startswith("3 in / 5 out")
