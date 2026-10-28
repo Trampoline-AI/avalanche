@@ -131,6 +131,86 @@ def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monke
     assert all(viewer.live_label(event) for event in events)
 
 
+def test_the_openai_agent_viewer_labels_every_native_kind():
+    from avalanche.agent.native import openai_agent as native
+    from tui.agent_trace_viewers.openai_agent import _LABELS
+
+    assert set(_LABELS) == _kinds(native.OpenAIAgentNativeEvent)
+
+
+def test_an_openai_run_renders_through_its_viewer(monkeypatch):
+    import asyncio
+    import contextlib
+    import json
+
+    pytest.importorskip("agents")
+    from agents.models.interface import ModelProvider
+    from agents.testing import ModelStep, ScriptedModel, assistant_message
+
+    import avalanche as ava
+    from avalanche._agent_evidence import capture_agent_evidence
+    from avalanche.runtimes import OpenAIAgent
+    from tui.agent_trace_viewers import InspectionTurn, viewer_for
+
+    sdk = importlib.import_module("avalanche.runtimes.openai_agent._sdk")
+
+    class Sum(ava.Signature):
+        """Add a and b."""
+
+        a: int = ava.InputField()
+        b: int = ava.InputField()
+        total: int = ava.OutputField()
+
+    answer = json.dumps({"total": 5, "run_summary": "Added 2 and 3."})
+    model = ScriptedModel([ModelStep(output=[assistant_message(answer)])])
+
+    class Scripted(ModelProvider):
+        def get_model(self, model_name):
+            return model
+
+    @contextlib.asynccontextmanager
+    async def models():
+        yield Scripted()
+
+    monkeypatch.setattr(sdk, "_models", models)
+    sent = []
+    agent = ava.Agent(signature=Sum, step_name="sum", runtime=OpenAIAgent(max_turns=3))
+    with capture_agent_evidence(sent.append, errors="raise"):
+        asyncio.run(agent(a=2, b=3))
+
+    *events, final = sent
+    viewer = viewer_for(final.header.trace_format)
+    turn_event = next(
+        event
+        for event in events
+        if event.common is not None and event.common.kind == "turn.finished"
+    )
+    view = viewer.turn(
+        InspectionTurn(turn_event.invocation_id, turn_event.common, turn_event.native),
+        full_output=False,
+    )
+    assert [item.key for item in view.items] == ["message", "tools", "metadata", "response"]
+    assert not view.failed
+    # A refusal marks the turn failed.
+    turn = turn_event.common.turn
+    refused = turn.model_copy(
+        update={"native": turn.native.model_copy(update={"refusal": "No."})}
+    )
+    assert viewer.turn(
+        InspectionTurn(
+            turn_event.invocation_id,
+            turn_event.common.model_copy(update={"turn": refused}),
+            turn_event.native,
+        ),
+        full_output=False,
+    ).failed
+    assert viewer.turn_limit(final.header) == 3
+    assert viewer.turn_limit(None) is None
+    assert viewer.submitted(final.header)
+    assert viewer.header(final.header)
+    assert all(viewer.live_label(event) for event in events)
+
+
 def test_usage_counts_prompt_cache_input():
     from avalanche.agent.trace import TokenUsage
     from tui.agent_trace_viewers.generic import usage_label
