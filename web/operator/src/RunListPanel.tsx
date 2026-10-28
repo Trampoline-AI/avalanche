@@ -118,15 +118,11 @@ export function RunListPanel({
     previousExpanded.current = expanded;
   }, [expanded]);
   const virtualizer = useVirtualizer({
-    count: visibleRunCount + 1 + Number(showTimelineFooter),
+    count: visibleRunCount + 1,
     getScrollElement: () => scrollElement.current,
     estimateSize: () => rowHeight,
     getItemKey: (index) =>
-      index === 0
-        ? "current"
-        : index > visibleRunCount
-          ? "view-all"
-          : `run:${filteredRuns[pageOffset + index - 1].runId}`,
+      index === 0 ? "current" : `run:${filteredRuns[pageOffset + index - 1].runId}`,
     overscan: RUN_ROW_OVERSCAN,
   });
   useEffect(() => {
@@ -190,7 +186,7 @@ export function RunListPanel({
       className={
         expanded
           ? "all-runs-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-line bg-panel"
-          : "run-list-panel h-full w-full overflow-hidden rounded border border-line bg-[rgba(255,255,255,.96)] shadow-[0_6px_20px_rgba(20,31,26,.1)]"
+          : "run-list-panel flex h-full w-full flex-col overflow-hidden rounded border border-line bg-[rgba(255,255,255,.96)] shadow-[0_6px_20px_rgba(20,31,26,.1)]"
       }
       aria-labelledby={headingId}
       onKeyDown={(event) => {
@@ -302,7 +298,7 @@ export function RunListPanel({
           </details>
         </div>
       )}
-      <div className={`timeline-scroll-shell relative ${expanded ? "min-h-0 flex-1" : ""}`}>
+      <div className={`timeline-scroll-shell relative min-h-0 ${expanded ? "flex-1" : ""}`}>
         <div
           className={
             expanded
@@ -336,20 +332,6 @@ export function RunListPanel({
                       aria-hidden="true"
                       className="size-3 shrink-0 text-secondary"
                     />
-                  </button>
-                );
-              }
-              if (virtualRow.index > visibleRunCount) {
-                return (
-                  <button
-                    key="view-all"
-                    type="button"
-                    onClick={onViewAll}
-                    style={rowStyle}
-                    className="absolute top-0 left-0 flex w-full cursor-pointer items-center gap-1.5 border-0 bg-transparent pl-[9px] pr-[17px] text-left text-[10px] font-medium text-acid hover:bg-canvas focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid"
-                  >
-                    View all
-                    <Maximize2 aria-hidden="true" className="size-3 shrink-0" />
                   </button>
                 );
               }
@@ -406,6 +388,18 @@ export function RunListPanel({
         </div>
         <div ref={scrollHandle} className="timeline-scroll-handle" aria-hidden="true" />
       </div>
+      {showTimelineFooter && (
+        <footer className="shrink-0 border-t border-line bg-panel">
+          <button
+            type="button"
+            onClick={onViewAll}
+            className="flex h-8 w-full cursor-pointer items-center gap-1.5 border-0 bg-transparent pl-[9px] pr-[17px] text-left text-[10px] font-medium text-acid hover:bg-canvas focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid"
+          >
+            View all
+            <Maximize2 aria-hidden="true" className="size-3 shrink-0" />
+          </button>
+        </footer>
+      )}
       {expanded && (
         <nav
           aria-label="Run pagination"

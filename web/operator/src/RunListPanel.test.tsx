@@ -140,7 +140,7 @@ it("orders the timeline newest first and keeps one workflow or run selected", as
   expect(screen.getAllByRole("button", { pressed: true })).toEqual([buttons[0]]);
 });
 
-it("caps the compact timeline at twenty runs, with Current and the history action in the scroll range", async () => {
+it("caps the compact timeline at twenty runs and pins the history action outside the scroll range", async () => {
   const entries = Array.from({ length: 21 }, (_, index) => {
     const runId = `run-${index}`;
     return [
@@ -161,13 +161,14 @@ it("caps the compact timeline at twenty runs, with Current and the history actio
   expect(screen.queryByRole("button", { name: "Current" })).not.toBeInTheDocument();
 
   view.rerender(<RunListPanel {...props} runs={Object.fromEntries(entries.slice(0, 20))} />);
-  await scrollTimelineTo(scroll, 22 * 32 - 192);
-  expect(await within(scroll).findByRole("button", { name: "View all" })).toBeInTheDocument();
+  await scrollTimelineTo(scroll, 21 * 32 - 192);
+  expect(await screen.findByRole("button", { name: "View all" })).toBeInTheDocument();
+  expect(within(scroll).queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
 
   view.rerender(<RunListPanel {...props} runs={Object.fromEntries(entries)} />);
   await within(scroll).findByRole("button", { name: /run-1,/ });
   expect(within(scroll).queryByRole("button", { name: /run-0,/ })).not.toBeInTheDocument();
-  fireEvent.click(within(scroll).getByRole("button", { name: "View all" }));
+  fireEvent.click(screen.getByRole("button", { name: "View all" }));
   expect(onViewAll).toHaveBeenCalledOnce();
 
   await scrollTimelineTo(scroll, 0);
@@ -198,9 +199,10 @@ it("preserves compact timeline scrolling across status and unrelated workflow up
   const view = render(<RunListPanel {...props} />);
   await screen.findByRole("button", { name: /run-19,/ });
   const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
-  const bottom = 22 * 32 - 192;
+  const bottom = 21 * 32 - 192;
   await scrollTimelineTo(scroll, bottom);
-  await within(scroll).findByRole("button", { name: "View all" });
+  expect(await screen.findByRole("button", { name: "View all" })).toBeVisible();
+  expect(within(scroll).queryByRole("button", { name: "View all" })).not.toBeInTheDocument();
 
   const updatedRuns = {
     ...runs,
@@ -219,7 +221,7 @@ it("preserves compact timeline scrolling across status and unrelated workflow up
     <RunListPanel {...props} runs={{ ...updatedRuns, [otherRun.runId]: otherRun }} />,
   );
   expect(scroll.scrollTop).toBe(bottom);
-  fireEvent.click(within(scroll).getByRole("button", { name: "View all" }));
+  fireEvent.click(screen.getByRole("button", { name: "View all" }));
   expect(props.onViewAll).toHaveBeenCalledOnce();
 
   const newestRun = RunSummaryMsg.create({
