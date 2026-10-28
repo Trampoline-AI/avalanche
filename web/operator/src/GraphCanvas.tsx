@@ -74,7 +74,7 @@ export interface AgentFieldSchemas {
 
 export interface AgentDeclaration extends AgentFieldSchemas {
   instructions: string;
-  /** The runtime the step runs on, such as "predict_rlm" or "claude_agent". */
+  /** The runtime the step runs on, such as "predict_rlm", "claude_agent" or "openai_agent". */
   runtimeKind: string;
   model?: unknown;
   runtime?: unknown;
@@ -157,6 +157,16 @@ export function parseAgentDeclaration(raw: string | undefined): AgentDeclaration
       runtimeKind: runtime.kind,
       model: { main: { source: "step override", identity: runtime.model } },
       runtime: { ...runtime.settings, builtin_tools: runtime.builtin_tools },
+      skills: stepSkills,
+      tools: declaration.tools.map(tool),
+    };
+  }
+  if (runtime.kind === "openai_agent") {
+    return {
+      ...signature,
+      runtimeKind: runtime.kind,
+      model: { main: { source: "step override", identity: runtime.model } },
+      runtime: runtime.settings,
       skills: stepSkills,
       tools: declaration.tools.map(tool),
     };

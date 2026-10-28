@@ -5,6 +5,7 @@ import { finishedTurn } from "../common";
 import type { TraceHeaderMsg } from "../../model";
 import type { AgentTraceStep, TraceHeaderLine } from "../types";
 import { claudeAgentViewer } from "./claudeAgent";
+import { openaiAgentViewer } from "./openaiAgent";
 import { predictRlmViewer } from "./predictRlm";
 
 export interface TraceViewer {
@@ -21,6 +22,7 @@ export interface TraceViewer {
 export const TRACE_VIEWERS = {
   "predict_rlm.run/v1": predictRlmViewer,
   "claude_agent.messages/v1": claudeAgentViewer,
+  "openai_agents.responses/v1": openaiAgentViewer,
 } satisfies Record<NativeEventFormat, TraceViewer>;
 
 // Events every runtime sends; an event without a native part is named by these.

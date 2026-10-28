@@ -101,6 +101,27 @@ describe("parseAgentDeclaration", () => {
     expect(declaration?.tools.map((tool) => tool.name)).toEqual(["lookup"]);
   });
 
+  it("reads an OpenAI Agents SDK declaration", () => {
+    const declaration = parseAgentDeclaration(
+      JSON.stringify({
+        signature: { name: "Sum", instructions: "Add.", inputs: [], outputs: [] },
+        tools: [{ name: "lookup", description: "", source_code: "def lookup(): ..." }],
+        skills: [],
+        runtime: {
+          kind: "openai_agent",
+          model: "gpt-5.4-mini",
+          settings: { max_turns: 4, narrate: true },
+        },
+      }),
+    );
+    expect(declaration?.runtimeKind).toBe("openai_agent");
+    expect(declaration?.model).toEqual({
+      main: { source: "step override", identity: "gpt-5.4-mini" },
+    });
+    expect(declaration?.runtime).toEqual({ max_turns: 4, narrate: true });
+    expect(declaration?.tools.map((tool) => tool.name)).toEqual(["lookup"]);
+  });
+
   it("lists the step's Agent Skills before PredictRLM's own", () => {
     const declaration = parseAgentDeclaration(
       agentDeclarationJson({

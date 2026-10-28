@@ -205,3 +205,46 @@ export function claudeTurnEvent(index: number): AgentLiveEvent {
     native: null,
   });
 }
+
+/** An OpenAI Agents SDK turn: a message, a reasoning summary and one tool call. */
+export function openaiTurnEvent(index: number): AgentLiveEvent {
+  return live(index, {
+    common: {
+      kind: "turn.finished",
+      omitted_tool_calls: 0,
+      turn: {
+        index,
+        message: `Looking it up ${index}.`,
+        reasoning: `Reasoning ${index}.`,
+        duration_ms: 640,
+        usage: {
+          input_tokens: 30,
+          output_tokens: 20,
+          cost_usd: null,
+          cache_read_input_tokens: 60,
+          cache_creation_input_tokens: 10,
+        },
+        tool_calls: [
+          {
+            call_id: `call-${index}`,
+            caller: "model",
+            name: "lookup",
+            arguments: { name: "a" },
+            result: "10",
+            error: null,
+            duration_ms: 3,
+          },
+        ],
+        native: {
+          format: "openai_agents.responses/v1",
+          response_id: `resp-${index}`,
+          model: "gpt-5.4-mini",
+          reasoning_tokens: 5,
+          refusal: null,
+          answer: false,
+        },
+      },
+    },
+    native: null,
+  });
+}

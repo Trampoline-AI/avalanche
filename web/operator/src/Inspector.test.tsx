@@ -962,6 +962,52 @@ describe("retained run inspection", () => {
     expect(readJsonDetail).not.toHaveBeenCalledWith("trace-body", expect.anything());
   });
 
+  it("shows an OpenAI Agents SDK run's model, usage and turn limit in the header", () => {
+    const openaiRun = RunSnapshotMsg.create({
+      ...run,
+      nodes: [
+        {
+          ...run.nodes[0],
+          trace: {
+            ...run.nodes[0].trace,
+            header: {
+              ...run.nodes[0].trace!.header!,
+              turnCount: "2",
+              usage: {
+                inputTokens: "30",
+                outputTokens: "20",
+                cacheReadInputTokens: "60",
+                cacheCreationInputTokens: "10",
+              },
+              native: {
+                format: "openai_agents.responses/v1",
+                max_turns: 10,
+                requests: 2,
+                reasoning_tokens: 5,
+                last_response_id: "resp-2",
+                errors: [],
+              },
+            },
+          },
+        },
+      ],
+    });
+    render(
+      <Inspector
+        api={createApi()}
+        workflow={agentWorkflow}
+        run={openaiRun}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const header = screen
+      .getByRole("complementary", { name: "Run inspector" })
+      .querySelector("header")!;
+    expect(header).toHaveTextContent("retained-model · 100 in / 20 out");
+    expect(header).toHaveTextContent("2 of 10 turns");
+  });
+
   it("shows separate main and sub model costs and trace duration in the header on every tab", () => {
     const pricedRun = RunSnapshotMsg.create({
       ...run,
