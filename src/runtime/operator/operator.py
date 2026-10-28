@@ -2139,6 +2139,11 @@ class Operator:
                 for node_id in node_ids
                 if node_id in prepared["agent_instruction_lines"]
             ),
+            agent_runtime_kinds=tuple(
+                (node_id, prepared["agent_runtime_kinds"][node_id])
+                for node_id in node_ids
+                if node_id in prepared["agent_runtime_kinds"]
+            ),
             standard_step_docstring_lines=tuple(
                 (node_id, prepared["standard_step_docstring_lines"][node_id])
                 for node_id in node_ids
@@ -3805,6 +3810,7 @@ def _validate_preparation_event(event: object) -> str:
                 "display_name",
                 "agent_field_schemas_json",
                 "agent_instruction_lines",
+                "agent_runtime_kinds",
                 "standard_step_docstring_lines",
                 "classifier_metadata_json",
                 "evaluation_metadata_json",
@@ -3830,6 +3836,7 @@ def _validate_preparation_event(event: object) -> str:
             event, "agent_field_schemas_json"
         )
         agent_instruction_lines = _string_mapping(event, "agent_instruction_lines")
+        agent_runtime_kinds = _string_mapping(event, "agent_runtime_kinds")
         standard_step_docstring_lines = _string_mapping(event, "standard_step_docstring_lines")
         classifier_metadata_json = _classifier_metadata_mapping(
             event["classifier_metadata_json"]
@@ -3875,6 +3882,10 @@ def _validate_preparation_event(event: object) -> str:
             raise _CoordinatorProtocolError(
                 f"field 'agent_field_schemas_json' references unknown node "
                 f"{_bounded_ascii(unknown)}"
+            )
+        if set(agent_runtime_kinds) != set(agent_field_schemas_json):
+            raise _CoordinatorProtocolError(
+                "field 'agent_runtime_kinds' must name exactly the agent nodes"
             )
         unknown_instruction_nodes = set(agent_instruction_lines).difference(node_ids)
         if unknown_instruction_nodes:

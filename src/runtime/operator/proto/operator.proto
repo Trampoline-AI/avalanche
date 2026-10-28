@@ -182,6 +182,8 @@ message WorkflowTopologyV2 {
   map<string, string> classifier_metadata_json = 8;
   map<string, string> step_interface_json = 9;
   map<string, string> evaluation_metadata_json = 10;
+  // Each agent node's runtime kind, such as "predict_rlm" or "claude_agent".
+  map<string, string> agent_runtime_kinds = 11;
 }
 
 message ScanTargetV2 {

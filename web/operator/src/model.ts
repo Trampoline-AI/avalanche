@@ -573,6 +573,8 @@ export interface WorkflowTopologyMsg {
   standardStepDocstringLines: {
     [key: string]: string;
   };
+  /** Each agent node's runtime kind, such as "predict_rlm" or "claude_agent". */
+  agentRuntimeKinds: Record<string, string>;
   /** Classifier declarations pinned to the executing workflow definition. */
   classifierMetadataJson: Record<string, string>;
   /** Evaluation declarations pinned to the executing workflow definition. */
@@ -591,6 +593,7 @@ export const WorkflowTopologyMsg = {
       agentFieldSchemasJson: {},
       agentInstructionLines: {},
       standardStepDocstringLines: {},
+      agentRuntimeKinds: {},
       classifierMetadataJson: {},
       evaluationMetadataJson: {},
       stepInterfaceJson: {},

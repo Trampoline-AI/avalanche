@@ -406,6 +406,7 @@ class WorkflowTopologyV2(_message.Message):
         "classifier_metadata_json",
         "step_interface_json",
         "evaluation_metadata_json",
+        "agent_runtime_kinds",
     )
     class GraphEntry(_message.Message):
         __slots__ = ("key", "value")
@@ -483,6 +484,14 @@ class WorkflowTopologyV2(_message.Message):
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
 
+    class AgentRuntimeKindsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+
     NODE_IDS_FIELD_NUMBER: _ClassVar[int]
     GRAPH_FIELD_NUMBER: _ClassVar[int]
     NODE_TYPES_FIELD_NUMBER: _ClassVar[int]
@@ -493,6 +502,7 @@ class WorkflowTopologyV2(_message.Message):
     CLASSIFIER_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     STEP_INTERFACE_JSON_FIELD_NUMBER: _ClassVar[int]
     EVALUATION_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
+    AGENT_RUNTIME_KINDS_FIELD_NUMBER: _ClassVar[int]
     node_ids: _containers.RepeatedScalarFieldContainer[str]
     graph: _containers.MessageMap[str, NodeEdgesV2]
     node_types: _containers.ScalarMap[str, str]
@@ -503,6 +513,7 @@ class WorkflowTopologyV2(_message.Message):
     classifier_metadata_json: _containers.ScalarMap[str, str]
     step_interface_json: _containers.ScalarMap[str, str]
     evaluation_metadata_json: _containers.ScalarMap[str, str]
+    agent_runtime_kinds: _containers.ScalarMap[str, str]
     def __init__(
         self,
         node_ids: _Optional[_Iterable[str]] = ...,
@@ -515,6 +526,7 @@ class WorkflowTopologyV2(_message.Message):
         classifier_metadata_json: _Optional[_Mapping[str, str]] = ...,
         step_interface_json: _Optional[_Mapping[str, str]] = ...,
         evaluation_metadata_json: _Optional[_Mapping[str, str]] = ...,
+        agent_runtime_kinds: _Optional[_Mapping[str, str]] = ...,
     ) -> None: ...
 
 class ScanTargetV2(_message.Message):

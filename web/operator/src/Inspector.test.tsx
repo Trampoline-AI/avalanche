@@ -32,6 +32,7 @@ import {
 } from "./test/agentTraceFixtures";
 import {
   agentDeclarationJson,
+  claudeAgentDeclarationJson,
   createApi,
   evaluationDeclaration,
   node,
@@ -866,6 +867,45 @@ describe("retained run inspection", () => {
       "true",
     );
     expect(screen.getByText("historical_review_question")).toBeInTheDocument();
+  });
+
+  it("says in the header when a step runs on the Claude Agent SDK", () => {
+    const claudeWorkflow = FlowInfoMsg.create({
+      ...agentWorkflow,
+      agentDeclarationsJson: { [node.nodeId]: claudeAgentDeclarationJson("Answer.") },
+    });
+    const claudeRun = RunSnapshotMsg.create({
+      ...run,
+      topology: { ...run.topology!, agentRuntimeKinds: { [node.nodeId]: "claude_agent" } },
+    });
+    const header = () =>
+      screen
+        .getByRole("complementary", { name: /Node declaration|Run inspector/ })
+        .querySelector("header")!;
+    const view = render(
+      <Inspector
+        api={createApi()}
+        workflow={agentWorkflow}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(within(header()).queryByText(/claude agent sdk/i)).toBeNull();
+
+    for (const props of [
+      { workflow: claudeWorkflow },
+      { workflow: agentWorkflow, run: claudeRun },
+    ]) {
+      view.rerender(
+        <Inspector
+          api={createApi()}
+          nodeId={node.nodeId}
+          onClose={() => undefined}
+          {...props}
+        />,
+      );
+      expect(within(header()).getByText(/claude agent sdk/i)).toBeVisible();
+    }
   });
 
   it("shows a common header for runtimes without PredictRLM details", () => {

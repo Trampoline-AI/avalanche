@@ -122,6 +122,7 @@ def _seed_run(
             "display_names": {node_id: node_id for node_id in node_ids},
             "agent_field_schemas_json": {},
             "agent_instruction_lines": {},
+            "agent_runtime_kinds": {},
             "standard_step_docstring_lines": {},
             "classifier_metadata_json": {
                 node_id: declaration_json for node_id in ("classify", "other")

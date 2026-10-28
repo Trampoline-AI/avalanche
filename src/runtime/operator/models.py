@@ -73,6 +73,7 @@ class WorkflowTopology:
     display_names: tuple[tuple[str, str], ...] = ()
     agent_field_schemas_json: tuple[tuple[str, str], ...] = ()
     agent_instruction_lines: tuple[tuple[str, str], ...] = ()
+    agent_runtime_kinds: tuple[tuple[str, str], ...] = ()
     standard_step_docstring_lines: tuple[tuple[str, str], ...] = ()
     classifier_metadata_json: tuple[tuple[str, str], ...] = ()
     evaluation_metadata_json: tuple[tuple[str, str], ...] = ()

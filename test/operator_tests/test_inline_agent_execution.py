@@ -322,6 +322,7 @@ def test_spawned_inline_agent_feeds_typed_downstream_result_and_retains_evidence
             terminal["header"]["native"]["max_iterations"]
             == calls[0]["config"]["max_iterations"]
         )
+        assert dict(historical.agent_runtime_kinds) == {agent_id: "predict_rlm"}
         assert dict(historical.agent_instruction_lines)[agent_id] == (
             "Route a customer ticket."
             if flow_name == "single"
