@@ -35,10 +35,15 @@ async def on_predict_rlm(text: str, *, agent: ava.Agent) -> str:
     return (await agent(text=text)).outputs.echoed
 
 
+@ava.agent_step(Echo, runtime=ava.runtimes.OpenAIAgent(model="gpt-5.4-mini"))
+async def on_openai(text: str, *, agent: ava.Agent) -> str:
+    return (await agent(text=text)).outputs.echoed
+
+
 @ava.workflow(agent_defaults={"runtime": ava.runtimes.ClaudeAgent()})
 def mixed():
     text = load()
-    return on_claude(text) & on_default(text) & on_predict_rlm(text)
+    return on_claude(text) & on_default(text) & on_predict_rlm(text) & on_openai(text)
 
 
 def test_agent_runtime_kinds_follow_each_step_and_the_workflow_default():
@@ -52,9 +57,10 @@ def test_agent_runtime_kinds_follow_each_step_and_the_workflow_default():
         "on_claude_1": "claude_agent",
         "on_default_1": "claude_agent",
         "on_predict_rlm_1": "predict_rlm",
+        "on_openai_1": "openai_agent",
     }
     topology = WorkflowTopology(
         node_ids=tuple(node_ids), agent_runtime_kinds=tuple(sorted(kinds.items()))
     )
     restored = workflow_topology_from_v2(workflow_topology_to_v2(topology))
-    assert restored.agent_runtime_kinds == topology.agent_runtime_kinds
+    assert dict(restored.agent_runtime_kinds) == kinds

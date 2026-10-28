@@ -10,11 +10,19 @@ import importlib
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from . import claude_agent, predict_rlm
+    from . import claude_agent, openai_agent, predict_rlm
     from .claude_agent import ClaudeAgent
+    from .openai_agent import OpenAIAgent
     from .predict_rlm import PredictRLM
 
-__all__ = ["ClaudeAgent", "PredictRLM", "claude_agent", "predict_rlm"]
+__all__ = [
+    "ClaudeAgent",
+    "OpenAIAgent",
+    "PredictRLM",
+    "claude_agent",
+    "openai_agent",
+    "predict_rlm",
+]
 
 
 def __getattr__(name: str):
@@ -26,7 +34,11 @@ def __getattr__(name: str):
         from . import claude_agent
 
         value = claude_agent.ClaudeAgent
-    elif name in {"claude_agent", "predict_rlm"}:
+    elif name == "OpenAIAgent":
+        from . import openai_agent
+
+        value = openai_agent.OpenAIAgent
+    elif name in {"claude_agent", "openai_agent", "predict_rlm"}:
         value = importlib.import_module(f".{name}", __name__)
     else:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
