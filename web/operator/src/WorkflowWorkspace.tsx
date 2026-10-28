@@ -26,7 +26,56 @@ const INSPECTOR_MIN_WIDTH = 320;
 const INSPECTOR_MAX_WIDTH = 640;
 const INSPECTOR_DEFAULT_WIDTH = 410;
 
+/** A host-supplied deployment, ordered newest first within its workflow. */
+export interface WorkspaceDeployment {
+  /** Full deployment identifier, exposed in the row title and accessible name. */
+  id: string;
+  /** Visible row label; hosts may abbreviate the identifier here. */
+  label: string;
+  /** Creation time in epoch seconds, matching run timestamps. */
+  createdAt: number;
+  /** Marks the current deployment; at most one item should be current. */
+  current: boolean;
+}
+
+/** Host-owned deployment data and actions; operator-ui renders the timeline. */
+export interface WorkspaceDeployments {
+  /** Newest-first deployments, already filtered to this workflow. */
+  items: WorkspaceDeployment[];
+  /** Whether another page is available. */
+  hasMore: boolean;
+  /** A page request is in progress; renders a loading row and blocks more requests. */
+  loading: boolean;
+  /** Requests a page near the bottom. Update loading/items when the request settles. */
+  loadMore?: () => void;
+  /** Inline loading error. Omitted when there is no error. */
+  error?: string;
+  /** Identifier to highlight; omitted when no deployment is selected. */
+  selectedId?: string;
+  /** Selects a deployment's definition; does not change the current deployment. */
+  onSelect: (id: string) => void;
+  /** Optional non-current-row action with an inline confirmation. Absent: no action. */
+  setCurrent?: {
+    /** Action label. Default "Set current". */
+    label?: string;
+    /** Confirmation wording for the chosen deployment. */
+    confirmText: (item: WorkspaceDeployment) => string;
+    /** Moves the current pointer. Rejected Error messages are shown inline. */
+    onConfirm: (id: string) => Promise<void>;
+  };
+}
+
 export interface WorkflowWorkspaceProps {
+  /** Pinned Current row label. Default "Current definition". */
+  currentLabel?: string;
+  /** Muted trailing text action. Omitted: no action and no caret. */
+  currentRowAction?: { label: string; onClick: () => void };
+  /** Enables Runs | Deployments tabs; omitted: the stock runs-only timeline. */
+  deployments?: WorkspaceDeployments;
+  /** Controlled timeline tab when set; otherwise internal state starts at "runs". */
+  timelineView?: "runs" | "deployments";
+  /** Observes tab requests in either mode; controlled hosts must update timelineView. */
+  onTimelineViewChange?: (view: "runs" | "deployments") => void;
   api: OperatorApi;
   workflowId: string;
   className?: string;
@@ -41,7 +90,10 @@ export interface WorkflowWorkspaceProps {
   };
 }
 
-interface WorkflowWorkspaceSurfaceProps {
+interface WorkflowWorkspaceSurfaceProps extends Pick<
+  WorkflowWorkspaceProps,
+  "currentLabel" | "currentRowAction" | "deployments" | "timelineView" | "onTimelineViewChange"
+> {
   api: OperatorApi;
   state: OperatorProjection;
   workflowId?: string;
@@ -74,6 +126,11 @@ export function WorkflowWorkspaceSurface({
   runActionsEnabled = true,
   definitionLabel,
   bottomRightPanel,
+  currentLabel,
+  currentRowAction,
+  deployments,
+  timelineView,
+  onTimelineViewChange,
 }: WorkflowWorkspaceSurfaceProps) {
   const [inspectedNode, setInspectedNode] = useState<string>();
   const [timelineExpanded, setTimelineExpanded] = useState(false);
@@ -293,6 +350,11 @@ export function WorkflowWorkspaceSurface({
       onSelectRun={selectWorkflowRun}
       onViewAll={openAllRuns}
       onClose={closeAllRuns}
+      currentLabel={currentLabel}
+      currentRowAction={currentRowAction}
+      deployments={deployments}
+      timelineView={timelineView}
+      onTimelineViewChange={onTimelineViewChange}
     />
   ) : undefined;
   const runControlsPanel = (historical ? loadedRun : workflow) ? (
@@ -479,6 +541,11 @@ export function WorkflowWorkspace({
   definitionLabel,
   bottomRightPanel,
   navigation,
+  currentLabel,
+  currentRowAction,
+  deployments,
+  timelineView,
+  onTimelineViewChange,
 }: WorkflowWorkspaceProps) {
   const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
   const [selection, setSelection] = useState<{ workflowId: string; runId?: string }>();
@@ -538,6 +605,11 @@ export function WorkflowWorkspace({
       runActionsEnabled={runActionsEnabled}
       definitionLabel={definitionLabel}
       bottomRightPanel={bottomRightPanel}
+      currentLabel={currentLabel}
+      currentRowAction={currentRowAction}
+      deployments={deployments}
+      timelineView={timelineView}
+      onTimelineViewChange={onTimelineViewChange}
     />
   );
 }

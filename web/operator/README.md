@@ -84,10 +84,10 @@ for inspection, alongside a loading indicator. Until the run's own topology arri
 the graph previews the current workflow definition; it does not represent execution
 state. The preview stays visible through the prepared-snapshot refresh, then switches
 to the run's topology and enables inspection.
-The floating **Timeline** shows Current followed by at most the 20 newest runs.
-Current scrolls with the run entries rather than staying pinned. When 20 runs are
-shown, a final **View all** row opens the expanded history browser; the header
-action remains available at all times. Selection highlights Current or the selected run.
+The floating **Timeline** pins **Current definition** above a virtualized run list.
+It reveals loaded history in 25-run batches near the bottom, with no twenty-run cap.
+The header's **View all** action opens expanded history. Selection highlights
+Current definition or the selected run; the Current row has no trailing caret.
 Both floating and expanded timelines use a trackless scroll handle that stays faintly
 visible whenever the list can scroll, and reaches full opacity while hovering over
 the timeline or dragging the handle. Rows extend beneath it with text padded clear.
@@ -159,10 +159,71 @@ Pass `bottomRightPanel` to `WorkflowWorkspace` to replace the graph's floating
 actions with host controls. Omit it to retain built-in controls, or pass `null`
 to hide the panel. The panel stays inside the graph when the inspector opens.
 
-The floating timeline's **Expand timeline** icon expands it into a wider, full-height
+### Optional host timeline props
+
+`WorkflowWorkspace` accepts these flat, additive optional props. With all omitted,
+Avalanche shows **Current definition**, no trailing action or tabs, and its usual
+run history. Hosts supply data and callbacks; operator-ui owns the rendered UI.
+`WorkspaceDeployment` and `WorkspaceDeployments` are exported package types.
+
+| Prop                                                             | Default / behavior                                                                                                   |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `currentLabel?: string`                                          | `"Current definition"` (nullish fallback). Delta uses `"Current deployment"`.                                        |
+| `currentRowAction?: { label: string; onClick: () => void }`      | No action or caret. When supplied, a separate muted 10px button; clicking it does not select Current.                |
+| `deployments?: WorkspaceDeployments`                             | Absent: no tabs. Present: **Runs \| Deployments** tabs in both compact and expanded headers.                         |
+| `timelineView?: "runs" \| "deployments"`                         | Omitted: internal state starts at `"runs"`. Supplied: controlled by the host. Without `deployments`, only runs show. |
+| `onTimelineViewChange?: (view: "runs" \| "deployments") => void` | No callback by default. Called on tab requests in both modes; controlled hosts must update `timelineView`.           |
+
+```tsx
+const [timelineView, setTimelineView] = useState<"runs" | "deployments">("runs");
+
+<WorkflowWorkspace
+  api={operatorApi}
+  workflowId={workflowId}
+  currentLabel="Current deployment"
+  currentRowAction={{ label: "See all", onClick: () => setTimelineView("deployments") }}
+  timelineView={timelineView}
+  onTimelineViewChange={setTimelineView}
+  deployments={deployments}
+/>;
+```
+
+The host's `deployments: WorkspaceDeployments` contains:
+
+- `items: WorkspaceDeployment[]`: newest-first, workflow-filtered
+  `{ id: string; label: string; createdAt: number; current: boolean }` rows.
+  `createdAt` is epoch seconds. `label` is displayed; full `id` is in the title
+  and accessible name. Mark at most one item `current` for the green current marker.
+- `hasMore: boolean`, `loading: boolean`, `loadMore?: () => void`: virtualized
+  infinite scrolling requests a page within four row-heights of the bottom.
+  It latches each request to avoid duplicate scroll calls until the item count
+  changes or the host's loading state changes. The host must set `loading` while
+  fetching and clear it after settling. No loader is called while loading,
+  after `hasMore` becomes false, or while `error` is set. Omit `loadMore` for a
+  fully loaded list.
+- `selectedId?: string` (default none) highlights a row.
+  `onSelect: (id: string) => void` asks the host to show its definition; it does
+  not move the current pointer or select a run.
+- `error?: string` (default none) shows an inline error. Loading and empty states
+  are rendered by operator-ui, not by the host.
+- `setCurrent?: { label?: string; confirmText: (item: WorkspaceDeployment) => string;
+onConfirm: (id: string) => Promise<void> }` (default none) adds a non-current-row
+  action, labeled **Set current** unless overridden. It opens an inline confirmation
+  with the host's wording and Confirm/Cancel buttons. Confirm shows pending,
+  closes on resolve, and displays the rejection's `Error.message` inline on failure.
+  Neither the action nor its confirmation selects a deployment. The host updates
+  `items[].current` after success.
+
+The pinned Current row remains available in either tab. Run status chips and
+run filters appear only in the expanded **Runs** view. Changing tabs does not
+change run selection or expand/collapse the timeline.
+
+The floating timeline's **View all** action expands it into a wider, full-height
 **Timeline** panel on the left of the workspace, independently of node inspection on
-the right. It paginates the runs supplied by the API baseline in 25-run pages, with a
-status dropdown and inclusive local-date filtering. Run-ID search is available
+the right. Above 1000px it occupies its own column beside the canvas and logs;
+below that breakpoint it remains an overlay. It paginates the runs supplied by
+the API baseline in 25-run pages, with single-select status count chips and
+inclusive local-date filtering. Run-ID search is available
 under the initially collapsed **Advanced filters** section. **Collapse timeline**
 or Escape restores the floating timeline and returns focus to its trigger.
 Filters and run selection survive expansion and collapse.

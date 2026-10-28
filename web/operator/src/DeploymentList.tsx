@@ -1,0 +1,233 @@
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useEffect, useRef, useState } from "react";
+
+import type { WorkspaceDeployment, WorkspaceDeployments } from "./WorkflowWorkspace";
+import { useTimelineScrollHandle } from "./useTimelineScrollHandle";
+
+const timestampFormat = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+const actionClass =
+  "shrink-0 cursor-pointer rounded border-0 bg-transparent font-mono text-[10px] text-secondary hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-acid disabled:cursor-wait disabled:opacity-50";
+
+export function DeploymentList({
+  deployments,
+  expanded,
+}: {
+  deployments: WorkspaceDeployments;
+  expanded: boolean;
+}) {
+  const { items, loading, hasMore, loadMore, error, selectedId, onSelect, setCurrent } =
+    deployments;
+  const scrollElement = useRef<HTMLDivElement>(null);
+  const scrollHandle = useRef<HTMLDivElement>(null);
+  // The host's loading update can arrive after several scroll events. Latch the
+  // request synchronously until a page arrives or the host finishes its request.
+  const requested = useRef(false);
+  const previousPage = useRef({ count: items.length, loading });
+  const [confirmation, setConfirmation] = useState<WorkspaceDeployment>();
+  const [pending, setPending] = useState(false);
+  const [confirmationError, setConfirmationError] = useState<string>();
+  const confirming = useRef(false);
+  const rowHeight = expanded ? 34 : 27.5;
+  const virtualizer = useVirtualizer({
+    count: items.length,
+    getScrollElement: () => scrollElement.current,
+    estimateSize: () => rowHeight,
+    getItemKey: (index) => items[index].id,
+    overscan: 8,
+  });
+  useEffect(() => {
+    virtualizer.measure();
+  }, [rowHeight, virtualizer]);
+  useTimelineScrollHandle(scrollElement, scrollHandle, expanded);
+  useEffect(() => {
+    // Reset only on host progress, not an effect replay (React StrictMode).
+    if (
+      previousPage.current.count !== items.length ||
+      previousPage.current.loading !== loading
+    ) {
+      requested.current = false;
+      previousPage.current = { count: items.length, loading };
+    }
+  }, [items.length, loading]);
+  useEffect(() => {
+    const viewport = scrollElement.current;
+    if (!viewport || loading || !hasMore || !loadMore || error) return;
+    const loadNearBottom = () => {
+      if (
+        requested.current ||
+        items.length * rowHeight - viewport.scrollTop - viewport.clientHeight > rowHeight * 4
+      )
+        return;
+      requested.current = true;
+      loadMore();
+    };
+    viewport.addEventListener("scroll", loadNearBottom, { passive: true });
+    loadNearBottom();
+    return () => viewport.removeEventListener("scroll", loadNearBottom);
+  }, [items.length, rowHeight, loading, hasMore, loadMore, error]);
+
+  const confirm = async () => {
+    if (!confirmation || !setCurrent || confirming.current) return;
+    confirming.current = true;
+    setPending(true);
+    setConfirmationError(undefined);
+    try {
+      await setCurrent.onConfirm(confirmation.id);
+      setConfirmation(undefined);
+    } catch (cause) {
+      setConfirmationError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      confirming.current = false;
+      setPending(false);
+    }
+  };
+
+  return (
+    <>
+      {confirmation && setCurrent && (
+        <div
+          className="shrink-0 border-b border-run-list-line bg-panel p-3 font-mono text-[10px] text-ink"
+          role="group"
+          aria-label="Confirm current deployment"
+        >
+          <p className="m-0 mb-2 break-words">{setCurrent.confirmText(confirmation)}</p>
+          {confirmationError && (
+            <p role="alert" className="mb-2 text-danger">
+              {confirmationError}
+            </p>
+          )}
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              className={actionClass}
+              disabled={pending}
+              onClick={(event) => {
+                event.stopPropagation();
+                void confirm();
+              }}
+            >
+              {pending ? "Setting current…" : "Confirm"}
+            </button>
+            <button
+              type="button"
+              className={actionClass}
+              disabled={pending}
+              onClick={(event) => {
+                event.stopPropagation();
+                setConfirmation(undefined);
+                setConfirmationError(undefined);
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+      <div
+        className={`flex shrink-0 items-center border-b border-run-list-line ${expanded ? "h-9" : "h-7"}`}
+        aria-hidden="true"
+      >
+        <div
+          className={`grid min-w-0 flex-1 ${expanded ? "grid-cols-[minmax(0,1fr)_120px]" : "grid-cols-[minmax(0,1fr)_100px]"} items-center gap-3 font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase ${expanded ? "px-[20px]" : "px-[9px]"}`}
+        >
+          <span>Deployment</span>
+          <span>Created</span>
+        </div>
+        {setCurrent && (
+          <span className={`${actionClass} invisible ${expanded ? "mr-[20px]" : "mr-[17px]"}`}>
+            {setCurrent.label ?? "Set current"}
+          </span>
+        )}
+      </div>
+      <div className={`timeline-scroll-shell relative min-h-0 ${expanded ? "flex-1" : ""}`}>
+        <div
+          ref={scrollElement}
+          className={`deployment-list-scroll run-list-scroll timeline-scroll overflow-auto overscroll-contain ${expanded ? "h-full" : "max-h-48"}`}
+        >
+          <div
+            className="deployment-list-virtual relative w-full"
+            style={{ height: virtualizer.getTotalSize() }}
+          >
+            {virtualizer.getVirtualItems().map((row) => {
+              const item = items[row.index];
+              const createdAt = new Date(item.createdAt * 1000);
+              return (
+                <div
+                  key={item.id}
+                  className={`absolute top-0 left-0 flex w-full items-center shadow-[inset_0_-1px_var(--color-run-list-line)] ${selectedId === item.id ? "bg-selected" : "bg-transparent hover:bg-hover"}`}
+                  style={{ height: row.size, transform: `translateY(${row.start}px)` }}
+                >
+                  <button
+                    type="button"
+                    className={`deployment-list-row grid h-full min-w-0 flex-1 cursor-pointer ${expanded ? "grid-cols-[minmax(0,1fr)_120px]" : "grid-cols-[minmax(0,1fr)_100px]"} items-center gap-3 border-0 border-b border-run-list-line bg-transparent text-left font-mono leading-none text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid ${expanded ? "px-[20px] text-[11px]" : "px-[9px] text-[10px]"} ${selectedId === item.id ? "bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "hover:bg-hover"}`}
+                    title={item.id}
+                    aria-label={`${item.id}, ${item.label}, ${timestampFormat.format(createdAt)}${item.current ? ", current" : ""}`}
+                    aria-pressed={selectedId === item.id}
+                    onClick={() => onSelect(item.id)}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate">{item.label}</span>
+                      {item.current && (
+                        <span className="shrink-0 text-[9px] tracking-[0.06em] text-run-status-success">
+                          ● <span className={expanded ? "" : "sr-only"}>CURRENT</span>
+                        </span>
+                      )}
+                    </span>
+                    <time
+                      className="truncate text-secondary"
+                      dateTime={createdAt.toISOString()}
+                      title={timestampFormat.format(createdAt)}
+                    >
+                      {timestampFormat.format(createdAt)}
+                    </time>
+                  </button>
+                  {item.current && setCurrent && (
+                    <span
+                      aria-hidden="true"
+                      className={`${actionClass} invisible ${expanded ? "mr-[20px]" : "mr-[17px]"}`}
+                    >
+                      {setCurrent.label ?? "Set current"}
+                    </span>
+                  )}
+                  {!item.current && setCurrent && (
+                    <button
+                      type="button"
+                      disabled={pending}
+                      className={`${actionClass} ${expanded ? "mr-[20px]" : "mr-[17px]"}`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        setConfirmation(item);
+                        setConfirmationError(undefined);
+                      }}
+                    >
+                      {setCurrent.label ?? "Set current"}
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+          {loading && (
+            <div role="status" className="px-2.5 py-1 font-mono text-[10px] text-secondary">
+              Loading deployments…
+            </div>
+          )}
+          {error && (
+            <div role="alert" className="p-2.5 font-mono text-[10px] text-danger">
+              {error}
+            </div>
+          )}
+          {!items.length && !loading && !error && (
+            <div className="p-2.5 font-mono text-[10px] text-secondary">No deployments</div>
+          )}
+        </div>
+        <div ref={scrollHandle} className="timeline-scroll-handle" aria-hidden="true" />
+      </div>
+    </>
+  );
+}

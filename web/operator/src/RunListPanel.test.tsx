@@ -5,6 +5,199 @@ import { expect, it, vi } from "vitest";
 import { RunListPanel } from "./RunListPanel";
 import { RunSummaryMsg } from "./model";
 import { summary, workflow } from "./test/fixtures";
+import type { WorkspaceDeployments } from "./WorkflowWorkspace";
+
+const deploymentItems = [
+  { id: "dpl-current-full-id", label: "Latest", createdAt: 1793200000, current: true },
+  { id: "dpl-previous-full-id", label: "Previous", createdAt: 1793100000, current: false },
+];
+const timelineProps = { workflowId: workflow.workflowId, runs: {}, onSelectRun: vi.fn() };
+
+it("defaults to Current definition without a caret, action or tabs", () => {
+  render(<RunListPanel {...timelineProps} />);
+  const current = screen.getByRole("button", { name: "Current definition" });
+  expect(current.querySelector(".lucide-chevron-right")).toBeNull();
+  expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  expect(screen.getAllByRole("button")).toEqual([current]);
+});
+
+it.each([false, true])(
+  "hosts an independent Current action and uncontrolled tabs (expanded=%s)",
+  async (expanded) => {
+    const onSelectRun = vi.fn();
+    const onClick = vi.fn();
+    const onTimelineViewChange = vi.fn();
+    const onSelect = vi.fn();
+    const deployments: WorkspaceDeployments = {
+      items: deploymentItems,
+      hasMore: false,
+      loading: false,
+      selectedId: deploymentItems[1].id,
+      onSelect,
+    };
+    const view = render(
+      <RunListPanel
+        {...timelineProps}
+        expanded={expanded}
+        onSelectRun={onSelectRun}
+        currentLabel="Current deployment"
+        currentRowAction={{ label: "See all", onClick }}
+        deployments={deployments}
+        onTimelineViewChange={onTimelineViewChange}
+      />,
+    );
+    const current = screen.getByRole("button", { name: "Current deployment" });
+    const action = screen.getByRole("button", { name: "See all" });
+    expect(current).not.toContainElement(action);
+    fireEvent.click(action);
+    expect(onClick).toHaveBeenCalledOnce();
+    expect(onSelectRun).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", { name: "Runs" })).toHaveAttribute("aria-selected", "true");
+    fireEvent.click(screen.getByRole("tab", { name: "Deployments" }));
+    expect(onTimelineViewChange).toHaveBeenLastCalledWith("deployments");
+    expect(screen.getByRole("tab", { name: "Deployments" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.queryByRole("group", { name: "Filter by status" })).not.toBeInTheDocument();
+    const previous = await screen.findByRole("button", { name: /^dpl-previous-full-id,/ });
+    expect(previous).toHaveAttribute("title", deploymentItems[1].id);
+    expect(previous).toHaveAttribute("aria-pressed", "true");
+    expect(previous).toHaveClass("bg-selected");
+    expect(previous).toHaveTextContent("Previous");
+    expect(previous.querySelector("time")).toHaveAttribute(
+      "dateTime",
+      new Date(deploymentItems[1].createdAt * 1000).toISOString(),
+    );
+    expect(screen.getByRole("button", { name: /^dpl-current-full-id,/ })).toHaveTextContent(
+      "CURRENT",
+    );
+    fireEvent.click(previous);
+    expect(onSelect).toHaveBeenLastCalledWith(deploymentItems[1].id);
+    expect(onSelectRun).not.toHaveBeenCalled();
+    expect(view.container.querySelector(".run-list-scroll")).not.toContainElement(current);
+    fireEvent.click(current);
+    expect(onSelectRun).toHaveBeenLastCalledWith(undefined);
+    fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
+    expect(screen.getByRole("tab", { name: "Runs" })).toHaveAttribute("aria-selected", "true");
+    if (expanded) expect(screen.getByRole("group", { name: "Filter by status" })).toBeVisible();
+  },
+);
+
+it("keeps the timeline tab controlled and falls back to runs when deployments are removed", () => {
+  const onTimelineViewChange = vi.fn();
+  const deployments = { items: [], hasMore: false, loading: false, onSelect: vi.fn() };
+  const props = { ...timelineProps, deployments, onTimelineViewChange };
+  const view = render(<RunListPanel {...props} timelineView="runs" />);
+  fireEvent.click(screen.getByRole("tab", { name: "Deployments" }));
+  expect(onTimelineViewChange).toHaveBeenCalledWith("deployments");
+  expect(screen.getByRole("tab", { name: "Runs" })).toHaveAttribute("aria-selected", "true");
+  view.rerender(<RunListPanel {...props} timelineView="deployments" />);
+  expect(screen.getByText("No deployments")).toBeVisible();
+  view.rerender(<RunListPanel {...props} deployments={undefined} timelineView="deployments" />);
+  expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
+  expect(screen.getByText("No runs")).toBeVisible();
+});
+
+it.each([false, true])(
+  "virtualizes deployments and requests each next page once near the bottom (expanded=%s)",
+  async (expanded) => {
+    const items = Array.from({ length: 100 }, (_, index) => ({
+      ...deploymentItems[1],
+      id: `dpl-${index}`,
+      label: `Deployment ${index}`,
+    }));
+    const loadMore = vi.fn();
+    const deployments = { items, hasMore: true, loading: false, loadMore, onSelect: vi.fn() };
+    const props = {
+      ...timelineProps,
+      expanded,
+      timelineView: "deployments" as const,
+      deployments,
+    };
+    const view = render(<RunListPanel {...props} />);
+    await screen.findByRole("button", { name: /^dpl-0,/ });
+    expect(screen.getAllByRole("button").length).toBeLessThan(30);
+    expect(screen.queryByRole("button", { name: /^dpl-99,/ })).not.toBeInTheDocument();
+    const scroll = view.container.querySelector<HTMLElement>(".deployment-list-scroll")!;
+    const height = expanded ? 34 : 27.5;
+    await scrollTimelineTo(scroll, items.length * height - 192 - height);
+    fireEvent.scroll(scroll);
+    expect(loadMore).toHaveBeenCalledOnce();
+    view.rerender(<RunListPanel {...props} deployments={{ ...deployments }} />);
+    fireEvent.scroll(scroll);
+    expect(loadMore).toHaveBeenCalledOnce();
+    view.rerender(<RunListPanel {...props} deployments={{ ...deployments, loading: true }} />);
+    expect(screen.getByRole("status")).toHaveTextContent("Loading deployments");
+    fireEvent.scroll(scroll);
+    expect(loadMore).toHaveBeenCalledOnce();
+    view.rerender(
+      <RunListPanel
+        {...props}
+        deployments={{ ...deployments, items: [...items, { ...items[0], id: "dpl-100" }] }}
+      />,
+    );
+    await scrollTimelineTo(scroll, 101 * height - 192);
+    expect(loadMore).toHaveBeenCalledTimes(2);
+    view.rerender(
+      <RunListPanel
+        {...props}
+        deployments={{ ...deployments, hasMore: false, error: "Cannot load deployments" }}
+      />,
+    );
+    fireEvent.scroll(scroll);
+    expect(loadMore).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("alert")).toHaveTextContent("Cannot load deployments");
+  },
+);
+
+it.each(["success", "failure"])(
+  "confirms set current inline with pending and %s without selecting a row",
+  async (result) => {
+    const pending = Promise.withResolvers<void>();
+    const onConfirm = vi.fn(() => pending.promise);
+    const onSelect = vi.fn();
+    const deployments = {
+      items: deploymentItems,
+      hasMore: false,
+      loading: false,
+      onSelect,
+      setCurrent: {
+        label: "Use deployment",
+        confirmText: (item: (typeof deploymentItems)[number]) =>
+          `Use ${item.label} for new runs?`,
+        onConfirm,
+      },
+    };
+    render(
+      <RunListPanel {...timelineProps} deployments={deployments} timelineView="deployments" />,
+    );
+    expect(screen.getAllByRole("button", { name: "Use deployment" })).toHaveLength(1);
+    fireEvent.click(screen.getByRole("button", { name: "Use deployment" }));
+    expect(screen.getByText("Use Previous for new runs?")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+    expect(onConfirm).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Use deployment" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    expect(onConfirm).toHaveBeenCalledExactlyOnceWith(deploymentItems[1].id);
+    expect(screen.getByRole("button", { name: "Setting current…" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
+    if (result === "success") {
+      await act(async () => pending.resolve());
+      expect(screen.queryByRole("button", { name: "Confirm" })).not.toBeInTheDocument();
+    } else {
+      await act(async () =>
+        pending.reject(new Error("The current deployment changed; reload and retry.")),
+      );
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "The current deployment changed; reload and retry.",
+      );
+      expect(screen.getByRole("button", { name: "Confirm" })).toBeEnabled();
+    }
+    expect(onSelect).not.toHaveBeenCalled();
+  },
+);
 
 async function scrollTimelineTo(element: HTMLElement, top: number) {
   vi.useFakeTimers();
@@ -99,11 +292,11 @@ it("combines exact status, run ID and date filters without losing hidden active 
   expect(screen.getByRole("searchbox")).not.toBeVisible();
   expect(screen.queryByRole("combobox", { name: "Status" })).not.toBeInTheDocument();
   const statusGroup = screen.getByRole("group", { name: "Filter by status" });
-  expect(within(statusGroup).getAllByRole("button").map((chip) => chip.textContent)).toEqual([
-    "All 3",
-    "failed 2",
-    "success 1",
-  ]);
+  expect(
+    within(statusGroup)
+      .getAllByRole("button")
+      .map((chip) => chip.textContent),
+  ).toEqual(["All 3", "failed 2", "success 1"]);
   const all = within(statusGroup).getByRole("button", { name: "All 3" });
   const failed = within(statusGroup).getByRole("button", { name: "failed 2" });
   expect(all).toHaveAttribute("aria-pressed", "true");
@@ -183,7 +376,7 @@ it("orders the timeline newest first and keeps one workflow or run selected", as
     buttons.map(
       (button) => button.getAttribute("aria-label")?.split(",")[0] ?? button.textContent,
     ),
-  ).toEqual(["Current", "run-10", "run-9", "run-8"]);
+  ).toEqual(["Current definition", "run-10", "run-9", "run-8"]);
   expect(screen.getAllByRole("button", { pressed: true })).toEqual([buttons[0]]);
   fireEvent.click(buttons[2]);
   expect(screen.getAllByRole("button", { pressed: true })).toEqual([buttons[2]]);
@@ -208,7 +401,7 @@ it("loads successive compact pages near the bottom and pins Current above the sc
   await screen.findByRole("button", { name: /run-51,/ });
   const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
   const virtual = view.container.querySelector<HTMLElement>(".run-list-virtual")!;
-  const current = screen.getByRole("button", { name: "Current" });
+  const current = screen.getByRole("button", { name: "Current definition" });
   expect(current).toBeVisible();
   expect(scroll).not.toContainElement(current);
   expect(current).toHaveAttribute("aria-pressed", "true");
@@ -250,7 +443,7 @@ it("loads successive compact pages near the bottom and pins Current above the sc
   view.rerender(<RunListPanel {...props} expanded />);
   await scrollTimelineTo(scroll, 25 * 34 - 192);
   expect(await within(scroll).findByRole("button", { name: /run-27,/ })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Current" })).toHaveStyle({
+  expect(screen.getByRole("button", { name: "Current definition" })).toHaveStyle({
     height: "36.5px",
     paddingTop: "9.75px",
     paddingBottom: "9.75px",

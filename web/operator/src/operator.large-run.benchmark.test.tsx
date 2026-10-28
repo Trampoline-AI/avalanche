@@ -64,7 +64,7 @@ describe("large-run resource bounds", () => {
     fireEvent.click(oldest);
     expect(selected).toHaveBeenLastCalledWith("run-09950");
     expect(screen.queryByRole("button", { name: /run-09999,/ })).not.toBeInTheDocument();
-    const current = screen.getByRole("button", { name: "Current" });
+    const current = screen.getByRole("button", { name: "Current definition" });
     expect(current).toBeVisible();
     expect(scroll).not.toContainElement(current);
     await waitFor(() => expect(virtual).toHaveStyle({ height: `${75 * 27.5}px` }));

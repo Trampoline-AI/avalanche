@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- The browser workspace's pinned row now says "Current definition" without a caret.
+  Embedding hosts can optionally override that label, add an independent text action,
+  and supply a Runs | Deployments timeline with controlled or local tab state,
+  virtualized deployment paging, selection, and confirmed set-current actions.
+
 - Agents: `ava.runtimes.ClaudeAgent` now passes any other keyword to the Claude
   Agent SDK as a `ClaudeAgentOptions` field, such as
   `ClaudeAgent(model="claude-sonnet-5-5", effort="low", mcp_servers={...})`.

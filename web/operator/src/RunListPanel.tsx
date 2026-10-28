@@ -1,10 +1,13 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import { ChevronRight, Maximize2, Minimize2, Workflow } from "lucide-react";
+import { Maximize2, Minimize2, Workflow } from "lucide-react";
 
 import { formatElapsedSeconds } from "./elapsedDuration";
 import type { RunSummaryMsg } from "./model";
 import { RunStatus } from "./RunStatus";
+import { DeploymentList } from "./DeploymentList";
+import { useTimelineScrollHandle } from "./useTimelineScrollHandle";
+import type { WorkflowWorkspaceProps } from "./WorkflowWorkspace";
 
 // Halve the centered vertical insets without changing the 10px/11px content
 // or 1px divider: 44 - 16.5 = 27.5; 56 - 22 = 34.
@@ -21,7 +24,10 @@ const RUN_TIMESTAMP_FORMAT = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
-interface RunListPanelProps {
+interface RunListPanelProps extends Pick<
+  WorkflowWorkspaceProps,
+  "currentLabel" | "currentRowAction" | "deployments" | "timelineView" | "onTimelineViewChange"
+> {
   workflowId: string;
   runs: Record<string, RunSummaryMsg>;
   selectedRunId?: string;
@@ -59,7 +65,14 @@ export function RunListPanel({
   onViewAll,
   onClose,
   expanded = false,
+  currentLabel,
+  currentRowAction,
+  deployments,
+  timelineView,
+  onTimelineViewChange,
 }: RunListPanelProps) {
+  const [internalView, setInternalView] = useState<"runs" | "deployments">("runs");
+  const view = deployments ? (timelineView ?? internalView) : "runs";
   const scrollElement = useRef<HTMLDivElement>(null);
   const scrollHandle = useRef<HTMLDivElement>(null);
   const headingId = useId();
@@ -121,7 +134,8 @@ export function RunListPanel({
   useEffect(() => {
     setLoadingPage(false);
     const viewport = scrollElement.current;
-    if (expanded || !viewport || visibleRunCount >= workflowRuns.length) return;
+    if (view !== "runs" || expanded || !viewport || visibleRunCount >= workflowRuns.length)
+      return;
     let frame: number | undefined;
     const loadNearBottom = () => {
       if (
@@ -143,7 +157,7 @@ export function RunListPanel({
       if (frame !== undefined) cancelAnimationFrame(frame);
       viewport.removeEventListener("scroll", loadNearBottom);
     };
-  }, [expanded, rowHeight, visibleRunCount, workflowId, workflowRuns.length]);
+  }, [view, expanded, rowHeight, visibleRunCount, workflowId, workflowRuns.length]);
   useEffect(() => {
     if (scrollElement.current) scrollElement.current.scrollTop = 0;
   }, [workflowId, search, status, fromDate, toDate, pageIndex]);
@@ -165,59 +179,8 @@ export function RunListPanel({
   });
   useEffect(() => {
     virtualizer.measure();
-  }, [rowHeight, virtualizer]);
-  useEffect(() => {
-    const viewport = scrollElement.current;
-    const handle = scrollHandle.current;
-    if (!viewport || !handle) return;
-    let drag: { pointerId: number; y: number; scrollTop: number } | undefined;
-    const update = () => {
-      const { clientHeight, scrollHeight, scrollTop } = viewport;
-      const trackHeight = Math.max(0, clientHeight - 8);
-      const height = Math.min(
-        trackHeight,
-        Math.max(24, (clientHeight / scrollHeight) * trackHeight),
-      );
-      const overflow = scrollHeight - clientHeight;
-      handle.hidden = overflow <= 0;
-      handle.style.height = `${height}px`;
-      handle.style.transform = `translateY(${overflow > 0 ? (scrollTop / overflow) * (trackHeight - height) : 0}px)`;
-    };
-    const startDrag = (event: PointerEvent) => {
-      if (event.button !== 0) return;
-      event.preventDefault();
-      drag = { pointerId: event.pointerId, y: event.clientY, scrollTop: viewport.scrollTop };
-      handle.setPointerCapture(event.pointerId);
-      handle.dataset.dragging = "true";
-    };
-    const moveDrag = (event: PointerEvent) => {
-      if (!drag || drag.pointerId !== event.pointerId) return;
-      const travel = viewport.clientHeight - 8 - handle.clientHeight;
-      if (travel <= 0) return;
-      viewport.scrollTop =
-        drag.scrollTop +
-        ((event.clientY - drag.y) / travel) * (viewport.scrollHeight - viewport.clientHeight);
-    };
-    const endDrag = () => {
-      drag = undefined;
-      delete handle.dataset.dragging;
-    };
-    const observer = new ResizeObserver(update);
-    observer.observe(viewport);
-    observer.observe(viewport.firstElementChild!);
-    viewport.addEventListener("scroll", update, { passive: true });
-    handle.addEventListener("pointerdown", startDrag);
-    handle.addEventListener("pointermove", moveDrag);
-    handle.addEventListener("lostpointercapture", endDrag);
-    update();
-    return () => {
-      observer.disconnect();
-      viewport.removeEventListener("scroll", update);
-      handle.removeEventListener("pointerdown", startDrag);
-      handle.removeEventListener("pointermove", moveDrag);
-      handle.removeEventListener("lostpointercapture", endDrag);
-    };
-  }, [expanded]);
+  }, [view, rowHeight, virtualizer]);
+  useTimelineScrollHandle(scrollElement, scrollHandle, expanded, view === "runs");
 
   return (
     <section
@@ -237,12 +200,33 @@ export function RunListPanel({
       <header
         className={`flex shrink-0 items-center justify-between ${expanded ? "h-14 border-b border-line-subtle px-[20px]" : "h-9 border-b-2 border-line px-[9px]"}`}
       >
-        <h2
-          id={headingId}
-          className={`m-0 font-semibold tracking-[-0.01em] text-ink ${expanded ? "text-sm" : "text-xs"}`}
-        >
-          Timeline
-        </h2>
+        <div className="flex min-w-0 items-center gap-3">
+          <h2
+            id={headingId}
+            className={`m-0 font-semibold tracking-[-0.01em] text-ink ${expanded ? "text-sm" : "text-xs"}`}
+          >
+            Timeline
+          </h2>
+          {deployments && (
+            <div role="tablist" aria-label="Timeline view" className="flex items-center gap-2">
+              {(["runs", "deployments"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  role="tab"
+                  aria-selected={view === tab}
+                  onClick={() => {
+                    if (timelineView === undefined) setInternalView(tab);
+                    onTimelineViewChange?.(tab);
+                  }}
+                  className={`cursor-pointer rounded border-0 bg-transparent p-0 text-[10px] focus-visible:outline-2 focus-visible:outline-acid ${view === tab ? "text-ink" : "text-secondary hover:text-ink"}`}
+                >
+                  {tab === "runs" ? "Runs" : "Deployments"}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
         <div className={`flex items-center ${expanded ? "gap-3" : "gap-2"}`}>
           {!expanded && onViewAll && (
             <button
@@ -272,7 +256,7 @@ export function RunListPanel({
           )}
         </div>
       </header>
-      {expanded && (
+      {expanded && view === "runs" && (
         <div className="all-runs-filters flex shrink-0 flex-col gap-[20px] border-b-2 border-line p-[20px] text-xs text-secondary">
           <div
             role="group"
@@ -354,143 +338,167 @@ export function RunListPanel({
           </details>
         </div>
       )}
-      <button
-        type="button"
-        aria-pressed={selectedRunId === undefined}
-        onClick={() => onSelectRun(undefined)}
-        style={{
-          height: currentHeight,
-          paddingTop: currentPadding,
-          paddingBottom: currentPadding,
-        }}
-        className={`run-list-current flex w-full shrink-0 cursor-pointer items-center gap-2 border-0 border-b border-run-list-line text-left font-mono font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid ${expanded ? "px-[20px] text-xs" : "pl-[9px] pr-[17px] text-[10px]"} ${selectedRunId === undefined ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
-      >
-        <Workflow aria-hidden="true" className="size-3.5 shrink-0 text-secondary" />
-        <span className="flex-1">Current</span>
-        <ChevronRight aria-hidden="true" className="size-3 shrink-0 text-secondary" />
-      </button>
       <div
-        className={`run-list-columns grid shrink-0 grid-cols-[minmax(0,1fr)_100px] items-center gap-3 border-b border-run-list-line font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase ${expanded ? "h-9 px-[20px]" : "h-7 px-[9px]"}`}
-        aria-hidden="true"
+        className={`flex shrink-0 items-center shadow-[inset_0_-1px_var(--color-run-list-line)] ${selectedRunId === undefined ? "bg-selected" : "bg-transparent"}`}
       >
-        <span>Run</span>
-        <span>Status</span>
-      </div>
-      <div className={`timeline-scroll-shell relative min-h-0 ${expanded ? "flex-1" : ""}`}>
-        <div
-          className={
-            expanded
-              ? "run-list-scroll timeline-scroll h-full overflow-auto overscroll-contain"
-              : "run-list-scroll timeline-scroll max-h-48 overflow-auto overscroll-contain"
-          }
-          ref={scrollElement}
+        <button
+          type="button"
+          aria-pressed={selectedRunId === undefined}
+          onClick={() => onSelectRun(undefined)}
+          style={{
+            height: currentHeight,
+            paddingTop: currentPadding,
+            paddingBottom: currentPadding,
+          }}
+          className={`run-list-current flex min-w-0 flex-1 cursor-pointer items-center gap-2 border-0 border-b border-run-list-line text-left font-mono font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid ${expanded ? "px-[20px] text-xs" : "pl-[9px] pr-[17px] text-[10px]"} ${selectedRunId === undefined ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
         >
-          <div
-            className="run-list-virtual relative w-full"
-            style={{ height: virtualizer.getTotalSize() }}
+          <Workflow aria-hidden="true" className="size-3.5 shrink-0 text-secondary" />
+          <span className="flex-1 truncate">{currentLabel ?? "Current definition"}</span>
+        </button>
+        {currentRowAction && (
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              currentRowAction.onClick();
+            }}
+            className={`shrink-0 cursor-pointer rounded border-0 bg-transparent text-[10px] text-secondary hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-acid ${expanded ? "mr-[20px]" : "mr-[17px]"}`}
           >
-            {virtualizer.getVirtualItems().map((virtualRow) => {
-              const rowStyle = {
-                height: virtualRow.size,
-                paddingTop: rowPadding,
-                paddingBottom: rowPadding,
-                transform: `translateY(${virtualRow.start}px)`,
-              };
-              const summary = filteredRuns[pageOffset + virtualRow.index];
-              const triggeredAt = summary.startedAt
-                ? new Date(summary.startedAt * 1000)
-                : runTriggeredAt(summary);
-              const elapsedSeconds = runElapsedSeconds(summary);
-              return (
+            {currentRowAction.label}
+          </button>
+        )}
+      </div>
+      {view === "deployments" && deployments ? (
+        <DeploymentList deployments={deployments} expanded={expanded} />
+      ) : (
+        <>
+          <div
+            className={`run-list-columns grid shrink-0 grid-cols-[minmax(0,1fr)_100px] items-center gap-3 border-b border-run-list-line font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase ${expanded ? "h-9 px-[20px]" : "h-7 px-[9px]"}`}
+            aria-hidden="true"
+          >
+            <span>Run</span>
+            <span>Status</span>
+          </div>
+          <div className={`timeline-scroll-shell relative min-h-0 ${expanded ? "flex-1" : ""}`}>
+            <div
+              className={
+                expanded
+                  ? "run-list-scroll timeline-scroll h-full overflow-auto overscroll-contain"
+                  : "run-list-scroll timeline-scroll max-h-48 overflow-auto overscroll-contain"
+              }
+              ref={scrollElement}
+            >
+              <div
+                className="run-list-virtual relative w-full"
+                style={{ height: virtualizer.getTotalSize() }}
+              >
+                {virtualizer.getVirtualItems().map((virtualRow) => {
+                  const rowStyle = {
+                    height: virtualRow.size,
+                    paddingTop: rowPadding,
+                    paddingBottom: rowPadding,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  };
+                  const summary = filteredRuns[pageOffset + virtualRow.index];
+                  const triggeredAt = summary.startedAt
+                    ? new Date(summary.startedAt * 1000)
+                    : runTriggeredAt(summary);
+                  const elapsedSeconds = runElapsedSeconds(summary);
+                  return (
+                    <button
+                      type="button"
+                      className={`run-list-row run-list-columns absolute top-0 left-0 grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_100px] items-center gap-3 border-0 border-b border-run-list-line text-left font-mono text-ink leading-none ${expanded ? "px-[20px] text-[11px]" : "px-[9px] text-[10px]"} ${selectedRunId === summary.runId ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
+                      key={summary.runId}
+                      onClick={() => onSelectRun(summary.runId)}
+                      aria-pressed={selectedRunId === summary.runId}
+                      style={rowStyle}
+                      title={summary.runId}
+                      aria-label={`${summary.runId}, ${summary.status}, ${runDuration(elapsedSeconds)}, ${
+                        triggeredAt
+                          ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
+                          : "start time not recorded"
+                      }`}
+                    >
+                      <span className="min-w-0 truncate font-mono text-secondary">
+                        <time
+                          className="run-triggered-at"
+                          dateTime={triggeredAt?.toISOString()}
+                        >
+                          {triggeredAt
+                            ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
+                            : "Start time not recorded"}
+                        </time>
+                        {" · "}
+                        <span
+                          className="run-duration"
+                          title={
+                            elapsedSeconds === undefined
+                              ? undefined
+                              : `${elapsedSeconds.toFixed(1)} seconds`
+                          }
+                        >
+                          {runDuration(elapsedSeconds)}
+                        </span>
+                      </span>
+                      <RunStatus status={summary.status} />
+                    </button>
+                  );
+                })}
+              </div>
+              {loadingPage && !expanded && (
+                <div
+                  role="status"
+                  className="run-list-loading px-[9px] py-1 text-[10px] text-secondary"
+                >
+                  Loading runs…
+                </div>
+              )}
+              {filteredRuns.length === 0 && (
+                <span
+                  className={`run-list-empty block font-mono text-secondary ${expanded ? "min-h-0 flex-1 overflow-auto px-[20px] py-[24px] text-xs" : "p-2.5 text-[8px]"}`}
+                >
+                  {workflowRuns.length ? "No matching runs" : "No runs"}
+                </span>
+              )}
+            </div>
+            <div ref={scrollHandle} className="timeline-scroll-handle" aria-hidden="true" />
+          </div>
+          {expanded && view === "runs" && (
+            <nav
+              aria-label="Run pagination"
+              className="flex shrink-0 flex-col gap-3 border-t border-line-subtle px-[20px] py-[16px] text-xs text-secondary"
+            >
+              <span role="status">
+                {filteredRuns.length
+                  ? `${pageOffset + 1}–${pageOffset + visibleRunCount} of ${filteredRuns.length} runs`
+                  : "0 runs"}
+              </span>
+              <div className="flex items-center justify-between gap-2">
                 <button
                   type="button"
-                  className={`run-list-row run-list-columns absolute top-0 left-0 grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_100px] items-center gap-3 border-0 border-b border-run-list-line text-left font-mono text-ink leading-none ${expanded ? "px-[20px] text-[11px]" : "px-[9px] text-[10px]"} ${selectedRunId === summary.runId ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
-                  key={summary.runId}
-                  onClick={() => onSelectRun(summary.runId)}
-                  aria-pressed={selectedRunId === summary.runId}
-                  style={rowStyle}
-                  title={summary.runId}
-                  aria-label={`${summary.runId}, ${summary.status}, ${runDuration(elapsedSeconds)}, ${
-                    triggeredAt
-                      ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
-                      : "start time not recorded"
-                  }`}
+                  aria-label="Previous page"
+                  disabled={pageIndex === 0}
+                  onClick={() => setPage(pageIndex - 1)}
+                  className="cursor-pointer rounded border border-line bg-transparent px-3 py-2 text-ink hover:bg-canvas focus-visible:outline-2 focus-visible:outline-acid disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  <span className="min-w-0 truncate font-mono text-secondary">
-                    <time className="run-triggered-at" dateTime={triggeredAt?.toISOString()}>
-                      {triggeredAt
-                        ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
-                        : "Start time not recorded"}
-                    </time>
-                    {" · "}
-                    <span
-                      className="run-duration"
-                      title={
-                        elapsedSeconds === undefined
-                          ? undefined
-                          : `${elapsedSeconds.toFixed(1)} seconds`
-                      }
-                    >
-                      {runDuration(elapsedSeconds)}
-                    </span>
-                  </span>
-                  <RunStatus status={summary.status} />
+                  Previous
                 </button>
-              );
-            })}
-          </div>
-          {loadingPage && !expanded && (
-            <div
-              role="status"
-              className="run-list-loading px-[9px] py-1 text-[10px] text-secondary"
-            >
-              Loading runs…
-            </div>
+                <span>
+                  Page {pageIndex + 1} of {pageCount}
+                </span>
+                <button
+                  type="button"
+                  aria-label="Next page"
+                  disabled={pageIndex === pageCount - 1}
+                  onClick={() => setPage(pageIndex + 1)}
+                  className="cursor-pointer rounded border border-line bg-transparent px-3 py-2 text-ink hover:bg-canvas focus-visible:outline-2 focus-visible:outline-acid disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Next
+                </button>
+              </div>
+            </nav>
           )}
-          {filteredRuns.length === 0 && (
-            <span
-              className={`run-list-empty block font-mono text-secondary ${expanded ? "min-h-0 flex-1 overflow-auto px-[20px] py-[24px] text-xs" : "p-2.5 text-[8px]"}`}
-            >
-              {workflowRuns.length ? "No matching runs" : "No runs"}
-            </span>
-          )}
-        </div>
-        <div ref={scrollHandle} className="timeline-scroll-handle" aria-hidden="true" />
-      </div>
-      {expanded && (
-        <nav
-          aria-label="Run pagination"
-          className="flex shrink-0 flex-col gap-3 border-t border-line-subtle px-[20px] py-[16px] text-xs text-secondary"
-        >
-          <span role="status">
-            {filteredRuns.length
-              ? `${pageOffset + 1}–${pageOffset + visibleRunCount} of ${filteredRuns.length} runs`
-              : "0 runs"}
-          </span>
-          <div className="flex items-center justify-between gap-2">
-            <button
-              type="button"
-              aria-label="Previous page"
-              disabled={pageIndex === 0}
-              onClick={() => setPage(pageIndex - 1)}
-              className="cursor-pointer rounded border border-line bg-transparent px-3 py-2 text-ink hover:bg-canvas focus-visible:outline-2 focus-visible:outline-acid disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Previous
-            </button>
-            <span>
-              Page {pageIndex + 1} of {pageCount}
-            </span>
-            <button
-              type="button"
-              aria-label="Next page"
-              disabled={pageIndex === pageCount - 1}
-              onClick={() => setPage(pageIndex + 1)}
-              className="cursor-pointer rounded border border-line bg-transparent px-3 py-2 text-ink hover:bg-canvas focus-visible:outline-2 focus-visible:outline-acid disabled:cursor-not-allowed disabled:opacity-40"
-            >
-              Next
-            </button>
-          </div>
-        </nav>
+        </>
       )}
     </section>
   );

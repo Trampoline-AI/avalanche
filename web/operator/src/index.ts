@@ -21,5 +21,9 @@ export type {
   OperatorUiSelection,
 } from "./ui/types";
 export { WorkflowWorkspace } from "./WorkflowWorkspace";
-export type { WorkflowWorkspaceProps } from "./WorkflowWorkspace";
+export type {
+  WorkflowWorkspaceProps,
+  WorkspaceDeployment,
+  WorkspaceDeployments,
+} from "./WorkflowWorkspace";
 export * from "./model";

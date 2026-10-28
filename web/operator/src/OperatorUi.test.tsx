@@ -254,7 +254,7 @@ describe("operator workflows", () => {
     await screen.findByRole("button", { name: /run-new, cancelled/ });
     expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     await screen.findByRole("button", { name: "Inspect Fetch" });
     expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
     expect(
@@ -414,7 +414,7 @@ describe("operator workflows", () => {
       ).toBeInTheDocument();
       fireEvent.click(
         screen.getByRole("button", {
-          name: host === "operator" ? "View current state for Orders" : "Current",
+          name: host === "operator" ? "View current state for Orders" : "Current definition",
         }),
       );
       await screen.findByRole("button", { name: "Run" });
@@ -644,7 +644,7 @@ describe("operator workflows", () => {
     await screen.findByRole("button", { name: "Inspect Inventory fetch" });
     await act(async () => started.resolve("run-new"));
     expect(screen.getByRole("button", { name: "Inspect Inventory fetch" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -707,7 +707,7 @@ describe("operator workflows", () => {
           "true",
         );
       } else if (destination !== "unmount") {
-        expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+        expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
           "aria-pressed",
           "true",
         );
@@ -738,6 +738,61 @@ describe("operator workflows", () => {
       expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
     },
   );
+
+  it("wires flat host timeline props through the embedded workspace", async () => {
+    const api = createApi();
+    const onSelectRun = vi.fn();
+    const onSelect = vi.fn();
+    function HostWorkspace() {
+      const [timelineView, onTimelineViewChange] = useState<"runs" | "deployments">("runs");
+      return (
+        <WorkflowWorkspace
+          api={api}
+          workflowId={workflow.workflowId}
+          navigation={{ selectedRunId: summary.runId, onSelectRun }}
+          currentLabel="Current deployment"
+          currentRowAction={{
+            label: "See all",
+            onClick: () => onTimelineViewChange("deployments"),
+          }}
+          timelineView={timelineView}
+          onTimelineViewChange={onTimelineViewChange}
+          deployments={{
+            items: [
+              {
+                id: "dpl-host-full-id",
+                label: "Host deployment",
+                createdAt: 1793200000,
+                current: true,
+              },
+            ],
+            hasMore: false,
+            loading: false,
+            selectedId: "dpl-host-full-id",
+            onSelect,
+          }}
+        />
+      );
+    }
+    render(<HostWorkspace />);
+    await screen.findByRole("button", { name: "Current deployment" });
+    fireEvent.click(screen.getByRole("button", { name: "See all" }));
+    expect(onSelectRun).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", { name: "Deployments" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /^dpl-host-full-id,/ }));
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("dpl-host-full-id");
+    fireEvent.click(screen.getByRole("button", { name: "View all" }));
+    expect(screen.getByRole("tab", { name: "Deployments" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.queryByRole("group", { name: "Filter by status" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Runs" }));
+    expect(screen.getByRole("group", { name: "Filter by status" })).toBeVisible();
+  });
 
   it("keeps historical workspace content and navigation after its definition is removed", async () => {
     const removed = Promise.withResolvers<void>();
@@ -826,7 +881,7 @@ describe("operator workflows", () => {
     );
     await screen.findByRole("button", { name: "Inspect Next recorded fetch" });
     expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     expect(screen.getByText("No workflows discovered")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Run logs" })).not.toBeInTheDocument();
@@ -839,13 +894,13 @@ describe("operator workflows", () => {
       },
     });
     render(<OperatorUi host={{ api, presentation }} />);
-    await screen.findByRole("button", { name: "Current" });
+    await screen.findByRole("button", { name: "Current definition" });
     fireEvent.click(await screen.findByRole("button", { name: "Run" }));
     expect(
       await screen.findByText("Preparation rejected: missing credential"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -912,13 +967,13 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
       },
     });
     mount(api);
-    expect(await screen.findByRole("button", { name: "Current" })).toHaveAttribute(
+    expect(await screen.findByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     await act(async () => publishOther.resolve());
-    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -929,8 +984,8 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
         "true",
       ),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
-    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
+    expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -1086,7 +1141,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     );
     const node = await screen.findByRole("button", { name: "Inspect Fetch" });
     expect(node).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -1134,10 +1189,10 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
     fireEvent.click(screen.getByRole("button", { name: /run-2,/ }));
     await screen.findByText("Loading run snapshot");
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
     await act(async () => lateSnapshot.resolve(snapshotFor(secondSummary)));
-    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -1145,7 +1200,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
 
     fireEvent.click(screen.getByRole("button", { name: /run-2,/ }));
     await screen.findByText("Snapshot was removed");
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
     act(() => {
       runs = [...runs, third];
@@ -1244,7 +1299,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
       "HistoricalBatch",
     );
     expect(getWorkflowNodeSource).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     expect(screen.getByRole("tab", { name: "Definition" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -1314,7 +1369,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(
       screen.queryByRole("complementary", { name: "Run inspector" }),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     expect(screen.queryByRole("tab", { name: "Definition" })).not.toBeInTheDocument();
   });
 
