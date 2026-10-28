@@ -89,7 +89,7 @@ Avalanche fills some options for every call. How yours combine with them:
 | SDK option | With yours |
 | --- | --- |
 | `mcp_servers` | Your servers are added next to Avalanche's `avalanche` server, which carries the step's tools. It must be a dict: a configuration file path raises `AgentStepError`, and so does a server of yours named `avalanche`. |
-| `hooks` | Your matchers are added after Avalanche's, event by event. Avalanche's only hook keeps `Read` inside the skill folder when step skills have files and you list `Read` nowhere. |
+| `hooks` | Your matchers are added after Avalanche's, event by event. Avalanche's only hook keeps `Read` inside the skill folder when step skills have files and you do not enable `Read` yourself. |
 | `plugins` | Your plugins are added next to the temporary `avalanche` plugin that carries the step's skills. |
 | `allowed_tools`, `add_dirs` | Your entries are added after Avalanche's, without repeats. |
 | `tools` | A list is added after the `builtin_tools` and the skill tools. A preset or `None` replaces them. |
@@ -297,7 +297,7 @@ The session starting, with the tools Claude can use:
 | `ava.File` inputs | Read where they are, without copies. The prompt gives each file's path, relative when it is inside the working folder. Folders outside it are added to the folders Claude may access. |
 | `ava.Workspace` input | The working folder. At most one. Without one, Claude works in an empty temporary folder. |
 | `tools` | Offered to Claude as `mcp__avalanche__<name>`. |
-| `skills` | Written for this call only into a temporary Claude Code plugin named `avalanche`, removed when the call ends. Claude sees each as `avalanche:<name>` with its description and loads it with the `Skill` tool. When a skill has files and neither `builtin_tools` nor the SDK options `tools` or `allowed_tools` list `Read`, `Read` is added, and every read outside the plugin folder is denied, in every permission mode. A `Read` you list keeps its usual scope. |
+| `skills` | Written for this call only into a temporary Claude Code plugin named `avalanche`, removed when the call ends. Claude sees each as `avalanche:<name>` with its description and loads it with the `Skill` tool. When a skill has files and neither `builtin_tools` nor the SDK option `tools` enables `Read`, `Read` is added, and every read outside the plugin folder is denied, in every permission mode. A `Read` you enable yourself keeps its usual scope; listing it only in the SDK option `allowed_tools` does not lift the limit. |
 | `invocation_id`, `step_name` | Not sent. |
 
 For `document="Avalanche runs DAGs."`, Claude's prompt is:
