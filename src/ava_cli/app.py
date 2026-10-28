@@ -143,6 +143,25 @@ def _build_parser() -> argparse.ArgumentParser:
         command.add_argument("--connect", default="localhost:7433", metavar="HOST:PORT")
         command.set_defaults(handler=handler)
 
+    runs = subcommands.add_parser("runs", help="list and cancel runs on an operator")
+    run_commands = runs.add_subparsers(dest="runs_command", metavar="COMMAND")
+    runs_list = run_commands.add_parser("list", help="list a workflow's runs, newest first")
+    runs_list.add_argument("flow", help="workflow selector")
+    runs_list.add_argument("--status", help="only show runs with this status")
+    runs_list.add_argument(
+        "--limit", type=int, default=20, help="most runs to show (default: 20)"
+    )
+    runs_list.add_argument("--json", action="store_true", help="print JSON instead of a table")
+    runs_list.add_argument("--connect", default="localhost:7433", metavar="HOST:PORT")
+    runs_list.set_defaults(handler=_list_runs)
+    runs_cancel = run_commands.add_parser("cancel", help="cancel runs")
+    runs_cancel.add_argument("run_ids", nargs="*", help="run IDs to cancel")
+    runs_cancel.add_argument(
+        "--all-running", metavar="FLOW", help="cancel every running run of FLOW"
+    )
+    runs_cancel.add_argument("--connect", default="localhost:7433", metavar="HOST:PORT")
+    runs_cancel.set_defaults(handler=_cancel_runs)
+
     run = subcommands.add_parser(
         "run",
         help="start a flow run on a local operator",
@@ -395,6 +414,47 @@ def _get_webhook(args: argparse.Namespace) -> int:
         return 0
     finally:
         provider.close()
+
+
+def _list_runs(args: argparse.Namespace) -> int:
+    from ava_cli.runs_view import format_runs_table, runs_json
+
+    provider = _make_provider(args.connect)
+    try:
+        runs = provider.list_runs(args.flow)
+        if args.status:
+            runs = [run for run in runs if run.status == args.status]
+        runs = sorted(runs, key=lambda run: run.started_at, reverse=True)[: args.limit]
+        if args.json:
+            print(json.dumps(runs_json(runs)))
+        else:
+            print(format_runs_table(runs))
+        return 0
+    finally:
+        provider.close()
+
+
+def _cancel_runs(args: argparse.Namespace) -> int:
+    from runtime.operator.models import RunStatus
+
+    provider = _make_provider(args.connect)
+    run_ids = list(args.run_ids)
+    if args.all_running:
+        run_ids += [
+            run.run_id
+            for run in provider.list_runs(args.all_running)
+            if run.status is RunStatus.RUNNING
+        ]
+    cancelled = 0
+    for run_id in run_ids:
+        try:
+            provider.cancel_run(run_id)
+        except Exception:
+            pass
+        cancelled += 1
+    provider.close()
+    print(f"cancelled {cancelled} run(s)")
+    return 0
 
 
 def _operator_main(argv: list[str]) -> int:

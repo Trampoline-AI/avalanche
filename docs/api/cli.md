@@ -139,6 +139,23 @@ is `localhost:7433`. These inspect configuration; they do not invoke the webhook
 Declare webhooks using `avalanche.Webhook` on `@workflow`; see
 [workflow and webhook declarations](workflows.md).
 
+## `ava runs list FLOW [options]`
+
+List a workflow's runs on an existing operator, newest first, as a table.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--state STATUS` | all | Only runs in this state, such as `running` or `failed`. |
+| `--limit N` | `20` | Most runs to show. |
+| `--json` | off | Print a JSON array instead of a table. |
+| `--connect HOST:PORT` | `localhost:7433` | Operator address. |
+
+## `ava runs cancel [RUN_ID ...] [--all-running FLOW]`
+
+Request cancellation of the given runs. With `--all-running FLOW`, also cancel every
+running or pending run of that workflow. Prints how many runs were cancelled and exits
+non-zero when a cancellation fails.
+
 ## `ava tui [FLOW[/NODE]] [options]`
 
 Launch the Textual terminal UI. Without `--connect`, use the mock provider; with

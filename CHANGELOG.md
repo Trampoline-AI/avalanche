@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- CLI: `ava runs list FLOW` lists a workflow's runs on a running operator, newest
+  first, as a table or as JSON with `--json`. `ava runs cancel RUN_ID ...` cancels runs,
+  and `--all-running FLOW` cancels every running run of a workflow.
 - Agents: `ava.runtimes.ClaudeAgent` now passes any other keyword to the Claude
   Agent SDK as a `ClaudeAgentOptions` field, such as
   `ClaudeAgent(model="claude-sonnet-5-5", effort="low", mcp_servers={...})`.
