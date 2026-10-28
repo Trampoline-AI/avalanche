@@ -8,6 +8,7 @@
           "discriminator": {
             "mapping": {
               "claude_agent": "#/$defs/ClaudeAgentDeclaration",
+              "openai_agent": "#/$defs/OpenAIAgentDeclaration",
               "predict_rlm": "#/$defs/PredictRLMDeclaration"
             },
             "propertyName": "kind"
@@ -18,6 +19,9 @@
             },
             {
               "$ref": "#/$defs/ClaudeAgentDeclaration"
+            },
+            {
+              "$ref": "#/$defs/OpenAIAgentDeclaration"
             }
           ],
           "title": "Runtime"
@@ -116,6 +120,19 @@
                       },
                       {
                         "$ref": "#/$defs/RateLimited"
+                      }
+                    ]
+                  },
+                  "openai_agents.responses/v1": {
+                    "discriminator": {
+                      "mapping": {
+                        "agent.started": "#/$defs/AgentStarted"
+                      },
+                      "propertyName": "kind"
+                    },
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/AgentStarted"
                       }
                     ]
                   },
@@ -235,6 +252,19 @@
                       "$ref": "#/$defs/RateLimited"
                     }
                   ]
+                },
+                {
+                  "discriminator": {
+                    "mapping": {
+                      "agent.started": "#/$defs/AgentStarted"
+                    },
+                    "propertyName": "kind"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/AgentStarted"
+                    }
+                  ]
                 }
               ]
             },
@@ -271,6 +301,55 @@
         "native"
       ],
       "title": "AgentLiveEvent",
+      "type": "object"
+    },
+    "AgentStarted": {
+      "additionalProperties": false,
+      "description": "The SDK started the step's agent, with the tools it offers the model.",
+      "properties": {
+        "agent_name": {
+          "title": "Agent Name",
+          "type": "string"
+        },
+        "format": {
+          "const": "openai_agents.responses/v1",
+          "default": "openai_agents.responses/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "kind": {
+          "const": "agent.started",
+          "default": "agent.started",
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tools",
+          "type": "array"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "agent_name",
+        "model",
+        "tools"
+      ],
+      "title": "AgentStarted",
       "type": "object"
     },
     "AgentTraceFinished": {
@@ -370,6 +449,7 @@
           "discriminator": {
             "mapping": {
               "claude_agent.messages/v1": "#/$defs/ClaudeAgentTraceHeader",
+              "openai_agents.responses/v1": "#/$defs/OpenAIAgentTraceHeader",
               "predict_rlm.run/v1": "#/$defs/PredictRLMTraceHeader"
             },
             "propertyName": "format"
@@ -380,6 +460,9 @@
             },
             {
               "$ref": "#/$defs/ClaudeAgentTraceHeader"
+            },
+            {
+              "$ref": "#/$defs/OpenAIAgentTraceHeader"
             }
           ],
           "title": "Native"
@@ -505,7 +588,8 @@
         "runtime_kind": {
           "enum": [
             "predict_rlm",
-            "claude_agent"
+            "claude_agent",
+            "openai_agent"
           ],
           "title": "Runtime Kind",
           "type": "string"
@@ -879,6 +963,169 @@
         "kind"
       ],
       "title": "Lifecycle",
+      "type": "object"
+    },
+    "OpenAIAgentDeclaration": {
+      "additionalProperties": false,
+      "description": "What an OpenAI Agents SDK runtime contributes to a declaration.\n\n``model`` is ``None`` when the step leaves the choice to the SDK.",
+      "properties": {
+        "kind": {
+          "const": "openai_agent",
+          "default": "openai_agent",
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Settings",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "model",
+        "settings"
+      ],
+      "title": "OpenAIAgentDeclaration",
+      "type": "object"
+    },
+    "OpenAIAgentTraceHeader": {
+      "additionalProperties": false,
+      "description": "OpenAI Agents SDK run details that have no common-header equivalent.",
+      "properties": {
+        "errors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Errors",
+          "type": "array"
+        },
+        "format": {
+          "const": "openai_agents.responses/v1",
+          "default": "openai_agents.responses/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "last_response_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Last Response Id"
+        },
+        "max_turns": {
+          "exclusiveMinimum": 0,
+          "title": "Max Turns",
+          "type": "integer"
+        },
+        "reasoning_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reasoning Tokens"
+        },
+        "requests": {
+          "minimum": 0,
+          "title": "Requests",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "format",
+        "max_turns",
+        "requests",
+        "reasoning_tokens",
+        "last_response_id",
+        "errors"
+      ],
+      "title": "OpenAIAgentTraceHeader",
+      "type": "object"
+    },
+    "OpenAIAgentTurn": {
+      "additionalProperties": false,
+      "description": "The model response behind one turn, as the SDK reports it.",
+      "properties": {
+        "answer": {
+          "title": "Answer",
+          "type": "boolean"
+        },
+        "format": {
+          "const": "openai_agents.responses/v1",
+          "default": "openai_agents.responses/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "reasoning_tokens": {
+          "anyOf": [
+            {
+              "minimum": 0,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Reasoning Tokens"
+        },
+        "refusal": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Refusal"
+        },
+        "response_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Response Id"
+        }
+      },
+      "required": [
+        "format",
+        "response_id",
+        "model",
+        "reasoning_tokens",
+        "refusal",
+        "answer"
+      ],
+      "title": "OpenAIAgentTurn",
       "type": "object"
     },
     "PredictFinished": {
@@ -1939,6 +2186,7 @@
           "discriminator": {
             "mapping": {
               "claude_agent.messages/v1": "#/$defs/ClaudeAgentTurn",
+              "openai_agents.responses/v1": "#/$defs/OpenAIAgentTurn",
               "predict_rlm.run/v1": "#/$defs/PredictRLMTurn"
             },
             "propertyName": "format"
@@ -1949,6 +2197,9 @@
             },
             {
               "$ref": "#/$defs/ClaudeAgentTurn"
+            },
+            {
+              "$ref": "#/$defs/OpenAIAgentTurn"
             }
           ],
           "title": "Native"

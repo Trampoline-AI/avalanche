@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { claudeTurnEvent, runStartedEvent, turnEvent } from "../test/agentTraceFixtures";
+import {
+  claudeTurnEvent,
+  openaiTurnEvent,
+  runStartedEvent,
+  turnEvent,
+} from "../test/agentTraceFixtures";
 import { parseAgentLiveEvent } from "./common";
 import { TRACE_VIEWERS, activityLabel, turnViewer, viewerFor } from "./viewers";
 
@@ -8,6 +13,7 @@ describe("agent trace viewers", () => {
   it("has a viewer for every trace format", () => {
     expect(Object.keys(TRACE_VIEWERS).sort()).toEqual([
       "claude_agent.messages/v1",
+      "openai_agents.responses/v1",
       "predict_rlm.run/v1",
     ]);
   });
@@ -162,5 +168,37 @@ describe("agent trace viewers", () => {
 
     expect(step.usage.main).toMatchObject({ inputTokens: 943, outputTokens: 5 });
     expect(step.submitsAnswer).toBe(true);
+  });
+
+  it("maps an OpenAI Agents SDK turn, its cached input and its answer", () => {
+    const event = parseAgentLiveEvent(openaiTurnEvent(1));
+    const viewer = turnViewer(event);
+
+    expect(viewer.turn(event)).toMatchObject({
+      iteration: 1,
+      message: "Looking it up 1.",
+      reasoning: "Reasoning 1.",
+      error: false,
+      durationMs: 640,
+      toolCalls: [{ name: "lookup", arguments: { name: "a" }, result: "10", durationMs: 3 }],
+      predictCalls: [],
+      submitsAnswer: false,
+    });
+    // The whole input adds back what the prompt cache read and wrote.
+    expect(viewer.turn(event).usage.main).toMatchObject({ inputTokens: 100, outputTokens: 20 });
+    expect(viewer.turn(event).lm?.finishReason).toBeUndefined();
+
+    const body = openaiTurnEvent(2);
+    if (body.common?.kind !== "turn.finished") throw new Error("fixture is a turn");
+    const { turn } = body.common;
+    if (turn.native.format !== "openai_agents.responses/v1") throw new Error("an OpenAI turn");
+    const withNative = (native: Partial<typeof turn.native>) =>
+      parseAgentLiveEvent({
+        ...body,
+        common: { ...body.common, turn: { ...turn, native: { ...turn.native, ...native } } },
+      });
+    expect(viewer.turn(withNative({ refusal: "I can't help." })).error).toBe(true);
+    expect(viewer.turn(withNative({ answer: true })).lm?.finishReason).toBe("answer");
+    expect(activityLabel("agent.started", "native")).not.toBe("agent.started");
   });
 });
