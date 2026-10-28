@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, Valid
 from pydantic import create_model as create_pydantic_model
 from pydantic_ai import Agent, Tool
 from pydantic_ai.capabilities import Capability
-from pydantic_ai.exceptions import AgentRunError, ToolFailed
+from pydantic_ai.exceptions import AgentRunError, ModelRetry, ToolFailed
 from pydantic_ai.messages import (
     BaseToolCallPart,
     BaseToolReturnPart,
@@ -418,13 +418,19 @@ def _output_files(
 
 
 def _failing_as_tool_errors(function: Callable[..., object]) -> Callable[..., object]:
-    """``function`` reporting its exceptions to the model, which can recover."""
+    """``function`` reporting its exceptions to the model, which can recover.
+
+    A tool that raises Pydantic AI's own ``ModelRetry`` or ``ToolFailed`` keeps its
+    meaning: the model is asked to call again, or told the call failed.
+    """
     if inspect.iscoroutinefunction(function):
 
         @functools.wraps(function)
         async def call_async(*args: object, **kwargs: object) -> object:
             try:
                 return await function(*args, **kwargs)
+            except (ModelRetry, ToolFailed):
+                raise
             except Exception as exc:
                 raise ToolFailed(f"{type(exc).__name__}: {exc}") from exc
 
@@ -434,6 +440,8 @@ def _failing_as_tool_errors(function: Callable[..., object]) -> Callable[..., ob
     def call(*args: object, **kwargs: object) -> object:
         try:
             result = function(*args, **kwargs)
+        except (ModelRetry, ToolFailed):
+            raise
         except Exception as exc:
             raise ToolFailed(f"{type(exc).__name__}: {exc}") from exc
         if inspect.isawaitable(result):
@@ -560,7 +568,7 @@ def _arguments(part: BaseToolCallPart) -> JsonValue:
             return _bounded(_JSON.validate_json(part.args))
         except ValidationError:
             return _bounded(part.args)
-    return _bounded(evidence_value(part.args or {}))
+    return _bounded(evidence_value(part.args_as_dict()))
 
 
 def _within_budget(calls: tuple[ToolCall, ...]) -> tuple[ToolCall, ...]:
