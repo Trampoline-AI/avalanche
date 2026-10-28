@@ -15,12 +15,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
-    Annotated,
     Any,
     Literal,
-    Union,
-    get_args,
-    get_origin,
     get_type_hints,
 )
 
@@ -83,6 +79,7 @@ from ...agent.trace import (
 from ...file import File
 from ...references import AgentOutputFolder
 from ...workspace import Workspace
+from .._file_fields import FileFields, input_files
 from .runtime import unknown_sdk_options
 
 if TYPE_CHECKING:
@@ -110,41 +107,9 @@ async def run(
     runtime: ClaudeAgent, request: AgentRequest, events: AgentEventSink
 ) -> AgentRunOutcome:
     signature = request.signature
-    _check_inputs(request)
-    workspace_inputs = [
-        name
-        for name, info in signature.input_model.model_fields.items()
-        if info.annotation is Workspace
-    ]
-    if len(workspace_inputs) > 1:
-        raise AgentStepError(
-            f"agent step {request.step_name!r}: ClaudeAgent accepts at most one ava.Workspace "
-            f"input, got {workspace_inputs}"
-        )
-    workspace_outputs = [
-        name
-        for name, info in signature.output_model.model_fields.items()
-        if info.annotation is Workspace
-    ]
-    file_outputs = {
-        name: info.annotation is File
-        for name, info in signature.output_model.model_fields.items()
-        if info.annotation in (File, list[File])
-    }
-    unsupported_outputs = [
-        name
-        for name, info in signature.output_model.model_fields.items()
-        if name not in file_outputs
-        and (
-            _mentions(info.annotation, File)
-            or (info.annotation is not Workspace and _mentions(info.annotation, Workspace))
-        )
-    ]
-    if unsupported_outputs:
-        raise AgentStepError(
-            f"agent step {request.step_name!r}: ClaudeAgent outputs that hold files must be "
-            f"typed exactly ava.File, list[ava.File] or ava.Workspace {unsupported_outputs}"
-        )
+    fields = FileFields.of(request, runtime="ClaudeAgent")
+    workspace_outputs = list(fields.workspace_outputs)
+    file_outputs = fields.file_outputs
     if runtime.narrate and _SUMMARY_FIELD in signature.output_model.model_fields:
         raise AgentStepError(
             f"agent step {request.step_name!r}: with narrate on, ClaudeAgent asks Claude for "
@@ -153,8 +118,8 @@ async def run(
         )
     workspace: Workspace | None = None
     with contextlib.ExitStack() as stack:
-        if workspace_inputs:
-            workspace = getattr(request.inputs, workspace_inputs[0])
+        if fields.workspace_input is not None:
+            workspace = getattr(request.inputs, fields.workspace_input)
             # A reference workspace runs in place, so the agent's writes land in the
             # host's directory; a value workspace runs in its temporary copy.
             directory = workspace.path
@@ -185,7 +150,7 @@ async def run(
             {
                 str(path)
                 for path in (
-                    *(file.path.parent for file in _input_files(request)),
+                    *(file.path.parent for file in input_files(request)),
                     *((output_folder.path,) if output_folder is not None else ()),
                     *((plugin,) if plugin is not None else ()),
                 )
@@ -556,17 +521,6 @@ def _read_only_inside(folder: Path) -> HookCallback:
     return check
 
 
-def _input_files(request: AgentRequest) -> list[File]:
-    files: list[File] = []
-    for name, info in request.signature.input_model.model_fields.items():
-        value = getattr(request.inputs, name)
-        if info.annotation is File:
-            files.append(value)
-        elif info.annotation == list[File]:
-            files.extend(value)
-    return files
-
-
 async def _session(*, prompt: str, options: ClaudeAgentOptions) -> AsyncIterator[Message]:
     """The session's messages up to its result; closing it awaits the CLI's exit."""
     async with ClaudeSDKClient(options=options) as client:
@@ -669,40 +623,6 @@ def _system_prompt(
         return prompt
     # Claude Code's own system prompt comes first; the step's follows it.
     return SystemPromptPreset(type="preset", preset=preset, append=prompt)
-
-
-def _mentions(annotation: object, target: type, seen: frozenset[type] = frozenset()) -> bool:
-    """Whether ``target`` appears anywhere in a field type, including inside models."""
-    if annotation is target:
-        return True
-    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
-        if annotation in seen:
-            return False
-        return any(
-            _mentions(field.annotation, target, seen | {annotation})
-            for field in annotation.model_fields.values()
-        )
-    origin = get_origin(annotation)
-    if origin is None:
-        return False
-    if origin is Annotated:
-        return _mentions(get_args(annotation)[0], target, seen)
-    if origin in (Union, types.UnionType) or isinstance(origin, type):
-        return any(_mentions(argument, target, seen) for argument in get_args(annotation))
-    return False
-
-
-def _check_inputs(request: AgentRequest) -> None:
-    """Files and workspaces are supported only as whole input field types."""
-    for name, info in request.signature.input_model.model_fields.items():
-        annotation = info.annotation
-        if annotation in (File, Workspace, list[File]):
-            continue
-        if _mentions(annotation, File) or _mentions(annotation, Workspace):
-            raise AgentStepError(
-                f"agent step {request.step_name!r}: ClaudeAgent input {name!r} must be typed "
-                "exactly ava.File, list[ava.File] or ava.Workspace when it holds files"
-            )
 
 
 def _result_errors(result: ResultMessage) -> tuple[str, ...]:

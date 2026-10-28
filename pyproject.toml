@@ -49,6 +49,9 @@ claude = [
 openai = [
     "openai-agents>=0.24.0",
 ]
+pydantic-ai = [
+    "pydantic-ai>=2.63.0",
+]
 
 [dependency-groups]
 dev = [
