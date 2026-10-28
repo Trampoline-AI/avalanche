@@ -16,7 +16,11 @@ from typing import Any, Callable, Literal
 from pydantic import ValidationError
 
 from avalanche._agent_trace import AgentTraceEnvelope
-from avalanche.agent.declaration import AgentDeclaration, ClaudeAgentDeclaration
+from avalanche.agent.declaration import (
+    AgentDeclaration,
+    ClaudeAgentDeclaration,
+    OpenAIAgentDeclaration,
+)
 from avalanche.agent.live import (
     AgentLiveEvent,
     AgentTraceFinished,
@@ -1727,6 +1731,16 @@ class UIStore:
                 "skills": step_skills,
                 "models": {"main": runtime["model"]},
                 "runtime": {**runtime["settings"], "builtin_tools": runtime["builtin_tools"]},
+                "packages": [],
+                "modules": [],
+                "tools": step_tools,
+            }
+        if isinstance(declaration.runtime, OpenAIAgentDeclaration):
+            return {
+                **common,
+                "skills": step_skills,
+                "models": {"main": runtime["model"]},
+                "runtime": runtime["settings"],
                 "packages": [],
                 "modules": [],
                 "tools": step_tools,

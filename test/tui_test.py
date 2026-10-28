@@ -2126,3 +2126,32 @@ def test_claude_declarations_fill_the_metadata_sections(store):
             "files": ["references/style.md"],
         }
     }
+
+
+def test_openai_declarations_fill_the_metadata_sections(store):
+    from avalanche.agent.declaration import (
+        AgentDeclaration,
+        OpenAIAgentDeclaration,
+        SignatureDeclaration,
+        ToolDeclaration,
+    )
+
+    declaration = AgentDeclaration(
+        signature=SignatureDeclaration(name="Sum", instructions="Add.", inputs=(), outputs=()),
+        tools=(ToolDeclaration(name="lookup", description="", source_code=""),),
+        skills=(),
+        runtime=OpenAIAgentDeclaration(
+            model="gpt-5.4-mini", settings={"max_turns": 4, "narrate": True}
+        ),
+    )
+    store.current_workflow = replace(
+        store.current_workflow, agent_declarations={"agent": declaration}
+    )
+    store.select_node(store.all_nodes[0])
+
+    sections = store.agent_declaration_sections()
+
+    assert sections["models"] == {"main": "gpt-5.4-mini"}
+    assert sections["runtime"] == {"max_turns": 4, "narrate": True}
+    assert [tool["name"] for tool in sections["tools"]] == ["lookup"]
+    assert sections["skills"] == {}
