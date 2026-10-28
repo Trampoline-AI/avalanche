@@ -266,8 +266,8 @@ the step raises `TypeError` naming the `runtime=` replacement.
 ### Claude agent steps
 
 `ava.runtimes.ClaudeAgent` runs a step with Claude through the Claude Agent SDK
-instead of PredictRLM. Install the `claude` extra and the Claude Code CLI, pick a
-model, and use the step exactly as before:
+instead of PredictRLM. Install the `claude` extra, which brings the Claude Code
+CLI with it, pick a model, and use the step exactly as before:
 
 ```python
 @ava.agent_step(

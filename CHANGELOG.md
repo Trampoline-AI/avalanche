@@ -203,8 +203,9 @@
   (a failed result with no error list keeps its result text, cut to 4096 characters). BREAKING-PROTOCOL: part of Delta protocol 2.0
   (final trace body and trace header change; new `TraceHeaderV2.native_json`).
 - Agents: new `ava.runtimes.ClaudeAgent` runs agent steps with Claude through the
-  Claude Agent SDK. Install the new `claude` extra (`avalanche-ai[claude]`) and the
-  Claude Code CLI, then choose a model with `ClaudeAgent(model="claude-haiku-5-5")`.
+  Claude Agent SDK. Install the new `claude` extra (`avalanche-ai[claude]`), whose
+  SDK package ships the Claude Code CLI, then choose a model with
+  `ClaudeAgent(model="claude-haiku-5-5")`.
   The CLI signs in with the first of `ANTHROPIC_API_KEY`, a subscription token from
   `claude setup-token` (`CLAUDE_CODE_OAUTH_TOKEN`), and an existing `claude` login. Each call
   runs without the user's Claude settings, MCP servers or connectors; step tools are

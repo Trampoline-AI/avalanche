@@ -79,7 +79,7 @@ A runtime is the agent engine that runs an agent step. The step's signature, too
 | Runtime | How the agent works | Install |
 | --- | --- | --- |
 | `ava.runtimes.PredictRLM(...)` (default) | Writes and runs Python in a sandbox, with a second model for structured sub-predictions. | Included. |
-| `ava.runtimes.ClaudeAgent(...)` | Runs Claude through the Claude Code CLI, using your step tools and any Claude Code tools you enable. | `uv add 'avalanche-ai[claude]'` and the Claude Code CLI. |
+| `ava.runtimes.ClaudeAgent(...)` | Runs Claude through the Claude Code CLI, using your step tools and any Claude Code tools you enable. | `uv add 'avalanche-ai[claude]'`; it ships the Claude Code CLI. |
 
 The data every runtime shares (the request, result, trace and live events) is on [Agent runtimes](../agent-runtime-contract.md). Each runtime's settings, its own trace and event data, and how it fills the shared data are on its page: [PredictRLM](../runtimes/predict-rlm.md) and [ClaudeAgent](../runtimes/claude-agent.md). [Agent runtime models](../agent-runtime-models.md) lists every model of the layer.
 
@@ -140,7 +140,7 @@ ava.runtimes.ClaudeAgent(
 
 Avalanche checks only the name: an unknown one raises `ValueError` when the runtime is built if the `claude` extra is installed there, and `AgentStepError` when the step runs otherwise. `mcp_servers`, `hooks`, `plugins`, `allowed_tools`, `add_dirs`, and lists given as `tools` or `skills`, are added to what Avalanche sets for the step; a server named `avalanche` raises `AgentStepError`. `system_prompt`, `output_format` and `cwd` raise `ValueError`: use `system_prompt_append`, the signature's outputs and an `ava.Workspace` input instead. Any other option replaces Avalanche's value; replacing `setting_sources` or `strict_mcp_config` lets your own Claude settings or MCP servers reach the step. A step's options replace the workflow default's option by option. These options are never published or recorded, so `env` values and MCP credentials stay in the process that runs the step; with `RayExecutor` they must pickle. The full rules are on the [ClaudeAgent runtime](../runtimes/claude-agent.md#claude-agent-sdk-options) page.
 
-**Setup.** Install the `claude` extra and the Claude Code CLI on every machine that runs the step, Ray workers included. A workflow that only declares Claude steps imports and publishes without them; running a step without the SDK raises `AgentStepExecutionError` naming the extra.
+**Setup.** Install the `claude` extra on every machine that runs the step, Ray workers included. The Claude Agent SDK package it installs ships the Claude Code CLI; a separately installed `claude` CLI is used only where the package has none of its own. A workflow that only declares Claude steps imports and publishes without them; running a step without the SDK raises `AgentStepExecutionError` naming the extra.
 
 **Sign-in.** The CLI signs in as it does in a script, using the first of:
 

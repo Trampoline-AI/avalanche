@@ -6,8 +6,10 @@ drives the Claude Code CLI. Claude works in a folder, calls your step's tools an
 any Claude Code tools you enable, such as `Read` or `Bash`, and answers with JSON
 that matches the signature's outputs.
 
-Install it with `uv add 'avalanche-ai[claude]'`, and install the `claude` CLI
-wherever the step runs, Ray workers included. The CLI signs in as it does in a
+Install it with `uv add 'avalanche-ai[claude]'` wherever the step runs, Ray
+workers included. The Claude Agent SDK package ships the Claude Code CLI, so
+nothing else needs installing; a `claude` CLI you installed yourself is used only
+where the SDK package has no CLI of its own. The CLI signs in as it does in a
 terminal: a `claude` login, `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`,
 or `ANTHROPIC_API_KEY`.
 
@@ -364,7 +366,7 @@ Sent once the session has ended and its outputs, if any, are built.
 | Final event | Claude |
 | --- | --- |
 | `trace_finished` | The session returned a result. `outputs` is Claude's JSON answer without `run_summary`, with `ava.File` outputs as file references and `ava.Workspace` outputs by reference (see [file and workspace values](../agent-runtime-contract.md#file-and-workspace-values)). `outputs` is `None` when the header's `status` is `"failed"`, or when turning the answer into outputs failed, for example a file path outside the output folder; the step then raises. |
-| `trace_unavailable` | The call was cancelled, the Claude CLI is not installed, the SDK raised, or the CLI ended without a result. |
+| `trace_unavailable` | The call was cancelled, no Claude CLI was found, the SDK raised, or the CLI ended without a result. |
 
 The final event of the call above:
 
