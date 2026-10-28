@@ -6,7 +6,6 @@ import asyncio
 import importlib
 import os
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -239,6 +238,31 @@ async def test_a_failing_tool_is_told_to_the_model_and_kept_on_its_call(script):
     assert "ValueError: no bonus today" in call.error
     # The agent handled the failure, so the turn did not fail.
     assert not result.trace.turns[0].failed
+
+
+@pytest.mark.asyncio
+async def test_a_tool_raising_model_retry_asks_the_model_to_call_again(script):
+    from pydantic_ai import ModelRetry
+
+    def picky(name: str) -> int:
+        """Accept only the name b."""
+        if name != "b":
+            raise ModelRetry("use the name b")
+        return 10
+
+    script(
+        _response(_call("picky", {"name": "a"}, "first")),
+        _response(_call("picky", {"name": "b"}, "second")),
+        _answer(total=15),
+    )
+    result = await ava.Agent(
+        signature=Total, step_name="total", runtime=PydanticAIAgent(model=MODEL), tools=(picky,)
+    )(a=2, b=3)
+
+    first, second, _ = result.trace.turns
+    assert "use the name b" in first.tool_calls[0].error
+    assert second.tool_calls[0].result == 10
+    assert result.trace.header.native.retries == 1
 
 
 @pytest.mark.asyncio
@@ -748,13 +772,23 @@ async def test_live_loads_a_step_skill_and_reads_its_file(tmp_path):
     assert {"load_capability", "read_skill_file"} <= set(calls)
 
 
-def test_workspace_paths_resolve_inside_the_folder(tmp_path):
-    (tool,) = [t for t in sdk_module._workspace_tools(tmp_path) if t.name == "read_file"]
-    (tmp_path / "a.txt").write_text("a")
-    assert tool.function("a.txt") == "a"
-    outside = tmp_path.parent / "outside.txt"
-    outside.write_text("secret")
-    (tmp_path / "link.txt").symlink_to(outside)
-    with pytest.raises(Exception, match="outside the working folder"):
-        tool.function("link.txt")
-    assert Path(tmp_path / "a.txt").exists()
+@pytest.mark.asyncio
+async def test_a_link_out_of_the_workspace_is_refused(script, tmp_path):
+    folder = tmp_path / "work"
+    folder.mkdir()
+    (tmp_path / "secret.txt").write_text("secret")
+    (folder / "link.txt").symlink_to(tmp_path / "secret.txt")
+    script(
+        _response(
+            _call("read_file", {"path": "link.txt"}, "read"),
+            _call("write_file", {"path": "link.txt", "text": "x"}, "write"),
+        ),
+        _answer(summary="done"),
+    )
+    result = await ava.Agent(
+        signature=Edit, step_name="edit", runtime=PydanticAIAgent(model=MODEL)
+    )(workspace=ava.Workspace.from_directory(folder, reference="work"))
+
+    calls = result.trace.turns[0].tool_calls
+    assert all("outside the working folder" in call.error for call in calls)
+    assert (tmp_path / "secret.txt").read_text() == "secret"
