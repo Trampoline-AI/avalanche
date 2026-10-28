@@ -86,20 +86,23 @@ def _assistant(*blocks, usage=None, message_id=None) -> AssistantMessage:
     )
 
 
-def _closed(stop_reason: str, *, output_tokens: int) -> StreamEvent:
-    """A response's closing stream event, with its final token counts."""
+def _closed(stop_reason: str, *, output_tokens: int, input_counts: bool = True) -> StreamEvent:
+    """A response's closing stream event, with its final token counts.
+
+    The API guarantees only the output count; some backends leave the input counts out.
+    """
+    inputs = {
+        "input_tokens": 3,
+        "cache_read_input_tokens": 900,
+        "cache_creation_input_tokens": 40,
+    }
     return StreamEvent(
         uuid=f"event-{next(_MESSAGE_IDS)}",
         session_id="session-1",
         event={
             "type": "message_delta",
             "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-            "usage": {
-                "input_tokens": 3,
-                "output_tokens": output_tokens,
-                "cache_read_input_tokens": 900,
-                "cache_creation_input_tokens": 40,
-            },
+            "usage": {"output_tokens": output_tokens, **(inputs if input_counts else {})},
         },
     )
 
@@ -326,6 +329,38 @@ async def test_a_signature_output_named_like_the_run_summary_needs_narration_off
         signature=Reported, step_name="report", runtime=ClaudeAgent(narrate=False)
     )
     assert (await quiet(a=1)).outputs.run_summary == "mine"
+
+
+@pytest.mark.asyncio
+async def test_a_closing_event_without_input_counts_keeps_those_the_response_started_with(
+    replay,
+):
+    answer = ToolUseBlock(id="call-1", name="StructuredOutput", input={"total": 5})
+    replay(
+        [
+            _init(),
+            _assistant(answer, usage={"input_tokens": 7, "output_tokens": 1}),
+            _closed("tool_use", output_tokens=30, input_counts=False),
+            UserMessage(content=[ToolResultBlock(tool_use_id="call-1", content="ok")]),
+            _result({"total": 5}),
+        ]
+    )
+    (turn,) = (await _agent()(a=2, b=3)).trace.turns
+    assert turn.usage == TokenUsage(input_tokens=7, output_tokens=30)
+    assert turn.native.stop_reason == "tool_use"
+
+    # With no input count anywhere, the turn's usage is not reported.
+    replay(
+        [
+            _init(),
+            AssistantMessage(content=[answer], model=MODEL, message_id="no-usage"),
+            _closed("tool_use", output_tokens=30, input_counts=False),
+            UserMessage(content=[ToolResultBlock(tool_use_id="call-1", content="ok")]),
+            _result({"total": 5}),
+        ]
+    )
+    (turn,) = (await _agent()(a=2, b=3)).trace.turns
+    assert turn.usage is None
 
 
 @pytest.mark.asyncio
