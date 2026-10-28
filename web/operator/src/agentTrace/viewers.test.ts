@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   claudeTurnEvent,
   openaiTurnEvent,
+  pydanticAiTurnEvent,
   runStartedEvent,
   turnEvent,
 } from "../test/agentTraceFixtures";
@@ -15,6 +16,7 @@ describe("agent trace viewers", () => {
       "claude_agent.messages/v1",
       "openai_agents.responses/v1",
       "predict_rlm.run/v1",
+      "pydantic_ai.messages/v1",
     ]);
   });
 
@@ -200,5 +202,53 @@ describe("agent trace viewers", () => {
     expect(viewer.turn(withNative({ refusal: "I can't help." })).error).toBe(true);
     expect(viewer.turn(withNative({ answer: true })).lm?.finishReason).toBe("answer");
     expect(activityLabel("agent.started", "native")).not.toBe("agent.started");
+  });
+
+  it("maps a Pydantic AI turn with its timing, cost and finish reason", () => {
+    const event = parseAgentLiveEvent(pydanticAiTurnEvent(2));
+    const viewer = turnViewer(event);
+
+    expect(viewer.turn(event)).toMatchObject({
+      iteration: 2,
+      message: "Answer text 2.",
+      reasoning: "Thinking 2.",
+      error: false,
+      durationMs: 900,
+      toolCalls: [{ name: "lookup", arguments: { name: "a" }, result: 10 }],
+      predictCalls: [],
+      lm: { finishReason: "tool_call" },
+      usage: { main: { inputTokens: 903, outputTokens: 5, cost: 0.0004 } },
+      submitsAnswer: false,
+    });
+    expect(viewer.turn(event).execution).toBeUndefined();
+  });
+
+  it("marks a Pydantic AI turn that failed or only answered", () => {
+    const body = pydanticAiTurnEvent(3);
+    if (body.common?.kind !== "turn.finished") throw new Error("fixture is a turn");
+    const { turn } = body.common;
+    if (turn.native.format !== "pydantic_ai.messages/v1") throw new Error("a Pydantic AI turn");
+    const failed = parseAgentLiveEvent({
+      ...body,
+      common: {
+        ...body.common,
+        turn: { ...turn, native: { ...turn.native, finish_reason: "error" } },
+      },
+    });
+    const answer = parseAgentLiveEvent({
+      ...body,
+      common: {
+        ...body.common,
+        turn: {
+          ...turn,
+          tool_calls: turn.tool_calls.map((call) => ({ ...call, name: "final_result" })),
+        },
+      },
+    });
+    const viewer = turnViewer(failed);
+
+    expect(viewer.turn(failed).error).toBe(true);
+    expect(viewer.turn(answer).submitsAnswer).toBe(true);
+    expect(activityLabel("tool.retried", "tool.finished")).not.toBe("tool.retried");
   });
 });

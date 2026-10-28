@@ -7,6 +7,7 @@ import type { AgentTraceStep, TraceHeaderLine } from "../types";
 import { claudeAgentViewer } from "./claudeAgent";
 import { openaiAgentViewer } from "./openaiAgent";
 import { predictRlmViewer } from "./predictRlm";
+import { pydanticAiViewer } from "./pydanticAi";
 
 export interface TraceViewer {
   /** One turn.finished event as the explorer shows it. */
@@ -23,6 +24,7 @@ export const TRACE_VIEWERS = {
   "predict_rlm.run/v1": predictRlmViewer,
   "claude_agent.messages/v1": claudeAgentViewer,
   "openai_agents.responses/v1": openaiAgentViewer,
+  "pydantic_ai.messages/v1": pydanticAiViewer,
 } satisfies Record<NativeEventFormat, TraceViewer>;
 
 // Events every runtime sends; an event without a native part is named by these.
