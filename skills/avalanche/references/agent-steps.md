@@ -248,7 +248,8 @@ report_style = ava.agent.Skill.from_dir("skills/report-style")
 async def draft_proposal(request: ProposalRequest, *, agent: ava.Agent): ...
 ```
 
-Only `ava.runtimes.ClaudeAgent` runs a step's skills today. A PredictRLM step
+`ava.runtimes.ClaudeAgent` and `ava.runtimes.OpenAIAgent` run a step's skills;
+OpenAIAgent's model reads them but cannot run their scripts. A PredictRLM step
 with `skills=` fails before the agent starts; give PredictRLM steps PredictRLM
 skills instead.
 

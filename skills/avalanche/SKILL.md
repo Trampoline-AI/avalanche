@@ -602,8 +602,9 @@ operator-based execution commands, never a standalone Python runner.
   agent steps. Never create a Skill solely to carry instructions for one agent
   step; keep those instructions in its signature docstring. On PredictRLM steps,
   pass reusable PredictRLM skills (`ava.runtimes.predict_rlm.skills`) through the
-  runtime, `runtime=ava.runtimes.PredictRLM(skills=[...])`. On ClaudeAgent steps,
-  pass `ava.agent.Skill` objects (Agent Skills format) in the step's `skills=`.
+  runtime, `runtime=ava.runtimes.PredictRLM(skills=[...])`. On ClaudeAgent and
+  OpenAIAgent steps, pass `ava.agent.Skill` objects (Agent Skills format) in the
+  step's `skills=`.
 - In decorated bodies, `agent` is framework-injected, keyword-only, annotated
   `ava.Agent`, and never passed at DAG call sites. `await agent(...)` returns an
   `ava.agent.AgentResult` whose `outputs` are already validated against the

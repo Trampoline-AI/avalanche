@@ -1,12 +1,13 @@
 # Agent runtimes
 
 An agent step can run on different engines, called runtimes. Avalanche supports
-two:
+three:
 
 | Runtime | Page |
 | --- | --- |
 | `ava.runtimes.PredictRLM(...)` (default) | [PredictRLM](runtimes/predict-rlm.md) |
 | `ava.runtimes.ClaudeAgent(...)` | [ClaudeAgent](runtimes/claude-agent.md) |
+| `ava.runtimes.OpenAIAgent(...)` | [OpenAIAgent](runtimes/openai-agent.md) |
 
 Your step, its result and its trace look the same whatever runtime runs it. This
 page shows that shared data. Each runtime page shows the runtime's settings, the
@@ -217,10 +218,12 @@ class AgentTraceHeader:
     tool_call_count: int          # across all turns
     external_run_id: str | None   # the runtime's own ID for this run
     session_id: str | None        # the runtime's session ID, when it has one
-    native: PredictRLMTraceHeader | ClaudeAgentTraceHeader  # see each runtime page
+    native: PredictRLMTraceHeader | ClaudeAgentTraceHeader | OpenAIAgentTraceHeader
+                                  # see each runtime page
 
     @property
-    def runtime_kind(self) -> Literal["predict_rlm", "claude_agent"]: ...  # from native
+    def runtime_kind(self) -> Literal["predict_rlm", "claude_agent", "openai_agent"]: ...
+                                  # from native
     @property
     def trace_format(self) -> str: ...  # native.format, the shape of every native part
 ```
@@ -243,11 +246,11 @@ class Turn:
     tool_calls: tuple[ToolCall, ...]  # in order
     duration_ms: int | None
     usage: TokenUsage | None      # this turn, every model it called added up
-    native: PredictRLMTurn | ClaudeAgentTurn  # see each runtime page
+    native: PredictRLMTurn | ClaudeAgentTurn | OpenAIAgentTurn  # see each runtime page
 ```
 
-A turn has failed when its runtime says so: PredictRLM's code failed, or Claude
-got an API error.
+A turn has failed when its runtime says so: PredictRLM's code failed, Claude
+got an API error, or an OpenAI model refused.
 
 ### `ToolCall`
 
@@ -300,7 +303,8 @@ never its bytes or host path (see [file references](file-references.md)), in the
 depend on the runtime: PredictRLM records files in tool arguments and results the
 same way. ClaudeAgent records a tool's result as the JSON Claude got, so an
 `ava.File` a tool returns appears in its JSON form, and an `ava.Workspace` holding
-its files appears with their contents.
+its files appears with their contents. OpenAIAgent records a tool's result as the
+JSON text the model got, with the same forms.
 
 ```python
 class FileInputEvidence:            # an ava.File
@@ -350,11 +354,12 @@ class AgentLiveEvent:
     sequence: int                 # from 1, in order within the call
     timestamp_ns: int             # when Avalanche received it
     common: AgentEvent | None     # None when the event means nothing outside its runtime
-    native: PredictRLMNativeEvent | ClaudeAgentNativeEvent | None  # see each runtime page;
+    native: PredictRLMNativeEvent | ClaudeAgentNativeEvent | OpenAIAgentNativeEvent | None
+                                  # see each runtime page;
                                   # None when common says everything
 
     @property
-    def runtime_kind(self) -> Literal["predict_rlm", "claude_agent"] | None: ...
+    def runtime_kind(self) -> Literal["predict_rlm", "claude_agent", "openai_agent"] | None: ...
 ```
 
 At least one of `common` and `native` is set. `runtime_kind` is read from the
@@ -508,7 +513,7 @@ class AgentTraceUnavailable:      # the call ended without a trace
     kind: Literal["trace_unavailable"]
     schema_version: Literal[2]
     invocation_id: str
-    runtime_kind: Literal["predict_rlm", "claude_agent"]
+    runtime_kind: Literal["predict_rlm", "claude_agent", "openai_agent"]
     status: Literal["succeeded", "failed", "cancelled"]
     error: str
     external_run_id: str | None
@@ -626,6 +631,8 @@ class JsonOutputs:                # a JSON document, validated in strict JSON mo
 
 PredictRLM returns `PythonOutputs`. ClaudeAgent returns `JsonOutputs`, or
 `PythonOutputs` when the signature has `ava.File` or `ava.Workspace` outputs.
+OpenAIAgent returns `JsonOutputs`, or `PythonOutputs` when the signature has
+`ava.File` outputs.
 
 ```python
 PythonOutputs(values={"summary": "Avalanche runs DAGs.", "word_count": 3})
