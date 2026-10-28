@@ -793,6 +793,22 @@ class _StopDelta(BaseModel):
     stop_reason: str | None
 
 
+class _InputUsage(BaseModel):
+    """Input-side token counts; the API may leave any of them out of a stream event."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+
+
+class _DeltaUsage(_InputUsage):
+    """A closing event's counts: only the final output count is guaranteed."""
+
+    output_tokens: int
+
+
 class _MessageDelta(BaseModel):
     """A response's closing stream event: its stop reason and final token counts."""
 
@@ -800,7 +816,7 @@ class _MessageDelta(BaseModel):
 
     type: Literal["message_delta"]
     delta: _StopDelta
-    usage: _SdkUsage
+    usage: _DeltaUsage
 
 
 class _SystemInit(BaseModel):
@@ -814,16 +830,35 @@ class _SystemInit(BaseModel):
 def _usage(raw: Mapping[str, Any] | None, cost: float | None = None) -> TokenUsage | None:
     if raw is None:
         return None
-    return _token_usage(_SdkUsage.model_validate(raw), cost)
-
-
-def _token_usage(usage: _SdkUsage, cost: float | None = None) -> TokenUsage:
+    usage = _SdkUsage.model_validate(raw)
     return TokenUsage(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         cache_read_input_tokens=usage.cache_read_input_tokens,
         cache_creation_input_tokens=usage.cache_creation_input_tokens,
         cost_usd=cost,
+    )
+
+
+def _final_usage(closing: _DeltaUsage, message: AssistantMessage) -> TokenUsage | None:
+    """A response's usage: its final output count, and input counts from the closing
+    event or, when it leaves them out, from the response's messages, which carry them
+    from the moment it started. Without any input count the usage is not reported."""
+    started = _InputUsage.model_validate(message.usage or {})
+    input_tokens = (
+        closing.input_tokens if closing.input_tokens is not None else started.input_tokens
+    )
+    if input_tokens is None:
+        return None
+    return TokenUsage(
+        input_tokens=input_tokens,
+        output_tokens=closing.output_tokens,
+        cache_read_input_tokens=closing.cache_read_input_tokens
+        if closing.cache_read_input_tokens is not None
+        else started.cache_read_input_tokens,
+        cache_creation_input_tokens=closing.cache_creation_input_tokens
+        if closing.cache_creation_input_tokens is not None
+        else started.cache_creation_input_tokens,
     )
 
 
@@ -994,7 +1029,7 @@ class _Transcript:
             reasoning=reasoning or None,
             tool_calls=tuple(pending.calls.values()),
             duration_ms=None,
-            usage=None if pending.final is None else _token_usage(pending.final.usage),
+            usage=None if pending.final is None else _final_usage(pending.final.usage, message),
             native=native.ClaudeAgentTurn(
                 message_id=message.message_id,
                 model=message.model,
