@@ -20,6 +20,7 @@ from avalanche.agent.declaration import (
     AgentDeclaration,
     ClaudeAgentDeclaration,
     OpenAIAgentDeclaration,
+    PydanticAIDeclaration,
 )
 from avalanche.agent.live import (
     AgentLiveEvent,
@@ -1741,6 +1742,16 @@ class UIStore:
                 "skills": step_skills,
                 "models": {"main": runtime["model"]},
                 "runtime": {**runtime["settings"], "builtin_tools": runtime["builtin_tools"]},
+                "packages": [],
+                "modules": [],
+                "tools": step_tools,
+            }
+        if isinstance(declaration.runtime, PydanticAIDeclaration):
+            return {
+                **common,
+                "skills": step_skills,
+                "models": {"main": runtime["model"]},
+                "runtime": {**runtime["settings"], "agent_options": runtime["agent_options"]},
                 "packages": [],
                 "modules": [],
                 "tools": step_tools,
