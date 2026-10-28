@@ -56,7 +56,7 @@ export interface WorkspaceDeployments {
   onSelect: (id: string) => void;
   /** Optional non-current-row action with an inline confirmation. Absent: no action. */
   setCurrent?: {
-    /** Action label. Default "Set current". */
+    /** Action label, rendered lowercase. Default "set current". */
     label?: string;
     /** Confirmation wording for the chosen deployment. */
     confirmText: (item: WorkspaceDeployment) => string;

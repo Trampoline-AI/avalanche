@@ -57,7 +57,7 @@ it.each([false, true])(
     expect(view.container.querySelector(".run-list-columns > :last-child")).toHaveClass(
       "text-right",
     );
-    const action = screen.getByRole("button", { name: "See all" });
+    const action = screen.getByRole("button", { name: "see all" });
     expect(current).not.toContainElement(action);
     expect(action).toHaveClass("underline", "hover:no-underline");
     expect(action).not.toHaveClass("border", "hover:bg-canvas");
@@ -103,7 +103,7 @@ it.each([false, true])(
     expect(
       screen.queryByRole("button", { name: "Current deployment" }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "See all" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "see all" })).not.toBeInTheDocument();
     const previous = await screen.findByRole("button", { name: /^dpl-previous-full-id,/ });
     expect(previous).toHaveAttribute("title", deploymentItems[1].id);
     expect(previous).toHaveAttribute("aria-pressed", "true");
@@ -115,7 +115,7 @@ it.each([false, true])(
     );
     const currentDeployment = screen.getByRole("button", { name: /^dpl-current-full-id,/ });
     expect(currentDeployment).toHaveAttribute("aria-current", "true");
-    expect(currentDeployment.parentElement).toHaveTextContent("● CURRENT");
+    expect(currentDeployment.parentElement).toHaveTextContent(/current\s*●/);
     expect(currentDeployment).toHaveClass("text-left");
     expect(currentDeployment.nextElementSibling).toHaveClass("justify-end", "text-right");
     expect(view.container.querySelector(".deployment-list-status")).toHaveClass(
@@ -123,7 +123,7 @@ it.each([false, true])(
       "text-right",
     );
     expect(
-      within(currentDeployment.parentElement!).queryByRole("button", { name: "Set current" }),
+      within(currentDeployment.parentElement!).queryByRole("button", { name: "set current" }),
     ).not.toBeInTheDocument();
     fireEvent.click(currentDeployment);
     expect(onSelect).toHaveBeenLastCalledWith(deploymentItems[0].id);
@@ -134,7 +134,7 @@ it.each([false, true])(
     fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
     expect(onTimelineViewChange).toHaveBeenLastCalledWith("runs");
     const restoredCurrent = screen.getByRole("button", { name: "Current deployment" });
-    expect(screen.getByRole("button", { name: "See all" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "see all" })).toBeVisible();
     fireEvent.click(restoredCurrent);
     expect(onSelectRun).toHaveBeenLastCalledWith(undefined);
     expect(screen.getByRole("tab", { name: "Overview" })).toHaveAttribute(
@@ -243,16 +243,16 @@ it.each([
     const view = render(
       <RunListPanel {...timelineProps} deployments={deployments} timelineView="deployments" />,
     );
-    const actions = await screen.findAllByRole("button", { name: label ?? "Set current" });
+    const actions = await screen.findAllByRole("button", { name: (label ?? "set current").toLowerCase() });
     expect(actions).toHaveLength(2);
     const [action] = actions;
     const previous = screen.getByRole("button", { name: /^dpl-previous-full-id,/ });
     expect(previous).not.toContainElement(action);
     const current = screen.getByRole("button", { name: /^dpl-current-full-id,/ });
     expect(current).toHaveAttribute("aria-current", "true");
-    expect(current.parentElement).toHaveTextContent("● CURRENT");
+    expect(current.parentElement).toHaveTextContent(/current\s*●/);
     expect(
-      within(current.parentElement!).queryByRole("button", { name: label ?? "Set current" }),
+      within(current.parentElement!).queryByRole("button", { name: (label ?? "set current").toLowerCase() }),
     ).not.toBeInTheDocument();
     expect(action).toBeVisible();
     expect(action).toBeEnabled();
@@ -261,12 +261,19 @@ it.each([
       "border-0",
       "bg-transparent",
       "p-0",
-      "text-acid",
-      "no-underline",
+      "text-secondary",
+      "underline",
       "hover:no-underline",
       "focus-visible:outline-acid",
     );
-    expect(action).not.toHaveClass("border", "border-line", "underline", "hover:underline");
+    expect(action).not.toHaveClass("border", "border-line", "uppercase", "hover:underline");
+    // Same link style as the Current row action; label text first, icon trailing.
+    expect(action.firstElementChild?.tagName).toBe("SPAN");
+    expect(action.lastElementChild?.tagName.toLowerCase()).toBe("svg");
+    const marker = current.parentElement!.querySelector(".deployment-current-marker")!;
+    expect(marker.tagName).toBe("SPAN");
+    expect(marker).not.toHaveClass("underline");
+    expect(marker.textContent?.trim()).toMatch(/^current\s*●$/);
     expect(action.parentElement).toHaveClass("justify-end", "text-right");
     fireEvent.click(action);
     expect(action).toBeDisabled();
@@ -305,13 +312,13 @@ it.each([
         />,
       );
       expect(previous).toHaveAttribute("aria-current", "true");
-      expect(previous.parentElement).toHaveTextContent("● CURRENT");
+      expect(previous.parentElement).toHaveTextContent(/current\s*●/);
       expect(
-        within(previous.parentElement!).queryByRole("button", { name: "Set current" }),
+        within(previous.parentElement!).queryByRole("button", { name: "set current" }),
       ).not.toBeInTheDocument();
       expect(current).not.toHaveAttribute("aria-current");
       expect(
-        within(current.parentElement!).getByRole("button", { name: "Set current" }),
+        within(current.parentElement!).getByRole("button", { name: "set current" }),
       ).toBeEnabled();
     } else {
       await act(async () =>

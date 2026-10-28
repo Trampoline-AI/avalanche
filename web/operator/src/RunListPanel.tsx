@@ -392,7 +392,7 @@ export function RunListPanel({
                 }}
                 className={`current-row-action shrink-0 cursor-pointer rounded border-0 bg-transparent p-0 text-[10px] text-secondary underline underline-offset-2 hover:text-ink hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid ${expanded ? "mr-[20px]" : "mr-[17px]"}`}
               >
-                {currentRowAction.label}
+                {currentRowAction.label.toLocaleLowerCase()}
               </button>
             )}
           </div>

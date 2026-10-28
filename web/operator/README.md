@@ -169,7 +169,7 @@ run history. Hosts supply data and callbacks; operator-ui owns the rendered UI.
 | Prop                                                             | Default / behavior                                                                                                   |
 | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
 | `currentLabel?: string`                                          | `"Current definition"` (nullish fallback). Delta uses `"Current deployment"`.                                        |
-| `currentRowAction?: { label: string; onClick: () => void }`      | No action or caret. When supplied, a separate muted 10px button; clicking it does not select Current.                |
+| `currentRowAction?: { label: string; onClick: () => void }`      | No action or caret. When supplied, lowercase underlined link text (underline off on hover); does not select Current.|
 | `deployments?: WorkspaceDeployments`                             | Absent: no tabs. Present: **Overview \| Deployments** tabs in both compact and expanded headers.                         |
 | `timelineView?: "runs" \| "deployments"`                         | Omitted: internal state starts at `"runs"`. Supplied: controlled by the host. Without `deployments`, only runs show. |
 | `onTimelineViewChange?: (view: "runs" \| "deployments") => void` | No callback by default. Called on tab requests in both modes; controlled hosts must update `timelineView`.           |
@@ -193,8 +193,8 @@ The host's `deployments: WorkspaceDeployments` contains:
 - `items: WorkspaceDeployment[]`: newest-first, workflow-filtered
   `{ id: string; label: string; createdAt: number; current: boolean }` rows.
   `createdAt` is epoch seconds. `label` is displayed; full `id` is in the title
-  and accessible name. Mark at most one item `current` for the primary-color
-  **● CURRENT** marker in the Status column and `aria-current="true"` on its row.
+  and accessible name. Mark at most one item `current` for the
+  **current ●** status text (lowercase, green dot after, not a link) in the Status column and `aria-current="true"` on its row.
 - `hasMore: boolean`, `loading: boolean`, `loadMore?: () => void`: virtualized
   infinite scrolling requests a page within four row-heights of the bottom.
   It latches each request to avoid duplicate scroll calls until the item count
@@ -209,9 +209,9 @@ The host's `deployments: WorkspaceDeployments` contains:
   are rendered by operator-ui, not by the host.
 - `setCurrent?: { label?: string; confirmText: (item: WorkspaceDeployment) => string;
 onConfirm: (id: string) => Promise<void> }` (default none) adds a non-current-row
-  link-style button, labeled **Set current** unless overridden, in the primary colour
-  with a leading icon, no border/background/padding, and no underline even on hover.
-  Hover shifts only the text colour; keyboard focus has a visible ring.
+  link-style button, labeled **set current** unless overridden (rendered lowercase),
+  styled exactly like `currentRowAction`: underlined at rest, underline removed on hover,
+  trailing icon, no border/background/padding; keyboard focus has a visible ring.
   It stays visible on every non-current row and opens an inline confirmation
   with the host's wording and Confirm/Cancel buttons. Row actions are disabled
   while confirmation is open; the requested row shows a spinner and `aria-busy`

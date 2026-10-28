@@ -34,7 +34,7 @@ export function DeploymentList({
   const [confirmationError, setConfirmationError] = useState<string>();
   const confirming = useRef(false);
   const rowHeight = expanded ? 34 : 27.5;
-  const statusColumnClass = `deployment-list-status flex shrink-0 items-center justify-end text-right ${expanded ? "mr-[20px] w-[120px] text-[11px]" : "mr-[17px] w-[100px] text-[10px]"} font-mono leading-none uppercase`;
+  const statusColumnClass = `deployment-list-status flex shrink-0 items-center justify-end text-right ${expanded ? "mr-[20px] w-[120px] text-[11px]" : "mr-[17px] w-[100px] text-[10px]"} font-mono leading-none`;
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollElement.current,
@@ -140,7 +140,7 @@ export function DeploymentList({
           <span className="truncate">Deployment</span>
           <span>Created</span>
         </div>
-        <span className={`${statusColumnClass} text-run-status-muted`}>
+        <span className={`${statusColumnClass} text-run-status-muted uppercase`}>
           <span className="text-[9px] tracking-[0.16em]">Status</span>
         </span>
       </div>
@@ -182,22 +182,26 @@ export function DeploymentList({
                   </button>
                   <div className={statusColumnClass}>
                     {item.current ? (
-                      <span className="whitespace-nowrap tracking-[0.06em] text-acid">
-                        ● CURRENT
+                      <span className="deployment-current-marker inline-flex items-center gap-1 whitespace-nowrap text-secondary">
+                        current
+                        <span aria-hidden="true" className="text-run-status-success">
+                          ●
+                        </span>
                       </span>
                     ) : setCurrent ? (
                       <button
                         type="button"
-                        aria-label={setCurrent.label ?? "Set current"}
+                        aria-label={(setCurrent.label ?? "set current").toLocaleLowerCase()}
                         aria-busy={confirmation?.id === item.id}
                         disabled={!!confirmation || pending}
-                        className="inline-flex max-w-full cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-mono text-[length:inherit] leading-none text-acid uppercase no-underline hover:text-acid-hover hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid disabled:cursor-wait disabled:opacity-50"
+                        className="deployment-set-current inline-flex max-w-full cursor-pointer items-center gap-1 border-0 bg-transparent p-0 font-mono text-[length:inherit] leading-none text-secondary underline underline-offset-2 hover:text-ink hover:no-underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid disabled:cursor-wait disabled:opacity-50"
                         onClick={(event) => {
                           event.stopPropagation();
                           setConfirmation(item);
                           setConfirmationError(undefined);
                         }}
                       >
+                        <span className="truncate">{(setCurrent.label ?? "set current").toLocaleLowerCase()}</span>
                         {confirmation?.id === item.id ? (
                           <LoaderCircle
                             aria-hidden="true"
@@ -206,7 +210,6 @@ export function DeploymentList({
                         ) : (
                           <RotateCcw aria-hidden="true" className="size-3 shrink-0" />
                         )}
-                        <span className="truncate">{setCurrent.label ?? "Set current"}</span>
                       </button>
                     ) : null}
                   </div>

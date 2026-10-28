@@ -776,7 +776,7 @@ describe("operator workflows", () => {
     }
     render(<HostWorkspace />);
     await screen.findByRole("button", { name: "Current deployment" });
-    fireEvent.click(screen.getByRole("button", { name: "See all" }));
+    fireEvent.click(screen.getByRole("button", { name: "see all" }));
     expect(onSelectRun).not.toHaveBeenCalled();
     expect(screen.getByRole("tab", { name: "Deployments" })).toHaveAttribute(
       "aria-selected",
