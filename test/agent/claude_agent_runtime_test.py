@@ -318,6 +318,29 @@ async def test_narration_sits_between_the_instructions_and_the_append_and_can_be
 
 
 @pytest.mark.asyncio
+async def test_the_claude_code_preset_carries_the_step_prompt_as_its_append(replay):
+    seen = replay(_success_stream())
+    await _agent(system_prompt_append="Be terse.")(a=2, b=3)
+    plain = seen["options"]
+    replay(_success_stream())
+    await _agent(system_prompt_preset="claude_code", system_prompt_append="Be terse.")(a=2, b=3)
+    preset = seen["options"]
+
+    assert preset.system_prompt == {
+        "type": "preset",
+        "preset": "claude_code",
+        "append": plain.system_prompt,
+    }
+    # Only the system prompt changes: the answer and the isolation stay the same.
+    assert preset.output_format == plain.output_format
+    assert preset.cwd is not None
+    assert preset.setting_sources == []
+    assert preset.strict_mcp_config is True
+    assert preset.tools == plain.tools
+    assert preset.allowed_tools == plain.allowed_tools
+
+
+@pytest.mark.asyncio
 async def test_an_answer_without_its_run_summary_fails_the_step(replay):
     replay(_success_stream(summary=None))
 
@@ -846,10 +869,12 @@ async def test_step_tools_run_through_the_in_process_tool_server():
 
 def test_declaration_and_merging_follow_the_runtime_rules():
     step = ClaudeAgent(max_turns=3)
-    default = ClaudeAgent(model=MODEL, builtin_tools=["Read"])
+    default = ClaudeAgent(
+        model=MODEL, builtin_tools=["Read"], system_prompt_preset="claude_code"
+    )
 
     assert step.merged_over(default) == ClaudeAgent(
-        model=MODEL, max_turns=3, builtin_tools=["Read"]
+        model=MODEL, max_turns=3, builtin_tools=["Read"], system_prompt_preset="claude_code"
     )
     assert step.declaration(workflow_default=default) == ClaudeAgentDeclaration(
         model=MODEL,
@@ -857,6 +882,7 @@ def test_declaration_and_merging_follow_the_runtime_rules():
             "max_turns": 3,
             "permission_mode": "default",
             "system_prompt_append": None,
+            "system_prompt_preset": "claude_code",
             "max_budget_usd": None,
             "narrate": True,
         },
@@ -1408,7 +1434,7 @@ async def test_collections_avalanche_fills_are_combined_with_the_users(replay, t
 @pytest.mark.parametrize(
     ("option", "value", "pointer"),
     [
-        ("system_prompt", "Be brief.", "system_prompt_append"),
+        ("system_prompt", "Be brief.", "system_prompt_preset"),
         ("output_format", {"type": "json_schema", "schema": {}}, "outputs"),
         ("cwd", "/tmp", "ava.Workspace"),
     ],

@@ -48,6 +48,7 @@ class ClaudeAgent:
     builtin_tools: Sequence[str] = ()         # Claude Code tools usable without asking, e.g. "Read"
     permission_mode: PermissionMode = "default"
     system_prompt_append: str | None = None   # added after the signature's instructions
+    system_prompt_preset: Literal["claude_code"] | None = None  # put Claude Code's prompt first
     max_budget_usd: PositiveFloat | None = None  # most US dollars one call may spend
     narrate: bool = True                      # ask Claude to say what it is doing (see below)
 ```
@@ -70,6 +71,23 @@ answer before the outputs are built and shows it as the answering turn's
 `message`, after any text Claude wrote in that turn. A signature output named
 `run_summary` raises `AgentStepError` unless `narrate=False`. Set `narrate=False`
 to leave out both the paragraph and the field.
+
+By default the system prompt is only what Avalanche builds: the signature's
+instructions, the narration paragraph and `system_prompt_append`. Set
+`system_prompt_preset="claude_code"` to start it with Claude Code's own system
+prompt, the one the `claude` command uses, and add Avalanche's prompt after it:
+
+```python
+runtime = ava.runtimes.ClaudeAgent(
+    model="claude-sonnet-5-5",
+    builtin_tools=("Read", "Edit", "Bash"),
+    system_prompt_preset="claude_code",
+)
+```
+
+Only the system prompt changes. Claude's answer still follows the signature's
+outputs, the working folder is the same, and your Claude settings are still not
+loaded.
 
 Each call ignores your own Claude setup: your user and project settings are not
 loaded, and MCP servers and connectors from your Claude account are not offered.
@@ -116,7 +134,7 @@ Avalanche fills some options for every call. How yours combine with them:
 | `allowed_tools`, `add_dirs` | Your entries are added after Avalanche's, without repeats. |
 | `tools` | A list is added after the `builtin_tools` and the skill tools. A preset or `None` replaces them. |
 | `skills` | A list is added after the step's skills. `"all"` replaces them. |
-| `system_prompt` | Rejected with `ValueError`: the step's instructions are the system prompt. Use `system_prompt_append`. |
+| `system_prompt` | Rejected with `ValueError`: the step's instructions are the system prompt. Use `system_prompt_append`, or `system_prompt_preset="claude_code"` to put Claude Code's own system prompt first. |
 | `output_format` | Rejected with `ValueError`: the signature's outputs define Claude's answer. |
 | `cwd` | Rejected with `ValueError`: give the step an `ava.Workspace` input to choose the folder Claude works in. |
 | Any other option | Yours replaces Avalanche's value. |
@@ -317,7 +335,7 @@ The session starting, with the tools Claude can use:
 
 | `AgentRequest` | Claude |
 | --- | --- |
-| `signature` instructions | The system prompt, followed by the narration paragraph when `narrate` is on, then `system_prompt_append`. |
+| `signature` instructions | The system prompt, followed by the narration paragraph when `narrate` is on, then `system_prompt_append`. With `system_prompt_preset="claude_code"`, all of this follows Claude Code's own system prompt. |
 | `signature` outputs | The JSON schema Claude must answer with, plus a required `run_summary` string when `narrate` is on. |
 | `inputs` | The prompt: one instruction line, then the inputs as JSON. |
 | `ava.File` inputs | Read where they are, without copies. The prompt gives each file's path, relative when it is inside the working folder. Folders outside it are added to the folders Claude may access. |

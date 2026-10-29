@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- `ava.runtimes.ClaudeAgent` takes `system_prompt_preset="claude_code"` to start
+  a step's system prompt with Claude Code's own and add the signature's
+  instructions, the narration paragraph and `system_prompt_append` after it. The
+  answer format, working folder and settings isolation are unchanged. The setting
+  is published with the step's runtime and can be set as a workflow default.
+  Passing `system_prompt` is still rejected, and the error now names this field.
+
 ## 0.16.0
 
 - Long browser log entries keep their time, source and level pinned to the log
