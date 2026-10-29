@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from .models import RunStatus
 from .state import (
+    SCHEDULE_ACTION_IDS,
     ActionDescriptor,
     ActionResult,
     ExtensionDescription,
@@ -18,6 +19,9 @@ from .state import (
     PanelDescriptor,
     TuiContext,
     TuiExtensionError,
+    json_plain,
+    schedule_action,
+    schedule_input_schema,
 )
 
 if TYPE_CHECKING:
@@ -38,6 +42,23 @@ class MockTuiExtensions:
     def describe(self, context: TuiContext) -> ExtensionDescription:
         self._context = context
         run = self.provider.get_run(context.run) if context.run else None
+        workflow = (
+            next(
+                (w for w in self.provider.list_workflows() if w.selector == context.flow),
+                None,
+            )
+            if context.flow
+            else None
+        )
+        scheduled = (
+            (
+                schedule_action(
+                    workflow.schedule_enabled, False, schedule_input_schema(workflow)
+                ),
+            )
+            if workflow is not None and workflow.cron
+            else ()
+        )
         return ExtensionDescription(
             context,
             self.protocol_version,
@@ -67,6 +88,7 @@ class MockTuiExtensions:
                     "Confirm cancellation",
                     None,
                 ),
+                *scheduled,
             ),
             (
                 PanelDescriptor(
@@ -75,7 +97,8 @@ class MockTuiExtensions:
                     "tools",
                     "schedules",
                     "table",
-                    ("id", "cron", "control"),
+                    ("id", "enabled", "cron"),
+                    actions=SCHEDULE_ACTION_IDS,
                 ),
             ),
         )
@@ -104,7 +127,7 @@ class MockTuiExtensions:
             offset = int(offset_text)
         rows = tuple(
             MappingProxyType(
-                {"id": flow.selector, "cron": flow.cron, "control": "inspection_only"}
+                {"id": flow.selector, "enabled": flow.schedule_enabled, "cron": flow.cron}
             )
             for flow in self.provider.list_workflows()
             if flow.cron
@@ -139,13 +162,30 @@ class MockTuiExtensions:
             value = MappingProxyType(
                 {"run_id": self.provider.start_run(context.flow, **payload)}
             )
+        elif action in SCHEDULE_ACTION_IDS:
+            assert context.flow is not None
+            workflow = next(
+                w for w in self.provider.list_workflows() if w.selector == context.flow
+            )
+            takes_input = (
+                action == "schedule.enable" and schedule_input_schema(workflow) is not None
+            )
+            info = self.provider.set_schedule_enabled(
+                context.flow,
+                action == "schedule.enable",
+                {key: json_plain(value) for key, value in payload.items()}
+                if takes_input
+                else None,
+            )
+            value = MappingProxyType({"enabled": info.schedule_enabled})
         else:
             assert context.run is not None
             self.provider.cancel_run(context.run)
             value = MappingProxyType({"run_id": context.run})
-        result = ActionResult(context, intent_id, "accepted", str(self._revision), value)
+        status = "completed" if action.startswith("schedule.") else "accepted"
+        result = ActionResult(context, intent_id, status, str(self._revision), value)
         self._intents[intent_id] = (action, context, MappingProxyType(dict(payload)), result)
-        self.invalidate()
+        self.invalidate("schedules" if action.startswith("schedule.") else "runs")
         return result
 
     def subscribe(self, callback: Callable[[Invalidation], None]) -> Callable[[], None]:
@@ -157,9 +197,11 @@ class MockTuiExtensions:
 
         return unsubscribe
 
-    def invalidate(self) -> None:
+    def invalidate(self, resource: str = "runs") -> None:
         self._revision += 1
-        notice = Invalidation(self._context, "runs", str(self._revision), None, "changed", None)
+        notice = Invalidation(
+            self._context, resource, str(self._revision), None, "changed", None
+        )
         for callback in tuple(self._callbacks):
             callback(notice)
 

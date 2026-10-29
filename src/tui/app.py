@@ -60,6 +60,10 @@ _TRACE_HYDRATION_RETRY_BASE_SECONDS = 0.25
 _TRACE_HYDRATION_RETRY_MAX_SECONDS = 4.0
 _TRACE_HYDRATION_RETRY_MAX_LEVEL = 5
 
+# Run history header suffixes for a scheduled workflow.
+SCHEDULE_DISABLED_MARK = " · disabled"
+NEXT_RUN_MARK = " · next run "
+
 
 class AvalancheApp(App):
     """Avalanche TUI — workflow monitor backed by StateProvider."""
@@ -278,7 +282,7 @@ class AvalancheApp(App):
             self.action_inspect_node,
         )
         yield SystemCommand(
-            "Schedules", "Inspect schedules; no simulated toggle", self.action_schedules
+            "Schedules", "Inspect, enable or disable schedules", self.action_schedules
         )
         yield SystemCommand(
             "Log filters", "Node, attempt, channel and level", self.action_log_filters
@@ -734,9 +738,10 @@ class AvalancheApp(App):
             if pipe and pipe.cron:
                 desc = _cron_description(pipe.cron)
                 right = f"Scheduled {desc}"
-                t = _next_run_label(pipe.cron, pipe.next_run_at)
-                if t:
-                    right += f" · next run {t}"
+                if not pipe.schedule_enabled:
+                    right += SCHEDULE_DISABLED_MARK
+                elif t := _next_run_label(pipe.cron, pipe.next_run_at):
+                    right += f"{NEXT_RUN_MARK}{t}"
 
             if right:
                 avail = rh.size.width - 6

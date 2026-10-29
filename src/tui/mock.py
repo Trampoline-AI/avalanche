@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import threading
 import time
+from dataclasses import replace
 from datetime import datetime
 from typing import Callable
 from uuid import uuid4
+
+from pydantic import JsonValue
 
 from avalanche._agent_trace import AgentTraceEnvelope
 from avalanche.agent.declaration import (
@@ -86,6 +89,7 @@ INGEST_WORKFLOW = WorkflowInfo(
         "deduplicate_1": "step",
         "load_1": "dest",
     },
+    cron="0 * * * *",
 )
 
 ANALYTICS_WORKFLOW = WorkflowInfo(
@@ -754,6 +758,24 @@ class MockStateProvider:
         t.start()
 
         return run_id
+
+    def set_schedule_enabled(
+        self,
+        workflow_selector: str,
+        enabled: bool,
+        run_input: dict[str, JsonValue] | None = None,
+    ) -> WorkflowInfo:
+        current = self._workflows[workflow_selector]
+        info = replace(
+            current,
+            schedule_enabled=enabled,
+            schedule_input=current.schedule_input if run_input is None else run_input,
+        )
+        self._workflows[workflow_selector] = info
+        catalog = self.get_catalog()
+        for callback in self._catalog_callbacks:
+            callback(catalog)
+        return info
 
     def cancel_run(self, run_id: str) -> None:
         run = self._runs.get(run_id)

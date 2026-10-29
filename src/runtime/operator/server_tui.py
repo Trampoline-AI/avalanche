@@ -224,12 +224,15 @@ class TuiResourceReader:
                     flow.selector,
                     flow.rendered_name,
                     flow.cron,
+                    flow.schedule_enabled,
+                    flow.schedule_input,
                     flow.next_run_at,
                     flow.last_run_at,
                 )
                 for flow in flows
             ],
             separators=(",", ":"),
+            sort_keys=True,
             allow_nan=False,
         )
         digest = hashlib.sha256(observation.encode()).hexdigest()
@@ -243,9 +246,10 @@ class TuiResourceReader:
             "id": flow.selector,
             "flow": flow.rendered_name,
             "cron": flow.cron,
+            "enabled": flow.schedule_enabled,
+            "input": flow.schedule_input,
             "next_run_at": flow.next_run_at,
             "last_run_at": flow.last_run_at,
-            "control": "inspection_only",
         }
         after = _Position(target, revision, offset + 1) if offset + 1 < len(flows) else None
         return row, after, revision
