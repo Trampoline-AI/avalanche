@@ -19,6 +19,7 @@ import threading
 import time
 import webbrowser
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from importlib.resources import as_file, files
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -33,7 +34,10 @@ from runtime.operator.discovery import (
 from runtime.operator.workspace_config import format_scan_targets, select_workflow_targets
 
 if TYPE_CHECKING:
+    from pydantic import JsonValue
+
     from runtime.operator.client import GrpcStateProvider
+    from runtime.operator.models import WorkflowInfo
 
 _RENAME_NOREPLACE = 1
 _RENAME_EXCL = 0x00000004
@@ -132,6 +136,11 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help=f"maximum seconds for one discovery scan (default: {DEFAULT_DISCOVERY_TIMEOUT:g})",
     )
+    operator.add_argument(
+        "--schedules-enabled",
+        action="store_true",
+        help="start with every cron schedule enabled (schedules start disabled otherwise)",
+    )
     operator.set_defaults(handler=_run_operator)
 
     webhooks = subcommands.add_parser("webhooks", help="inspect local webhook routes")
@@ -141,6 +150,37 @@ def _build_parser() -> argparse.ArgumentParser:
         if name == "get":
             command.add_argument("selector", help="canonical workflow selector")
         command.add_argument("--connect", default="localhost:7433", metavar="HOST:PORT")
+        command.set_defaults(handler=handler)
+
+    schedule = subcommands.add_parser(
+        "schedule",
+        help="inspect and control cron schedules on a running operator",
+        description=(
+            "List, enable, or disable discovered cron schedules. Schedules start "
+            "disabled; their state lives in the operator's memory and resets when it "
+            "restarts."
+        ),
+    )
+    schedule_commands = schedule.add_subparsers(
+        dest="schedule_command", metavar="COMMAND", required=True
+    )
+    for name, handler, summary in (
+        ("list", _list_schedules, "list scheduled workflows as JSON"),
+        ("enable", _enable_schedule, "let a workflow's cron schedule start runs"),
+        ("disable", _disable_schedule, "stop a workflow's cron schedule from starting runs"),
+    ):
+        command = schedule_commands.add_parser(name, help=summary)
+        if name != "list":
+            command.add_argument("selector", help="canonical workflow selector")
+        if name == "enable":
+            command.add_argument(
+                "--input",
+                dest="input_json",
+                help="JSON object each cron run starts with; omitted keeps the current input",
+            )
+        command.add_argument(
+            "--connect", default="localhost:7433", metavar="HOST:PORT", help="operator address"
+        )
         command.set_defaults(handler=handler)
 
     run = subcommands.add_parser(
@@ -296,6 +336,11 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="SECONDS",
         help=f"maximum seconds for one discovery scan (default: {DEFAULT_DISCOVERY_TIMEOUT:g})",
     )
+    dev.add_argument(
+        "--schedules-enabled",
+        action="store_true",
+        help="start with every cron schedule enabled (schedules start disabled otherwise)",
+    )
     dev.set_defaults(handler=_run_dev)
 
     return parser
@@ -333,6 +378,8 @@ def _run_operator(args: argparse.Namespace) -> int:
         runtime_args.append("--ray")
     if args.no_web:
         runtime_args.append("--no-web")
+    if args.schedules_enabled:
+        runtime_args.append("--schedules-enabled")
     return _operator_main(runtime_args)
 
 
@@ -395,6 +442,62 @@ def _get_webhook(args: argparse.Namespace) -> int:
         return 0
     finally:
         provider.close()
+
+
+def _schedule_record(workflow: WorkflowInfo) -> dict[str, JsonValue]:
+    def timestamp(value: float | None) -> str | None:
+        return None if value is None else datetime.fromtimestamp(value, UTC).isoformat()
+
+    return {
+        "selector": workflow.selector,
+        "name": workflow.rendered_name,
+        "cron": workflow.cron,
+        "enabled": workflow.schedule_enabled,
+        "input": workflow.schedule_input,
+        "next_run_at": timestamp(workflow.next_run_at),
+        "last_run_at": timestamp(workflow.last_run_at),
+    }
+
+
+def _list_schedules(args: argparse.Namespace) -> int:
+    provider = _make_provider(args.connect)
+    try:
+        records = [_schedule_record(item) for item in provider.list_workflows() if item.cron]
+        print(json.dumps(records, sort_keys=True))
+        return 0
+    finally:
+        provider.close()
+
+
+def _set_schedule_enabled(
+    args: argparse.Namespace, enabled: bool, run_input: dict[str, JsonValue] | None = None
+) -> int:
+    from runtime.operator.client import OperatorCallError
+
+    provider = _make_provider(args.connect)
+    try:
+        try:
+            workflow = provider.set_schedule_enabled(args.selector, enabled, run_input)
+        except OperatorCallError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(json.dumps(_schedule_record(workflow), sort_keys=True))
+        return 0
+    finally:
+        provider.close()
+
+
+def _enable_schedule(args: argparse.Namespace) -> int:
+    try:
+        run_input = _parse_json_object(args.input_json, "--input")
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    return _set_schedule_enabled(args, True, run_input)
+
+
+def _disable_schedule(args: argparse.Namespace) -> int:
+    return _set_schedule_enabled(args, False)
 
 
 def _operator_main(argv: list[str]) -> int:
@@ -1523,6 +1626,7 @@ def _run_dev(args: argparse.Namespace) -> int:
             args.flows,
             discovery_timeout=args.discovery_timeout,
             executor_backend="ray" if args.ray else "local",
+            schedules_enabled=args.schedules_enabled,
         )
         workflow_count = len(operator.get_catalog().workflows)
         print(
