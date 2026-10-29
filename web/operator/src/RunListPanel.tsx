@@ -253,7 +253,9 @@ export function RunListPanel({
               ))}
             </div>
           ) : (
-            <span className={tabClass(true)}>Overview</span>
+            <span className="timeline-title inline-flex h-full items-center font-mono text-[10px] font-semibold tracking-[0.16em] text-ink uppercase">
+              Timeline
+            </span>
           )}
         </div>
         <div className={`flex items-center ${expanded ? "gap-3" : "gap-2"}`}>

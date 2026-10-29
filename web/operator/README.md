@@ -172,7 +172,7 @@ run history. Hosts supply data and callbacks; operator-ui owns the rendered UI.
 | `currentLabel?: string`                                          | `"Current definition"` (nullish fallback). Delta uses `"Current deployment"`.                                        |
 | `currentRowAction?: { label: string; onClick: () => void }`      | No action or caret. When supplied, lowercase link text, underline on the text itself (removed on hover), normal weight; does not select Current.|
 | `showCurrentRow?: boolean`                                       | `true`: pinned current row on the Overview tab. `false`: no pinned row on any tab; the list starts under the tabs.   |
-| `deployments?: WorkspaceDeployments`                             | Absent: no tabs. Present: **Overview \| Deployments** tabs in both compact and expanded headers.                         |
+| `deployments?: WorkspaceDeployments`                             | Absent: **Timeline** title, no tabs. Present: **Overview \| Deployments** tabs in both compact and expanded headers.                         |
 | `timelineView?: "runs" \| "deployments"`                         | Omitted: internal state starts at `"runs"`. Supplied: controlled by the host. Without `deployments`, only runs show. |
 | `onTimelineViewChange?: (view: "runs" \| "deployments") => void` | No callback by default. Called on tab requests in both modes; controlled hosts must update `timelineView`.           |
 
@@ -242,8 +242,9 @@ The pinned Current row and its optional action appear only on **Overview**, not 
 **Overview** view. Changing tabs does not
 change run selection or expand/collapse the timeline.
 
-The header shows **Overview | Deployments** tabs when `deployments` is supplied, or a
-non-clickable selected **Overview** label in stock mode. The selected label has a 2px
+The header shows **Overview | Deployments** tabs when `deployments` is supplied. In stock
+mode (no `deployments`) it shows a plain **Timeline** title in the same header style, with
+no underline indicator, followed by the pinned **Current definition** row. The selected tab has a 2px
 primary-color underline on the header border; inactive tabs are muted. ArrowLeft,
 ArrowRight, Home and End focus and request the corresponding tab. Controlled hosts
 remain responsible for updating `timelineView`. The visible **Overview** label keeps

@@ -44,10 +44,13 @@ it("defaults to Current definition without a caret, action or tabs", () => {
   expect(screen.queryByRole("tab")).not.toBeInTheDocument();
   const panel = screen.getByRole("region", { name: "Timeline" });
   expect(within(panel).queryByRole("heading")).not.toBeInTheDocument();
-  const runs = within(panel).getByText("Overview");
-  expect(runs.tagName).toBe("SPAN");
-  expect(runs).toHaveClass("font-semibold", "text-ink", "after:bg-acid");
-  expect(runs).not.toHaveAttribute("tabindex");
+  // Stock hosts keep the "Timeline" title (header style, no underline indicator); no Overview label.
+  expect(within(panel).queryByText("Overview")).not.toBeInTheDocument();
+  const title = within(panel).getByText("Timeline");
+  expect(title.tagName).toBe("SPAN");
+  expect(title).toHaveClass("font-semibold", "text-ink", "uppercase", "text-[10px]");
+  expect(title).not.toHaveClass("after:bg-acid");
+  expect(title).not.toHaveAttribute("tabindex");
   expect(screen.getAllByRole("button")).toEqual([current]);
 });
 
