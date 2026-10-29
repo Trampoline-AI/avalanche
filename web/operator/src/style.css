@@ -630,6 +630,17 @@
     border-color: var(--color-line);
   }
 
+  /* The run input is configuration, not a step: dashed and amber, with no run state. */
+  .node-input {
+    border-color: color-mix(in srgb, var(--color-amber) 55%, var(--color-line));
+    background: color-mix(in srgb, var(--color-amber) 6%, var(--color-panel));
+  }
+
+  .node-input-identity {
+    background: color-mix(in srgb, var(--color-amber) 12%, transparent);
+    color: var(--color-amber);
+  }
+
   .node-header,
   .node-title,
   .node-card-meta,

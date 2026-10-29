@@ -4,9 +4,62 @@ from __future__ import annotations
 
 import inspect
 import textwrap
+from typing import Annotated, get_args, get_origin
+
+from pydantic import BaseModel, ConfigDict, JsonValue
 
 from avalanche.agent.declaration import AgentDeclaration
-from avalanche.dag import NodeType, Workflow
+from avalanche.dag import NodeFuture, NodeType, Workflow
+from avalanche.input_ref import InputRef
+from avalanche.runtime import BaseInput
+
+
+class WorkflowInputDeclaration(BaseModel):
+    """The declared run input model and the steps that receive it."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    type_name: str
+    json_schema: dict[str, JsonValue]
+    consumer_node_ids: list[str]
+
+
+class PreparedRunInput(BaseModel):
+    """The validated values a run starts with and the fields its caller supplied."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    values_json: str
+    supplied_fields: list[str]
+
+
+def _receives_run_input(future: NodeFuture) -> bool:
+    if any(isinstance(value, InputRef) for value in (*future.args, *future.kwargs.values())):
+        return True
+    for name, parameter in inspect.signature(future.node.fn).parameters.items():
+        annotation = parameter.annotation
+        if get_origin(annotation) is Annotated:
+            annotation = get_args(annotation)[0]
+        if (
+            name not in future.kwargs
+            and isinstance(annotation, type)
+            and issubclass(annotation, BaseInput)
+        ):
+            return True
+    return False
+
+
+def input_declaration_for_workflow(workflow: Workflow, node_ids: list[str]) -> str:
+    """Describe the declared run input; empty when the workflow declares none."""
+    if workflow.input_type is None:
+        return ""
+    return WorkflowInputDeclaration(
+        type_name=workflow.input_type.__name__,
+        json_schema=workflow.input_type.model_json_schema(),
+        consumer_node_ids=[
+            node_id for node_id in node_ids if _receives_run_input(workflow.nodes[node_id])
+        ],
+    ).model_dump_json()
 
 
 def agent_declarations_for_workflow(

@@ -77,6 +77,18 @@
   (they were `manual`); Web UI and TUI starts stay `manual`, and `StartRun` accepts a
   `trigger` field. Clients reject unknown trigger values. Python `RunState` and
   `RunSummary` expose it as `TriggerKind`.
+- The browser workflow graph shows a workflow's run input as a dashed Input node in
+  front of the steps that receive it, through a `BaseInput` annotation or an
+  `ava.input` selector. Workflows without `input=` show no Input node. The node lists
+  each field with its type and its default, or marks it required. A cron-scheduled
+  workflow says that scheduled runs use these defaults. In a run, the node shows the
+  values the run actually used, marks which came from defaults, and says how the run
+  started (manually, by its cron schedule, or by a webhook). Selecting the node opens
+  an inspector with each field's description and the full schema.
+- The operator now validates a declared run input once, while it prepares the run,
+  and publishes the validated values on the run snapshot. A run with invalid input
+  now fails while it is being prepared, before any step is shown, rather than when
+  execution starts.
 
 ## 0.16.0
 
