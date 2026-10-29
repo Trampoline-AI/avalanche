@@ -78,6 +78,17 @@ class WorkflowTopology:
     classifier_metadata_json: tuple[tuple[str, str], ...] = ()
     evaluation_metadata_json: tuple[tuple[str, str], ...] = ()
     step_interface_json: tuple[tuple[str, str], ...] = ()
+    # Serialized WorkflowInputDeclaration; empty when the workflow declares no input.
+    input_declaration_json: str = ""
+
+
+@dataclass(frozen=True)
+class RunInput:
+    """The validated input one run started with."""
+
+    values_json: str
+    # Fields the caller supplied; every other field took its declared default.
+    supplied_fields: tuple[str, ...] = ()
 
 
 @dataclass
@@ -122,6 +133,7 @@ class RunState:
     latest_log_sequence: int = 0
     details_hydrated: bool = True  # False only for summary-only list projections.
     terminal_seal: TerminalSealDescriptor | None = None
+    input: RunInput | None = None
 
     @property
     def elapsed(self) -> float | None:
@@ -238,6 +250,7 @@ class RunSnapshot:
     log_page_token: str = ""
     topology: WorkflowTopology = field(default_factory=WorkflowTopology)
     terminal_seal: TerminalSealDescriptor | None = None
+    input: RunInput | None = None
 
 
 @dataclass(frozen=True)
@@ -631,6 +644,7 @@ class WorkflowInfo:
     webhook_url: str | None = None
     webhook_active: bool = False
     input_schema_json: str = ""
+    input_declaration_json: str = ""
     version: str = ""
 
     @property
@@ -722,6 +736,7 @@ class WorkflowDescriptor:
     webhook_path: str | None = None
     webhook_enabled: bool = False
     input_schema_json: str = ""
+    input_declaration_json: str = ""
 
 
 @dataclass(frozen=True)

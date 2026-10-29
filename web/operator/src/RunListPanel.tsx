@@ -302,31 +302,31 @@ export function RunListPanel({
                 Status
               </span>
               <div className="status-chip-row flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto [scrollbar-width:none]">
-              <button
-                type="button"
-                className={statusChipClass(!status)}
-                aria-pressed={!status}
-                onClick={() => {
-                  setStatus("");
-                  setPage(0);
-                }}
-              >
-                All <span className="font-mono text-secondary">{workflowRuns.length}</span>
-              </button>
-              {statuses.map(([value, count]) => (
                 <button
-                  key={value}
                   type="button"
-                  className={statusChipClass(status === value)}
-                  aria-pressed={status === value}
+                  className={statusChipClass(!status)}
+                  aria-pressed={!status}
                   onClick={() => {
-                    setStatus(status === value ? "" : value);
+                    setStatus("");
                     setPage(0);
                   }}
                 >
-                  {value} <span className="font-mono text-secondary">{count}</span>
+                  All <span className="font-mono text-secondary">{workflowRuns.length}</span>
                 </button>
-              ))}
+                {statuses.map(([value, count]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={statusChipClass(status === value)}
+                    aria-pressed={status === value}
+                    onClick={() => {
+                      setStatus(status === value ? "" : value);
+                      setPage(0);
+                    }}
+                  >
+                    {value} <span className="font-mono text-secondary">{count}</span>
+                  </button>
+                ))}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-[12px]">

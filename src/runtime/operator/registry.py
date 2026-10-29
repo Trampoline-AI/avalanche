@@ -39,6 +39,7 @@ from .models import (
 from .source import resolve_watch_roots
 from .workflow_metadata import (
     agent_declarations_for_workflow,
+    input_declaration_for_workflow,
     node_docstring_lines_for_workflow,
     node_source_code_for_workflow,
     step_interface_for_workflow,
@@ -187,6 +188,7 @@ def workflow_to_info(
         standard_step_docstring_lines=standard_step_docstring_lines,
         node_source_code=node_source_code,
         input_schema_json=workflow_input_schema(workflow),
+        input_declaration_json=input_declaration_for_workflow(workflow, node_ids),
         cron=workflow.cron,
         webhook_path=workflow.webhook.path if workflow.webhook else None,
         webhook_enabled=workflow.webhook is not None,
@@ -215,6 +217,7 @@ def descriptor_to_info(descriptor: WorkflowDescriptor) -> WorkflowInfo:
         standard_step_docstring_lines=dict(descriptor.standard_step_docstring_lines),
         node_source_code=dict(descriptor.node_source_code),
         input_schema_json=descriptor.input_schema_json,
+        input_declaration_json=descriptor.input_declaration_json,
         cron=descriptor.cron,
         webhook_path=descriptor.webhook_path,
         webhook_enabled=descriptor.webhook_enabled,
