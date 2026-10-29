@@ -748,6 +748,3 @@
   width: 1em;
   text-align: center;
 }
-.avalanche-operator-ui .run-status-glyph::before {
-  content: attr(data-char);
-}

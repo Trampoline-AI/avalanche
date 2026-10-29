@@ -7,7 +7,10 @@ let timer: ReturnType<typeof setInterval> | undefined;
 let motion: MediaQueryList | undefined;
 
 function paint() {
-  for (const glyph of glyphs) glyph.dataset.char = frames[frame];
+  for (const glyph of glyphs) {
+    glyph.dataset.char = frames[frame];
+    glyph.textContent = frames[frame];
+  }
 }
 
 function updateClock() {
@@ -26,6 +29,7 @@ function updateClock() {
 export function subscribeRunningGlyph(element: HTMLElement) {
   glyphs.add(element);
   element.dataset.char = frames[frame];
+  element.textContent = frames[frame];
   if (glyphs.size === 1) {
     motion = window.matchMedia?.("(prefers-reduced-motion: reduce)");
     motion?.addEventListener("change", updateClock);

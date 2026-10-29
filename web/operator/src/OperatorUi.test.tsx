@@ -145,6 +145,15 @@ describe("agent runtime on graph nodes", () => {
       ["running", "◐", "active", "active"],
       ["pending", "○", "neutral", "muted"],
       [undefined, "○", "neutral", "muted"],
+      // Delta step states map onto the same set; unknown states never render blank.
+      ["accepted", "✓", "success", "success"],
+      ["indeterminate", "✗", "danger", "danger"],
+      ["expired", "✗", "danger", "danger"],
+      ["ready", "◐", "warning", "amber"],
+      ["waiting", "◐", "warning", "amber"],
+      ["intended", "○", "neutral", "muted"],
+      ["cancelled", "⊘", "neutral", "muted"],
+      ["somethingnew", "○", "neutral", "muted"],
     ] as const) {
       view.rerender(
         <GraphCanvas
@@ -158,13 +167,20 @@ describe("agent runtime on graph nodes", () => {
         .getByRole("button", { name: "Inspect Claude step" })
         .closest("article")!;
       expect(card).toHaveAttribute("data-node-state", status ?? "pending");
-      expect(card).toHaveStyle({ "--node-state-color": `var(--color-run-status-${color})` });
+      expect(card).toHaveStyle({
+        "--node-state-color": color === "amber" ? "var(--color-amber)" : `var(--color-run-status-${color})`,
+      });
       expect(card).toHaveStyle({ outline: "2px solid var(--color-acid)" });
       const marker = card.querySelector(".node-title .run-status-glyph")!;
-      expect(marker).toHaveAttribute("data-glyph", status === "running" ? "running" : tone);
+      expect(marker).toHaveAttribute("data-glyph", tone === "active" ? "running" : tone);
       expect(marker).toHaveAttribute("data-char", glyph);
+      // The glyph is real text, so it reads in the node's DOM text (not only via CSS).
+      expect(marker.textContent).toBe(glyph);
+      expect(card.querySelector(".node-title")!.textContent!.trimStart().startsWith(glyph)).toBe(true);
       expect(marker.parentElement).toHaveAttribute("data-tone", tone);
-      expect(marker.parentElement).toHaveClass(`text-run-status-${color}`);
+      expect(marker.parentElement).toHaveClass(
+        color === "amber" ? "text-amber" : `text-run-status-${color}`,
+      );
       expect(card.querySelectorAll(".run-status-glyph")).toHaveLength(1);
       expect(card.querySelector(".node-title")?.firstElementChild).toBe(marker.parentElement);
       expect(card.querySelector("svg.node-status-icon")).toBeNull();

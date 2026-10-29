@@ -45,7 +45,7 @@ import { arrangeGraph, createGraphLayout, type RoutedEdgeData } from "./graphLay
 import { highlightConnectedEdges } from "./graphSelection";
 import { useGraphOrientation } from "./useGraphOrientation";
 import { ClaudeLogo, isClaudeRuntime } from "./ClaudeLogo";
-import { RunStatus } from "./RunStatus";
+import { RunStatus, statusTone, statusToneColor } from "./RunStatus";
 
 interface FieldMetadata {
   name: string;
@@ -272,14 +272,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
       ? `node-agent${data.isClaude ? " node-claude" : ""}`
       : "";
   const state = data.status ?? "pending";
-  const stateColor =
-    state === "success"
-      ? "var(--color-run-status-success)"
-      : state === "failed"
-        ? "var(--color-run-status-danger)"
-        : state === "running"
-          ? "var(--color-run-status-active)"
-          : "var(--color-run-status-muted)";
+  const stateColor = statusToneColor[statusTone(state)];
   return (
     <article
       className={`node-card ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded border text-left motion-reduce:transition-none ${designationClass}`}
