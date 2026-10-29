@@ -24,6 +24,7 @@ import {
   RunSummaryPageV2,
   RunSummaryV2,
   ScopeReferenceV2,
+  StartRunTriggerV2,
   TraceDescriptorV2,
   TraceHeaderV2,
   WorkflowTopologyV2,
@@ -95,7 +96,7 @@ const classifierContinuation = ContinuationRefV2.create({
 const classifierSnapshot = RunSnapshotV2.create({
   scopeRef,
   cursor: cursor(),
-  summary: { runId: "run-1" },
+  summary: { runId: "run-1", triggeredBy: "manual" },
   nodes: [{ nodeId: "classify", activityContinuation: classifierContinuation }],
   topology: {
     nodeIds: ["classify"],
@@ -164,6 +165,7 @@ describe("operator transport boundary", () => {
               RunSummaryV2.create({
                 runId: request.continuation ? "run-2" : "run-1",
                 workflowSelector: "flows.py::orders",
+                triggeredBy: "scheduled",
               }),
             ],
             nextPage: request.continuation ? undefined : continuation,
@@ -225,7 +227,7 @@ describe("operator transport boundary", () => {
           RunSnapshotV2.create({
             scopeRef,
             cursor: cursor(),
-            summary: RunSummaryV2.create({ runId: "run-1" }),
+            summary: RunSummaryV2.create({ runId: "run-1", triggeredBy: "manual" }),
             logContinuation: page,
           }),
         ),
@@ -317,7 +319,7 @@ describe("operator transport boundary", () => {
           RunSnapshotV2.create({
             scopeRef,
             cursor: cursor(),
-            summary: RunSummaryV2.create({ runId: "run-1" }),
+            summary: RunSummaryV2.create({ runId: "run-1", triggeredBy: "manual" }),
             nodes: Object.keys(bodies).map((key) =>
               NodeSnapshotV2.create({
                 nodeId: key,
@@ -376,7 +378,7 @@ describe("operator transport boundary", () => {
           RunSnapshotV2.create({
             scopeRef,
             cursor: cursor(),
-            summary: RunSummaryV2.create({ runId: "run-1" }),
+            summary: RunSummaryV2.create({ runId: "run-1", triggeredBy: "manual" }),
             nodes: [
               NodeSnapshotV2.create({
                 nodeId: "agent",
@@ -1022,5 +1024,77 @@ describe("operator transport boundary", () => {
     });
     const evaluations = await api.listRunEvaluations("run-1");
     expect(evaluations.map((record) => record.nodeId)).toEqual(["first", "second"]);
+  });
+
+  it("marks UI starts as manual and controls schedules by workflow selector", async () => {
+    const startRun = vi.fn(() => ({ response: Promise.resolve({ runId: "started" }) }));
+    const setScheduleEnabled = vi.fn(() => ({
+      response: Promise.resolve(
+        FlowInfoV2.create({
+          workflowSelector: "flows.py::nightly",
+          workflowId: "flows.py::nightly",
+          cron: "0 9 * * *",
+          scheduleEnabled: false,
+        }),
+      ),
+    }));
+    const api = apiWith({ startRun, setScheduleEnabled });
+
+    await expect(api.startRun("flows.py::nightly")).resolves.toBe("started");
+    expect(startRun).toHaveBeenCalledWith(
+      expect.objectContaining({ trigger: StartRunTriggerV2.MANUAL }),
+    );
+    const flow = await api.setScheduleEnabled("flows.py::nightly", false);
+    expect(setScheduleEnabled).toHaveBeenCalledWith({
+      workflowSelector: "flows.py::nightly",
+      enabled: false,
+    });
+    expect(flow).toMatchObject({ cron: "0 9 * * *", scheduleEnabled: false });
+  });
+
+  it("sends schedule input when enabling and reads back the stored input", async () => {
+    const setScheduleEnabled = vi.fn(() => ({
+      response: Promise.resolve(
+        FlowInfoV2.create({
+          workflowSelector: "flows.py::nightly",
+          workflowId: "flows.py::nightly",
+          cron: "0 9 * * *",
+          scheduleEnabled: true,
+          scheduleInputJson: '{"region":"eu"}',
+          inputSchemaJson: '{"type":"object"}',
+        }),
+      ),
+    }));
+    const api = apiWith({ setScheduleEnabled });
+
+    const flow = await api.setScheduleEnabled("flows.py::nightly", true, { region: "eu" });
+
+    expect(setScheduleEnabled).toHaveBeenCalledWith({
+      workflowSelector: "flows.py::nightly",
+      enabled: true,
+      inputJson: '{"region":"eu"}',
+    });
+    expect(flow).toMatchObject({
+      scheduleInput: { region: "eu" },
+      inputSchemaJson: '{"type":"object"}',
+    });
+  });
+
+  it("rejects run summaries with an unknown trigger kind", async () => {
+    const api = apiWith({
+      getRunSnapshot: () => ({
+        response: Promise.resolve(
+          RunSnapshotV2.create({
+            scopeRef,
+            cursor: cursor(),
+            summary: { runId: "run-1", triggeredBy: "timer" },
+          }),
+        ),
+      }),
+    });
+
+    await expect(api.getLatestRunSnapshot("run-1", "operator-1")).rejects.toThrow(
+      /Unknown run trigger/,
+    );
   });
 });

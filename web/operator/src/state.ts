@@ -44,7 +44,7 @@ export interface OperatorProjection {
   catalogReloadDeploymentId?: string;
   catalogReloadNoticeEventUlid?: string;
   error?: string;
-  action?: { kind: "start" | "cancel"; target: string };
+  action?: { kind: "start" | "cancel" | "schedule"; target: string };
 }
 
 type ProjectionAction =
@@ -819,5 +819,25 @@ export function useOperatorProjection(api: OperatorApi) {
     [api],
   );
 
-  return { state, reconcile, startRun, cancelRun, selectRun };
+  // The streamed catalog replacement is the only source of schedule state.
+  const setScheduleEnabled = useCallback(
+    async (workflowSelector: string, enabled: boolean, input?: Record<string, unknown>) => {
+      dispatch({ type: "action", action: { kind: "schedule", target: workflowSelector } });
+      try {
+        await api.setScheduleEnabled(workflowSelector, enabled, input);
+      } finally {
+        dispatch({ type: "action", action: undefined });
+      }
+    },
+    [api],
+  );
+
+  return {
+    state,
+    reconcile,
+    startRun,
+    cancelRun,
+    selectRun,
+    setScheduleEnabled,
+  };
 }

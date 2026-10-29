@@ -1,9 +1,15 @@
 import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
 
-import { AgentEventKindV2, AgentTraceStatusV2, PageOrderV2 } from "./generated/operator";
-import { DescriptorPageOrder } from "./model";
+import {
+  AgentEventKindV2,
+  AgentTraceStatusV2,
+  PageOrderV2,
+  StartRunTriggerV2,
+} from "./generated/operator";
+import { DescriptorPageOrder, TRIGGER_KINDS, type TriggerKind } from "./model";
 import { mapEvaluationRecord, type EvaluationRecord } from "./evaluations";
 import { parseTraceHeaderNative } from "./agentTrace/common";
+import { isUnknownRecord } from "./guards";
 
 import {
   OperatorServiceV2Client,
@@ -194,6 +200,13 @@ export interface OperatorApi {
   readTextDetail(bodyToken: string, signal?: AbortSignal): Promise<string>;
   startRun(workflowSelector: string, input?: Record<string, unknown>): Promise<string>;
   cancelRun(runId: string): Promise<void>;
+  /** Enable or disable a cron schedule; the operator keeps this only in memory. */
+  /** `input`, only when enabling, replaces the input cron runs start with. */
+  setScheduleEnabled(
+    workflowSelector: string,
+    enabled: boolean,
+    input?: Record<string, unknown>,
+  ): Promise<FlowInfoMsg>;
 }
 
 interface RegisteredContinuation {
@@ -594,8 +607,23 @@ export class GrpcWebOperatorApi implements OperatorApi {
       inputJson: input === undefined ? "" : JSON.stringify(input),
       contextJson: "",
       inputFiles: [],
+      // A person pressed Run in this UI.
+      trigger: StartRunTriggerV2.MANUAL,
     }).response;
     return response.runId;
+  }
+
+  async setScheduleEnabled(
+    workflowSelector: string,
+    enabled: boolean,
+    input?: Record<string, unknown>,
+  ): Promise<FlowInfoMsg> {
+    const flow = await this.client.setScheduleEnabled({
+      workflowSelector,
+      enabled,
+      inputJson: input === undefined ? undefined : JSON.stringify(input),
+    }).response;
+    return mapFlowInfo(flow);
   }
 
   async cancelRun(runId: string): Promise<void> {
@@ -1209,6 +1237,15 @@ function mapPageOrder(order: DescriptorPageOrder): PageOrderV2 {
     : PageOrderV2.FORWARD;
 }
 
+function isTriggerKind(value: string): value is TriggerKind {
+  return (TRIGGER_KINDS as readonly string[]).includes(value);
+}
+
+function mapTriggerKind(value: string): TriggerKind {
+  if (!isTriggerKind(value)) throw new Error(`Unknown run trigger: ${JSON.stringify(value)}`);
+  return value;
+}
+
 function mapRunSummary(summary: RunSummaryV2): RunSummaryMsg {
   return {
     runId: summary.runId,
@@ -1216,13 +1253,19 @@ function mapRunSummary(summary: RunSummaryV2): RunSummaryMsg {
     status: summary.status,
     startedAt: summary.startedAt,
     endedAt: summary.endedAt,
-    triggeredBy: summary.triggeredBy,
+    triggeredBy: mapTriggerKind(summary.triggeredBy),
     workflowId: summary.workflowSelector,
     workflowDisplayName: summary.workflowDisplayName,
     createdSequence: summary.createdSequence,
     revision: summary.revision,
     triggeredAt: summary.triggeredAt,
   };
+}
+
+function parseScheduleInput(payload: string): Record<string, unknown> {
+  const value: unknown = JSON.parse(payload);
+  if (!isUnknownRecord(value)) throw new Error("Schedule input must be a JSON object");
+  return value;
 }
 
 function mapFlowInfo(flow: FlowInfoV2): FlowInfoMsg {
@@ -1237,6 +1280,12 @@ function mapFlowInfo(flow: FlowInfoV2): FlowInfoMsg {
     cron: flow.cron,
     nextRunAt: flow.nextRunAt,
     lastRunAt: flow.lastRunAt,
+    scheduleEnabled: flow.scheduleEnabled,
+    scheduleInput:
+      flow.scheduleInputJson === undefined
+        ? undefined
+        : parseScheduleInput(flow.scheduleInputJson),
+    inputSchemaJson: flow.inputSchemaJson,
     workflowId: flow.workflowId,
     displayName: flow.displayName,
     rootAlias: "",

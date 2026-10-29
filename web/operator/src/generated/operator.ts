@@ -332,6 +332,20 @@ export interface FlowInfoV2 {
      * @generated from protobuf field: string version = 19
      */
     version: string;
+    /**
+     * True while the operator will start this flow's cron runs. A disabled
+     * schedule has no next_run_at. False when the flow declares no cron.
+     *
+     * @generated from protobuf field: bool schedule_enabled = 20
+     */
+    scheduleEnabled: boolean;
+    /**
+     * JSON input object each cron run starts with. Absent means the workflow's
+     * declared input defaults.
+     *
+     * @generated from protobuf field: optional string schedule_input_json = 21
+     */
+    scheduleInputJson?: string;
 }
 /**
  * @generated from protobuf message avalanche.operator.DiscoveryDiagnosticV2
@@ -569,6 +583,32 @@ export interface StartRunRequestV2 {
      * @generated from protobuf field: optional string expected_version = 6
      */
     expectedVersion?: string;
+    /**
+     * Who asked for this run. Callers that do not say are recorded as "api".
+     *
+     * @generated from protobuf field: avalanche.operator.StartRunTriggerV2 trigger = 7
+     */
+    trigger: StartRunTriggerV2;
+}
+/**
+ * @generated from protobuf message avalanche.operator.SetScheduleEnabledRequestV2
+ */
+export interface SetScheduleEnabledRequestV2 {
+    /**
+     * @generated from protobuf field: string workflow_selector = 1
+     */
+    workflowSelector: string;
+    /**
+     * @generated from protobuf field: bool enabled = 2
+     */
+    enabled: boolean;
+    /**
+     * JSON input object for future cron runs, accepted only when enabling. Absent
+     * keeps the stored input; the workflow validates it when each run starts.
+     *
+     * @generated from protobuf field: optional string input_json = 3
+     */
+    inputJson?: string;
 }
 /**
  * @generated from protobuf message avalanche.operator.StartRunResponseV2
@@ -704,6 +744,8 @@ export interface RunSummaryV2 {
      */
     revision: string;
     /**
+     * One of "scheduled", "manual", "webhook", or "api".
+     *
      * @generated from protobuf field: string triggered_by = 9
      */
     triggeredBy: string;
@@ -1681,6 +1723,22 @@ export interface RunStatusEnvelopeV2 {
     scopeRef?: ScopeReferenceV2;
 }
 /**
+ * The trigger kinds a StartRun caller may claim. Cron and webhook runs are
+ * started only by the operator itself.
+ *
+ * @generated from protobuf enum avalanche.operator.StartRunTriggerV2
+ */
+export enum StartRunTriggerV2 {
+    /**
+     * @generated from protobuf enum value: START_RUN_TRIGGER_V2_API = 0;
+     */
+    API = 0,
+    /**
+     * @generated from protobuf enum value: START_RUN_TRIGGER_V2_MANUAL = 1;
+     */
+    MANUAL = 1
+}
+/**
  * @generated from protobuf enum avalanche.operator.AgentTraceStatusV2
  */
 export enum AgentTraceStatusV2 {
@@ -2456,7 +2514,9 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
             { no: 16, name: "classifier_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 17, name: "evaluation_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 18, name: "input_schema_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 19, name: "version", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+            { no: 19, name: "version", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 20, name: "schedule_enabled", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 21, name: "schedule_input_json", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<FlowInfoV2>): FlowInfoV2 {
@@ -2479,6 +2539,7 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         message.evaluationMetadataJson = {};
         message.inputSchemaJson = "";
         message.version = "";
+        message.scheduleEnabled = false;
         if (value !== undefined)
             reflectionMergePartial<FlowInfoV2>(this, message, value);
         return message;
@@ -2544,6 +2605,12 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
                     break;
                 case /* string version */ 19:
                     message.version = reader.string();
+                    break;
+                case /* bool schedule_enabled */ 20:
+                    message.scheduleEnabled = reader.bool();
+                    break;
+                case /* optional string schedule_input_json */ 21:
+                    message.scheduleInputJson = reader.string();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -2662,6 +2729,12 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         /* string version = 19; */
         if (message.version !== "")
             writer.tag(19, WireType.LengthDelimited).string(message.version);
+        /* bool schedule_enabled = 20; */
+        if (message.scheduleEnabled !== false)
+            writer.tag(20, WireType.Varint).bool(message.scheduleEnabled);
+        /* optional string schedule_input_json = 21; */
+        if (message.scheduleInputJson !== undefined)
+            writer.tag(21, WireType.LengthDelimited).string(message.scheduleInputJson);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -3348,7 +3421,8 @@ class StartRunRequestV2$Type extends MessageType<StartRunRequestV2> {
             { no: 3, name: "input_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 4, name: "context_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 5, name: "input_files", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => FileAttachmentV2 },
-            { no: 6, name: "expected_version", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 6, name: "expected_version", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 7, name: "trigger", kind: "enum", T: () => ["avalanche.operator.StartRunTriggerV2", StartRunTriggerV2, "START_RUN_TRIGGER_V2_"] }
         ]);
     }
     create(value?: PartialMessage<StartRunRequestV2>): StartRunRequestV2 {
@@ -3358,6 +3432,7 @@ class StartRunRequestV2$Type extends MessageType<StartRunRequestV2> {
         message.inputJson = "";
         message.contextJson = "";
         message.inputFiles = [];
+        message.trigger = 0;
         if (value !== undefined)
             reflectionMergePartial<StartRunRequestV2>(this, message, value);
         return message;
@@ -3384,6 +3459,9 @@ class StartRunRequestV2$Type extends MessageType<StartRunRequestV2> {
                     break;
                 case /* optional string expected_version */ 6:
                     message.expectedVersion = reader.string();
+                    break;
+                case /* avalanche.operator.StartRunTriggerV2 trigger */ 7:
+                    message.trigger = reader.int32();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -3415,6 +3493,9 @@ class StartRunRequestV2$Type extends MessageType<StartRunRequestV2> {
         /* optional string expected_version = 6; */
         if (message.expectedVersion !== undefined)
             writer.tag(6, WireType.LengthDelimited).string(message.expectedVersion);
+        /* avalanche.operator.StartRunTriggerV2 trigger = 7; */
+        if (message.trigger !== 0)
+            writer.tag(7, WireType.Varint).int32(message.trigger);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -3425,6 +3506,68 @@ class StartRunRequestV2$Type extends MessageType<StartRunRequestV2> {
  * @generated MessageType for protobuf message avalanche.operator.StartRunRequestV2
  */
 export const StartRunRequestV2 = new StartRunRequestV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class SetScheduleEnabledRequestV2$Type extends MessageType<SetScheduleEnabledRequestV2> {
+    constructor() {
+        super("avalanche.operator.SetScheduleEnabledRequestV2", [
+            { no: 1, name: "workflow_selector", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "enabled", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 3, name: "input_json", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+    create(value?: PartialMessage<SetScheduleEnabledRequestV2>): SetScheduleEnabledRequestV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.workflowSelector = "";
+        message.enabled = false;
+        if (value !== undefined)
+            reflectionMergePartial<SetScheduleEnabledRequestV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: SetScheduleEnabledRequestV2): SetScheduleEnabledRequestV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string workflow_selector */ 1:
+                    message.workflowSelector = reader.string();
+                    break;
+                case /* bool enabled */ 2:
+                    message.enabled = reader.bool();
+                    break;
+                case /* optional string input_json */ 3:
+                    message.inputJson = reader.string();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: SetScheduleEnabledRequestV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string workflow_selector = 1; */
+        if (message.workflowSelector !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.workflowSelector);
+        /* bool enabled = 2; */
+        if (message.enabled !== false)
+            writer.tag(2, WireType.Varint).bool(message.enabled);
+        /* optional string input_json = 3; */
+        if (message.inputJson !== undefined)
+            writer.tag(3, WireType.LengthDelimited).string(message.inputJson);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.SetScheduleEnabledRequestV2
+ */
+export const SetScheduleEnabledRequestV2 = new SetScheduleEnabledRequestV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class StartRunResponseV2$Type extends MessageType<StartRunResponseV2> {
     constructor() {
@@ -6618,6 +6761,7 @@ export const OperatorServiceV2 = new ServiceType("avalanche.operator.OperatorSer
     { name: "GetWorkflowNodeSource", options: {}, I: GetWorkflowNodeSourceRequestV2, O: WorkflowNodeSourceV2 },
     { name: "StartRun", options: {}, I: StartRunRequestV2, O: StartRunResponseV2 },
     { name: "CancelRun", options: {}, I: CancelRunRequestV2, O: CancelRunResponseV2 },
+    { name: "SetScheduleEnabled", options: {}, I: SetScheduleEnabledRequestV2, O: FlowInfoV2 },
     { name: "ListRunSummaries", options: {}, I: ListRunSummariesRequestV2, O: RunSummaryPageV2 },
     { name: "GetRunSnapshot", options: {}, I: GetRunSnapshotRequestV2, O: RunSnapshotV2 },
     { name: "ListRunActivity", options: {}, I: ListRunActivityRequestV2, O: RunActivityPageV2 },

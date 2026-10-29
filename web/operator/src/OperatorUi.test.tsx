@@ -168,7 +168,8 @@ describe("agent runtime on graph nodes", () => {
         .closest("article")!;
       expect(card).toHaveAttribute("data-node-state", status ?? "pending");
       expect(card).toHaveStyle({
-        "--node-state-color": color === "amber" ? "var(--color-amber)" : `var(--color-run-status-${color})`,
+        "--node-state-color":
+          color === "amber" ? "var(--color-amber)" : `var(--color-run-status-${color})`,
       });
       expect(card).toHaveStyle({ outline: "2px solid var(--color-acid)" });
       const marker = card.querySelector(".node-title .run-status-glyph")!;
@@ -176,7 +177,9 @@ describe("agent runtime on graph nodes", () => {
       expect(marker).toHaveAttribute("data-char", glyph);
       // The glyph is real text, so it reads in the node's DOM text (not only via CSS).
       expect(marker.textContent).toBe(glyph);
-      expect(card.querySelector(".node-title")!.textContent!.trimStart().startsWith(glyph)).toBe(true);
+      expect(
+        card.querySelector(".node-title")!.textContent!.trimStart().startsWith(glyph),
+      ).toBe(true);
       expect(marker.parentElement).toHaveAttribute("data-tone", tone);
       expect(marker.parentElement).toHaveClass(
         color === "amber" ? "text-amber" : `text-run-status-${color}`,
@@ -1879,5 +1882,138 @@ describe("graph evaluation declarations", () => {
       />,
     );
     expect(screen.queryByText(/Evaluations ·/)).not.toBeInTheDocument();
+  });
+});
+
+describe("cron schedules", () => {
+  const nightly = FlowInfoMsg.create({
+    ...workflow,
+    workflowId: "nightly.py::nightly",
+    displayName: "Nightly",
+    relativeFile: "nightly.py",
+    cron: "* * * * *",
+    scheduleEnabled: false,
+    lastRunAt: Date.UTC(2026, 9, 28, 12, 0) / 1000,
+  });
+  const nextRunAt = Date.UTC(2026, 9, 28, 12, 1) / 1000;
+  const cronRun = RunSummaryMsg.create({
+    ...summary,
+    runId: "run-cron",
+    workflowId: nightly.workflowId,
+    status: "failed",
+    triggeredBy: "scheduled",
+  });
+
+  it("enables and disables a schedule from the workflow view and labels run triggers", async () => {
+    const changes: Array<{ enabled: boolean }> = [];
+    const pushed: Array<(envelope: OperatorUpdateEnvelope) => void> = [];
+    const publish = (update: OperatorUpdateEnvelope) => pushed.forEach((push) => push(update));
+    let sequence = 1;
+    const catalogWith = (flow: FlowInfoMsg) =>
+      envelope(++sequence, {
+        oneofKind: "catalogReplaced",
+        catalogReplaced: {
+          catalog: CatalogSnapshotMsg.create({
+            ...baseline.catalog,
+            asOfEventUlid: eventUlid(sequence),
+            workflows: [flow, workflow],
+          }),
+        },
+      });
+    const setScheduleEnabled = vi.fn(async (selector: string, enabled: boolean) => {
+      changes.push({ enabled });
+      const flow = {
+        ...nightly,
+        scheduleEnabled: enabled,
+        nextRunAt: enabled ? nextRunAt : 0,
+      };
+      publish(catalogWith(flow));
+      return flow;
+    });
+    const api = createApi({
+      loadBaseline: async () => ({
+        ...baseline,
+        catalog: CatalogSnapshotMsg.create({
+          ...baseline.catalog,
+          workflows: [nightly, workflow],
+        }),
+        runs: [cronRun],
+      }),
+      setScheduleEnabled,
+      streamUpdates: async function* (_instance, _cursor, signal) {
+        const queue: OperatorUpdateEnvelope[] = [];
+        let wake: (() => void) | undefined;
+        pushed.push((update) => {
+          queue.push(update);
+          wake?.();
+        });
+        while (!signal?.aborted) {
+          const next = queue.shift();
+          if (next) {
+            yield next;
+            continue;
+          }
+          await new Promise<void>((resolve) => {
+            wake = resolve;
+            signal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        }
+      },
+    });
+    render(<OperatorUi host={{ api, presentation }} />);
+
+    const badge = await screen.findByRole("img", { name: /\* \* \* \* \*/ });
+    expect(badge).toHaveAttribute("data-schedule-enabled", "false");
+    expect(
+      await screen.findByRole("button", { name: /run-cron, failed, .*Scheduled trigger/ }),
+    ).toBeVisible();
+    const toggle = screen.getByRole("switch", { name: "Run on schedule" });
+    expect(toggle).toHaveAttribute("aria-checked", "false");
+    // Schedule details stay hidden until expanded.
+    expect(screen.queryByRole("region", { name: "Schedule" })).not.toBeInTheDocument();
+    const details = screen.getByRole("button", { name: "Schedule details" });
+    fireEvent.click(details);
+    expect(details).toHaveAttribute("aria-expanded", "true");
+    const schedule = screen.getByRole("region", { name: "Schedule" });
+    expect(within(schedule).getByText("Every minute")).toBeVisible();
+    expect(within(schedule).getByRole("button", { name: /run-cron, failed/ })).toBeVisible();
+    expect(within(schedule).getAllByRole("time")).toHaveLength(1);
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
+    expect(setScheduleEnabled).toHaveBeenCalledWith(nightly.workflowId, true, undefined);
+    expect(within(schedule).getAllByRole("time")).toHaveLength(2);
+    expect(screen.getByRole("img", { name: /\* \* \* \* \*/ })).toHaveAttribute(
+      "data-schedule-enabled",
+      "true",
+    );
+
+    fireEvent.click(toggle);
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "false"));
+    expect(changes).toEqual([{ enabled: true }, { enabled: false }]);
+  });
+
+  it("shows no schedule controls for an unscheduled workflow or when run actions are disabled", async () => {
+    const api = createApi({
+      loadBaseline: async () => ({
+        ...baseline,
+        catalog: CatalogSnapshotMsg.create({
+          ...baseline.catalog,
+          workflows: [nightly, workflow],
+        }),
+        runs: [],
+      }),
+    });
+    const view = render(<WorkflowWorkspace api={api} workflowId={workflow.workflowId} />);
+    await screen.findByRole("button", { name: "Inspect Fetch" });
+    expect(screen.getByRole("button", { name: "Run" })).toBeVisible();
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Schedule details" })).not.toBeInTheDocument();
+
+    view.rerender(
+      <WorkflowWorkspace api={api} workflowId={nightly.workflowId} runActionsEnabled={false} />,
+    );
+    await screen.findByRole("button", { name: "Inspect Fetch" });
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
   });
 });
