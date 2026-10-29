@@ -305,11 +305,18 @@
     },
     "AgentStarted": {
       "additionalProperties": false,
-      "description": "The SDK started the step's agent, with the tools it offers the model.",
+      "description": "The SDK started the step's agent, with the tools it offers the model.\n\n``tools`` are the step's tools and the skill tools; ``builtin_tools`` the\nsandbox tool sets, whose tools the SDK adds when the sandbox starts.",
       "properties": {
         "agent_name": {
           "title": "Agent Name",
           "type": "string"
+        },
+        "builtin_tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Builtin Tools",
+          "type": "array"
         },
         "format": {
           "const": "openai_agents.responses/v1",
@@ -347,7 +354,8 @@
         "kind",
         "agent_name",
         "model",
-        "tools"
+        "tools",
+        "builtin_tools"
       ],
       "title": "AgentStarted",
       "type": "object"
@@ -969,6 +977,17 @@
       "additionalProperties": false,
       "description": "What an OpenAI Agents SDK runtime contributes to a declaration.\n\n``model`` is ``None`` when the step leaves the choice to the SDK.",
       "properties": {
+        "builtin_tools": {
+          "items": {
+            "enum": [
+              "filesystem",
+              "shell"
+            ],
+            "type": "string"
+          },
+          "title": "Builtin Tools",
+          "type": "array"
+        },
         "kind": {
           "const": "openai_agent",
           "default": "openai_agent",
@@ -997,7 +1016,8 @@
       "required": [
         "kind",
         "model",
-        "settings"
+        "settings",
+        "builtin_tools"
       ],
       "title": "OpenAIAgentDeclaration",
       "type": "object"

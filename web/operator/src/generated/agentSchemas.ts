@@ -25,7 +25,7 @@ export type PredictRLMDeclaration = z.infer<typeof PredictRLMDeclaration>;
 export const ClaudeAgentDeclaration = z.strictObject({ "builtin_tools": z.array(z.string()), "kind": z.literal("claude_agent"), "model": z.union([z.string(), z.null()]), "settings": z.record(z.string(), JsonValue) });
 export type ClaudeAgentDeclaration = z.infer<typeof ClaudeAgentDeclaration>;
 
-export const OpenAIAgentDeclaration = z.strictObject({ "kind": z.literal("openai_agent"), "model": z.union([z.string(), z.null()]), "settings": z.record(z.string(), JsonValue) });
+export const OpenAIAgentDeclaration = z.strictObject({ "builtin_tools": z.array(z.enum(["filesystem","shell"])), "kind": z.literal("openai_agent"), "model": z.union([z.string(), z.null()]), "settings": z.record(z.string(), JsonValue) });
 export type OpenAIAgentDeclaration = z.infer<typeof OpenAIAgentDeclaration>;
 
 export const FieldDeclaration = z.strictObject({ "annotation": z.string(), "description": z.string(), "name": z.string() });
@@ -109,7 +109,7 @@ export type SessionInitialized = z.infer<typeof SessionInitialized>;
 export const RateLimited = z.strictObject({ "format": z.literal("claude_agent.messages/v1"), "kind": z.literal("rate_limit"), "limit_type": z.union([z.string(), z.null()]), "status": z.string() });
 export type RateLimited = z.infer<typeof RateLimited>;
 
-export const AgentStarted = z.strictObject({ "agent_name": z.string(), "format": z.literal("openai_agents.responses/v1"), "kind": z.literal("agent.started"), "model": z.union([z.string(), z.null()]), "tools": z.array(z.string()) });
+export const AgentStarted = z.strictObject({ "agent_name": z.string(), "builtin_tools": z.array(z.string()), "format": z.literal("openai_agents.responses/v1"), "kind": z.literal("agent.started"), "model": z.union([z.string(), z.null()]), "tools": z.array(z.string()) });
 export type AgentStarted = z.infer<typeof AgentStarted>;
 
 export const AgentLiveEvent = z.strictObject({ "common": z.union([z.discriminatedUnion("kind", [RunStarted, TurnFinished, ToolStarted, ToolFinished]), z.null()]), "invocation_id": z.string().min(1), "kind": z.literal("event"), "native": z.union([z.discriminatedUnion("format", [z.discriminatedUnion("kind", [Lifecycle, IterationRecorded, CodeGenerated, PredictStarted, PredictFinished, CodeExecuted, RunEnded]), z.discriminatedUnion("kind", [SessionInitialized, RateLimited]), z.discriminatedUnion("kind", [AgentStarted])]), z.null()]), "schema_version": z.literal(2), "sequence": z.number().gt(0).refine(Number.isInteger, "Expected an integer"), "timestamp_ns": z.number().min(0).refine(Number.isInteger, "Expected an integer") });

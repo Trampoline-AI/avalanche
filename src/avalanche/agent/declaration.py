@@ -140,6 +140,10 @@ class ClaudeAgentDeclaration(BaseModel):
     builtin_tools: tuple[str, ...]
 
 
+# The OpenAI Agents SDK sandbox tools an OpenAIAgent step may turn on.
+OpenAIBuiltinTool = Literal["filesystem", "shell"]
+
+
 class OpenAIAgentDeclaration(BaseModel):
     """What an OpenAI Agents SDK runtime contributes to a declaration.
 
@@ -151,6 +155,7 @@ class OpenAIAgentDeclaration(BaseModel):
     kind: Literal["openai_agent"] = "openai_agent"
     model: str | None
     settings: dict[str, JsonValue]
+    builtin_tools: tuple[OpenAIBuiltinTool, ...]
 
 
 RuntimeDeclaration = Annotated[

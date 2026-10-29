@@ -2141,7 +2141,9 @@ def test_openai_declarations_fill_the_metadata_sections(store):
         tools=(ToolDeclaration(name="lookup", description="", source_code=""),),
         skills=(),
         runtime=OpenAIAgentDeclaration(
-            model="gpt-5.4-mini", settings={"max_turns": 4, "narrate": True}
+            model="gpt-5.4-mini",
+            settings={"max_turns": 4, "narrate": True},
+            builtin_tools=("shell",),
         ),
     )
     store.current_workflow = replace(
@@ -2152,6 +2154,6 @@ def test_openai_declarations_fill_the_metadata_sections(store):
     sections = store.agent_declaration_sections()
 
     assert sections["models"] == {"main": "gpt-5.4-mini"}
-    assert sections["runtime"] == {"max_turns": 4, "narrate": True}
+    assert sections["runtime"] == {"max_turns": 4, "narrate": True, "builtin_tools": ["shell"]}
     assert [tool["name"] for tool in sections["tools"]] == ["lookup"]
     assert sections["skills"] == {}
