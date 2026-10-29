@@ -12,7 +12,14 @@ from textual.widgets import Button, DataTable, Input, Label, Select, Static, Tex
 
 from ..extensions import ExtensionSession
 from ..models import LogLevel
-from ..state import ExtensionPage, PanelDescriptor, TuiContext, TuiExtensionError, json_plain
+from ..state import (
+    ActionDescriptor,
+    ExtensionPage,
+    PanelDescriptor,
+    TuiContext,
+    TuiExtensionError,
+    json_plain,
+)
 
 
 class InspectionScreen(ModalScreen):
@@ -100,7 +107,10 @@ class ResourceScreen(ModalScreen):
     ResourceScreen #resource-body { height: 1fr; }
     ResourceScreen Horizontal { height: 3; }
     """
-    BINDINGS = [("escape", "dismiss", "Back")]
+    BINDINGS = [
+        ("escape", "dismiss", "Back"),
+        *((str(n), f"panel_action({n - 1})", "Panel action") for n in range(1, 10)),
+    ]
 
     def __init__(
         self, session: ExtensionSession, panel: PanelDescriptor, context: TuiContext
@@ -123,6 +133,11 @@ class ResourceScreen(ModalScreen):
                 yield Tree(self.panel.label, id="resource-body")
             else:
                 yield TextArea(read_only=True, id="resource-body")
+            if self.panel.actions:
+                yield Static("", id="resource-actions-target", markup=False)
+                with Horizontal(id="resource-actions"):
+                    for index, action_id in enumerate(self.panel.actions):
+                        yield Button(action_id, id=f"panel-action-{index}")
             with Horizontal():
                 yield Button("Reload", id="resource-reload")
                 yield Button("Next page", id="resource-next", disabled=True)
@@ -130,9 +145,64 @@ class ResourceScreen(ModalScreen):
 
     def on_mount(self) -> None:
         self._load(None)
+        if self.panel.actions:
+            self._sync_actions()
+            # Descriptions refresh off-thread after an action; mirror them cheaply.
+            self.set_interval(0.25, self._sync_actions)
+
+    def _panel_actions(self) -> list[ActionDescriptor]:
+        """Advertised panel actions in panel order; absent ones are not offered."""
+        description = self.session.description
+        if description is None or not self._context_is_current():
+            return []
+        if description.context != self.context:
+            return []
+        advertised = {action.id: action for action in description.actions}
+        return [advertised[item] for item in self.panel.actions if item in advertised]
+
+    def _sync_actions(self) -> None:
+        available = {action.id: action for action in self._panel_actions()}
+        shown = 0
+        for index, action_id in enumerate(self.panel.actions):
+            button = self.query_one(f"#panel-action-{index}", Button)
+            action = available.get(action_id)
+            button.display = action is not None
+            if action is None:
+                continue
+            shown += 1
+            label = f"{action.label} ({shown})"
+            if button.label.plain != label:
+                button.label = label
+            button.disabled = not action.available or (self.app.read_only and action.mutates)
+        target = self.query_one("#resource-actions-target", Static)
+        flow = self.context.flow
+        target.update(
+            f"Controls for {flow}"
+            if shown and flow is not None
+            else "Select a workflow with this capability to control it"
+        )
+
+    def action_panel_action(self, position: int) -> None:
+        actions = self._panel_actions()
+        if position < len(actions):
+            self.app.invoke_extension_action(actions[position])
+
+    def _context_is_current(self) -> bool:
+        """Follow run/node selection changes unless this panel is about them."""
+        current = self.app.extension_context
+        if current == self.context:
+            return True
+        if self.panel.slot in ("run", "node") or (
+            current.scope,
+            current.flow,
+            current.version,
+        ) != (self.context.scope, self.context.flow, self.context.version):
+            return False
+        self.context = current
+        return True
 
     def _load(self, cursor: str | None) -> None:
-        if self.context != self.app.extension_context:
+        if not self._context_is_current():
             self.query_one("#resource-status", Static).update(
                 "Stale context · reopen this panel"
             )
@@ -150,7 +220,7 @@ class ResourceScreen(ModalScreen):
         self.query_one("#resource-reload", Button).disabled = False
 
     def _accept(self, page: ExtensionPage) -> None:
-        if not self.is_mounted or self.context != self.app.extension_context:
+        if not self.is_mounted or not self._context_is_current():
             return
         if self._requested_cursor is not None and self._revision != page.revision:
             self._fail(
@@ -239,3 +309,8 @@ class ResourceScreen(ModalScreen):
         elif event.button.id == "resource-reload":
             self._revision = None
             self._load(None)
+        elif event.button.id is not None and event.button.id.startswith("panel-action-"):
+            action_id = self.panel.actions[int(event.button.id.removeprefix("panel-action-"))]
+            action = next((a for a in self._panel_actions() if a.id == action_id), None)
+            if action is not None:
+                self.app.invoke_extension_action(action)
