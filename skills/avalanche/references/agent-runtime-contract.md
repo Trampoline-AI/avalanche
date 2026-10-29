@@ -632,7 +632,7 @@ class JsonOutputs:                # a JSON document, validated in strict JSON mo
 PredictRLM returns `PythonOutputs`. ClaudeAgent returns `JsonOutputs`, or
 `PythonOutputs` when the signature has `ava.File` or `ava.Workspace` outputs.
 OpenAIAgent returns `JsonOutputs`, or `PythonOutputs` when the signature has
-`ava.File` outputs.
+`ava.File` or `ava.Workspace` outputs.
 
 ```python
 PythonOutputs(values={"summary": "Avalanche runs DAGs.", "word_count": 3})

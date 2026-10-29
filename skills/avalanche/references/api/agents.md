@@ -178,13 +178,14 @@ ava.runtimes.OpenAIAgent(model="gpt-5.4-mini", max_turns=6)
 | --- | --- | --- |
 | `model` | `str \| None`; default `None` | OpenAI model, such as `"gpt-5.4-mini"`. `None` uses `OPENAI_DEFAULT_MODEL`, else the SDK's default. |
 | `max_turns` | positive `int \| None`; default `None` | Most model responses before the run fails; `None` is the SDK's limit, 10. |
+| `builtin_tools` | sequence of `"filesystem"`, `"shell"`; default `()` | The SDK's sandbox tools: `"filesystem"` gives `apply_patch` and `view_image`, `"shell"` gives `exec_command` and `write_stdin`. With either, the step runs in a local sandbox rooted at its `ava.Workspace` input, else a temporary folder. |
 | `system_prompt_append` | `str \| None`; default `None` | Text added after the signature's instructions in the agent's instructions. |
 | `narrate` | `bool`; default `True` | As for ClaudeAgent: asks the model to say what it is about to do before each tool call, and requires a `run_summary` string in its answer, which Avalanche removes from the outputs and shows as the answering turn's message. A signature output named `run_summary` needs `narrate=False`. |
 | `tracing` | `bool`; default `False` | Sends the SDK's own trace of each call to OpenAI. Off, nothing but the model calls reaches OpenAI. |
 
 Any other keyword is a field of the SDK's `agents.ModelSettings`, such as `temperature`, `reasoning` or `max_tokens`, passed to the SDK with the SDK's own types. Avalanche checks only the name: an unknown one raises `ValueError` when the runtime is built if the `openai` extra is installed there, and `AgentStepError` when the step runs otherwise. A step's settings replace the workflow default's setting by setting. Model settings are never published or recorded; with `RayExecutor` they must pickle.
 
-The agent has no file system and no tools besides the step's: `ava.File` inputs are attached to the model's message, `ava.File` outputs are text files the model answers with by name and content, and `ava.Workspace` inputs or outputs raise `AgentStepError`. Signature, tool parameter and output types must fit OpenAI strict JSON schemas; one that does not, such as a `dict[str, int]` output, raises `AgentStepError` before the call starts. The full rules are on the [OpenAIAgent runtime](../runtimes/openai-agent.md) page.
+`ava.File` inputs are attached to the model's message. By default the agent has no tools besides the step's: `ava.File` outputs are text files the model answers with by name and content, and `ava.Workspace` inputs or outputs raise `AgentStepError`. `builtin_tools=["filesystem", "shell"]` turns on the SDK's sandbox tools: the model then edits files and runs commands in the step's `ava.Workspace` input, in place, writes `ava.File` outputs itself, and can run skill scripts. The local sandbox does not confine commands on Linux. Signature, tool parameter and output types must fit OpenAI strict JSON schemas; one that does not, such as a `dict[str, int]` output, raises `AgentStepError` before the call starts. The full rules are on the [OpenAIAgent runtime](../runtimes/openai-agent.md) page.
 
 **Setup.** Install the `openai` extra on every machine that runs the step, Ray workers included. A workflow that only declares OpenAI steps imports and publishes without it; running a step without the SDK raises `AgentStepExecutionError` naming the extra. Each call creates its own OpenAI client from `OPENAI_API_KEY` and, when set, `OPENAI_BASE_URL`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` in the environment of the process that runs the step.
 
@@ -279,7 +280,7 @@ Which runtimes run a step's skills:
 | Runtime | Support |
 | --- | --- |
 | `ClaudeAgent` | Yes; see [ClaudeAgent](#claudeagent). |
-| `OpenAIAgent` | Yes, read-only. The model reads `SKILL.md` and the skill's files through two tools Avalanche adds, `load_skill` and `read_skill_file`; it cannot run a skill's scripts. See the [OpenAIAgent runtime](../runtimes/openai-agent.md#request) page. |
+| `OpenAIAgent` | Yes. The model reads `SKILL.md` and the skill's files through two tools Avalanche adds, `load_skill` and `read_skill_file`; it runs a skill's scripts only with the `"shell"` sandbox tool. See the [OpenAIAgent runtime](../runtimes/openai-agent.md#request) page. |
 | `PredictRLM` | Not yet. The step raises `AgentStepError` before the agent starts; use [PredictRLM's own skills](#predictrlm-skills) instead. |
 
 ### PredictRLM skills
