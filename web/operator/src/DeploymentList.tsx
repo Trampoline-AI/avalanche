@@ -155,7 +155,7 @@ export function DeploymentList({
     if (!confirmation) confirmationTrigger.current?.focus();
   }, [confirmation]);
   const rowHeight = expanded ? 34 : 27.5;
-  const statusColumnClass = `deployment-list-status flex shrink-0 items-center justify-end text-right ${expanded ? "mr-[20px] w-[120px] text-[11px]" : "mr-[17px] w-[100px] text-[10px]"} font-mono leading-none`;
+  const statusColumnClass = `deployment-list-status flex shrink-0 items-center mr-[30px] justify-end text-right ${expanded ? "w-[120px] text-[11px]" : "w-[100px] text-[10px]"} font-mono leading-none`;
   const virtualizer = useVirtualizer({
     count: items.length,
     getScrollElement: () => scrollElement.current,
@@ -232,7 +232,7 @@ export function DeploymentList({
         aria-hidden="true"
       >
         <div
-          className={`grid min-w-0 flex-1 ${expanded ? "grid-cols-[minmax(0,1fr)_120px]" : "grid-cols-[minmax(0,1fr)_100px]"} items-center gap-3 font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase ${expanded ? "px-[20px]" : "px-[9px]"}`}
+          className={`grid min-w-0 flex-1 ${expanded ? "grid-cols-[minmax(0,1fr)_120px]" : "grid-cols-[minmax(0,1fr)_100px]"} items-center gap-3 font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase pl-[16px] pr-3`}
         >
           <span className="truncate normal-case">id</span>
           <span>Created</span>
@@ -264,7 +264,7 @@ export function DeploymentList({
                 >
                   <button
                     type="button"
-                    className={`deployment-list-row grid h-full min-w-0 flex-1 cursor-pointer ${expanded ? "grid-cols-[minmax(0,1fr)_120px]" : "grid-cols-[minmax(0,1fr)_100px]"} items-center gap-3 border-0 border-b border-run-list-line bg-transparent text-left font-mono leading-none text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid ${expanded ? "px-[20px] text-[11px]" : "px-[9px] text-[10px]"} ${selectedId === item.id ? "bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "hover:bg-hover"}`}
+                    className={`deployment-list-row grid h-full min-w-0 flex-1 cursor-pointer ${expanded ? "grid-cols-[minmax(0,1fr)_120px]" : "grid-cols-[minmax(0,1fr)_100px]"} items-center gap-3 border-0 border-b border-run-list-line bg-transparent text-left font-mono leading-none text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid pl-[16px] pr-3 ${expanded ? "text-[11px]" : "text-[10px]"} ${selectedId === item.id ? "bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "hover:bg-hover"}`}
                     title={item.id}
                     aria-label={`${item.id}, ${item.label}, ${timestampFormat.format(createdAt)}${item.current ? ", current" : ""}`}
                     aria-pressed={selectedId === item.id}
@@ -318,7 +318,7 @@ export function DeploymentList({
             })}
           </div>
           {loading && (
-            <div role="status" className="px-2.5 py-1 font-mono text-[10px] text-secondary">
+            <div role="status" className="px-[16px] py-1 font-mono text-[10px] text-secondary">
               Loading deployments…
             </div>
           )}

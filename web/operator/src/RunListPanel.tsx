@@ -213,7 +213,7 @@ export function RunListPanel({
       }}
     >
       <header
-        className={`flex shrink-0 items-center justify-between ${expanded ? "h-14 border-b border-line-subtle px-[20px]" : "h-9 border-b-2 border-line px-[9px]"}`}
+        className={`flex shrink-0 items-center justify-between ${expanded ? "h-14 border-b border-line-subtle pl-[16px] pr-[30px]" : "h-9 border-b-2 border-line pl-[16px] pr-[30px]"}`}
       >
         <div className="flex min-w-0 self-stretch items-center">
           {deployments ? (
@@ -292,7 +292,7 @@ export function RunListPanel({
         className="flex min-h-0 flex-1 flex-col"
       >
         {expanded && view === "runs" && (
-          <div className="all-runs-filters flex shrink-0 flex-col gap-[20px] border-b-2 border-line p-[20px] text-xs text-secondary">
+          <div className="all-runs-filters flex shrink-0 flex-col gapx-[16px] py-[20px] border-b-2 border-line px-[16px] py-[20px] text-xs text-secondary">
             <div
               role="group"
               aria-label="Filter by status"
@@ -388,7 +388,7 @@ export function RunListPanel({
                 paddingTop: currentPadding,
                 paddingBottom: currentPadding,
               }}
-              className={`run-list-current flex min-w-0 flex-1 cursor-pointer items-center gap-2 border-0 border-b border-run-list-line text-left font-mono font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid ${expanded ? "px-[20px] text-xs" : "pl-[9px] pr-[17px] text-[10px]"} ${selectedRunId === undefined ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
+              className={`run-list-current flex min-w-0 flex-1 cursor-pointer items-center gap-2 border-0 border-b border-run-list-line text-left font-mono font-medium text-ink focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid pl-[16px] ${currentRowAction ? "pr-3" : "pr-[30px]"} ${expanded ? "text-xs" : "text-[10px]"} ${selectedRunId === undefined ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
             >
               <Workflow aria-hidden="true" className="size-3.5 shrink-0 text-secondary" />
               <span className="flex-1 truncate">{currentLabel ?? "Current definition"}</span>
@@ -400,7 +400,7 @@ export function RunListPanel({
                   event.stopPropagation();
                   currentRowAction.onClick();
                 }}
-                className={`current-row-action group shrink-0 cursor-pointer rounded border-0 bg-transparent p-0 text-[10px] font-normal text-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid ${expanded ? "mr-[20px]" : "mr-[17px]"}`}
+                className={`current-row-action group shrink-0 cursor-pointer mr-[30px] rounded border-0 bg-transparent p-0 text-[10px] font-normal text-secondary hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid `}
               >
                 <span className="current-row-action-label font-normal underline underline-offset-2 group-hover:no-underline">
                   {currentRowAction.label.toLocaleLowerCase()}
@@ -414,7 +414,7 @@ export function RunListPanel({
         ) : (
           <>
             <div
-              className={`run-list-columns grid shrink-0 grid-cols-[minmax(0,1fr)_100px] items-center gap-3 border-b border-run-list-line font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase ${expanded ? "h-9 px-[20px]" : "h-7 px-[9px]"}`}
+              className={`run-list-columns grid shrink-0 grid-cols-[minmax(0,1fr)_100px] items-center gap-3 border-b border-run-list-line font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase ${expanded ? "h-9 pl-[16px] pr-[30px]" : "h-7 pl-[16px] pr-[30px]"}`}
               aria-hidden="true"
             >
               <span>Run</span>
@@ -450,7 +450,7 @@ export function RunListPanel({
                     return (
                       <button
                         type="button"
-                        className={`run-list-row run-list-columns absolute top-0 left-0 grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_100px] items-center gap-3 border-0 border-b border-run-list-line text-left font-mono text-ink leading-none ${expanded ? "px-[20px] text-[11px]" : "px-[9px] text-[10px]"} ${selectedRunId === summary.runId ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
+                        className={`run-list-row run-list-columns absolute top-0 left-0 grid w-full cursor-pointer grid-cols-[minmax(0,1fr)_100px] items-center gap-3 border-0 border-b border-run-list-line text-left font-mono text-ink leading-none ${expanded ? "pl-[16px] pr-[30px] text-[11px]" : "pl-[16px] pr-[30px] text-[10px]"} ${selectedRunId === summary.runId ? "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover" : "bg-transparent hover:bg-hover"}`}
                         key={summary.runId}
                         onClick={() => onSelectRun(summary.runId)}
                         aria-pressed={selectedRunId === summary.runId}
@@ -493,14 +493,14 @@ export function RunListPanel({
                 {loadingPage && !expanded && (
                   <div
                     role="status"
-                    className="run-list-loading px-[9px] py-1 text-[10px] text-secondary"
+                    className="run-list-loading px-[16px] py-1 text-[10px] text-secondary"
                   >
                     Loading runs…
                   </div>
                 )}
                 {filteredRuns.length === 0 && (
                   <span
-                    className={`run-list-empty block font-mono text-secondary ${expanded ? "min-h-0 flex-1 overflow-auto px-[20px] py-[24px] text-xs" : "p-2.5 text-[8px]"}`}
+                    className={`run-list-empty block font-mono text-secondary ${expanded ? "min-h-0 flex-1 overflow-auto px-[16px] py-[24px] text-xs" : "px-[16px] py-2.5 text-[8px]"}`}
                   >
                     {workflowRuns.length ? "No matching runs" : "No runs"}
                   </span>
@@ -511,7 +511,7 @@ export function RunListPanel({
             {expanded && view === "runs" && (
               <nav
                 aria-label="Run pagination"
-                className="flex shrink-0 flex-col gap-3 border-t border-line-subtle px-[20px] py-[16px] text-xs text-secondary"
+                className="flex shrink-0 flex-col gap-3 border-t border-line-subtle px-[16px] py-[16px] text-xs text-secondary"
               >
                 <span role="status">
                   {filteredRuns.length

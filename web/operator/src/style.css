@@ -434,8 +434,12 @@
   cursor: not-allowed;
 }
 
+/* The native scrollbar is hidden; the overlay handle (.timeline-scroll-handle, 14px from the
+   right edge) is the scrollbar. Rows, column headers and the tab bar reserve that 14px gutter
+   on the right (pr-[30px] = 14px gutter + 16px padding), so the handle never covers STATUS. */
 .avalanche-operator-ui .timeline-scroll {
   scrollbar-width: none;
+  scrollbar-gutter: stable;
 }
 
 .avalanche-operator-ui .timeline-scroll::-webkit-scrollbar {
