@@ -36,6 +36,31 @@
   answer format, working folder and settings isolation are unchanged. The setting
   is published with the step's runtime and can be set as a workflow default.
   Passing `system_prompt` is still rejected, and the error now names this field.
+- **BREAKING CHANGE:** discovered cron schedules now start **disabled**; the operator
+  no longer runs a `cron` workflow until its schedule is enabled. Start with
+  `ava operator --schedules-enabled` (or `ava dev --schedules-enabled`) to keep the
+  previous always-on behavior.
+- Enable and disable a workflow's cron schedule from the Web UI, the TUI schedules
+  panel, the REST API (`POST /api/v1/flows/{selector}/schedule`), gRPC
+  (`SetScheduleEnabled`), and the new `ava schedule list|enable|disable` command.
+  Flows report `schedule_enabled`; a disabled schedule has no next run. The state is
+  in operator memory only: it is kept across rediscovery and reload and resets on
+  restart.
+- Enabling a schedule can set the input its cron runs start with. In the Web UI, the
+  run controls' JSON input is the one place to define input: it is prefilled with
+  the field defaults (or the schedule's input), Run uses it, and turning the
+  schedule on saves it for cron runs. The TUI opens its input form prefilled the
+  same way; the REST route and `SetScheduleEnabled` take `input_json`, and
+  `ava schedule enable` takes `--input`. Flows report the stored input as
+  `schedule_input_json`; without one, scheduled runs use the input defaults.
+- The Web UI marks scheduled workflows with a clock badge. Its run controls gain a
+  schedule switch next to Run, with collapsible schedule details (cron in plain
+  words, input, next and last run).
+- **BREAKING CHANGE:** run summaries' `triggered_by` is now one of `scheduled`,
+  `manual`, `webhook`, or `api`. REST, gRPC, and `ava run` starts are now `api`
+  (they were `manual`); Web UI and TUI starts stay `manual`, and `StartRun` accepts a
+  `trigger` field. Clients reject unknown trigger values. Python `RunState` and
+  `RunSummary` expose it as `TriggerKind`.
 
 ## 0.16.0
 

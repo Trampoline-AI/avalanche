@@ -245,6 +245,7 @@ authentication; do not expose it to an untrusted network. A separately launched
 | Method | Path (under `/api/v1`) | Response |
 | --- | --- | --- |
 | GET | `/flows` | Discovered flows and their `workflow_selector` values |
+| POST | `/flows/{workflow_selector}/schedule` | Body `{"enabled": true}` enables a cron schedule, `false` disables it; when enabling, optional `input_json` sets the input object its runs start with. Returns the updated flow |
 | POST | `/runs` | `202` with `run_id`; execution continues asynchronously |
 | GET | `/runs` | Paginated run summaries |
 | GET | `/runs/{run_id}` | Snapshot with `summary`, node states, and topology |
@@ -252,7 +253,13 @@ authentication; do not expose it to an untrusted network. A separately launched
 | GET | `/runs/{run_id}/output` | Retained result value and file descriptors |
 | GET | `/runs/{run_id}/activity` | Paginated log or node-event descriptors |
 
-Percent-encode run IDs when placing them in URL paths. Application errors use a
+Percent-encode run IDs and workflow selectors when placing them in URL paths.
+Each flow reports `schedule_enabled` and, once set, `schedule_input_json`;
+schedules start disabled with the workflow's default input, and a disabled
+schedule has no `next_run_at`. Whether a schedule is enabled, and its input, live
+in the operator's memory only: it survives rediscovery and source reload, and resets when the operator
+restarts. Each run summary's `triggered_by` is `scheduled`, `manual` (the Web UI or TUI),
+`webhook`, or `api` (REST, gRPC, and `ava run` callers). Application errors use a
 JSON `error` object with `code` and `message`; malformed HTTP framing can be
 rejected by Uvicorn before the request reaches the API.
 

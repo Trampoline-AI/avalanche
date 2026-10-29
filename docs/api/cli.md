@@ -33,6 +33,7 @@ default serve the browser UI and REST API.
 | `--ray` | Off | Run workflows through Ray rather than the local executor. Requires the `ray` extra. |
 | `--log-level` | `WARNING` | Terminal log threshold: `DEBUG`, `INFO`, `WARNING`, `ERROR`; input is case-normalized. |
 | `--discovery-timeout SECONDS` | `60.0` | Positive finite maximum duration of a discovery scan. |
+| `--schedules-enabled` | Off | Start with every discovered cron schedule enabled. Schedules otherwise start disabled; the state is in memory only. |
 
 ### Target configuration
 
@@ -63,6 +64,7 @@ choice as `operator`.
 | `--ray` | Off | Use Ray execution. |
 | `--log-level` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. |
 | `--discovery-timeout SECONDS` | `60.0` | Positive finite discovery deadline. |
+| `--schedules-enabled` | Off | Start with every cron schedule enabled. |
 
 Unlike `operator`, `dev` has no `--host`, `--webhook-port`, or `--no-web` options.
 Its local webhook port is `7434`. Startup reports discovery, gRPC readiness, and
@@ -139,6 +141,24 @@ is `localhost:7433`. These inspect configuration; they do not invoke the webhook
 Declare webhooks using `avalanche.Webhook` on `@workflow`; see
 [workflow and webhook declarations](workflows.md).
 
+## `ava schedule COMMAND [SELECTOR] [--connect HOST:PORT]`
+
+Inspect and control cron schedules on a running operator. Default connection is
+`localhost:7433`.
+
+| Command | Output |
+| --- | --- |
+| `ava schedule list` | JSON list of scheduled workflows: `selector`, `name`, `cron`, `enabled`, `input` (`null` for the workflow's defaults), `next_run_at`, `last_run_at` (ISO 8601 UTC or `null`). |
+| `ava schedule enable SELECTOR [--input JSON]` | Lets that workflow's cron schedule start runs; prints its JSON record. `--input` sets the JSON object each cron run starts with; without it the current input is kept. |
+| `ava schedule disable SELECTOR` | Stops that workflow's cron schedule from starting runs; prints its JSON record. |
+
+Schedules start disabled, and a disabled schedule has no next run time. Whether a
+schedule is enabled, and its input, live only in the operator's memory: they
+survive rediscovery and source reload, and reset when the operator restarts. The
+input is validated against the workflow's input model when each run starts. To run a scheduled
+workflow by hand, use `ava run` as for any other workflow. Targeting a workflow without a cron expression, or an unknown selector,
+prints the operator error to stderr and returns `1`.
+
 ## `ava tui [FLOW[/NODE]] [options]`
 
 Launch the Textual terminal UI. Without `--connect`, use the mock provider; with
@@ -170,7 +190,11 @@ from the operator, verifies size and SHA-256 and refuses to overwrite an existin
 path. Local File references use the framework's host binder; unavailable or
 expired references fail explicitly. Workspace-directory export remains available
 through `ava result --output-dir`, rather than a simulated TUI directory download.
-Schedules show real cron/next/last observations; the operator offers no toggle or
+Schedules show real cron, enabled, next and last observations. For the selected
+workflow, the schedules panel offers enable or disable (`1`) after confirmation;
+enabling a workflow that declares input opens its input form, prefilled with the
+schedule's current input or the field defaults;
+the run history header marks a disabled schedule. There is no
 wait-resolution action. There is no production permission service in local mode.
 
 Logs retain real node/channel/attempt identity where captured by the worker,

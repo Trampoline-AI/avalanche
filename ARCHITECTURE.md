@@ -294,7 +294,11 @@ the live Python watcher, so a restart re-evaluates changed local source
 metadata.
 
 The scheduler reconciles discovered `cron` declarations with the catalog. It
-starts runs through the same operator lifecycle as manual requests. Workflow
+starts runs through the same operator lifecycle as manual requests, but only for
+schedules that are enabled. Schedules start disabled (or all enabled with
+`--schedules-enabled`); enable/disable choices and the input each schedule's runs
+start with are kept in memory by workflow ID across reconciliation and reset on
+restart. The input is validated by the run worker, as for any other run. Workflow
 descriptors can also declare webhook routes. When routes exist, the operator
 starts a loopback HTTP ingress on port `7434` by default; valid JSON POST bodies
 become workflow input and return an accepted run ID.
@@ -388,8 +392,8 @@ application mounted at `/api`, and the gRPC-Web proxy to the native operator.
 separately for a configured operator. The browser does not receive a direct
 Python or gRPC channel to user workflow code.
 
-`src/runtime/operator/rest.py` handles `/api/v1` discovery, run creation,
-summaries, snapshots, cancellation, output, and activity. Requests are validated
+`src/runtime/operator/rest.py` handles `/api/v1` discovery, enabling and disabling
+schedules, run creation, summaries, snapshots, cancellation, output, and activity. Requests are validated
 at the HTTP boundary and translated to the same unary `OperatorServiceV2` RPCs.
 FastAPI supplies route declarations, request schemas, and OpenAPI documentation;
 blocking RPC calls run in worker threads rather than on the HTTP event loop.
