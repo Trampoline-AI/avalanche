@@ -109,9 +109,45 @@ A bare parallel group, lists/dicts containing deferred values, and deferred valu
 
 ## Triggers
 
-`cron` and `webhook` are declarations, not timers or servers. They become active when the workflow is discovered by the running [CLI operator](cli.md). Direct builder calls and `run()` do not activate them.
+`cron` and `webhook` are declarations, not timers or servers. A webhook becomes active when the workflow is discovered by the running [CLI operator](cli.md); a cron schedule also has to be enabled there (see below). Direct builder calls and `run()` do not activate them.
 
-`cron` accepts a croniter-compatible expression, for example `"*/5 * * * *"`. Discovery validates it; workflow construction/direct runs do not. Scheduling checks local wall-clock minutes, at most once per workflow per matching minute, and starts runs without caller-supplied input/context. Required input/context fields therefore need usable defaults for scheduled runs.
+`cron` accepts a croniter-compatible expression, for example `"*/5 * * * *"`. Discovery validates it; workflow construction/direct runs do not. Scheduling checks local wall-clock minutes, at most once per workflow per matching minute. Scheduled runs start with the schedule's input (see below) and no context, so required context fields need usable defaults.
+
+A discovered schedule starts **disabled**: the operator does not start cron runs
+for it until you enable it. Enable or disable one workflow's schedule from the Web
+UI workflow view, the TUI schedules panel (`Ctrl+S`), the REST API, or the CLI:
+
+```bash
+uv run ava schedule list
+uv run ava schedule enable flows.py::nightly
+uv run ava schedule disable flows.py::nightly
+```
+
+When the workflow declares an input model, enabling its schedule sets the input each
+cron run starts with. In the Web UI, the run controls' JSON input is prefilled with
+the field defaults (a required field without one starts as `null`); Run uses it, and
+turning on the **Run on schedule** switch saves it for cron runs. The TUI opens its
+input form prefilled the same way; the CLI and REST API take it explicitly:
+
+```bash
+uv run ava schedule enable flows.py::nightly --input '{"region": "eu"}'
+```
+
+Without input, scheduled runs use the input model's defaults. The input is kept
+while the schedule is disabled, so enabling it again reuses it, and replaced only
+when you enable with new input. Like any run input, it is validated against the
+input model when each run starts: an invalid input makes each scheduled run fail.
+
+A disabled schedule starts no runs and reports no next run time. You can still run
+the workflow by hand like any other. Whether a schedule is enabled, and its input, live only
+in the operator's memory: they are kept across rediscovery and source reload,
+including when the cron expression changes, and reset to disabled with default input
+when the operator restarts.
+`ava operator --schedules-enabled` (or `ava dev --schedules-enabled`) starts with
+every schedule enabled instead.
+
+Each run records what started it as `triggered_by`: `scheduled`, `manual` (the Web UI
+or the TUI), `webhook`, or `api` (REST, gRPC, and `ava run` callers).
 
 ```python
 ava.Webhook(path: str | None = None)
