@@ -37,6 +37,7 @@ from .models import (
     OperatorUpdateEnvelope,
     ResetRequired,
     RunCreated,
+    RunInput,
     RunSnapshot,
     RunStatus,
     RunStatusChanged,
@@ -96,6 +97,7 @@ def workflow_topology_to_v2(topology: WorkflowTopology) -> pb.WorkflowTopologyV2
         classifier_metadata_json=dict(topology.classifier_metadata_json),
         evaluation_metadata_json=dict(topology.evaluation_metadata_json),
         step_interface_json=dict(topology.step_interface_json),
+        input_declaration_json=topology.input_declaration_json,
     )
 
 
@@ -109,6 +111,7 @@ def workflow_info_to_v2(info: WorkflowInfo) -> pb.FlowInfoV2:
         classifier_metadata_json=tuple(sorted(info.classifier_metadata_json.items())),
         evaluation_metadata_json=tuple(sorted(info.evaluation_metadata_json.items())),
         step_interface_json=tuple(sorted(info.step_interface_json.items())),
+        input_declaration_json=info.input_declaration_json,
     )
     manifest_digest = sha256_hex(("\n".join([info.selector, *info.node_ids])).encode("utf-8"))
     return pb.FlowInfoV2(
@@ -381,6 +384,13 @@ def run_snapshot_to_v2(
     )
     if snapshot.terminal_seal is not None:
         message.terminal_seal.CopyFrom(terminal_seal_descriptor_to_v2(snapshot.terminal_seal))
+    if snapshot.input is not None:
+        message.input.CopyFrom(
+            pb.RunInputV2(
+                values_json=snapshot.input.values_json,
+                supplied_fields=snapshot.input.supplied_fields,
+            )
+        )
     return message
 
 
@@ -771,6 +781,7 @@ def workflow_topology_from_v2(msg: pb.WorkflowTopologyV2) -> WorkflowTopology:
             for node_id in node_ids
             if node_id in msg.step_interface_json
         ),
+        input_declaration_json=msg.input_declaration_json,
     )
 
 
@@ -780,6 +791,7 @@ def workflow_info_from_v2(msg: pb.FlowInfoV2) -> WorkflowInfo:
     return WorkflowInfo(
         name=msg.display_name,
         input_schema_json=msg.input_schema_json,
+        input_declaration_json=msg.topology.input_declaration_json,
         version=msg.version,
         file_path=msg.file_path,
         node_ids=node_ids,
@@ -950,6 +962,14 @@ def run_snapshot_from_v2(msg: pb.RunSnapshotV2) -> RunSnapshot:
         terminal_seal=(
             terminal_seal_descriptor_from_v2(msg.terminal_seal)
             if msg.HasField("terminal_seal")
+            else None
+        ),
+        input=(
+            RunInput(
+                values_json=msg.input.values_json,
+                supplied_fields=tuple(msg.input.supplied_fields),
+            )
+            if msg.HasField("input")
             else None
         ),
     )

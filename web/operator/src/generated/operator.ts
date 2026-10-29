@@ -480,6 +480,13 @@ export interface WorkflowTopologyV2 {
     agentRuntimeKinds: {
         [key: string]: string;
     };
+    /**
+     * The declared run input model, its JSON schema, and the steps that receive
+     * it, as JSON. Empty when the workflow declares no input.
+     *
+     * @generated from protobuf field: string input_declaration_json = 12
+     */
+    inputDeclarationJson: string;
 }
 /**
  * @generated from protobuf message avalanche.operator.ScanTargetV2
@@ -1043,6 +1050,29 @@ export interface RunSnapshotV2 {
      * @generated from protobuf field: avalanche.operator.RunActivityDescriptorV2 terminal_seal = 8
      */
     terminalSeal?: RunActivityDescriptorV2;
+    /**
+     * Absent when the workflow declares no input.
+     *
+     * @generated from protobuf field: avalanche.operator.RunInputV2 input = 9
+     */
+    input?: RunInputV2;
+}
+/**
+ * The validated input a run started with, after defaults were applied.
+ *
+ * @generated from protobuf message avalanche.operator.RunInputV2
+ */
+export interface RunInputV2 {
+    /**
+     * @generated from protobuf field: string values_json = 1
+     */
+    valuesJson: string;
+    /**
+     * Fields the caller supplied; every other field took its declared default.
+     *
+     * @generated from protobuf field: repeated string supplied_fields = 2
+     */
+    suppliedFields: string[];
 }
 /**
  * The immutable, scope-bound object body for an activity. Servers must
@@ -2961,7 +2991,8 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
             { no: 8, name: "classifier_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 9, name: "step_interface_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 10, name: "evaluation_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
-            { no: 11, name: "agent_runtime_kinds", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
+            { no: 11, name: "agent_runtime_kinds", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
+            { no: 12, name: "input_declaration_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<WorkflowTopologyV2>): WorkflowTopologyV2 {
@@ -2977,6 +3008,7 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         message.stepInterfaceJson = {};
         message.evaluationMetadataJson = {};
         message.agentRuntimeKinds = {};
+        message.inputDeclarationJson = "";
         if (value !== undefined)
             reflectionMergePartial<WorkflowTopologyV2>(this, message, value);
         return message;
@@ -3018,6 +3050,9 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
                     break;
                 case /* map<string, string> agent_runtime_kinds */ 11:
                     this.binaryReadMap11(message.agentRuntimeKinds, reader, options);
+                    break;
+                case /* string input_declaration_json */ 12:
+                    message.inputDeclarationJson = reader.string();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -3228,6 +3263,9 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         /* map<string, string> agent_runtime_kinds = 11; */
         for (let k of globalThis.Object.keys(message.agentRuntimeKinds))
             writer.tag(11, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.agentRuntimeKinds[k]).join();
+        /* string input_declaration_json = 12; */
+        if (message.inputDeclarationJson !== "")
+            writer.tag(12, WireType.LengthDelimited).string(message.inputDeclarationJson);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -4710,7 +4748,8 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
             { no: 5, name: "scope_ref", kind: "message", T: () => ScopeReferenceV2 },
             { no: 6, name: "latest_log_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
             { no: 7, name: "log_continuation", kind: "message", T: () => ContinuationRefV2 },
-            { no: 8, name: "terminal_seal", kind: "message", T: () => RunActivityDescriptorV2 }
+            { no: 8, name: "terminal_seal", kind: "message", T: () => RunActivityDescriptorV2 },
+            { no: 9, name: "input", kind: "message", T: () => RunInputV2 }
         ]);
     }
     create(value?: PartialMessage<RunSnapshotV2>): RunSnapshotV2 {
@@ -4750,6 +4789,9 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
                 case /* avalanche.operator.RunActivityDescriptorV2 terminal_seal */ 8:
                     message.terminalSeal = RunActivityDescriptorV2.internalBinaryRead(reader, reader.uint32(), options, message.terminalSeal);
                     break;
+                case /* avalanche.operator.RunInputV2 input */ 9:
+                    message.input = RunInputV2.internalBinaryRead(reader, reader.uint32(), options, message.input);
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -4786,6 +4828,9 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
         /* avalanche.operator.RunActivityDescriptorV2 terminal_seal = 8; */
         if (message.terminalSeal)
             RunActivityDescriptorV2.internalBinaryWrite(message.terminalSeal, writer.tag(8, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.RunInputV2 input = 9; */
+        if (message.input)
+            RunInputV2.internalBinaryWrite(message.input, writer.tag(9, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -4796,6 +4841,61 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
  * @generated MessageType for protobuf message avalanche.operator.RunSnapshotV2
  */
 export const RunSnapshotV2 = new RunSnapshotV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class RunInputV2$Type extends MessageType<RunInputV2> {
+    constructor() {
+        super("avalanche.operator.RunInputV2", [
+            { no: 1, name: "values_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "supplied_fields", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+    create(value?: PartialMessage<RunInputV2>): RunInputV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.valuesJson = "";
+        message.suppliedFields = [];
+        if (value !== undefined)
+            reflectionMergePartial<RunInputV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: RunInputV2): RunInputV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string values_json */ 1:
+                    message.valuesJson = reader.string();
+                    break;
+                case /* repeated string supplied_fields */ 2:
+                    message.suppliedFields.push(reader.string());
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: RunInputV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string values_json = 1; */
+        if (message.valuesJson !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.valuesJson);
+        /* repeated string supplied_fields = 2; */
+        for (let i = 0; i < message.suppliedFields.length; i++)
+            writer.tag(2, WireType.LengthDelimited).string(message.suppliedFields[i]);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.RunInputV2
+ */
+export const RunInputV2 = new RunInputV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class ActivityDetailRefV2$Type extends MessageType<ActivityDetailRefV2> {
     constructor() {

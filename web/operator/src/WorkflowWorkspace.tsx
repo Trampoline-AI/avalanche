@@ -21,6 +21,7 @@ import type { OperatorProjection } from "./state";
 import { useOperatorProjection } from "./state";
 import { WorkspaceDivider } from "./WorkspaceDivider";
 import { useRunEvaluations } from "./useRunEvaluations";
+import { INPUT_NODE_ID } from "./workflowInput";
 
 import {
   INSPECTOR_MIN_WIDTH,
@@ -348,13 +349,20 @@ export function WorkflowWorkspaceSurface({
   // Requesting snapshots have no run-pinned graph yet. Keep the definition visible
   // through the status update and the subsequent prepared-snapshot refresh.
   const previewWorkflow = requestingRun && !run?.topology?.nodeIds.length;
-  const topologyNodeIds = previewWorkflow
-    ? workflow?.nodeIds
+  const shownTopology = previewWorkflow
+    ? workflow
     : run
-      ? run.topology?.nodeIds
+      ? run.topology
       : historical
         ? undefined
-        : workflow?.nodeIds;
+        : workflow;
+  const shownNodeIds = shownTopology?.nodeIds;
+  const shownInputDeclaration = shownTopology?.inputDeclarationJson;
+  const topologyNodeIds = useMemo(
+    () =>
+      shownNodeIds && shownInputDeclaration ? [INPUT_NODE_ID, ...shownNodeIds] : shownNodeIds,
+    [shownInputDeclaration, shownNodeIds],
+  );
   useEffect(() => {
     if (!topologyNodeIds) return;
     setInspectedNode((current) =>
@@ -434,6 +442,8 @@ export function WorkflowWorkspaceSurface({
                     workflow={!run || previewWorkflow ? workflow : undefined}
                     runTopology={previewWorkflow ? undefined : run?.topology}
                     runNodes={requestingRun ? undefined : run?.nodes}
+                    runInput={previewWorkflow ? undefined : run?.input}
+                    runTriggeredBy={previewWorkflow ? undefined : run?.summary?.triggeredBy}
                     inspectionDisabled={requestingRun}
                     evaluations={evaluationState.records}
                     selectedNodeId={inspectedNode}
@@ -498,7 +508,7 @@ export function WorkflowWorkspaceSurface({
                     onExpandedChange={setLogExpanded}
                     api={api}
                     run={run}
-                    nodeId={inspectedNode}
+                    nodeId={inspectedNode === INPUT_NODE_ID ? undefined : inspectedNode}
                     liveLogs={displayedRunId ? state.liveLogs[displayedRunId] : undefined}
                     onSelectNode={openNode}
                   />

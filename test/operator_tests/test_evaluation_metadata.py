@@ -281,7 +281,7 @@ def _workflow():
 def test_manual_catalog_and_prepared_topology_own_evaluation_declarations():
     workflow = _workflow()
     catalog = workflow_to_info(workflow, "flow.py")
-    event = {"type": "prepared", **_workflow_metadata(workflow)}
+    event = {"type": "prepared", **_workflow_metadata(workflow), "input": None}
     assert _validate_preparation_event(event) == "prepared"
     run = Operator._run_from_prepared("run", "flow", "flow", TriggerKind.MANUAL, 100.0, event)
     [(node_id, metadata)] = run.topology.evaluation_metadata_json
@@ -315,7 +315,7 @@ def test_manual_catalog_and_prepared_topology_own_evaluation_declarations():
     ],
 )
 def test_preparation_rejects_malformed_or_unknown_evaluation_declarations(failure):
-    event = {"type": "prepared", **_workflow_metadata(_workflow())}
+    event = {"type": "prepared", **_workflow_metadata(_workflow()), "input": None}
     metadata = event["evaluation_metadata_json"]
     [node_id] = metadata
     declaration = json.loads(metadata[node_id])
@@ -358,7 +358,7 @@ def test_preparation_rejects_malformed_or_unknown_evaluation_declarations(failur
 
 @pytest.mark.parametrize("limit", ["node", "total"])
 def test_preparation_bounds_evaluation_declaration_bytes(monkeypatch, limit):
-    event = {"type": "prepared", **_workflow_metadata(_workflow())}
+    event = {"type": "prepared", **_workflow_metadata(_workflow()), "input": None}
     [declaration] = event["evaluation_metadata_json"].values()
     size = len(declaration.encode())
     if limit == "node":

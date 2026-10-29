@@ -135,6 +135,8 @@ def _seed_run(
                 ).model_dump_json()
                 for node_id in node_ids
             },
+            "input_declaration_json": "",
+            "input": None,
         },
     )
     with operator._lock:
@@ -840,7 +842,7 @@ def test_preparation_rejects_malformed_step_interfaces(failure):
     def flow():
         return load()
 
-    event = {"type": "prepared", **_workflow_metadata(flow())}
+    event = {"type": "prepared", **_workflow_metadata(flow()), "input": None}
     [node_id] = event["node_ids"]
     interfaces = event["step_interface_json"]
     if failure == "invalid-json":

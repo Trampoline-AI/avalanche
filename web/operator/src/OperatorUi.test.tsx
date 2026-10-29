@@ -28,16 +28,16 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
     nodeTypes,
     children,
   }: {
-    nodes: { id: string; data: unknown; selected?: boolean }[];
+    nodes: { id: string; type: string; data: unknown; selected?: boolean }[];
     nodeTypes: Record<string, ComponentType<{ data: unknown; selected?: boolean }>>;
     children: ReactNode;
   }) => {
-    const Card = nodeTypes.workflow;
     return (
       <div>
-        {nodes.map((node) => (
-          <Card key={node.id} data={node.data} selected={node.selected} />
-        ))}
+        {nodes.map((node) => {
+          const Card = nodeTypes[node.type];
+          return <Card key={node.id} data={node.data} selected={node.selected} />;
+        })}
         {children}
       </div>
     );
@@ -49,6 +49,7 @@ import type { OperatorUiSelection } from "./index";
 import type { OperatorApi } from "./api";
 import { Explorer } from "./Explorer";
 import { GraphCanvas } from "./GraphCanvas";
+import { Inspector } from "./Inspector";
 import type { EvaluationRecord } from "./evaluations";
 import {
   CatalogSnapshotMsg,
@@ -2015,5 +2016,142 @@ describe("cron schedules", () => {
     );
     await screen.findByRole("button", { name: "Inspect Fetch" });
     expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+  });
+});
+
+describe("workflow input node", () => {
+  const inputDeclarationJson = JSON.stringify({
+    type_name: "ReviewInput",
+    json_schema: {
+      title: "ReviewInput",
+      type: "object",
+      properties: {
+        repository: {
+          type: "string",
+          title: "Repository",
+          description: "Repository to review",
+        },
+        post_reviews: { type: "boolean", title: "Post Reviews", default: false },
+        limit: { type: "integer", title: "Limit", default: 3 },
+      },
+      required: ["repository"],
+    },
+    consumer_node_ids: ["fetch"],
+  });
+  const declared = FlowInfoMsg.create({
+    ...workflow,
+    cron: "*/1 * * * *",
+    inputDeclarationJson,
+  });
+  const runTopology = WorkflowTopologyMsg.create({
+    nodeIds: workflow.nodeIds,
+    graph: workflow.graph,
+    nodeTypes: workflow.nodeTypes,
+    displayNames: workflow.displayNames,
+    inputDeclarationJson,
+  });
+  const runInput = {
+    valuesJson: JSON.stringify({ repository: "acme/app", post_reviews: false, limit: 5 }),
+    suppliedFields: ["repository", "limit"],
+  };
+  const inputCard = () =>
+    screen
+      .getByRole("button", { name: "Inspect workflow input ReviewInput" })
+      .closest("article")!;
+  const field = (card: HTMLElement, name: string) =>
+    within(card).getByText(name, { selector: "dt" }).parentElement!;
+
+  it("shows no input node when the workflow declares no input", () => {
+    render(<GraphCanvas workflow={workflow} onOpenNode={vi.fn()} />);
+
+    expect(screen.queryByRole("button", { name: /Inspect workflow input/ })).toBeNull();
+  });
+
+  it("lists declared fields with defaults and opens the input from the definition", () => {
+    const open = vi.fn();
+    render(<GraphCanvas workflow={declared} onOpenNode={open} />);
+    const card = inputCard();
+
+    expect(card).toHaveAttribute("data-node-kind", "input");
+    expect(within(field(card, "repository")).getByText("required")).toBeInTheDocument();
+    expect(within(field(card, "limit")).getByText("integer = 3")).toBeInTheDocument();
+    expect(within(card).getByText(/\*\/1 \* \* \* \*/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect workflow input ReviewInput" }));
+    expect(open).toHaveBeenCalledWith("ava:input");
+  });
+
+  it("shows the values a run used and marks the defaults", () => {
+    render(
+      <GraphCanvas
+        runTopology={runTopology}
+        runInput={runInput}
+        runTriggeredBy="scheduled"
+        onOpenNode={vi.fn()}
+      />,
+    );
+    const card = inputCard();
+
+    expect(within(field(card, "limit")).getByText("5")).toBeInTheDocument();
+    expect(within(field(card, "limit")).queryByText("default")).toBeNull();
+    expect(within(field(card, "post_reviews")).getByText("false")).toBeInTheDocument();
+    expect(within(field(card, "post_reviews")).getByText("default")).toBeInTheDocument();
+    expect(within(card).getByText(/cron schedule/)).toBeInTheDocument();
+  });
+
+  it("inspects the declaration and the run's supplied and default values", () => {
+    const view = render(
+      <Inspector api={createApi()} workflow={declared} nodeId="ava:input" onClose={vi.fn()} />,
+    );
+    const fields = screen.getByRole("region", { name: "Input fields" });
+
+    expect(within(fields).getByText("Repository to review")).toBeInTheDocument();
+    expect(within(fields).getByText("Required")).toBeInTheDocument();
+    expect(within(fields).getByText("default 3")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Run values" })).toBeNull();
+
+    view.rerender(
+      <Inspector
+        api={createApi()}
+        run={RunSnapshotMsg.create({
+          ...snapshotFor(),
+          topology: runTopology,
+          input: runInput,
+          summary: RunSummaryMsg.create({ ...summary, triggeredBy: "scheduled" }),
+        })}
+        nodeId="ava:input"
+        onClose={vi.fn()}
+      />,
+    );
+    const values = screen.getByRole("region", { name: "Run values" });
+    const badge = (name: string) =>
+      within(within(values).getByText(name).closest("li")!).getByText(/^(Supplied|Default)$/);
+
+    expect(badge("limit")).toHaveTextContent("Supplied");
+    expect(badge("post_reviews")).toHaveTextContent("Default");
+    expect(screen.getByText(/cron schedule/)).toBeInTheDocument();
+  });
+
+  it("opens the input inspector from the workspace graph", async () => {
+    const api = createApi({
+      getCatalog: async () => ({ ...baseline.catalog, workflows: [declared] }),
+      loadBaseline: async () => ({
+        ...baseline,
+        catalog: { ...baseline.catalog, workflows: [declared] },
+      }),
+    });
+    render(
+      <WorkflowWorkspace
+        api={api}
+        workflowId={workflow.workflowId}
+        runActionsEnabled={false}
+      />,
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Inspect workflow input ReviewInput" }),
+    );
+    expect(
+      await screen.findByRole("complementary", { name: "Workflow input declaration" }),
+    ).toBeVisible();
   });
 });
