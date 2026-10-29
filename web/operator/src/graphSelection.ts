@@ -9,7 +9,7 @@ export function highlightConnectedEdges(
       selectedNodeId !== undefined &&
       (edge.source === selectedNodeId || edge.target === selectedNodeId);
     const muted = selectedNodeId !== undefined && !connected;
-    const color = connected ? "#2563eb" : "#87938d";
+    const color = connected ? "var(--color-acid)" : "var(--color-edge)";
     return {
       ...edge,
       className: `${edge.className ?? ""}${connected ? " dag-edge--connected" : muted ? " dag-edge--muted" : ""}`,

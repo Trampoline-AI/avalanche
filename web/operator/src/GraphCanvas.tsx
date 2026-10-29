@@ -1,5 +1,14 @@
-import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowRight, Bot, Check, FlaskConical, ListFilter, X } from "lucide-react";
+import {
+  memo,
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { ArrowDown, ArrowRight, Bot, FlaskConical, ListFilter } from "lucide-react";
 
 import {
   Background,
@@ -10,6 +19,8 @@ import {
   Panel,
   Position,
   ReactFlow,
+  useReactFlow,
+  useStore,
   useViewport,
   type Edge,
   type EdgeProps,
@@ -34,6 +45,7 @@ import { arrangeGraph, createGraphLayout, type RoutedEdgeData } from "./graphLay
 import { highlightConnectedEdges } from "./graphSelection";
 import { useGraphOrientation } from "./useGraphOrientation";
 import { ClaudeLogo, isClaudeRuntime } from "./ClaudeLogo";
+import { RunStatus, statusTone, statusToneColor } from "./RunStatus";
 
 interface FieldMetadata {
   name: string;
@@ -259,25 +271,18 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
     : data.isAgent
       ? `node-agent${data.isClaude ? " node-claude" : ""}`
       : "";
-  const statusColorClass =
-    data.status === "success"
-      ? "text-success"
-      : data.status === "failed"
-        ? "text-failed"
-        : "text-muted";
-  const statusClass =
-    data.status === "success"
-      ? "status-success"
-      : data.status === "failed"
-        ? "status-failed"
-        : data.status === "running"
-          ? "status-running gradient-animate border-[3px]"
-          : "blueprint";
+  const state = data.status ?? "pending";
+  const stateColor = statusToneColor[statusTone(state)];
   return (
     <article
-      className={`node-card ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded-xl border ${data.isClaude ? "border-claude" : "border-line"} bg-panel text-left shadow-[0_8px_24px_rgba(25,39,32,.08)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_rgba(25,39,32,.12)] motion-reduce:transition-none ${selected && data.status !== "running" ? "border-acid!" : ""} ${designationClass} ${statusClass}`}
+      className={`node-card ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded border text-left motion-reduce:transition-none ${designationClass}`}
+      data-node-state={state}
       style={
-        selected && isCompact ? { outline: `${2 / zoom}px solid var(--color-acid)` } : undefined
+        {
+          "--node-state-color": stateColor,
+          outline: selected ? `${2 / zoom}px solid var(--color-acid)` : undefined,
+          outlineOffset: selected ? "2px" : undefined,
+        } as CSSProperties
       }
       data-node-kind={data.isClassifier ? "classifier" : data.isAgent ? "agent" : "standard"}
       aria-disabled={data.inspectionDisabled || undefined}
@@ -348,24 +353,10 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
           {data.isClassifier ? "Classifier" : data.isAgent ? "Agent" : data.nodeType}
         </span>
         <strong
-          className={`node-title block self-stretch ${isCompact ? "text-xl" : "pr-[76px] text-sm"} leading-tight text-ink`}
+          className={`node-title block self-stretch font-mono ${isCompact ? "text-xl" : "pr-[76px] text-sm"} leading-tight text-ink`}
         >
-          {data.label}
+          <RunStatus status={state} glyphOnly /> {data.label}
           {data.identity && ` ${data.identity}`}
-          {data.status === "success" && (
-            <Check
-              aria-hidden="true"
-              className={`node-status-icon ml-1 inline-block text-success transition-[width,height] duration-200 ease-out motion-reduce:transition-none ${isCompact ? "size-6 align-[-0.15em]" : "size-3 align-[-0.08em]"}`}
-              strokeWidth={2.5}
-            />
-          )}
-          {data.status === "failed" && (
-            <X
-              aria-hidden="true"
-              className={`node-status-icon ml-1 inline-block text-failed transition-[width,height] duration-200 ease-out motion-reduce:transition-none ${isCompact ? "size-6 align-[-0.15em]" : "size-3 align-[-0.08em]"}`}
-              strokeWidth={2.5}
-            />
-          )}
         </strong>
         {data.classifierSummary && (
           <span className="node-classifier-summary mt-1 min-w-0 self-stretch text-[9px] leading-relaxed text-classifier [overflow-wrap:anywhere]">
@@ -382,7 +373,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         )}
         {data.status && (
           <span
-            className={`node-card-meta node-status absolute top-[19px] right-0 font-mono text-[8px] uppercase ${statusColorClass}`}
+            className={`node-card-meta node-status absolute top-[19px] right-0 font-mono text-[8px] uppercase text-[color:var(--node-state-color)]`}
           >
             {data.status}
           </span>
@@ -450,7 +441,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
             <small>Inputs</small>
             {data.declaration.inputs.map((field) => (
               <span
-                className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-start gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:break-word] [&>code]:text-[7px] [&>code]:text-muted"
+                className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-start gap-1 font-mono text-[7px]/[1.35] text-field-ink [&>code]:min-w-0 [&>code]:[overflow-wrap:break-word] [&>code]:text-[7px] [&>code]:text-muted"
                 key={`input-${field.name}`}
               >
                 <span
@@ -470,7 +461,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
             <small>Outputs</small>
             {data.declaration.outputs.map((field) => (
               <span
-                className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-end gap-1 font-mono text-[7px]/[1.35] text-[#36423c] [&>code]:min-w-0 [&>code]:[overflow-wrap:break-word] [&>code]:text-[7px] [&>code]:text-muted"
+                className="field node-field mt-[3px] flex min-h-3.5 min-w-0 items-start justify-end gap-1 font-mono text-[7px]/[1.35] text-field-ink [&>code]:min-w-0 [&>code]:[overflow-wrap:break-word] [&>code]:text-[7px] [&>code]:text-muted"
                 key={`output-${field.name}`}
               >
                 <span
@@ -521,6 +512,24 @@ const FIT_VIEW_OPTIONS = { padding: 0.24 };
 const VERTICAL_FIT_VIEW_OPTIONS: FitViewOptions = {
   padding: { top: "160px", bottom: "90px", left: "40px", right: "80px" },
 };
+
+function FitGraphOnWidthChange({ options }: { options: FitViewOptions }) {
+  const width = useStore((state) => state.width);
+  const { fitView } = useReactFlow();
+  const previousWidth = useRef(width);
+
+  useEffect(() => {
+    const previous = previousWidth.current;
+    previousWidth.current = width;
+    // Initial fitting belongs to React Flow. Re-fit only after its resize observer
+    // has committed a changed canvas width (timeline, inspector or window resize).
+    if (previous <= 0 || width <= 0 || previous === width) return;
+    const frame = requestAnimationFrame(() => void fitView(options));
+    return () => cancelAnimationFrame(frame);
+  }, [width, fitView, options]);
+
+  return null;
+}
 
 function invocationIdentity(nodeId: string, label: string): string {
   const suffix = nodeId.startsWith(`${label}_`) ? nodeId.slice(label.length + 1) : "";
@@ -835,16 +844,19 @@ function GraphCanvasView({
         onPaneClick={onClearNode}
         proOptions={{ hideAttribution: true }}
       >
+        <FitGraphOnWidthChange
+          options={orientation === "vertical" ? VERTICAL_FIT_VIEW_OPTIONS : FIT_VIEW_OPTIONS}
+        />
         {bottomRightPanel && (
           <Panel
             position="bottom-right"
-            className="dag-panel dag-actions-panel nodrag nopan m-3.5 rounded-[9px] border border-line bg-[rgba(255,255,255,.96)] p-[7px] shadow-[0_6px_20px_rgba(20,31,26,.1)]"
+            className="dag-panel dag-actions-panel nodrag nopan m-3.5 rounded border border-line bg-overlay-panel p-[7px] shadow-[0_6px_20px_var(--color-shadow-2)]"
           >
             {bottomRightPanel}
           </Panel>
         )}
         <Background
-          color={isCurrentWorkflow ? "#dfe4e1" : "rgba(255,255,255,.06)"}
+          color={isCurrentWorkflow ? "var(--color-line)" : "var(--color-run-dots)"}
           variant={BackgroundVariant.Dots}
           gap={isCurrentWorkflow ? 18 : 24}
           size={isCurrentWorkflow ? 2.5 : 1}

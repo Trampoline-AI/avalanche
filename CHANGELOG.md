@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+- Long browser log entries keep their time, source and level pinned to the log
+  viewport while the message scrolls; these cells leave when their row ends.
+
+- Workflow graph cards use the timeline’s animated status glyphs before monospace
+  titles, flat state-tinted 1px borders/backgrounds and 3px corners. Selected cards
+  keep a primary outline, including running steps; runtime designation labels remain.
+
+- The Deployments tab marks the current deployment in its right-aligned Status
+  column and keeps the pinned Current row on Overview only. Non-current deployments
+  have visible primary-colour link-style Set current buttons: no border, background,
+  padding or underline, with confirmation, busy feedback and keyboard focus rings.
+  Overview run statuses and their header are right-aligned too; dates stay left.
+
+- The browser timeline header now shows Overview / Deployments as keyboard-navigable
+  tabs with a primary-color selection underline, or a non-clickable Overview label
+  without deployments. The public `"runs"` view value is unchanged. The expand action
+  is icon-only; the Timeline heading is gone.
+
+- The browser workspace's pinned row now says "Current definition" without a caret.
+  Embedding hosts can optionally override that label, add an independent text action,
+  and supply an Overview | Deployments timeline with controlled or local tab state,
+  virtualized deployment paging, selection, and confirmed set-current actions.
+
 - Agents: `ava.runtimes.ClaudeAgent` now passes any other keyword to the Claude
   Agent SDK as a `ClaudeAgentOptions` field, such as
   `ClaudeAgent(model="claude-sonnet-5-5", effort="low", mcp_servers={...})`.

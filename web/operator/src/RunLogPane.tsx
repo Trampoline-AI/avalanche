@@ -1,6 +1,8 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   type CSSProperties,
+  type Dispatch,
+  type SetStateAction,
   type KeyboardEvent,
   type PointerEvent,
   useCallback,
@@ -26,12 +28,16 @@ import {
 } from "./detailProjection";
 import { DescriptorPageOrder, type LogRecordDescriptorMsg, type RunSnapshotMsg } from "./model";
 
+import {
+  LOG_PANE_MIN_HEIGHT_PX,
+  LOG_PANE_DEFAULT_HEIGHT_PX,
+  maximumPaneHeight,
+  boundedPaneHeight,
+} from "./useWorkspaceLayout";
+
 const LOG_DECODE_BATCH_SIZE = 20;
 const LOG_ROW_ESTIMATE_PX = 48;
 const LOG_ROW_OVERSCAN = 12;
-const LOG_PANE_MIN_HEIGHT_PX = 140;
-const LOG_PANE_DEFAULT_HEIGHT_PX = 260;
-const LOG_PANE_DEFAULT_MAX_HEIGHT_PX = 720;
 const LOG_PANE_KEYBOARD_STEP_PX = 16;
 const EMPTY_LOGS: LogRecordDescriptorMsg[] = [];
 const EMPTY_LOG_PAGE: DescriptorPageState<LogRecordDescriptorMsg> = {
@@ -41,6 +47,10 @@ const EMPTY_LOG_PAGE: DescriptorPageState<LogRecordDescriptorMsg> = {
 };
 
 interface RunLogPaneProps {
+  height?: number;
+  expanded?: boolean;
+  onHeightChange?: Dispatch<SetStateAction<number>>;
+  onExpandedChange?: Dispatch<SetStateAction<boolean>>;
   api: OperatorApi;
   run: RunSnapshotMsg;
   nodeId?: string;
@@ -58,32 +68,32 @@ interface ResizeStart {
   height: number;
 }
 
-function maximumPaneHeight(element: HTMLElement | null) {
-  const parentHeight = element?.parentElement?.clientHeight ?? 0;
-  const availableHeight = parentHeight > 0 ? parentHeight : window.innerHeight;
-  return Math.max(LOG_PANE_MIN_HEIGHT_PX, Math.floor(availableHeight * 0.75));
-}
-
-function boundedPaneHeight(height: number, maximum: number) {
-  return Math.min(maximum, Math.max(LOG_PANE_MIN_HEIGHT_PX, height));
-}
-
 function logTimestamp(timestamp: number) {
   if (!Number.isFinite(timestamp)) return "--:--:--.---";
   return new Date(timestamp * 1000).toISOString().slice(11, 23);
 }
 
 export function RunLogPane({
+  height,
+  expanded: controlledExpanded,
+  onHeightChange,
+  onExpandedChange,
   api,
   run,
   nodeId,
   liveLogs = EMPTY_LOGS,
   onSelectNode,
 }: RunLogPaneProps) {
-  const [expanded, setExpanded] = useState(true);
+  const [localExpanded, setLocalExpanded] = useState(true);
   const [following, setFollowing] = useState(true);
-  const [paneHeight, setPaneHeight] = useState(LOG_PANE_DEFAULT_HEIGHT_PX);
-  const [maximumHeight, setMaximumHeight] = useState(LOG_PANE_DEFAULT_MAX_HEIGHT_PX);
+  const [localHeight, setLocalHeight] = useState(() =>
+    boundedPaneHeight(LOG_PANE_DEFAULT_HEIGHT_PX, maximumPaneHeight()),
+  );
+  const expanded = controlledExpanded ?? localExpanded;
+  const paneHeight = height ?? localHeight;
+  const setExpanded = onExpandedChange ?? setLocalExpanded;
+  const setPaneHeight = onHeightChange ?? setLocalHeight;
+  const [maximumHeight, setMaximumHeight] = useState(() => maximumPaneHeight());
   const [page, setPage] = useState<DescriptorPageState<LogRecordDescriptorMsg>>(EMPTY_LOG_PAGE);
   const [pageScope, setPageScope] = useState<string>();
   const [pageLoading, setPageLoading] = useState(false);
@@ -140,7 +150,7 @@ export function RunLogPane({
     updateBounds();
     window.addEventListener("resize", updateBounds);
     return () => window.removeEventListener("resize", updateBounds);
-  }, []);
+  }, [setPaneHeight]);
 
   useEffect(() => {
     pageController.current?.abort();
@@ -453,7 +463,7 @@ export function RunLogPane({
   return (
     <section
       ref={paneElement}
-      className={`run-log-pane relative z-[6] grid min-h-0 min-w-0 flex-[0_0_35px] grid-rows-[35px_minmax(0,1fr)] border-t border-line bg-[rgba(255,255,255,.98)] shadow-[0_-5px_18px_rgba(20,31,26,.08)] ${expanded ? "expanded min-h-[140px] max-h-[75%]" : ""}`}
+      className={`run-log-pane relative z-[6] grid min-h-0 min-w-0 flex-[0_0_35px] grid-rows-[35px_minmax(0,1fr)] border-t border-line bg-overlay-log shadow-[0_-5px_18px_var(--color-shadow-3)] ${expanded ? "expanded min-h-[140px] max-h-[75%]" : ""}`}
       style={paneStyle}
       aria-label="Run logs"
     >
@@ -513,7 +523,7 @@ export function RunLogPane({
         {expanded && (
           <button
             type="button"
-            className={`toggle run-log-autoscroll inline-flex flex-none cursor-pointer items-center gap-[5px] rounded-full border bg-panel px-2 py-[5px] font-mono text-[8px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>span]:text-xs [&>span]:leading-none [&>span]:text-acid ${following ? "active border-acid text-acid" : "border-line text-secondary"}`}
+            className={`toggle run-log-autoscroll inline-flex flex-none cursor-pointer items-center gap-[5px] rounded border bg-panel px-2 py-[5px] font-mono text-[8px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>span]:text-xs [&>span]:leading-none [&>span]:text-acid ${following ? "active border-acid text-acid" : "border-line text-secondary"}`}
             aria-label="Auto-scroll logs"
             aria-pressed={following}
             title={
@@ -539,7 +549,7 @@ export function RunLogPane({
         >
           {pageError && (
             <p
-              className="inspector-error mb-1.5 rounded-[7px] border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]"
+              className="inspector-error mb-1.5 rounded border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]"
               role="alert"
             >
               {pageError}
@@ -547,7 +557,7 @@ export function RunLogPane({
           )}
           {decodeError && (
             <p
-              className="inspector-error mb-1.5 rounded-[7px] border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]"
+              className="inspector-error mb-1.5 rounded border border-danger px-2 py-1.5 text-[10px] text-danger [overflow-wrap:anywhere]"
               role="alert"
             >
               {decodeError}
@@ -556,7 +566,7 @@ export function RunLogPane({
           {activePage.nextPageToken && (
             <button
               type="button"
-              className="descriptor-page-action run-log-older-action mb-1.5 cursor-pointer justify-self-start rounded-md border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid disabled:cursor-wait disabled:text-muted"
+              className="descriptor-page-action run-log-older-action mb-1.5 cursor-pointer justify-self-start rounded border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid disabled:cursor-wait disabled:text-muted"
               disabled={pageLoading}
               aria-busy={pageLoading}
               onClick={loadOlderLogs}
@@ -605,31 +615,37 @@ export function RunLogPane({
                     : entry.nodeId;
                   return (
                     <article
-                      className="run-log-row absolute top-0 left-0 grid min-h-9 w-full grid-cols-[78px_minmax(120px,180px)_52px_minmax(12rem,1fr)] items-start gap-2 border-b border-[#edf0ee] bg-[#fbfcfb] px-[9px] py-1.5 font-mono text-[9px]/[1.45] text-secondary [&>time]:whitespace-nowrap [&>time]:text-muted [&>pre]:m-0 [&>pre]:min-w-0 [&>pre]:whitespace-pre-wrap [&>pre]:text-[#27332d] [&>pre]:[overflow-wrap:anywhere]"
+                      className="run-log-row absolute top-0 left-0 grid min-h-9 w-full grid-cols-[78px_minmax(120px,180px)_52px_minmax(12rem,1fr)] items-start gap-2 border-b border-log-line bg-log-surface px-[9px] py-3 font-mono text-[9px]/[1.45] text-secondary [&>time]:whitespace-nowrap [&>time]:text-muted [&>pre]:m-0 [&>pre]:min-w-0 [&>pre]:whitespace-pre-wrap [&>pre]:text-log-ink [&>pre]:[overflow-wrap:anywhere]"
                       key={entry.sequence}
                       data-index={virtualRow.index}
                       ref={virtualizer.measureElement}
-                      style={{ transform: `translateY(${virtualRow.start}px)` }}
+                      // 12px vertical padding; stuck cells keep a 6px inset from the pane top.
+                      // Use layout coordinates: translating the row also offsets its
+                      // sticky children from the scrollport by virtualRow.start.
+                      style={{ top: virtualRow.start }}
                     >
-                      <time dateTime={new Date(entry.timestamp * 1000).toISOString()}>
+                      <time
+                        className="sticky top-1.5 bg-inherit"
+                        dateTime={new Date(entry.timestamp * 1000).toISOString()}
+                      >
                         {logTimestamp(entry.timestamp)}
                       </time>
                       {graphNodeId ? (
                         <button
                           type="button"
-                          className="run-log-node min-w-0 cursor-pointer border-0 bg-transparent p-0 text-left [font:inherit] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>strong]:block [&>strong]:truncate [&>code]:mt-0.5 [&>code]:block [&>code]:truncate [&>code]:text-[8px] [&>code]:text-muted"
+                          className="run-log-node sticky top-1.5 min-w-0 cursor-pointer border-0 bg-inherit p-0 text-left [font:inherit] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>strong]:block [&>strong]:truncate [&>code]:mt-0.5 [&>code]:block [&>code]:truncate [&>code]:text-[8px] [&>code]:text-muted"
                           onClick={() => onSelectNode(graphNodeId)}
                         >
                           <strong>{nodeLabel}</strong>
                           {nodeLabel !== entry.nodeId && <code>{graphNodeId}</code>}
                         </button>
                       ) : (
-                        <span className="run-log-node min-w-0 text-left [font:inherit] text-acid [&>strong]:block [&>strong]:truncate">
+                        <span className="run-log-node sticky top-1.5 min-w-0 bg-inherit text-left [font:inherit] text-acid [&>strong]:block [&>strong]:truncate">
                           <strong>{nodeLabel}</strong>
                         </span>
                       )}
                       <span
-                        className={`run-log-level font-bold uppercase ${entry.level === "error" || entry.level === "critical" ? `level-${entry.level} text-danger` : entry.level === "warning" ? "level-warning text-amber" : "text-secondary"}`}
+                        className={`run-log-level sticky top-1.5 bg-inherit font-bold uppercase ${entry.level === "error" || entry.level === "critical" ? `level-${entry.level} text-danger` : entry.level === "warning" ? "level-warning text-amber" : "text-secondary"}`}
                       >
                         {entry.level}
                       </span>

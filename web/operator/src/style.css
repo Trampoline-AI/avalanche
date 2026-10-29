@@ -9,9 +9,9 @@
 }
 .navpanel {
   border: 1px solid var(--color-line);
-  border-radius: 8px;
-  background: white;
-  box-shadow: 0 4px 14px rgba(20, 31, 26, 0.08);
+  border-radius: var(--radius-ui);
+  background: var(--color-panel);
+  box-shadow: 0 4px 14px var(--color-nav-shadow);
 }
 .navpanel .react-flow__controls-button,
 .navpanel-orientation button {
@@ -22,23 +22,23 @@
   padding: 5px;
   border: 0;
   border-bottom: 1px solid var(--color-line);
-  background: white;
+  background: var(--color-panel);
   cursor: pointer;
   color: var(--color-secondary);
   fill: currentColor;
 }
 .navpanel > .react-flow__controls-button:first-child {
-  border-radius: 7px 7px 0 0;
+  border-radius: var(--radius-ui) var(--radius-ui) 0 0;
 }
 .navpanel-orientation .graph-orientation-toggle {
   border-bottom: 0;
-  border-radius: 0 0 7px 7px;
+  border-radius: 0 0 var(--radius-ui) var(--radius-ui);
 }
 .navpanel-orientation svg {
   fill: none;
 }
 .navpanel button:hover {
-  background: #f1f4f2;
+  background: var(--color-nav-hover);
 }
 .navpanel button:focus-visible {
   outline: 2px solid var(--color-sidebar-primary);
@@ -63,7 +63,19 @@
   src: url("./fonts/Nacelle-SemiBold.woff2") format("woff2");
 }
 
-@theme {
+@theme static {
+  /* Every rounded surface shares one radius; rounded-full is for circles only. */
+  --radius-ui: 3px;
+  --radius: var(--radius-ui);
+  --radius-sm: var(--radius-ui);
+  --radius-md: var(--radius-ui);
+  --radius-lg: var(--radius-ui);
+  --radius-xl: var(--radius-ui);
+  --color-run-status-active: #363cff;
+  --color-run-status-success: oklch(0.48 0.17 150);
+  --color-run-status-danger: #b42318;
+  --color-run-status-muted: #61616c;
+  --color-run-list-line: #bebebe;
   --color-ink: #17211c;
   --color-canvas: #f6f8f7;
   --color-panel: #ffffff;
@@ -81,6 +93,101 @@
   --color-claude: #d97757;
   --color-classifier: #0e7490;
   --color-classifier-light: #ecfeff;
+  --color-field-ink: #36423c;
+  --color-line-subtle: #eef1ef;
+  --color-selected: #edf3ff;
+  --color-selected-hover: #e4edff;
+  --color-hover: #f4f6f5;
+  --color-acid-hover: #1d4ed8;
+  --color-cancel-line: #e0a6a1;
+  --color-cancel-ink: #a92f29;
+  --color-cancel-hover: #fff3f2;
+  --color-line-strong: #cbd2ce;
+  --color-input-muted: #6d7872;
+  --color-error-line: #efb9b5;
+  --color-error-surface: #fff1f0;
+  --color-error-ink: #9d2923;
+  --color-error-soft: #fff8f7;
+  --color-terminal-line: #26332f;
+  --color-terminal-surface: #111817;
+  --color-terminal-error: #ffb4ac;
+  --color-terminal-ink: #c7d4cf;
+  --color-agent-line: #d9d1ff;
+  --color-agent-surface: #f8f6ff;
+  --color-canvas-shell: #f7f9f8;
+  --color-run-canvas: #fafaf8;
+  --color-history-line: #dfc99e;
+  --color-history-ink: #766548;
+  --color-notice-surface: #1d2923;
+  --color-log-line: #edf0ee;
+  --color-log-surface: #fbfcfb;
+  --color-log-ink: #27332d;
+  --color-icon-line: #9ca3af;
+  --color-warning-line: #ead1a2;
+  --color-warning-surface: #fff8eb;
+  --color-warning-muted: #8b7655;
+  --color-warning-ink: #735b37;
+  --color-warning-hover: #f7e8c8;
+  --color-breadcrumb: #26322c;
+  --color-code-gutter: #7b8680;
+  --color-code-focus: #9bb6f5;
+  --color-score-ink: #000000;
+  --color-edge: #87938d;
+  --color-score-mid: #eab308;
+  --color-on-accent: #ffffff;
+  --color-notice-ink: #ffffff;
+  --color-overlay-panel: rgba(255, 255, 255, 0.96);
+  --color-overlay-log: rgba(255, 255, 255, 0.98);
+  --color-history-surface: rgba(255, 252, 245, 0.96);
+  --color-run-dots: rgba(255, 255, 255, 0.06);
+  --color-backdrop: #000000;
+  --color-on-notice-line: #ffffff;
+  --color-nav-hover: #f1f4f2;
+  --color-scroll-handle: rgb(85 97 91 / 35%);
+  --color-gradient-mint: hsl(163 100% 74%);
+  --color-gradient-blue: hsl(238 100% 63%);
+  --color-code-foreground: #24292e;
+  --color-code-selection: #bbdfff;
+  --color-code-gutter-foreground: #6e7781;
+  --color-shadow-0: rgba(20, 31, 26, 0.14);
+  --color-shadow-1: rgba(20, 31, 26, 0.16);
+  --color-shadow-2: rgba(20, 31, 26, 0.1);
+  --color-shadow-3: rgba(20, 31, 26, 0.08);
+  --color-shadow-4: rgba(54, 44, 25, 0.08);
+  --color-shadow-5: rgba(15, 25, 20, 0.22);
+  --color-ansi-0: #1f2937;
+  --color-ansi-1: #c43d36;
+  --color-ansi-2: #16805d;
+  --color-ansi-3: #a15c00;
+  --color-ansi-4: #2563eb;
+  --color-ansi-5: #a855f7;
+  --color-ansi-6: #0f766e;
+  --color-ansi-7: #dfe4e1;
+  --color-ansi-8: #64748b;
+  --color-ansi-9: #ef4444;
+  --color-ansi-10: #22c55e;
+  --color-ansi-11: #f59e0b;
+  --color-ansi-12: #3b82f6;
+  --color-ansi-13: #c084fc;
+  --color-ansi-14: #14b8a6;
+  --color-ansi-15: #ffffff;
+  --color-shadow-6: rgba(25, 39, 32, 0.08);
+  --color-shadow-7: rgba(25, 39, 32, 0.12);
+  --color-shadow-8: rgba(20, 31, 26, 0.04);
+  --color-code-0: #116329;
+  --color-code-1: #6a737d;
+  --color-code-2: #6f42c1;
+  --color-code-3: #005cc5;
+  --color-code-4: #d73a49;
+  --color-code-5: #032f62;
+  --color-code-6: #22863a;
+  --color-code-7: #24292e;
+  --color-code-8: #24292e;
+  --color-code-9: #b31d28;
+  --color-code-10: #e36209;
+  --color-code-11: #032f62;
+  --color-code-14: #cb2431;
+  --color-nav-shadow: rgba(20, 31, 26, 0.08);
   --font-sans: "Nacelle", Inter, Helvetica, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
@@ -92,6 +199,138 @@
   color: var(--color-ink);
   font-family: var(--font-sans);
   font-synthesis: style;
+  color-scheme: light;
+}
+
+/* A portal scope fills the viewport, not an embedding host. Override the
+   unlayered scope defaults here rather than relying on layered utilities. */
+.deployment-confirm-backdrop {
+  height: auto;
+  box-sizing: border-box;
+  background: color-mix(in srgb, var(--color-backdrop) 50%, transparent);
+}
+
+/* Theme belongs to each embedded root, not the host document. The explicit
+   ancestor selector also works when Delta puts .dark on <html>. */
+:where(.dark) .avalanche-operator-ui,
+.avalanche-operator-ui.dark {
+  color-scheme: dark;
+  --color-ink: #e6ede8;
+  --color-canvas: #111814;
+  --color-panel: #1a231e;
+  --color-line: #34443a;
+  --color-muted: #94a89a;
+  --color-acid: #7ca8ff;
+  --color-sidebar-primary: #9b9eff;
+  --color-mint: #54c99e;
+  --color-amber: #e6b45f;
+  --color-danger: #ff7777;
+  --color-secondary: #b3c3b8;
+  --color-success: #5cdb87;
+  --color-agent: #c4a1ff;
+  --color-claude: #eda184;
+  --color-classifier: #6bd1e7;
+  --color-classifier-light: #16313a;
+  --color-run-status-active: #6e73ff;
+  --color-run-status-success: oklch(0.72 0.17 150);
+  --color-run-status-danger: #ff7a6e;
+  --color-run-status-muted: #9a9aa8;
+  --color-run-list-line: #3a3b4a;
+  --color-field-ink: #c7d4cd;
+  --color-line-subtle: #29362f;
+  --color-selected: #1c304d;
+  --color-selected-hover: #254064;
+  --color-hover: #25332b;
+  --color-acid-hover: #9dbdff;
+  --color-cancel-line: #814f4b;
+  --color-cancel-ink: #ffada5;
+  --color-cancel-hover: #3a2423;
+  --color-line-strong: #4b5c51;
+  --color-input-muted: #9aac9f;
+  --color-error-line: #814f4b;
+  --color-error-surface: #3a2423;
+  --color-error-ink: #ffada5;
+  --color-error-soft: #30211f;
+  --color-terminal-line: #3f5148;
+  --color-terminal-surface: #0c1210;
+  --color-terminal-error: #ffb4ac;
+  --color-terminal-ink: #d9e6df;
+  --color-agent-line: #51436f;
+  --color-agent-surface: #272135;
+  --color-canvas-shell: #111814;
+  --color-run-canvas: #131b16;
+  --color-history-line: #645231;
+  --color-history-ink: #ddc394;
+  --color-notice-surface: #26382d;
+  --color-log-line: #29362f;
+  --color-log-surface: #17201a;
+  --color-log-ink: #d6e1da;
+  --color-icon-line: #708276;
+  --color-warning-line: #645231;
+  --color-warning-surface: #30291c;
+  --color-warning-muted: #bda986;
+  --color-warning-ink: #e0c799;
+  --color-warning-hover: #483c25;
+  --color-breadcrumb: #d6e1da;
+  --color-code-gutter: #9aac9f;
+  --color-code-focus: #7ca8ff;
+  --color-score-ink: #e6ede8;
+  --color-edge: #83998b;
+  --color-score-mid: #facc15;
+  --color-on-accent: #111814;
+  --color-notice-ink: #e6ede8;
+  --color-overlay-panel: rgba(26, 35, 30, 0.96);
+  --color-overlay-log: rgba(26, 35, 30, 0.98);
+  --color-history-surface: rgba(48, 41, 28, 0.96);
+  --color-run-dots: rgba(214, 225, 218, 0.12);
+  --color-backdrop: #000000;
+  --color-on-notice-line: #e6ede8;
+  --color-nav-hover: #25332b;
+  --color-scroll-handle: rgb(170 190 177 / 45%);
+  --color-gradient-mint: hsl(163 75% 52%);
+  --color-gradient-blue: hsl(225 95% 72%);
+  --color-code-foreground: #c9d1d9;
+  --color-code-selection: #264b70;
+  --color-code-gutter-foreground: #8b949e;
+  --color-shadow-0: rgba(0, 0, 0, 0.14);
+  --color-shadow-1: rgba(0, 0, 0, 0.16);
+  --color-shadow-2: rgba(0, 0, 0, 0.1);
+  --color-shadow-3: rgba(0, 0, 0, 0.08);
+  --color-shadow-4: rgba(0, 0, 0, 0.08);
+  --color-shadow-5: rgba(0, 0, 0, 0.22);
+  --color-ansi-0: #b3becb;
+  --color-ansi-1: #ff8b84;
+  --color-ansi-2: #54c99e;
+  --color-ansi-3: #e6b45f;
+  --color-ansi-4: #7ca8ff;
+  --color-ansi-5: #c4a1ff;
+  --color-ansi-6: #55c7b8;
+  --color-ansi-7: #b7c7bd;
+  --color-ansi-8: #94a3b8;
+  --color-ansi-9: #ff7777;
+  --color-ansi-10: #5cdb87;
+  --color-ansi-11: #fbbf24;
+  --color-ansi-12: #83b4ff;
+  --color-ansi-13: #d8b4fe;
+  --color-ansi-14: #5eead4;
+  --color-ansi-15: #f0f4f1;
+  --color-shadow-6: rgba(0, 0, 0, 0.08);
+  --color-shadow-7: rgba(0, 0, 0, 0.12);
+  --color-shadow-8: rgba(0, 0, 0, 0.04);
+  --color-code-0: #7ee787;
+  --color-code-1: #8b949e;
+  --color-code-2: #d2a8ff;
+  --color-code-3: #79c0ff;
+  --color-code-4: #ff7b72;
+  --color-code-5: #a5d6ff;
+  --color-code-6: #7ee787;
+  --color-code-7: #d2a8ff;
+  --color-code-8: #d2a8ff;
+  --color-code-9: #ffdcd7;
+  --color-code-10: #ffab70;
+  --color-code-11: #a5d6ff;
+  --color-code-14: #f97583;
+  --color-nav-shadow: rgba(0, 0, 0, 0.24);
 }
 
 .avalanche-operator-ui code,
@@ -195,8 +434,12 @@
   cursor: not-allowed;
 }
 
+/* The native scrollbar is hidden; the overlay handle (.timeline-scroll-handle, 14px from the
+   right edge) is the scrollbar. Rows, column headers and the tab bar reserve that 14px gutter
+   on the right (pr-[30px] = 14px gutter + 16px padding), so the handle never covers STATUS. */
 .avalanche-operator-ui .timeline-scroll {
   scrollbar-width: none;
+  scrollbar-gutter: stable;
 }
 
 .avalanche-operator-ui .timeline-scroll::-webkit-scrollbar {
@@ -216,8 +459,8 @@
 .avalanche-operator-ui .timeline-scroll-handle::before {
   position: absolute;
   inset: 0 4px;
-  border-radius: 999px;
-  background: rgb(85 97 91 / 35%);
+  border-radius: var(--radius-ui);
+  background: var(--color-scroll-handle);
   content: "";
 }
 
@@ -327,7 +570,7 @@
 }
 
 .avalanche-operator-ui .operator-markdown :not(pre) > code {
-  border-radius: 0.25rem;
+  border-radius: var(--radius-ui);
   padding: 0.1em 0.3em;
   background: var(--color-canvas);
   color: var(--color-ink);
@@ -338,7 +581,7 @@
   max-width: 100%;
   overflow-x: auto;
   border: 1px solid var(--color-line);
-  border-radius: 0.375rem;
+  border-radius: var(--radius-ui);
   padding: 0.8em 1em;
   background: var(--color-canvas);
   color: var(--color-ink);
@@ -369,49 +612,22 @@
   margin-block-end: 0;
 }
 
-@keyframes gradientRotate {
-  0% {
-    background-position: 100% 100%;
-  }
-
-  50% {
-    background-position: 50% 100%;
-  }
-
-  100% {
-    background-position: 100% 100%;
-  }
-}
-
-/* Animated gradient border for currently running workflow nodes. */
-
-.gradient-animate {
-  border-color: transparent !important;
-  background:
-    linear-gradient(var(--color-panel), var(--color-panel)) padding-box,
-    linear-gradient(315deg, hsl(163 100% 74%), hsl(238 100% 63%) 68%, hsl(163 100% 74%))
-      border-box !important;
-  background-size:
-    100% 100%,
-    200% 200% !important;
-  animation: gradientRotate 10s ease infinite;
-  transition: background 0.5s ease;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .gradient-animate {
-    animation: none;
-  }
-}
-
 @layer components {
   .node-card {
+    border: 1px solid var(--node-state-color, var(--color-line));
+    border-radius: var(--radius-ui);
+    background: color-mix(in srgb, var(--node-state-color) 8%, var(--color-panel));
+    box-shadow: none;
     transition:
       border-color 150ms ease-out,
-      box-shadow 150ms ease-out,
       min-height 200ms ease-out,
       padding 200ms ease-out,
       transform 150ms ease-out;
+  }
+
+  .node-card[data-node-state="pending"],
+  .node-card[data-node-state="skipped"] {
+    border-color: var(--color-line);
   }
 
   .node-header,
@@ -501,4 +717,38 @@
       transition: none;
     }
   }
+}
+
+/* React Flow's vendor defaults otherwise retain a light canvas and controls. */
+.avalanche-operator-ui .react-flow {
+  --xy-background-color-default: transparent;
+  --xy-background-pattern-dots-color-default: var(--color-line);
+  --xy-edge-stroke-default: var(--color-edge);
+  --xy-edge-stroke-selected-default: var(--color-acid);
+  --xy-connectionline-stroke-default: var(--color-edge);
+  --xy-controls-button-background-color-default: var(--color-panel);
+  --xy-controls-button-background-color-hover-default: var(--color-hover);
+  --xy-controls-button-color-default: var(--color-secondary);
+  --xy-controls-button-border-color-default: var(--color-line);
+  --xy-minimap-background-color-default: var(--color-panel);
+  --xy-minimap-mask-background-color-default: color-mix(
+    in srgb,
+    var(--color-canvas) 70%,
+    transparent
+  );
+  --xy-minimap-node-background-color-default: var(--color-muted);
+  --xy-node-background-color-default: var(--color-panel);
+  --xy-node-color-default: var(--color-ink);
+  --xy-node-border-radius-default: var(--radius-ui);
+  --xy-attribution-background-color-default: var(--color-panel);
+}
+.avalanche-operator-ui :is(.react-flow__controls, .react-flow__minimap) {
+  border-radius: var(--radius-ui);
+}
+
+/* Unboxed TUI status: glyph is decorative; the real runtime word stays text. */
+.avalanche-operator-ui .run-status-glyph {
+  display: inline-block;
+  width: 1em;
+  text-align: center;
 }

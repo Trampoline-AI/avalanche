@@ -22,11 +22,68 @@ import { useOperatorProjection } from "./state";
 import { WorkspaceDivider } from "./WorkspaceDivider";
 import { useRunEvaluations } from "./useRunEvaluations";
 
-const INSPECTOR_MIN_WIDTH = 320;
-const INSPECTOR_MAX_WIDTH = 640;
-const INSPECTOR_DEFAULT_WIDTH = 410;
+import {
+  INSPECTOR_MIN_WIDTH,
+  maximumInspectorWidth,
+  useWorkspaceLayout,
+} from "./useWorkspaceLayout";
+
+/** A host-supplied deployment, ordered newest first within its workflow. */
+export interface WorkspaceDeployment {
+  /** Full deployment identifier, exposed in the row title and accessible name. */
+  id: string;
+  /** Visible row label; hosts may abbreviate the identifier here. */
+  label: string;
+  /** Creation time in epoch seconds, matching run timestamps. */
+  createdAt: number;
+  /** Marks the current deployment; at most one item should be current. */
+  current: boolean;
+}
+
+/** Host-owned deployment data and actions; operator-ui renders the timeline. */
+export interface WorkspaceDeployments {
+  /** Newest-first deployments, already filtered to this workflow. */
+  items: WorkspaceDeployment[];
+  /** Whether another page is available. */
+  hasMore: boolean;
+  /** A page request is in progress; renders a loading row and blocks more requests. */
+  loading: boolean;
+  /** Requests a page near the bottom. Update loading/items when the request settles. */
+  loadMore?: () => void;
+  /** Inline loading error. Omitted when there is no error. */
+  error?: string;
+  /** Identifier to highlight; omitted when no deployment is selected. */
+  selectedId?: string;
+  /** Selects a deployment's definition; does not change the current deployment. */
+  onSelect: (id: string) => void;
+  /** Optional non-current-row action with a page-level confirmation modal. Absent: no action. */
+  setCurrent?: {
+    /** Action label, rendered lowercase. Default "set current". */
+    label?: string;
+    /** Modal title. Default "Set current deployment?". */
+    confirmTitle?: string;
+    /** Confirmation wording for the chosen deployment. */
+    confirmText: (item: WorkspaceDeployment) => string;
+    /** Moves the current pointer. Rejected Error messages are shown inside the modal. */
+    onConfirm: (id: string) => Promise<void>;
+  };
+}
 
 export interface WorkflowWorkspaceProps {
+  /** Global panel-layout storage key. Default "avalanche-operator-ui.layout"; set to namespace a host. */
+  layoutStorageKey?: string;
+  /** Pinned Current row label. Default "Current definition". */
+  currentLabel?: string;
+  /** Muted trailing text action. Omitted: no action and no caret. */
+  currentRowAction?: { label: string; onClick: () => void };
+  /** Render the pinned current row on the Overview tab. Default true; false hides it on every tab. */
+  showCurrentRow?: boolean;
+  /** Enables Overview | Deployments tabs; omitted: the stock runs-only timeline. */
+  deployments?: WorkspaceDeployments;
+  /** Controlled timeline tab when set; otherwise internal state starts at "runs". */
+  timelineView?: "runs" | "deployments";
+  /** Observes tab requests in either mode; controlled hosts must update timelineView. */
+  onTimelineViewChange?: (view: "runs" | "deployments") => void;
   api: OperatorApi;
   workflowId: string;
   className?: string;
@@ -41,7 +98,16 @@ export interface WorkflowWorkspaceProps {
   };
 }
 
-interface WorkflowWorkspaceSurfaceProps {
+interface WorkflowWorkspaceSurfaceProps extends Pick<
+  WorkflowWorkspaceProps,
+  | "layoutStorageKey"
+  | "currentLabel"
+  | "currentRowAction"
+  | "showCurrentRow"
+  | "deployments"
+  | "timelineView"
+  | "onTimelineViewChange"
+> {
   api: OperatorApi;
   state: OperatorProjection;
   workflowId?: string;
@@ -74,13 +140,21 @@ export function WorkflowWorkspaceSurface({
   runActionsEnabled = true,
   definitionLabel,
   bottomRightPanel,
+  currentLabel,
+  currentRowAction,
+  showCurrentRow,
+  deployments,
+  timelineView,
+  onTimelineViewChange,
+  layoutStorageKey,
 }: WorkflowWorkspaceSurfaceProps) {
   const [inspectedNode, setInspectedNode] = useState<string>();
-  const [timelineExpanded, setTimelineExpanded] = useState(false);
+  const { layout, setInspectorWidth, setTimelineExpanded, setLogHeight, setLogExpanded } =
+    useWorkspaceLayout(layoutStorageKey);
+  const { timelineExpanded, inspectorWidth } = layout;
   const timelineElement = useRef<HTMLDivElement>(null);
   const timelineBounds = useRef<DOMRect | undefined>(undefined);
   const timelineAnimation = useRef<Animation | undefined>(undefined);
-  const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_DEFAULT_WIDTH);
   const workspaceId = useId();
   const navigationGeneration = useRef(0);
   // Invalidate pending start navigation even when the user leaves and returns to the
@@ -122,7 +196,6 @@ export function WorkflowWorkspaceSurface({
       current.following = selectedRunId !== undefined && selectedRunId === latestRunId;
       current.pendingSelection = undefined;
       setInspectedNode(undefined);
-      setTimelineExpanded(false);
     } else if (current.observedRunId !== selectedRunId) {
       if (!current.pendingSelection || current.pendingSelection.runId !== selectedRunId) {
         // A host route change, rather than a selection made by this workspace.
@@ -293,6 +366,12 @@ export function WorkflowWorkspaceSurface({
       onSelectRun={selectWorkflowRun}
       onViewAll={openAllRuns}
       onClose={closeAllRuns}
+      currentLabel={currentLabel}
+      currentRowAction={currentRowAction}
+      showCurrentRow={showCurrentRow}
+      deployments={deployments}
+      timelineView={timelineView}
+      onTimelineViewChange={onTimelineViewChange}
     />
   ) : undefined;
   const runControlsPanel = (historical ? loadedRun : workflow) ? (
@@ -323,9 +402,17 @@ export function WorkflowWorkspaceSurface({
         className={`workflow-workspace relative grid min-h-0 min-w-0 w-full flex-1 overflow-hidden grid-cols-[minmax(0,1fr)_var(--workspace-inspector-divider-width)_var(--workspace-inspector-column-width)] max-[1000px]:grid-cols-[minmax(0,1fr)] ${inspectorOpen ? "with-inspector" : ""}`}
         style={workspaceStyle}
       >
-        <section className="canvas-shell relative col-start-1 flex min-h-0 min-w-0 flex-col overflow-hidden bg-[#f7f9f8]">
+        <section className="canvas-shell relative col-start-1 flex min-h-0 min-w-0 flex-row overflow-hidden bg-canvas-shell">
+          {runListPanel && (
+            <div
+              ref={timelineElement}
+              className={`workspace-timeline z-20 ${timelineExpanded ? "relative w-[410px] max-w-full shrink-0 max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:left-0" : "absolute top-3.5 left-3.5 w-[300px] max-w-[calc(100vw-3rem)]"}`}
+            >
+              {runListPanel}
+            </div>
+          )}
           <div
-            className={`canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${run ? "run-canvas bg-[#fafaf8]" : "blueprint-canvas bg-white"}`}
+            className={`canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${run ? "run-canvas bg-run-canvas" : "blueprint-canvas bg-panel"}`}
           >
             {workflow || run ? (
               <>
@@ -353,7 +440,7 @@ export function WorkflowWorkspaceSurface({
                   )}
                   {historical && !loadedRun && (
                     <div
-                      className="absolute right-3 top-3 max-w-[240px] rounded-lg border border-line bg-panel p-3 text-xs text-secondary"
+                      className="absolute right-3 top-3 max-w-[240px] rounded border border-line bg-panel p-3 text-xs text-secondary"
                       role={state.selectedRunStatus === "error" ? "alert" : "status"}
                     >
                       {state.selectedRunStatus === "error" ? (
@@ -368,7 +455,7 @@ export function WorkflowWorkspaceSurface({
                   )}
                   {requestingRun ? (
                     <div
-                      className="pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[240px] rounded-lg border border-line bg-panel px-3 py-2.5 text-xs text-secondary shadow-sm max-[700px]:top-auto max-[700px]:bottom-16"
+                      className="pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[240px] rounded border border-line bg-panel px-3 py-2.5 text-xs text-secondary shadow-sm max-[700px]:top-auto max-[700px]:bottom-16"
                       role="status"
                       aria-label="Run preparation"
                     >
@@ -384,7 +471,7 @@ export function WorkflowWorkspaceSurface({
                       </span>
                     </div>
                   ) : run ? (
-                    <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded-lg border border-[#dfc99e] bg-[rgba(255,252,245,.96)] px-3 py-[9px] text-[9px] text-[#766548] shadow-[0_4px_14px_rgba(54,44,25,.08)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
+                    <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
                       <span>Viewing a run snapshot</span>This view does not represent the
                       workflow&apos;s current state.
                     </div>
@@ -392,6 +479,10 @@ export function WorkflowWorkspaceSurface({
                 </div>
                 {run && (
                   <RunLogPane
+                    height={layout.logHeight}
+                    expanded={layout.logExpanded}
+                    onHeightChange={setLogHeight}
+                    onExpandedChange={setLogExpanded}
                     api={api}
                     run={run}
                     nodeId={inspectedNode}
@@ -409,14 +500,6 @@ export function WorkflowWorkspaceSurface({
               </div>
             )}
           </div>
-          {runListPanel && (
-            <div
-              ref={timelineElement}
-              className={`workspace-timeline absolute z-20 ${timelineExpanded ? "inset-y-0 left-0 w-[410px] max-w-full" : "top-3.5 left-3.5 w-[300px] max-w-[calc(100vw-3rem)]"}`}
-            >
-              {runListPanel}
-            </div>
-          )}
         </section>
         {inspectorOpen && (
           <>
@@ -426,7 +509,7 @@ export function WorkflowWorkspaceSurface({
               controls={`${workspaceId}-inspector`}
               value={inspectorWidth}
               min={INSPECTOR_MIN_WIDTH}
-              max={INSPECTOR_MAX_WIDTH}
+              max={maximumInspectorWidth()}
               pointerDirection={-1}
               onChange={setInspectorWidth}
             />
@@ -456,7 +539,7 @@ export function WorkflowWorkspaceSurface({
           role="status"
           aria-live="polite"
         >
-          <div className="flex items-center gap-2.5 rounded-lg border border-white/10 bg-[#1d2923] px-3.5 py-2.5 text-[11px] font-medium tracking-[-0.01em] text-white shadow-[0_10px_30px_rgba(15,25,20,.22)]">
+          <div className="flex items-center gap-2.5 rounded border border-on-notice-line/10 bg-notice-surface px-3.5 py-2.5 text-[11px] font-medium tracking-[-0.01em] text-notice-ink shadow-[0_10px_30px_var(--color-shadow-5)]">
             <span className="relative flex size-2" aria-hidden="true">
               <span className="absolute inline-flex size-full animate-ping rounded-full bg-acid opacity-60 motion-reduce:animate-none" />
               <span className="relative inline-flex size-2 rounded-full bg-acid" />
@@ -479,6 +562,13 @@ export function WorkflowWorkspace({
   definitionLabel,
   bottomRightPanel,
   navigation,
+  currentLabel,
+  currentRowAction,
+  showCurrentRow,
+  deployments,
+  timelineView,
+  onTimelineViewChange,
+  layoutStorageKey,
 }: WorkflowWorkspaceProps) {
   const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
   const [selection, setSelection] = useState<{ workflowId: string; runId?: string }>();
@@ -525,6 +615,8 @@ export function WorkflowWorkspace({
   }
   return (
     <WorkflowWorkspaceSurface
+      key={layoutStorageKey}
+      layoutStorageKey={layoutStorageKey}
       api={api}
       state={state}
       workflowId={workflowId}
@@ -538,6 +630,12 @@ export function WorkflowWorkspace({
       runActionsEnabled={runActionsEnabled}
       definitionLabel={definitionLabel}
       bottomRightPanel={bottomRightPanel}
+      currentLabel={currentLabel}
+      currentRowAction={currentRowAction}
+      showCurrentRow={showCurrentRow}
+      deployments={deployments}
+      timelineView={timelineView}
+      onTimelineViewChange={onTimelineViewChange}
     />
   );
 }

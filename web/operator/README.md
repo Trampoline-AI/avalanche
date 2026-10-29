@@ -84,10 +84,10 @@ for inspection, alongside a loading indicator. Until the run's own topology arri
 the graph previews the current workflow definition; it does not represent execution
 state. The preview stays visible through the prepared-snapshot refresh, then switches
 to the run's topology and enables inspection.
-The floating **Timeline** shows Current followed by at most the 20 newest runs.
-Current scrolls with the run entries rather than staying pinned. When 20 runs are
-shown, a final **View all** row opens the expanded history browser; the header
-action remains available at all times. Selection highlights Current or the selected run.
+The floating timeline pins **Current definition** above a virtualized run list.
+It reveals loaded history in 25-run batches near the bottom, with no twenty-run cap.
+The header's icon-only **Expand timeline** action opens expanded history. Selection
+highlights Current definition or the selected run; the Current row has no trailing caret.
 Both floating and expanded timelines use a trackless scroll handle that stays faintly
 visible whenever the list can scroll, and reaches full opacity while hovering over
 the timeline or dragging the handle. Rows extend beneath it with text padded clear.
@@ -159,10 +159,106 @@ Pass `bottomRightPanel` to `WorkflowWorkspace` to replace the graph's floating
 actions with host controls. Omit it to retain built-in controls, or pass `null`
 to hide the panel. The panel stays inside the graph when the inspector opens.
 
-The floating timeline's **Expand timeline** icon expands it into a wider, full-height
-**Timeline** panel on the left of the workspace, independently of node inspection on
-the right. It paginates the runs supplied by the API baseline in 25-run pages, with a
-status dropdown and inclusive local-date filtering. Run-ID search is available
+### Optional host timeline props
+
+`WorkflowWorkspace` accepts these flat, additive optional props. With all omitted,
+Avalanche shows **Current definition**, no trailing action or tabs, and its usual
+run history. Hosts supply data and callbacks; operator-ui owns the rendered UI.
+`WorkspaceDeployment` and `WorkspaceDeployments` are exported package types.
+
+| Prop                                                             | Default / behavior                                                                                                   |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `layoutStorageKey?: string` | `"avalanche-operator-ui.layout"`. Namespaces the single JSON panel-layout record for a host. |
+| `currentLabel?: string`                                          | `"Current definition"` (nullish fallback). Delta uses `"Current deployment"`.                                        |
+| `currentRowAction?: { label: string; onClick: () => void }`      | No action or caret. When supplied, lowercase link text, underline on the text itself (removed on hover), normal weight; does not select Current.|
+| `showCurrentRow?: boolean`                                       | `true`: pinned current row on the Overview tab. `false`: no pinned row on any tab; the list starts under the tabs.   |
+| `deployments?: WorkspaceDeployments`                             | Absent: **Timeline** title, no tabs. Present: **Overview \| Deployments** tabs in both compact and expanded headers.                         |
+| `timelineView?: "runs" \| "deployments"`                         | Omitted: internal state starts at `"runs"`. Supplied: controlled by the host. Without `deployments`, only runs show. |
+| `onTimelineViewChange?: (view: "runs" \| "deployments") => void` | No callback by default. Called on tab requests in both modes; controlled hosts must update `timelineView`.           |
+
+Panel layout is global per browser user, not per workflow, deployment or run:
+inspector width, log height and open/closed state, and timeline expansion survive
+workspace unmounts, keyed route replacements and page reloads. Both embedded
+`WorkflowWorkspace` and stock `ava operator` use the same default storage key.
+State is read synchronously on mount (no default-then-restore flash), with panel
+sizes clamped to the viewport and existing resize bounds. Writes are debounced
+by 150 ms and flushed on unmount. Missing/corrupt JSON, SSR, disabled storage and
+quota errors fall back to normal defaults or session-only changes. Hosts can
+supply `layoutStorageKey` to isolate their layout from other embeddings.
+
+```tsx
+const [timelineView, setTimelineView] = useState<"runs" | "deployments">("runs");
+
+<WorkflowWorkspace
+  api={operatorApi}
+  workflowId={workflowId}
+  currentLabel="Current deployment"
+  currentRowAction={{ label: "See all", onClick: () => setTimelineView("deployments") }}
+  timelineView={timelineView}
+  onTimelineViewChange={setTimelineView}
+  deployments={deployments}
+/>;
+```
+
+The host's `deployments: WorkspaceDeployments` contains:
+
+- `items: WorkspaceDeployment[]`: newest-first, workflow-filtered
+  `{ id: string; label: string; createdAt: number; current: boolean }` rows.
+  `createdAt` is epoch seconds. `label` is displayed; full `id` is in the title
+  and accessible name. Mark at most one item `current` for the
+  **current ●** status text (lowercase, green dot after, not a link) in the Status column and `aria-current="true"` on its row.
+- `hasMore: boolean`, `loading: boolean`, `loadMore?: () => void`: virtualized
+  infinite scrolling requests a page within four row-heights of the bottom.
+  It latches each request to avoid duplicate scroll calls until the item count
+  changes or the host's loading state changes. The host must set `loading` while
+  fetching and clear it after settling. No loader is called while loading,
+  after `hasMore` becomes false, or while `error` is set. Omit `loadMore` for a
+  fully loaded list.
+- `selectedId?: string` (default none) highlights a row.
+  `onSelect: (id: string) => void` asks the host to show its definition; it does
+  not move the current pointer or select a run.
+- `error?: string` (default none) shows an inline error. Loading and empty states
+  are rendered by operator-ui, not by the host.
+- `setCurrent?: { label?: string; confirmTitle?: string; confirmText: (item: WorkspaceDeployment) => string;
+onConfirm: (id: string) => Promise<void> }` (default none) adds a non-current-row
+  link-style button, labeled **set current** unless overridden (rendered lowercase),
+  styled exactly like `currentRowAction`: underlined at rest, underline removed on hover,
+  text only (no icon at rest; a small spinner shows while confirming), no border/background/padding;
+  keyboard focus has a visible ring. It opens a page-level modal `alertdialog` portalled to
+  `document.body`, outside the timeline. The portal carries the package's CSS scope class;
+  light/dark colors follow `.dark` on the host's `html` or `body`.
+  `confirmTitle` defaults to **Set current deployment?**; `confirmText(item)` supplies the body,
+  followed by the abbreviated deployment ID (full ID on hover). Initial focus is on **Cancel**;
+  Tab/Shift+Tab stay inside, Escape or backdrop click cancels and returns focus to the row action.
+  **Set current** invokes `onConfirm`. Both dialog buttons are disabled and the primary button
+  shows a spinner during the request; Escape/backdrop cannot cancel it. Success closes the modal;
+  failure leaves it open with the rejection's `Error.message` in an alert inside the modal.
+  Row actions are disabled while the modal is open; the target row shows a spinner and `aria-busy`
+  throughout confirmation and the request. Neither the action nor its confirmation selects a
+  deployment. The host updates `items[].current` after success.
+
+The pinned Current row and its optional action appear only on **Overview**, not on
+**Deployments**. Run status chips and run filters appear only in the expanded
+**Overview** view. Changing tabs does not
+change run selection or expand/collapse the timeline.
+
+The header shows **Overview | Deployments** tabs when `deployments` is supplied. In stock
+mode (no `deployments`) it shows a plain **Timeline** title in the same header style, with
+no underline indicator, followed by the pinned **Current definition** row. The selected tab has a 2px
+primary-color underline on the header border; inactive tabs are muted. ArrowLeft,
+ArrowRight, Home and End focus and request the corresponding tab. Controlled hosts
+remain responsible for updating `timelineView`. The visible **Overview** label keeps
+its public `timelineView` / `onTimelineViewChange` value `"runs"` unchanged.
+Only the Status header and status/action column are right-aligned in both lists;
+deployment IDs, created dates and run timestamps stay left-aligned.
+
+The floating timeline's icon-only **Expand timeline** action (also its tooltip and
+accessible name) expands it into a wider, full-height timeline panel on the left of
+the workspace, independently of node inspection on the right. Above 1000px it
+occupies its own column beside the canvas and logs;
+below that breakpoint it remains an overlay. It paginates the runs supplied by
+the API baseline in 25-run pages, with single-select status count chips and
+inclusive local-date filtering. Run-ID search is available
 under the initially collapsed **Advanced filters** section. **Collapse timeline**
 or Escape restores the floating timeline and returns focus to its trigger.
 Filters and run selection survive expansion and collapse.

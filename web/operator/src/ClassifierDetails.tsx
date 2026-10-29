@@ -2,7 +2,7 @@ import { json } from "@codemirror/lang-json";
 import { foldGutter, foldKeymap } from "@codemirror/language";
 import { EditorState } from "@codemirror/state";
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
-import { githubLightInit } from "@uiw/codemirror-theme-github";
+import { createCodeTheme } from "./codeTheme";
 import { useEffect, useId, useRef, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
@@ -21,7 +21,7 @@ import { Percentage, percentageColor } from "./Percentage";
 
 const percent = new Intl.NumberFormat("en-US", { style: "percent", maximumFractionDigits: 0 });
 
-const inputColorTheme = githubLightInit({ settings: { background: "var(--color-panel)" } });
+const inputColorTheme = createCodeTheme();
 const inputLayout = EditorView.theme({
   "&": { fontSize: "11px" },
   ".cm-content": { fontFamily: "var(--font-mono)", lineHeight: "1.65", padding: "8px 0" },
@@ -65,7 +65,7 @@ function ClassifierInput({ value }: { value: Exclude<ClassifierEntry, null> }) {
     });
     return () => view.destroy();
   }, [source]);
-  return <div ref={parent} className="min-w-0 overflow-hidden rounded-md border border-line" />;
+  return <div ref={parent} className="min-w-0 overflow-hidden rounded border border-line" />;
 }
 
 function JsonValue({ value }: { value: ClassifierEntry }) {
@@ -111,10 +111,10 @@ export function AnswerSummary({
           aria-valuemax={1}
           aria-valuenow={answer.noul}
           aria-valuetext={`${percent.format(answer.noul)} true`}
-          className="h-1 w-24 max-w-full overflow-hidden rounded-full bg-line"
+          className="h-1 w-24 max-w-full overflow-hidden rounded bg-line"
         >
           <span
-            className="block h-full rounded-full"
+            className="block h-full rounded"
             style={{
               width: `${answer.noul * 100}%`,
               backgroundColor: percentageColor(answer.noul),

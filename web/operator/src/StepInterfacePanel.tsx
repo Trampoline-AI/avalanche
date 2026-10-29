@@ -397,7 +397,7 @@ export function StepInterfacePanel({
   return (
     <section
       aria-label="Step interface"
-      className="min-w-0 rounded-md border border-line bg-canvas/50 p-3"
+      className="min-w-0 rounded border border-line bg-canvas/50 p-3"
     >
       <h3 className="inspector-section-title">Step interface</h3>
       {definition ? (

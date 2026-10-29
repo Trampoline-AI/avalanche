@@ -86,4 +86,7 @@ HTMLDialogElement.prototype.close = function close() {
   this.dispatchEvent(new Event("close"));
 };
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  window.localStorage.clear();
+});

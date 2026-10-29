@@ -285,7 +285,7 @@ export function RetainedAgentValue({
         </p>
       ) : hasRetainedValue ? (
         retainedFields === undefined && (
-          <div className="mt-2 min-w-0 rounded-md bg-canvas p-2">
+          <div className="mt-2 min-w-0 rounded bg-canvas p-2">
             <ValueView value={retained} />
           </div>
         )
@@ -304,7 +304,7 @@ export function RetainedAgentValue({
       {pagesEvents && page.nextPageToken && (
         <button
           type="button"
-          className="descriptor-page-action cursor-pointer rounded-md border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid disabled:cursor-wait disabled:text-muted"
+          className="descriptor-page-action cursor-pointer rounded border border-line bg-panel px-2 py-[5px] font-mono text-[8px] text-acid disabled:cursor-wait disabled:text-muted"
           disabled={loading}
           aria-busy={loading}
           onClick={loadMore}

@@ -10,9 +10,9 @@ const decimalPercent = new Intl.NumberFormat("en-US", {
 
 export function percentageColor(value: number): string {
   if (value <= 0.5) {
-    return `color-mix(in srgb, var(--color-danger), #eab308 ${value * 200}%)`;
+    return `color-mix(in srgb, var(--color-danger), var(--color-score-mid) ${value * 200}%)`;
   }
-  return `color-mix(in srgb, #eab308, var(--color-success) ${(value - 0.5) * 200}%)`;
+  return `color-mix(in srgb, var(--color-score-mid), var(--color-success) ${(value - 0.5) * 200}%)`;
 }
 
 export function Percentage({

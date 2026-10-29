@@ -17,8 +17,10 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
   Handle: () => null,
   Panel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   useViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
+  useStore: (selector: (state: { width: number }) => unknown) => selector({ width: 0 }),
   useReactFlow: () => ({
     screenToFlowPosition: () => ({ x: 0, y: 0 }),
+    fitView: vi.fn(),
     setCenter,
   }),
   ReactFlow: ({
@@ -52,6 +54,7 @@ import {
   CatalogSnapshotMsg,
   FlowInfoMsg,
   LogRecordDescriptorMsg,
+  NodeSnapshotMsg,
   RunSnapshotMsg,
   RunSummaryMsg,
   OperatorUpdateEnvelope,
@@ -131,10 +134,59 @@ describe("agent runtime on graph nodes", () => {
       agentFieldSchemasJson: { claude: "{}", predict: "{}" },
       agentRuntimeKinds: { claude: "claude_agent", predict: "predict_rlm" },
     });
-    render(<GraphCanvas runTopology={topology} onOpenNode={vi.fn()} />);
+    const onOpenNode = vi.fn();
+    const view = render(<GraphCanvas runTopology={topology} onOpenNode={onOpenNode} />);
 
     expect(claudeLogo("Claude step")).toBeInTheDocument();
     expect(claudeLogo("Predict step")).toBeNull();
+    for (const [status, glyph, tone, color] of [
+      ["success", "✓", "success", "success"],
+      ["failed", "✗", "danger", "danger"],
+      ["running", "◐", "active", "active"],
+      ["pending", "○", "neutral", "muted"],
+      [undefined, "○", "neutral", "muted"],
+      // Delta step states map onto the same set; unknown states never render blank.
+      ["accepted", "✓", "success", "success"],
+      ["indeterminate", "✗", "danger", "danger"],
+      ["expired", "✗", "danger", "danger"],
+      ["ready", "◐", "warning", "amber"],
+      ["waiting", "◐", "warning", "amber"],
+      ["intended", "○", "neutral", "muted"],
+      ["cancelled", "⊘", "neutral", "muted"],
+      ["somethingnew", "○", "neutral", "muted"],
+    ] as const) {
+      view.rerender(
+        <GraphCanvas
+          runTopology={topology}
+          runNodes={status ? [NodeSnapshotMsg.create({ nodeId: "claude", status })] : []}
+          selectedNodeId="claude"
+          onOpenNode={onOpenNode}
+        />,
+      );
+      const card = screen
+        .getByRole("button", { name: "Inspect Claude step" })
+        .closest("article")!;
+      expect(card).toHaveAttribute("data-node-state", status ?? "pending");
+      expect(card).toHaveStyle({
+        "--node-state-color": color === "amber" ? "var(--color-amber)" : `var(--color-run-status-${color})`,
+      });
+      expect(card).toHaveStyle({ outline: "2px solid var(--color-acid)" });
+      const marker = card.querySelector(".node-title .run-status-glyph")!;
+      expect(marker).toHaveAttribute("data-glyph", tone === "active" ? "running" : tone);
+      expect(marker).toHaveAttribute("data-char", glyph);
+      // The glyph is real text, so it reads in the node's DOM text (not only via CSS).
+      expect(marker.textContent).toBe(glyph);
+      expect(card.querySelector(".node-title")!.textContent!.trimStart().startsWith(glyph)).toBe(true);
+      expect(marker.parentElement).toHaveAttribute("data-tone", tone);
+      expect(marker.parentElement).toHaveClass(
+        color === "amber" ? "text-amber" : `text-run-status-${color}`,
+      );
+      expect(card.querySelectorAll(".run-status-glyph")).toHaveLength(1);
+      expect(card.querySelector(".node-title")?.firstElementChild).toBe(marker.parentElement);
+      expect(card.querySelector("svg.node-status-icon")).toBeNull();
+      expect(card.className).not.toMatch(/gradient-animate|shadow-|border-\[3px\]/);
+      expect(card).toHaveClass("node-agent", "node-claude");
+    }
   });
 });
 
@@ -252,7 +304,7 @@ describe("operator workflows", () => {
     await screen.findByRole("button", { name: /run-new, cancelled/ });
     expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     await screen.findByRole("button", { name: "Inspect Fetch" });
     expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
     expect(
@@ -412,7 +464,7 @@ describe("operator workflows", () => {
       ).toBeInTheDocument();
       fireEvent.click(
         screen.getByRole("button", {
-          name: host === "operator" ? "View current state for Orders" : "Current",
+          name: host === "operator" ? "View current state for Orders" : "Current definition",
         }),
       );
       await screen.findByRole("button", { name: "Run" });
@@ -642,7 +694,7 @@ describe("operator workflows", () => {
     await screen.findByRole("button", { name: "Inspect Inventory fetch" });
     await act(async () => started.resolve("run-new"));
     expect(screen.getByRole("button", { name: "Inspect Inventory fetch" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -705,7 +757,7 @@ describe("operator workflows", () => {
           "true",
         );
       } else if (destination !== "unmount") {
-        expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+        expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
           "aria-pressed",
           "true",
         );
@@ -736,6 +788,61 @@ describe("operator workflows", () => {
       expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
     },
   );
+
+  it("wires flat host timeline props through the embedded workspace", async () => {
+    const api = createApi();
+    const onSelectRun = vi.fn();
+    const onSelect = vi.fn();
+    function HostWorkspace() {
+      const [timelineView, onTimelineViewChange] = useState<"runs" | "deployments">("runs");
+      return (
+        <WorkflowWorkspace
+          api={api}
+          workflowId={workflow.workflowId}
+          navigation={{ selectedRunId: summary.runId, onSelectRun }}
+          currentLabel="Current deployment"
+          currentRowAction={{
+            label: "See all",
+            onClick: () => onTimelineViewChange("deployments"),
+          }}
+          timelineView={timelineView}
+          onTimelineViewChange={onTimelineViewChange}
+          deployments={{
+            items: [
+              {
+                id: "dpl-host-full-id",
+                label: "Host deployment",
+                createdAt: 1793200000,
+                current: true,
+              },
+            ],
+            hasMore: false,
+            loading: false,
+            selectedId: "dpl-host-full-id",
+            onSelect,
+          }}
+        />
+      );
+    }
+    render(<HostWorkspace />);
+    await screen.findByRole("button", { name: "Current deployment" });
+    fireEvent.click(screen.getByRole("button", { name: "see all" }));
+    expect(onSelectRun).not.toHaveBeenCalled();
+    expect(screen.getByRole("tab", { name: "Deployments" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    fireEvent.click(await screen.findByRole("button", { name: /^dpl-host-full-id,/ }));
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith("dpl-host-full-id");
+    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
+    expect(screen.getByRole("tab", { name: "Deployments" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.queryByRole("group", { name: "Filter by status" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Overview" }));
+    expect(screen.getByRole("group", { name: "Filter by status" })).toBeVisible();
+  });
 
   it("keeps historical workspace content and navigation after its definition is removed", async () => {
     const removed = Promise.withResolvers<void>();
@@ -824,7 +931,7 @@ describe("operator workflows", () => {
     );
     await screen.findByRole("button", { name: "Inspect Next recorded fetch" });
     expect(screen.getByRole("button", { name: "Cancel run" })).toBeEnabled();
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     expect(screen.getByText("No workflows discovered")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Run" })).not.toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Run logs" })).not.toBeInTheDocument();
@@ -837,13 +944,13 @@ describe("operator workflows", () => {
       },
     });
     render(<OperatorUi host={{ api, presentation }} />);
-    await screen.findByRole("button", { name: "Current" });
+    await screen.findByRole("button", { name: "Current definition" });
     fireEvent.click(await screen.findByRole("button", { name: "Run" }));
     expect(
       await screen.findByText("Preparation rejected: missing credential"),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Inspect Fetch" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -910,13 +1017,13 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
       },
     });
     mount(api);
-    expect(await screen.findByRole("button", { name: "Current" })).toHaveAttribute(
+    expect(await screen.findByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     await act(async () => publishOther.resolve());
-    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -927,8 +1034,8 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
         "true",
       ),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
-    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
+    expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -1084,7 +1191,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     );
     const node = await screen.findByRole("button", { name: "Inspect Fetch" });
     expect(node).toBeEnabled();
-    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -1132,10 +1239,10 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
     fireEvent.click(screen.getByRole("button", { name: /run-2,/ }));
     await screen.findByText("Loading run snapshot");
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
     await act(async () => lateSnapshot.resolve(snapshotFor(secondSummary)));
-    expect(screen.getByRole("button", { name: "Current" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -1143,7 +1250,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
 
     fireEvent.click(screen.getByRole("button", { name: /run-2,/ }));
     await screen.findByText("Snapshot was removed");
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
     act(() => {
       runs = [...runs, third];
@@ -1242,7 +1349,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
       "HistoricalBatch",
     );
     expect(getWorkflowNodeSource).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     expect(screen.getByRole("tab", { name: "Definition" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -1312,7 +1419,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(
       screen.queryByRole("complementary", { name: "Run inspector" }),
     ).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Current" }));
+    fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     expect(screen.queryByRole("tab", { name: "Definition" })).not.toBeInTheDocument();
   });
 
@@ -1348,8 +1455,25 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
+    const logPane = screen.getByRole("region", { name: "Run logs" });
+    const logResize = screen.getByRole("separator", { name: "Resize logs" });
+    fireEvent.keyDown(logResize, { key: "ArrowUp" });
+    const logHeight = logPane.style.flexBasis;
+    expect(logHeight).toBe("276px");
+    const inspectorDivider = screen.getByRole("separator", { name: "Resize Inspector" });
     fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
     const allRuns = screen.getByRole("region", { name: "Timeline" });
+    const timeline = allRuns.closest(".workspace-timeline")!;
+    const canvas = logPane.closest(".canvas")!;
+    expect(timeline.parentElement).toHaveClass("canvas-shell", "flex-row");
+    expect(timeline.parentElement).toBe(canvas.parentElement);
+    expect(timeline).toHaveClass("relative", "shrink-0", "w-[410px]");
+    expect(timeline).not.toHaveClass("absolute");
+    expect(timeline).toHaveClass("max-[1000px]:absolute");
+    expect(timeline).not.toContainElement(logPane);
+    expect(screen.getByRole("separator", { name: "Resize logs" })).toBe(logResize);
+    expect(screen.getByRole("separator", { name: "Resize Inspector" })).toBe(inspectorDivider);
+    expect(logPane.style.flexBasis).toBe(logHeight);
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
     expect(within(allRuns).getByRole("button", { name: "Collapse timeline" })).toHaveFocus();
     fireEvent.click(within(allRuns).getByText("Advanced filters"));
@@ -1367,6 +1491,10 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(within(allRuns).queryByRole("button", { name: /run-1,/ })).not.toBeInTheDocument();
     fireEvent.keyDown(within(allRuns).getByRole("searchbox"), { key: "Escape" });
     expect(within(allRuns).queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(timeline).toHaveClass("absolute", "w-[300px]");
+    expect(timeline).not.toHaveClass("relative", "shrink-0");
+    expect(screen.getByRole("region", { name: "Run logs" })).toBe(logPane);
+    expect(logPane.style.flexBasis).toBe(logHeight);
     expect(screen.getByRole("button", { name: "Expand timeline" })).toHaveFocus();
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
@@ -1378,6 +1506,177 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     fireEvent.click(within(allRuns).getByRole("button", { name: "Collapse timeline" }));
     expect(screen.getByRole("region", { name: "Timeline" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Expand timeline" })).toHaveFocus();
+  });
+});
+
+describe("persisted workspace layout", () => {
+  it.each([undefined, "host.layout"])(
+    "keeps panel sizes across workflow remounts with key %s",
+    async (layoutStorageKey) => {
+      const key = layoutStorageKey ?? "avalanche-operator-ui.layout";
+      const otherWorkflow = FlowInfoMsg.create({ ...workflow, workflowId: "other.py::orders" });
+      const otherSummary = RunSummaryMsg.create({
+        ...summary,
+        workflowId: otherWorkflow.workflowId,
+      });
+      const mountWorkspace = (other = false) => {
+        const selectedWorkflow = other ? otherWorkflow : workflow;
+        const selectedSummary = other ? otherSummary : summary;
+        const api = createApi({
+          loadBaseline: async () => ({
+            ...baseline,
+            catalog: CatalogSnapshotMsg.create({
+              ...baseline.catalog,
+              workflows: [selectedWorkflow],
+            }),
+            runs: [selectedSummary],
+          }),
+          getLatestRunSnapshot: async () => snapshotFor(selectedSummary),
+        });
+        return render(
+          <WorkflowWorkspace
+            api={api}
+            workflowId={selectedWorkflow.workflowId}
+            layoutStorageKey={layoutStorageKey}
+            navigation={{ selectedRunId: summary.runId, onSelectRun: vi.fn() }}
+          />,
+        );
+      };
+      const first = mountWorkspace();
+      fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
+      const inspector = await screen.findByRole("separator", { name: "Resize Inspector" });
+      fireEvent.keyDown(inspector, { key: "ArrowLeft" });
+      expect(inspector).toHaveAttribute("aria-valuenow", "426");
+      const logs = await screen.findByRole("separator", { name: "Resize logs" });
+      fireEvent.keyDown(logs, { key: "ArrowUp" });
+      fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
+      fireEvent.click(screen.getByRole("button", { name: /^Logs/ }));
+      first.unmount(); // A route change before the debounce expires must flush the latest values.
+      expect(JSON.parse(window.localStorage.getItem(key)!)).toMatchObject({
+        inspectorWidth: 426,
+        logHeight: 276,
+        logExpanded: false,
+        timelineExpanded: true,
+      });
+      if (layoutStorageKey)
+        expect(window.localStorage.getItem("avalanche-operator-ui.layout")).toBeNull();
+      const second = mountWorkspace(true);
+      await screen.findByRole("button", { name: "Collapse timeline" });
+      expect(screen.getByRole("button", { name: /^Logs/ })).toHaveAttribute(
+        "aria-expanded",
+        "false",
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Logs/ }));
+      expect(screen.getByRole("region", { name: "Run logs" })).toHaveStyle({
+        flexBasis: "276px",
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+      expect(screen.getByRole("separator", { name: "Resize Inspector" })).toHaveAttribute(
+        "aria-valuenow",
+        "426",
+      );
+      second.unmount();
+    },
+  );
+
+  it.each([
+    null,
+    "not-json",
+    "null",
+    '{"inspectorWidth":"bad","logHeight":null,"timelineExpanded":"yes"}',
+  ])("falls back to defaults for invalid or missing layout %s", async (stored) => {
+    if (stored !== null) window.localStorage.setItem("avalanche-operator-ui.layout", stored);
+    render(<WorkflowWorkspace api={createApi()} workflowId={workflow.workflowId} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
+    expect(screen.getByRole("separator", { name: "Resize Inspector" })).toHaveAttribute(
+      "aria-valuenow",
+      "410",
+    );
+    expect(screen.getByRole("button", { name: "Expand timeline" })).toBeInTheDocument();
+  });
+
+  it("keeps debounced changes during an immediate keyed route replacement", async () => {
+    const api = createApi();
+    const view = render(
+      <WorkflowWorkspace key="deployment-a" api={api} workflowId={workflow.workflowId} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
+    fireEvent.keyDown(screen.getByRole("separator", { name: "Resize Inspector" }), {
+      key: "ArrowLeft",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
+    view.rerender(
+      <WorkflowWorkspace key="deployment-b" api={api} workflowId={workflow.workflowId} />,
+    );
+    await screen.findByRole("button", { name: "Collapse timeline" });
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    expect(screen.getByRole("separator", { name: "Resize Inspector" })).toHaveAttribute(
+      "aria-valuenow",
+      "426",
+    );
+  });
+
+  it("stays usable when storage access or writes are denied", async () => {
+    const read = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("storage denied");
+    });
+    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota exceeded");
+    });
+    try {
+      const view = render(
+        <WorkflowWorkspace api={createApi()} workflowId={workflow.workflowId} />,
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Expand timeline" }));
+      expect(screen.getByRole("button", { name: "Collapse timeline" })).toBeInTheDocument();
+      view.unmount();
+    } finally {
+      read.mockRestore();
+      write.mockRestore();
+    }
+  });
+
+  it("clamps stored panel sizes before rendering and debounces writes", async () => {
+    window.localStorage.setItem(
+      "avalanche-operator-ui.layout",
+      JSON.stringify({
+        inspectorWidth: 99999,
+        logHeight: 99999,
+        logExpanded: true,
+        timelineExpanded: true,
+      }),
+    );
+    render(
+      <WorkflowWorkspace
+        api={createApi()}
+        workflowId={workflow.workflowId}
+        navigation={{ selectedRunId: summary.runId, onSelectRun: vi.fn() }}
+      />,
+    );
+    await screen.findByRole("separator", { name: "Resize logs" });
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    const inspector = screen.getByRole("separator", { name: "Resize Inspector" });
+    expect(inspector).toHaveAttribute(
+      "aria-valuenow",
+      String(Math.min(640, window.innerWidth)),
+    );
+    const logs = screen.getByRole("separator", { name: "Resize logs" });
+    expect(Number(logs.getAttribute("aria-valuenow"))).toBe(
+      Math.max(140, Math.floor(window.innerHeight * 0.75)),
+    );
+    await screen.findByRole("button", { name: "Collapse timeline" });
+    vi.useFakeTimers();
+    try {
+      const write = vi.spyOn(Storage.prototype, "setItem");
+      fireEvent.keyDown(inspector, { key: "ArrowRight" });
+      fireEvent.keyDown(inspector, { key: "ArrowRight" });
+      expect(write).not.toHaveBeenCalled();
+      await act(() => vi.advanceTimersByTimeAsync(151));
+      expect(write).toHaveBeenCalledTimes(1);
+      write.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

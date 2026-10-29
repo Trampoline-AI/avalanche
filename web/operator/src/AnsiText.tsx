@@ -18,22 +18,22 @@ interface AnsiSegment {
 
 const SGR_SEQUENCE = /\u001B\[([0-9;]*)m/g;
 const ANSI_COLORS = [
-  "#1f2937",
-  "#c43d36",
-  "#16805d",
-  "#a15c00",
-  "#2563eb",
-  "#a855f7",
-  "#0f766e",
-  "#dfe4e1",
-  "#64748b",
-  "#ef4444",
-  "#22c55e",
-  "#f59e0b",
-  "#3b82f6",
-  "#c084fc",
-  "#14b8a6",
-  "#ffffff",
+  "var(--color-ansi-0)",
+  "var(--color-ansi-1)",
+  "var(--color-ansi-2)",
+  "var(--color-ansi-3)",
+  "var(--color-ansi-4)",
+  "var(--color-ansi-5)",
+  "var(--color-ansi-6)",
+  "var(--color-ansi-7)",
+  "var(--color-ansi-8)",
+  "var(--color-ansi-9)",
+  "var(--color-ansi-10)",
+  "var(--color-ansi-11)",
+  "var(--color-ansi-12)",
+  "var(--color-ansi-13)",
+  "var(--color-ansi-14)",
+  "var(--color-ansi-15)",
 ] as const;
 
 function initialState(): AnsiState {
@@ -155,8 +155,12 @@ function segments(text: string): AnsiSegment[] {
 }
 
 function styleFor(state: AnsiState): CSSProperties | undefined {
-  const foreground = state.inverse ? (state.background ?? "#ffffff") : state.foreground;
-  const background = state.inverse ? (state.foreground ?? "#17211c") : state.background;
+  const foreground = state.inverse
+    ? (state.background ?? "var(--color-panel)")
+    : state.foreground;
+  const background = state.inverse
+    ? (state.foreground ?? "var(--color-ink)")
+    : state.background;
   if (
     !foreground &&
     !background &&

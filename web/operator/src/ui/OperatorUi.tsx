@@ -118,7 +118,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
           explorerPinned ? "explorer-pinned" : "explorer-unpinned"
         } ${explorerExpanded ? "explorer-expanded" : "explorer-collapsed"}`}
       >
-        <header className="topbar relative z-10 grid min-h-[58px] grid-cols-[minmax(max-content,1fr)_minmax(0,max-content)_minmax(max-content,1fr)] items-center gap-x-4 border-b border-line bg-white px-5 shadow-[0_1px_2px_rgba(20,31,26,.04)] max-[700px]:grid-cols-[auto_minmax(0,1fr)_auto] max-[700px]:gap-2 max-[700px]:px-2.5">
+        <header className="topbar relative z-10 grid min-h-[58px] grid-cols-[minmax(max-content,1fr)_minmax(0,max-content)_minmax(max-content,1fr)] items-center gap-x-4 border-b border-line bg-panel px-5 shadow-[0_1px_2px_var(--color-shadow-8)] max-[700px]:grid-cols-[auto_minmax(0,1fr)_auto] max-[700px]:gap-2 max-[700px]:px-2.5">
           <div className="brand flex items-center gap-[11px]">
             <img
               className="brand-mark size-[30px] object-contain"
@@ -131,7 +131,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
             </div>
           </div>
           <div
-            className="breadcrumb min-w-0 truncate py-1 text-left text-xs text-muted [direction:rtl] max-[700px]:hidden [&_i]:mx-[9px] [&_i]:opacity-40 [&_strong]:font-semibold [&_strong]:text-[#26322c]"
+            className="breadcrumb min-w-0 truncate py-1 text-left text-xs text-muted [direction:rtl] max-[700px]:hidden [&_i]:mx-[9px] [&_i]:opacity-40 [&_strong]:font-semibold [&_strong]:text-breadcrumb"
             title={workflow?.rootAlias || presentation.rootLabel}
           >
             <bdi dir="ltr">
@@ -143,7 +143,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
                     type="button"
                     aria-label={`View current state for ${workflow.displayName}`}
                     aria-current={selection?.kind === "workflow" ? "page" : undefined}
-                    className="cursor-pointer border-0 bg-transparent p-0 text-inherit hover:underline focus-visible:rounded-sm focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+                    className="cursor-pointer border-0 bg-transparent p-0 text-inherit hover:underline focus-visible:rounded focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
                     onClick={() => selectWorkflowRun(undefined)}
                   >
                     <strong>{workflow.displayName}</strong>
@@ -166,7 +166,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
           </div>
           <button
             type="button"
-            className="explorer-toggle hidden size-8 cursor-pointer items-center justify-center rounded-md border-0 bg-transparent text-muted hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid max-[700px]:flex"
+            className="explorer-toggle hidden size-8 cursor-pointer items-center justify-center rounded border-0 bg-transparent text-muted hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid max-[700px]:flex"
             aria-label="Toggle workflows"
             aria-controls="operator-explorer"
             aria-expanded={explorerOpen}
@@ -176,7 +176,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
           </button>
         </header>
         {state.error && (
-          <div className="connection-error border-b border-[#efb9b5] bg-[#fff1f0] px-[18px] py-2 text-xs text-[#9d2923]">
+          <div className="connection-error border-b border-error-line bg-error-surface px-[18px] py-2 text-xs text-error-ink">
             {state.error}
           </div>
         )}
