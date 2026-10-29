@@ -35,6 +35,7 @@ from .source_policy import is_excluded_directory, is_path_in_excluded_directory
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
 from .workflow_metadata import (
     agent_declarations_for_workflow,
+    input_declaration_for_workflow,
     node_docstring_lines_for_workflow,
     node_source_code_for_workflow,
     step_interface_for_workflow,
@@ -634,6 +635,7 @@ def _descriptor_to_dict(
 
     return {
         "input_schema_json": workflow_input_schema(workflow),
+        "input_declaration_json": input_declaration_for_workflow(workflow, node_ids),
         "workflow_id": workflow_id,
         "display_name": workflow.name,
         "locator": {
@@ -664,6 +666,7 @@ def _descriptor_to_dict(
 def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
     return WorkflowDescriptor(
         input_schema_json=item["input_schema_json"],
+        input_declaration_json=item["input_declaration_json"],
         workflow_id=item["workflow_id"],
         display_name=item["display_name"],
         locator=WorkflowLocator(**item["locator"]),

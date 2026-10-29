@@ -81,6 +81,7 @@ from .models import (
     OperatorUpdateEnvelope,
     ResetRequired,
     RunCreated,
+    RunInput,
     RunSnapshot,
     RunState,
     RunStatus,
@@ -120,6 +121,7 @@ from .source import is_watch_path_included, resolve_live_source, resolve_watch_r
 from .step_io import StepInputs, StepIo, StepValuePreview
 from .webhooks import DEFAULT_WEBHOOK_PORT, WebhookServer, routes_for
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
+from .workflow_metadata import PreparedRunInput, WorkflowInputDeclaration
 
 if TYPE_CHECKING:
     from avalanche.agent.trace import AgentTraceHeader
@@ -1193,6 +1195,7 @@ class Operator:
             ),
             topology=run.topology,
             terminal_seal=run.terminal_seal,
+            input=run.input,
         )
 
     def _current_log_page_token_locked(self, run_id: str) -> dict[str, Any]:
@@ -1700,6 +1703,7 @@ class Operator:
                 run.flow_name = prepared_run.flow_name
                 run.workflow_display_name = prepared_run.workflow_display_name
                 run.topology = prepared_run.topology
+                run.input = prepared_run.input
                 run.nodes = prepared_run.nodes
                 if handle.cancel_event.is_set():
                     run.status = RunStatus.CANCELLED
@@ -2209,6 +2213,7 @@ class Operator:
             step_interface_json=tuple(
                 (node_id, prepared["step_interface_json"][node_id]) for node_id in node_ids
             ),
+            input_declaration_json=prepared["input_declaration_json"],
         )
         run = RunState(
             run_id=run_id,
@@ -2219,6 +2224,14 @@ class Operator:
             status=RunStatus.PENDING,
             triggered_by=triggered_by,
             triggered_at=triggered_at,
+            input=(
+                None
+                if prepared["input"] is None
+                else RunInput(
+                    values_json=prepared["input"]["values_json"],
+                    supplied_fields=tuple(prepared["input"]["supplied_fields"]),
+                )
+            ),
         )
         for node_id in node_ids:
             run.nodes[node_id] = NodeState(
@@ -3703,6 +3716,7 @@ _MAX_EVENT_EVALUATION_METADATA_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_STEP_INTERFACE_BYTES = 1024 * 1024
 _MAX_EVENT_STEP_INTERFACES_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_TRACEBACK_LENGTH = 262_144
+_MAX_EVENT_INPUT_LENGTH = 1024 * 1024
 _MAX_EVENT_TIMESTAMP_MAGNITUDE = 10**12
 
 
@@ -3900,6 +3914,8 @@ def _validate_preparation_event(event: object) -> str:
                 "classifier_metadata_json",
                 "evaluation_metadata_json",
                 "step_interface_json",
+                "input_declaration_json",
+                "input",
             },
         )
         node_ids = _required_field(event, "node_ids")
@@ -3993,6 +4009,7 @@ def _validate_preparation_event(event: object) -> str:
             type(display_name) is not str or len(display_name) > _MAX_EVENT_FIELD_LENGTH
         ):
             raise _CoordinatorProtocolError("field 'display_name' must be a bounded string")
+        _validate_prepared_input(event, node_ids)
         return event_type
     if event_type == "prepare_failed":
         _require_exact_event_keys(event, {"type", "error", "traceback"})
@@ -4008,6 +4025,33 @@ def _validate_preparation_event(event: object) -> str:
     raise _CoordinatorProtocolError(
         f"unknown preparation event type {_bounded_ascii(event_type)}"
     )
+
+
+def _validate_prepared_input(event: dict[str, Any], node_ids: list[str]) -> None:
+    declaration_json = _string_field(
+        event, "input_declaration_json", maximum_length=_MAX_EVENT_INPUT_LENGTH
+    )
+    run_input = _required_field(event, "input")
+    if (run_input is None) != (declaration_json == ""):
+        raise _CoordinatorProtocolError(
+            "field 'input' must be present exactly when the workflow declares an input"
+        )
+    if run_input is None:
+        return
+    try:
+        declaration = WorkflowInputDeclaration.model_validate_json(declaration_json)
+        prepared = PreparedRunInput.model_validate(run_input, strict=True)
+    except (ValueError, TypeError, RecursionError) as exc:
+        # Validation errors may echo user values; keep those out of protocol diagnostics.
+        raise _CoordinatorProtocolError("invalid run input metadata") from exc
+    if len(prepared.values_json) > _MAX_EVENT_INPUT_LENGTH:
+        raise _CoordinatorProtocolError("field 'input' exceeds the maximum length")
+    unknown_consumers = set(declaration.consumer_node_ids).difference(node_ids)
+    if unknown_consumers:
+        raise _CoordinatorProtocolError(
+            "field 'input_declaration_json' references unknown node "
+            f"{_bounded_ascii(min(unknown_consumers))}"
+        )
 
 
 def _validate_run_event(event: object, *, validate_result: bool = True) -> str:

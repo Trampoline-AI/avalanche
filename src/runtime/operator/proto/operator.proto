@@ -194,6 +194,9 @@ message WorkflowTopologyV2 {
   map<string, string> evaluation_metadata_json = 10;
   // Each agent node's runtime kind, such as "predict_rlm" or "claude_agent".
   map<string, string> agent_runtime_kinds = 11;
+  // The declared run input model, its JSON schema, and the steps that receive
+  // it, as JSON. Empty when the workflow declares no input.
+  string input_declaration_json = 12;
 }
 
 message ScanTargetV2 {
@@ -437,6 +440,15 @@ message RunSnapshotV2 {
   uint64 latest_log_sequence = 6;
   ContinuationRefV2 log_continuation = 7;
   RunActivityDescriptorV2 terminal_seal = 8;
+  // Absent when the workflow declares no input.
+  RunInputV2 input = 9;
+}
+
+// The validated input a run started with, after defaults were applied.
+message RunInputV2 {
+  string values_json = 1;
+  // Fields the caller supplied; every other field took its declared default.
+  repeated string supplied_fields = 2;
 }
 
 // The immutable, scope-bound object body for an activity. Servers must

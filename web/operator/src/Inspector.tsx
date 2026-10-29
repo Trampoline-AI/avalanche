@@ -47,6 +47,8 @@ import { isUnknownRecord } from "./guards";
 import { StepInterfacePanel } from "./StepInterfacePanel";
 import { StepRunValues } from "./StepRunValues";
 import { decodeStepInterface } from "./stepInterface";
+import { WorkflowInputInspector } from "./WorkflowInputInspector";
+import { INPUT_NODE_ID } from "./workflowInput";
 
 interface InspectorProps {
   api: OperatorApi;
@@ -155,6 +157,17 @@ export function Inspector(props: InspectorProps) {
       };
     }
   }, [rawDeclaration]);
+  if (nodeId === INPUT_NODE_ID) {
+    return (
+      <WorkflowInputInspector
+        workflow={workflow}
+        run={run}
+        embedded={props.embedded}
+        definitionLabel={props.definitionLabel}
+        onClose={props.onClose}
+      />
+    );
+  }
   if (
     nodeId !== undefined &&
     metadata !== undefined &&

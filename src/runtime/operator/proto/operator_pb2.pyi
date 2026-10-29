@@ -431,6 +431,7 @@ class WorkflowTopologyV2(_message.Message):
         "step_interface_json",
         "evaluation_metadata_json",
         "agent_runtime_kinds",
+        "input_declaration_json",
     )
     class GraphEntry(_message.Message):
         __slots__ = ("key", "value")
@@ -527,6 +528,7 @@ class WorkflowTopologyV2(_message.Message):
     STEP_INTERFACE_JSON_FIELD_NUMBER: _ClassVar[int]
     EVALUATION_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     AGENT_RUNTIME_KINDS_FIELD_NUMBER: _ClassVar[int]
+    INPUT_DECLARATION_JSON_FIELD_NUMBER: _ClassVar[int]
     node_ids: _containers.RepeatedScalarFieldContainer[str]
     graph: _containers.MessageMap[str, NodeEdgesV2]
     node_types: _containers.ScalarMap[str, str]
@@ -538,6 +540,7 @@ class WorkflowTopologyV2(_message.Message):
     step_interface_json: _containers.ScalarMap[str, str]
     evaluation_metadata_json: _containers.ScalarMap[str, str]
     agent_runtime_kinds: _containers.ScalarMap[str, str]
+    input_declaration_json: str
     def __init__(
         self,
         node_ids: _Optional[_Iterable[str]] = ...,
@@ -551,6 +554,7 @@ class WorkflowTopologyV2(_message.Message):
         step_interface_json: _Optional[_Mapping[str, str]] = ...,
         evaluation_metadata_json: _Optional[_Mapping[str, str]] = ...,
         agent_runtime_kinds: _Optional[_Mapping[str, str]] = ...,
+        input_declaration_json: _Optional[str] = ...,
     ) -> None: ...
 
 class ScanTargetV2(_message.Message):
@@ -1061,6 +1065,7 @@ class RunSnapshotV2(_message.Message):
         "latest_log_sequence",
         "log_continuation",
         "terminal_seal",
+        "input",
     )
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     SUMMARY_FIELD_NUMBER: _ClassVar[int]
@@ -1070,6 +1075,7 @@ class RunSnapshotV2(_message.Message):
     LATEST_LOG_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     LOG_CONTINUATION_FIELD_NUMBER: _ClassVar[int]
     TERMINAL_SEAL_FIELD_NUMBER: _ClassVar[int]
+    INPUT_FIELD_NUMBER: _ClassVar[int]
     cursor: LifecycleCursorV2
     summary: RunSummaryV2
     nodes: _containers.RepeatedCompositeFieldContainer[NodeSnapshotV2]
@@ -1078,6 +1084,7 @@ class RunSnapshotV2(_message.Message):
     latest_log_sequence: int
     log_continuation: ContinuationRefV2
     terminal_seal: RunActivityDescriptorV2
+    input: RunInputV2
     def __init__(
         self,
         cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ...,
@@ -1088,6 +1095,19 @@ class RunSnapshotV2(_message.Message):
         latest_log_sequence: _Optional[int] = ...,
         log_continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ...,
         terminal_seal: _Optional[_Union[RunActivityDescriptorV2, _Mapping]] = ...,
+        input: _Optional[_Union[RunInputV2, _Mapping]] = ...,
+    ) -> None: ...
+
+class RunInputV2(_message.Message):
+    __slots__ = ("values_json", "supplied_fields")
+    VALUES_JSON_FIELD_NUMBER: _ClassVar[int]
+    SUPPLIED_FIELDS_FIELD_NUMBER: _ClassVar[int]
+    values_json: str
+    supplied_fields: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(
+        self,
+        values_json: _Optional[str] = ...,
+        supplied_fields: _Optional[_Iterable[str]] = ...,
     ) -> None: ...
 
 class ActivityDetailRefV2(_message.Message):

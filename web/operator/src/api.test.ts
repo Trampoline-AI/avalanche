@@ -261,6 +261,30 @@ describe("operator transport boundary", () => {
     );
   });
 
+  it("maps the run input and the input declaration pinned to the run", async () => {
+    const inputDeclarationJson = JSON.stringify({
+      type_name: "ReviewInput",
+      json_schema: { type: "object", properties: { limit: { type: "integer", default: 3 } } },
+      consumer_node_ids: [],
+    });
+    const api = apiWith({
+      getRunSnapshot: () => ({
+        response: Promise.resolve(
+          RunSnapshotV2.create({
+            scopeRef,
+            cursor: cursor(),
+            summary: RunSummaryV2.create({ runId: "run-1", triggeredBy: "manual" }),
+            topology: { inputDeclarationJson },
+            input: { valuesJson: '{"limit":3}', suppliedFields: [] },
+          }),
+        ),
+      }),
+    });
+    const snapshot = await api.getLatestRunSnapshot("run-1", "operator-1");
+    expect(snapshot.topology?.inputDeclarationJson).toBe(inputDeclarationJson);
+    expect(snapshot.input).toEqual({ valuesJson: '{"limit":3}', suppliedFields: [] });
+  });
+
   it("decodes a valid live update and fails closed on unknown payloads, activities, and foreign scopes", async () => {
     const valid = RunStatusEnvelopeV2.create({
       eventUlid: eventUlid(9),

@@ -173,6 +173,8 @@ export interface FlowInfoMsg {
   evaluationMetadataJson: Record<string, string>;
   /** Python callable interfaces keyed by node ID. */
   stepInterfaceJson: Record<string, string>;
+  /** The declared run input as JSON; empty when the workflow declares none. */
+  inputDeclarationJson: string;
   /**
    * First non-empty docstring lines for non-agent standard steps.
    */
@@ -217,6 +219,7 @@ export const FlowInfoMsg = {
       classifierMetadataJson: {},
       evaluationMetadataJson: {},
       stepInterfaceJson: {},
+      inputDeclarationJson: "",
       standardStepDocstringLines: {},
       webhookPath: "",
       webhookUrl: "",
@@ -597,6 +600,8 @@ export interface WorkflowTopologyMsg {
   evaluationMetadataJson: Record<string, string>;
   /** Python callable interfaces pinned to the executing workflow definition. */
   stepInterfaceJson: Record<string, string>;
+  /** The run input declaration pinned to the executing workflow definition. */
+  inputDeclarationJson: string;
 }
 
 export const WorkflowTopologyMsg = {
@@ -613,6 +618,7 @@ export const WorkflowTopologyMsg = {
       classifierMetadataJson: {},
       evaluationMetadataJson: {},
       stepInterfaceJson: {},
+      inputDeclarationJson: "",
       ...value,
     } as WorkflowTopologyMsg;
   },
@@ -651,6 +657,15 @@ export interface RunSnapshotMsg {
    * Exact terminal activity descriptor mirrored by the server snapshot.
    */
   terminalSeal?: TerminalSealMsg;
+  /** The validated input the run started with; absent when none is declared. */
+  input?: RunInputMsg;
+}
+
+export interface RunInputMsg {
+  /** Every declared field after validation and defaults, as a JSON object. */
+  valuesJson: string;
+  /** Fields the caller supplied; every other field took its declared default. */
+  suppliedFields: string[];
 }
 
 export const RunSnapshotMsg = {
@@ -664,6 +679,7 @@ export const RunSnapshotMsg = {
       logPageToken: "",
       topology: undefined,
       terminalSeal: undefined,
+      input: undefined,
       ...value,
     } as RunSnapshotMsg;
   },

@@ -862,6 +862,12 @@ export class GrpcWebOperatorApi implements OperatorApi {
     if (snapshot.terminalSeal) {
       mapped.terminalSeal = this.mapTerminalSealDescriptor(snapshot.terminalSeal);
     }
+    if (snapshot.input) {
+      mapped.input = {
+        valuesJson: snapshot.input.valuesJson,
+        suppliedFields: snapshot.input.suppliedFields,
+      };
+    }
     return mapped;
   }
 
@@ -1299,6 +1305,7 @@ function mapFlowInfo(flow: FlowInfoV2): FlowInfoMsg {
     classifierMetadataJson: flow.classifierMetadataJson,
     evaluationMetadataJson: flow.evaluationMetadataJson,
     stepInterfaceJson: flow.topology?.stepInterfaceJson ?? {},
+    inputDeclarationJson: flow.topology?.inputDeclarationJson ?? "",
     webhookPath: flow.webhookPath,
     webhookUrl: flow.webhookUrl,
     webhookActive: flow.webhookActive,

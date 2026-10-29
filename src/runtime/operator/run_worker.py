@@ -26,6 +26,7 @@ from avalanche.classifier import capture_classifier_evidence
 from avalanche.classifier.models import ClassifierInvocation
 from avalanche.dag import Workflow
 from avalanche.evaluation_capture import capture_evaluations
+from avalanche.runtime import BaseInput
 
 from ..executor import Executor, LocalExecutor, RayExecutor
 from .evaluation_worker import EvaluationRequest, _local_modules, snapshot_evaluation
@@ -45,7 +46,12 @@ from .result_store import (
 )
 from .results import encode_workflow_result
 from .step_io import preview_step_inputs, preview_value, step_signatures
-from .workflow_metadata import node_docstring_lines_for_workflow, step_interface_for_workflow
+from .workflow_metadata import (
+    PreparedRunInput,
+    input_declaration_for_workflow,
+    node_docstring_lines_for_workflow,
+    step_interface_for_workflow,
+)
 
 _log_attempt: ContextVar[str] = ContextVar("operator_log_attempt", default="")
 _log_node: ContextVar[str] = ContextVar("operator_log_node", default="")
@@ -156,9 +162,18 @@ def _run_worker(
         workflow = builder()
         if not isinstance(workflow, Workflow):
             raise TypeError("Marked builder did not return a Workflow")
+        run_input: BaseInput | dict[str, Any] | None = input_value
+        prepared_input: dict[str, Any] | None = None
+        if workflow.input_type is not None:
+            # Validate once here so the run executes exactly the values it reports.
+            run_input = workflow.input_type.model_validate(input_value or {})
+            prepared_input = PreparedRunInput(
+                values_json=run_input.model_dump_json(),
+                supplied_fields=sorted(run_input.model_fields_set),
+            ).model_dump()
         _put_preparation_event(
             event_queue,
-            {"type": "prepared", **_workflow_metadata(workflow)},
+            {"type": "prepared", **_workflow_metadata(workflow), "input": prepared_input},
         )
     except BaseException as exc:
         _put_preparation_event(
@@ -249,7 +264,7 @@ def _run_worker(
         result = workflow.run(
             executor=executor,
             hooks=hooks,
-            input=input_value,
+            input=run_input,
             context=context_value,
             run_id=run_id,
         ).result()
@@ -374,6 +389,7 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
         "classifier_metadata_json": classifier_metadata_for_workflow(workflow, node_ids),
         "evaluation_metadata_json": evaluation_metadata_for_workflow(workflow, node_ids),
         "step_interface_json": step_interface_for_workflow(workflow, node_ids),
+        "input_declaration_json": input_declaration_for_workflow(workflow, node_ids),
         "standard_step_docstring_lines": node_docstring_lines_for_workflow(workflow, node_ids),
     }
 
