@@ -1,6 +1,8 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   type CSSProperties,
+  type Dispatch,
+  type SetStateAction,
   type KeyboardEvent,
   type PointerEvent,
   useCallback,
@@ -26,12 +28,16 @@ import {
 } from "./detailProjection";
 import { DescriptorPageOrder, type LogRecordDescriptorMsg, type RunSnapshotMsg } from "./model";
 
+import {
+  LOG_PANE_MIN_HEIGHT_PX,
+  LOG_PANE_DEFAULT_HEIGHT_PX,
+  maximumPaneHeight,
+  boundedPaneHeight,
+} from "./useWorkspaceLayout";
+
 const LOG_DECODE_BATCH_SIZE = 20;
 const LOG_ROW_ESTIMATE_PX = 48;
 const LOG_ROW_OVERSCAN = 12;
-const LOG_PANE_MIN_HEIGHT_PX = 140;
-const LOG_PANE_DEFAULT_HEIGHT_PX = 260;
-const LOG_PANE_DEFAULT_MAX_HEIGHT_PX = 720;
 const LOG_PANE_KEYBOARD_STEP_PX = 16;
 const EMPTY_LOGS: LogRecordDescriptorMsg[] = [];
 const EMPTY_LOG_PAGE: DescriptorPageState<LogRecordDescriptorMsg> = {
@@ -41,6 +47,10 @@ const EMPTY_LOG_PAGE: DescriptorPageState<LogRecordDescriptorMsg> = {
 };
 
 interface RunLogPaneProps {
+  height?: number;
+  expanded?: boolean;
+  onHeightChange?: Dispatch<SetStateAction<number>>;
+  onExpandedChange?: Dispatch<SetStateAction<boolean>>;
   api: OperatorApi;
   run: RunSnapshotMsg;
   nodeId?: string;
@@ -58,32 +68,32 @@ interface ResizeStart {
   height: number;
 }
 
-function maximumPaneHeight(element: HTMLElement | null) {
-  const parentHeight = element?.parentElement?.clientHeight ?? 0;
-  const availableHeight = parentHeight > 0 ? parentHeight : window.innerHeight;
-  return Math.max(LOG_PANE_MIN_HEIGHT_PX, Math.floor(availableHeight * 0.75));
-}
-
-function boundedPaneHeight(height: number, maximum: number) {
-  return Math.min(maximum, Math.max(LOG_PANE_MIN_HEIGHT_PX, height));
-}
-
 function logTimestamp(timestamp: number) {
   if (!Number.isFinite(timestamp)) return "--:--:--.---";
   return new Date(timestamp * 1000).toISOString().slice(11, 23);
 }
 
 export function RunLogPane({
+  height,
+  expanded: controlledExpanded,
+  onHeightChange,
+  onExpandedChange,
   api,
   run,
   nodeId,
   liveLogs = EMPTY_LOGS,
   onSelectNode,
 }: RunLogPaneProps) {
-  const [expanded, setExpanded] = useState(true);
+  const [localExpanded, setLocalExpanded] = useState(true);
   const [following, setFollowing] = useState(true);
-  const [paneHeight, setPaneHeight] = useState(LOG_PANE_DEFAULT_HEIGHT_PX);
-  const [maximumHeight, setMaximumHeight] = useState(LOG_PANE_DEFAULT_MAX_HEIGHT_PX);
+  const [localHeight, setLocalHeight] = useState(() =>
+    boundedPaneHeight(LOG_PANE_DEFAULT_HEIGHT_PX, maximumPaneHeight()),
+  );
+  const expanded = controlledExpanded ?? localExpanded;
+  const paneHeight = height ?? localHeight;
+  const setExpanded = onExpandedChange ?? setLocalExpanded;
+  const setPaneHeight = onHeightChange ?? setLocalHeight;
+  const [maximumHeight, setMaximumHeight] = useState(() => maximumPaneHeight());
   const [page, setPage] = useState<DescriptorPageState<LogRecordDescriptorMsg>>(EMPTY_LOG_PAGE);
   const [pageScope, setPageScope] = useState<string>();
   const [pageLoading, setPageLoading] = useState(false);
@@ -140,7 +150,7 @@ export function RunLogPane({
     updateBounds();
     window.addEventListener("resize", updateBounds);
     return () => window.removeEventListener("resize", updateBounds);
-  }, []);
+  }, [setPaneHeight]);
 
   useEffect(() => {
     pageController.current?.abort();

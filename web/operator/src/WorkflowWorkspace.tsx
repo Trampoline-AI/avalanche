@@ -22,9 +22,11 @@ import { useOperatorProjection } from "./state";
 import { WorkspaceDivider } from "./WorkspaceDivider";
 import { useRunEvaluations } from "./useRunEvaluations";
 
-const INSPECTOR_MIN_WIDTH = 320;
-const INSPECTOR_MAX_WIDTH = 640;
-const INSPECTOR_DEFAULT_WIDTH = 410;
+import {
+  INSPECTOR_MIN_WIDTH,
+  maximumInspectorWidth,
+  useWorkspaceLayout,
+} from "./useWorkspaceLayout";
 
 /** A host-supplied deployment, ordered newest first within its workflow. */
 export interface WorkspaceDeployment {
@@ -68,6 +70,8 @@ export interface WorkspaceDeployments {
 }
 
 export interface WorkflowWorkspaceProps {
+  /** Global panel-layout storage key. Default "avalanche-operator-ui.layout"; set to namespace a host. */
+  layoutStorageKey?: string;
   /** Pinned Current row label. Default "Current definition". */
   currentLabel?: string;
   /** Muted trailing text action. Omitted: no action and no caret. */
@@ -96,6 +100,7 @@ export interface WorkflowWorkspaceProps {
 
 interface WorkflowWorkspaceSurfaceProps extends Pick<
   WorkflowWorkspaceProps,
+  | "layoutStorageKey"
   | "currentLabel"
   | "currentRowAction"
   | "showCurrentRow"
@@ -141,13 +146,15 @@ export function WorkflowWorkspaceSurface({
   deployments,
   timelineView,
   onTimelineViewChange,
+  layoutStorageKey,
 }: WorkflowWorkspaceSurfaceProps) {
   const [inspectedNode, setInspectedNode] = useState<string>();
-  const [timelineExpanded, setTimelineExpanded] = useState(false);
+  const { layout, setInspectorWidth, setTimelineExpanded, setLogHeight, setLogExpanded } =
+    useWorkspaceLayout(layoutStorageKey);
+  const { timelineExpanded, inspectorWidth } = layout;
   const timelineElement = useRef<HTMLDivElement>(null);
   const timelineBounds = useRef<DOMRect | undefined>(undefined);
   const timelineAnimation = useRef<Animation | undefined>(undefined);
-  const [inspectorWidth, setInspectorWidth] = useState(INSPECTOR_DEFAULT_WIDTH);
   const workspaceId = useId();
   const navigationGeneration = useRef(0);
   // Invalidate pending start navigation even when the user leaves and returns to the
@@ -189,7 +196,6 @@ export function WorkflowWorkspaceSurface({
       current.following = selectedRunId !== undefined && selectedRunId === latestRunId;
       current.pendingSelection = undefined;
       setInspectedNode(undefined);
-      setTimelineExpanded(false);
     } else if (current.observedRunId !== selectedRunId) {
       if (!current.pendingSelection || current.pendingSelection.runId !== selectedRunId) {
         // A host route change, rather than a selection made by this workspace.
@@ -473,6 +479,10 @@ export function WorkflowWorkspaceSurface({
                 </div>
                 {run && (
                   <RunLogPane
+                    height={layout.logHeight}
+                    expanded={layout.logExpanded}
+                    onHeightChange={setLogHeight}
+                    onExpandedChange={setLogExpanded}
                     api={api}
                     run={run}
                     nodeId={inspectedNode}
@@ -499,7 +509,7 @@ export function WorkflowWorkspaceSurface({
               controls={`${workspaceId}-inspector`}
               value={inspectorWidth}
               min={INSPECTOR_MIN_WIDTH}
-              max={INSPECTOR_MAX_WIDTH}
+              max={maximumInspectorWidth()}
               pointerDirection={-1}
               onChange={setInspectorWidth}
             />
@@ -558,6 +568,7 @@ export function WorkflowWorkspace({
   deployments,
   timelineView,
   onTimelineViewChange,
+  layoutStorageKey,
 }: WorkflowWorkspaceProps) {
   const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
   const [selection, setSelection] = useState<{ workflowId: string; runId?: string }>();
@@ -604,6 +615,8 @@ export function WorkflowWorkspace({
   }
   return (
     <WorkflowWorkspaceSurface
+      key={layoutStorageKey}
+      layoutStorageKey={layoutStorageKey}
       api={api}
       state={state}
       workflowId={workflowId}

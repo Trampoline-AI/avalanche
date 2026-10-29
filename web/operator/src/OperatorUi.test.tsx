@@ -1459,6 +1459,177 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
   });
 });
 
+describe("persisted workspace layout", () => {
+  it.each([undefined, "host.layout"])(
+    "keeps panel sizes across workflow remounts with key %s",
+    async (layoutStorageKey) => {
+      const key = layoutStorageKey ?? "avalanche-operator-ui.layout";
+      const otherWorkflow = FlowInfoMsg.create({ ...workflow, workflowId: "other.py::orders" });
+      const otherSummary = RunSummaryMsg.create({
+        ...summary,
+        workflowId: otherWorkflow.workflowId,
+      });
+      const mountWorkspace = (other = false) => {
+        const selectedWorkflow = other ? otherWorkflow : workflow;
+        const selectedSummary = other ? otherSummary : summary;
+        const api = createApi({
+          loadBaseline: async () => ({
+            ...baseline,
+            catalog: CatalogSnapshotMsg.create({
+              ...baseline.catalog,
+              workflows: [selectedWorkflow],
+            }),
+            runs: [selectedSummary],
+          }),
+          getLatestRunSnapshot: async () => snapshotFor(selectedSummary),
+        });
+        return render(
+          <WorkflowWorkspace
+            api={api}
+            workflowId={selectedWorkflow.workflowId}
+            layoutStorageKey={layoutStorageKey}
+            navigation={{ selectedRunId: summary.runId, onSelectRun: vi.fn() }}
+          />,
+        );
+      };
+      const first = mountWorkspace();
+      fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
+      const inspector = await screen.findByRole("separator", { name: "Resize Inspector" });
+      fireEvent.keyDown(inspector, { key: "ArrowLeft" });
+      expect(inspector).toHaveAttribute("aria-valuenow", "426");
+      const logs = await screen.findByRole("separator", { name: "Resize logs" });
+      fireEvent.keyDown(logs, { key: "ArrowUp" });
+      fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
+      fireEvent.click(screen.getByRole("button", { name: /^Logs/ }));
+      first.unmount(); // A route change before the debounce expires must flush the latest values.
+      expect(JSON.parse(window.localStorage.getItem(key)!)).toMatchObject({
+        inspectorWidth: 426,
+        logHeight: 276,
+        logExpanded: false,
+        timelineExpanded: true,
+      });
+      if (layoutStorageKey)
+        expect(window.localStorage.getItem("avalanche-operator-ui.layout")).toBeNull();
+      const second = mountWorkspace(true);
+      await screen.findByRole("button", { name: "Collapse timeline" });
+      expect(screen.getByRole("button", { name: /^Logs/ })).toHaveAttribute(
+        "aria-expanded",
+        "false",
+      );
+      fireEvent.click(screen.getByRole("button", { name: /^Logs/ }));
+      expect(screen.getByRole("region", { name: "Run logs" })).toHaveStyle({
+        flexBasis: "276px",
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+      expect(screen.getByRole("separator", { name: "Resize Inspector" })).toHaveAttribute(
+        "aria-valuenow",
+        "426",
+      );
+      second.unmount();
+    },
+  );
+
+  it.each([
+    null,
+    "not-json",
+    "null",
+    '{"inspectorWidth":"bad","logHeight":null,"timelineExpanded":"yes"}',
+  ])("falls back to defaults for invalid or missing layout %s", async (stored) => {
+    if (stored !== null) window.localStorage.setItem("avalanche-operator-ui.layout", stored);
+    render(<WorkflowWorkspace api={createApi()} workflowId={workflow.workflowId} />);
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
+    expect(screen.getByRole("separator", { name: "Resize Inspector" })).toHaveAttribute(
+      "aria-valuenow",
+      "410",
+    );
+    expect(screen.getByRole("button", { name: "Expand timeline" })).toBeInTheDocument();
+  });
+
+  it("keeps debounced changes during an immediate keyed route replacement", async () => {
+    const api = createApi();
+    const view = render(
+      <WorkflowWorkspace key="deployment-a" api={api} workflowId={workflow.workflowId} />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
+    fireEvent.keyDown(screen.getByRole("separator", { name: "Resize Inspector" }), {
+      key: "ArrowLeft",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
+    view.rerender(
+      <WorkflowWorkspace key="deployment-b" api={api} workflowId={workflow.workflowId} />,
+    );
+    await screen.findByRole("button", { name: "Collapse timeline" });
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    expect(screen.getByRole("separator", { name: "Resize Inspector" })).toHaveAttribute(
+      "aria-valuenow",
+      "426",
+    );
+  });
+
+  it("stays usable when storage access or writes are denied", async () => {
+    const read = vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("storage denied");
+    });
+    const write = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("quota exceeded");
+    });
+    try {
+      const view = render(
+        <WorkflowWorkspace api={createApi()} workflowId={workflow.workflowId} />,
+      );
+      fireEvent.click(await screen.findByRole("button", { name: "Expand timeline" }));
+      expect(screen.getByRole("button", { name: "Collapse timeline" })).toBeInTheDocument();
+      view.unmount();
+    } finally {
+      read.mockRestore();
+      write.mockRestore();
+    }
+  });
+
+  it("clamps stored panel sizes before rendering and debounces writes", async () => {
+    window.localStorage.setItem(
+      "avalanche-operator-ui.layout",
+      JSON.stringify({
+        inspectorWidth: 99999,
+        logHeight: 99999,
+        logExpanded: true,
+        timelineExpanded: true,
+      }),
+    );
+    render(
+      <WorkflowWorkspace
+        api={createApi()}
+        workflowId={workflow.workflowId}
+        navigation={{ selectedRunId: summary.runId, onSelectRun: vi.fn() }}
+      />,
+    );
+    await screen.findByRole("separator", { name: "Resize logs" });
+    fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    const inspector = screen.getByRole("separator", { name: "Resize Inspector" });
+    expect(inspector).toHaveAttribute(
+      "aria-valuenow",
+      String(Math.min(640, window.innerWidth)),
+    );
+    const logs = screen.getByRole("separator", { name: "Resize logs" });
+    expect(Number(logs.getAttribute("aria-valuenow"))).toBe(
+      Math.max(140, Math.floor(window.innerHeight * 0.75)),
+    );
+    await screen.findByRole("button", { name: "Collapse timeline" });
+    vi.useFakeTimers();
+    try {
+      const write = vi.spyOn(Storage.prototype, "setItem");
+      fireEvent.keyDown(inspector, { key: "ArrowRight" });
+      fireEvent.keyDown(inspector, { key: "ArrowRight" });
+      expect(write).not.toHaveBeenCalled();
+      await act(() => vi.advanceTimersByTimeAsync(151));
+      expect(write).toHaveBeenCalledTimes(1);
+      write.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("graph evaluation declarations", () => {
   const evaluatedWorkflow = FlowInfoMsg.create({
     ...workflow,
