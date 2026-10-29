@@ -3,7 +3,7 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Maximize2, Minimize2, Workflow } from "lucide-react";
 
 import { formatElapsedSeconds } from "./elapsedDuration";
-import type { RunSummaryMsg } from "./model";
+import type { RunSummaryMsg, TriggerKind } from "./model";
 import { RunStatus } from "./RunStatus";
 import { DeploymentList } from "./DeploymentList";
 import { useTimelineScrollHandle } from "./useTimelineScrollHandle";
@@ -57,6 +57,13 @@ function runElapsedSeconds(summary: RunSummaryMsg): number | undefined {
 function runDuration(elapsedSeconds: number | undefined) {
   return elapsedSeconds === undefined ? "—" : formatElapsedSeconds(elapsedSeconds);
 }
+
+const TRIGGER_LABELS: Record<TriggerKind, string> = {
+  scheduled: "Scheduled",
+  manual: "Manual",
+  webhook: "Webhook",
+  api: "API",
+};
 
 function runTriggeredAt(summary: RunSummaryMsg): Date | undefined {
   return summary.triggeredAt ? new Date(summary.triggeredAt * 1000) : undefined;
@@ -302,31 +309,31 @@ export function RunListPanel({
                 Status
               </span>
               <div className="status-chip-row flex min-w-0 flex-nowrap items-center gap-1.5 overflow-x-auto [scrollbar-width:none]">
-              <button
-                type="button"
-                className={statusChipClass(!status)}
-                aria-pressed={!status}
-                onClick={() => {
-                  setStatus("");
-                  setPage(0);
-                }}
-              >
-                All <span className="font-mono text-secondary">{workflowRuns.length}</span>
-              </button>
-              {statuses.map(([value, count]) => (
                 <button
-                  key={value}
                   type="button"
-                  className={statusChipClass(status === value)}
-                  aria-pressed={status === value}
+                  className={statusChipClass(!status)}
+                  aria-pressed={!status}
                   onClick={() => {
-                    setStatus(status === value ? "" : value);
+                    setStatus("");
                     setPage(0);
                   }}
                 >
-                  {value} <span className="font-mono text-secondary">{count}</span>
+                  All <span className="font-mono text-secondary">{workflowRuns.length}</span>
                 </button>
-              ))}
+                {statuses.map(([value, count]) => (
+                  <button
+                    key={value}
+                    type="button"
+                    className={statusChipClass(status === value)}
+                    aria-pressed={status === value}
+                    onClick={() => {
+                      setStatus(status === value ? "" : value);
+                      setPage(0);
+                    }}
+                  >
+                    {value} <span className="font-mono text-secondary">{count}</span>
+                  </button>
+                ))}
               </div>
             </div>
             <div className="grid grid-cols-2 gap-[12px]">
@@ -457,6 +464,8 @@ export function RunListPanel({
                         style={rowStyle}
                         title={summary.runId}
                         aria-label={`${summary.runId}, ${summary.status}, ${runDuration(elapsedSeconds)}, ${
+                          TRIGGER_LABELS[summary.triggeredBy]
+                        } trigger, ${
                           triggeredAt
                             ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
                             : "start time not recorded"
@@ -481,6 +490,10 @@ export function RunListPanel({
                             }
                           >
                             {runDuration(elapsedSeconds)}
+                          </span>
+                          {" · "}
+                          <span className="run-trigger" data-trigger={summary.triggeredBy}>
+                            {TRIGGER_LABELS[summary.triggeredBy]}
                           </span>
                         </span>
                         <span className="justify-self-end text-right">

@@ -221,6 +221,13 @@ export function createApi(overrides: Partial<OperatorApi> = {}): OperatorApi {
       JSON.stringify(await overrides.readJsonDetail?.(token, signal)),
     startRun: async () => "run-3",
     cancelRun: async () => undefined,
+    setScheduleEnabled: async (workflowSelector, enabled) => {
+      const flow = baseline.catalog.workflows.find(
+        (item) => item.workflowId === workflowSelector,
+      );
+      if (!flow) throw new Error(`Unknown workflow ${workflowSelector}`);
+      return { ...flow, scheduleEnabled: enabled, nextRunAt: enabled ? flow.nextRunAt : 0 };
+    },
     ...overrides,
   };
 }
