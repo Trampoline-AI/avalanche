@@ -1,5 +1,5 @@
 import { memo, useEffect, useState } from "react";
-import { Folder, PanelLeft, X } from "lucide-react";
+import { Clock, Folder, PanelLeft, X } from "lucide-react";
 
 import type { CatalogSnapshotMsg, FlowInfoMsg } from "./model";
 import type { OperatorUiSelection } from "./ui/types";
@@ -23,6 +23,27 @@ interface WorkflowRowProps {
   onSelect: (selection: OperatorUiSelection) => void;
 }
 
+function scheduleLabel(workflow: FlowInfoMsg): string {
+  return `Scheduled: ${workflow.cron}${workflow.scheduleEnabled ? "" : " (disabled)"}`;
+}
+
+function ScheduleBadge({ workflow }: { workflow: FlowInfoMsg }) {
+  const label = scheduleLabel(workflow);
+  return (
+    <span
+      role="img"
+      aria-label={label}
+      title={label}
+      className={`schedule-badge grid size-4 shrink-0 place-items-center rounded-full ${
+        workflow.scheduleEnabled ? "text-acid" : "text-amber"
+      }`}
+      data-schedule-enabled={workflow.scheduleEnabled}
+    >
+      <Clock aria-hidden="true" className="size-3" strokeWidth={2} />
+    </span>
+  );
+}
+
 const WorkflowRow = memo(function WorkflowRow({
   workflow,
   selected,
@@ -37,26 +58,43 @@ const WorkflowRow = memo(function WorkflowRow({
           ? "active font-medium text-sidebar-primary"
           : "bg-transparent text-muted hover:text-ink"
       }`}
-      aria-label={compact ? workflow.displayName : undefined}
+      aria-label={
+        compact
+          ? workflow.cron
+            ? `${workflow.displayName}, ${scheduleLabel(workflow)}`
+            : workflow.displayName
+          : undefined
+      }
       aria-current={selected ? "true" : undefined}
-      title={`${workflow.displayName}\n${workflow.relativeFile}`}
+      title={`${workflow.displayName}\n${workflow.relativeFile}${
+        workflow.cron ? `\n${scheduleLabel(workflow)}` : ""
+      }`}
       onClick={() => onSelect({ kind: "workflow", workflowId: workflow.workflowId })}
     >
       <span
         aria-hidden="true"
-        className="grid size-8 shrink-0 place-items-center rounded border border-icon-line text-sm font-medium"
+        className="relative grid size-8 shrink-0 place-items-center rounded border border-icon-line text-sm font-medium"
       >
         {workflow.displayName.slice(0, 1).toUpperCase() +
           workflow.displayName.slice(1, 2).toLowerCase()}
+        {compact && workflow.cron && (
+          <Clock
+            className={`absolute -right-1 -bottom-1 size-3 rounded-full bg-panel ${
+              workflow.scheduleEnabled ? "text-acid" : "text-amber"
+            }`}
+            strokeWidth={2.5}
+          />
+        )}
       </span>
       {!compact && (
-        <span className="min-w-0">
+        <span className="min-w-0 flex-1">
           <span className="block truncate leading-5">{workflow.displayName}</span>
           <small className="block truncate text-[10px] leading-3 font-normal text-secondary">
             {workflow.relativeFile}
           </small>
         </span>
       )}
+      {!compact && workflow.cron && <ScheduleBadge workflow={workflow} />}
     </button>
   );
 });

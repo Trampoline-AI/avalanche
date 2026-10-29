@@ -117,6 +117,11 @@ interface WorkflowWorkspaceSurfaceProps extends Pick<
   selectRun: (runId?: string) => Promise<void>;
   startRun: (workflowSelector: string, input?: Record<string, unknown>) => Promise<string>;
   cancelRun: (runId: string) => Promise<void>;
+  setScheduleEnabled: (
+    workflowSelector: string,
+    enabled: boolean,
+    input?: Record<string, unknown>,
+  ) => Promise<void>;
   workflowReloadDescription?: string;
   className?: string;
   runActionsEnabled?: boolean;
@@ -135,6 +140,7 @@ export function WorkflowWorkspaceSurface({
   selectRun,
   startRun,
   cancelRun,
+  setScheduleEnabled,
   workflowReloadDescription = "Workflow change detected. Scanning...",
   className = "",
   runActionsEnabled = true,
@@ -265,6 +271,10 @@ export function WorkflowWorkspaceSurface({
     },
     [selectWorkflowRun, startRun],
   );
+  const openScheduledRun = useCallback(
+    (runId: string) => selectWorkflowRun(runId),
+    [selectWorkflowRun],
+  );
   const closePanel = useCallback(() => setInspectedNode(undefined), []);
   // Keeps the inspected node while leaving the run for the current definition.
   const openCurrentDefinition = useCallback(
@@ -384,8 +394,11 @@ export function WorkflowWorkspaceSurface({
       workflow={!historical ? workflow : undefined}
       run={loadedRun}
       pending={state.action}
+      runs={state.runs}
       onStart={startWorkflowRun}
       onCancel={cancelRun}
+      onSetScheduleEnabled={setScheduleEnabled}
+      onSelectRun={openScheduledRun}
       runActionsEnabled={runActionsEnabled}
     />
   ) : undefined;
@@ -580,7 +593,8 @@ export function WorkflowWorkspace({
   onTimelineViewChange,
   layoutStorageKey,
 }: WorkflowWorkspaceProps) {
-  const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
+  const { state, startRun, cancelRun, selectRun, setScheduleEnabled } =
+    useOperatorProjection(api);
   const [selection, setSelection] = useState<{ workflowId: string; runId?: string }>();
   const selectedRunId = navigation
     ? navigation.selectedRunId
@@ -636,6 +650,7 @@ export function WorkflowWorkspace({
       selectRun={selectRun}
       startRun={startRun}
       cancelRun={cancelRun}
+      setScheduleEnabled={setScheduleEnabled}
       className={className}
       runActionsEnabled={runActionsEnabled}
       definitionLabel={definitionLabel}

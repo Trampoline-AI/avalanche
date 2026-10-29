@@ -30,6 +30,11 @@ export enum DescriptorPageOrder {
   NEWEST_FIRST = 1,
 }
 
+/** What started a run: its cron schedule, a person, a webhook, or an API caller. */
+export type TriggerKind = "scheduled" | "manual" | "webhook" | "api";
+
+export const TRIGGER_KINDS: readonly TriggerKind[] = ["scheduled", "manual", "webhook", "api"];
+
 export interface NodeEdges {
   /**
    * @generated from protobuf field: repeated string children = 1
@@ -128,6 +133,12 @@ export interface FlowInfoMsg {
    * @generated from protobuf field: double last_run_at = 9
    */
   lastRunAt: number;
+  /** True while the operator will start this workflow's cron runs; false when disabled. */
+  scheduleEnabled: boolean;
+  /** Input each cron run starts with; undefined means the workflow's declared defaults. */
+  scheduleInput?: Record<string, unknown>;
+  /** JSON Schema of the workflow's declared input. */
+  inputSchemaJson: string;
   /**
    * @generated from protobuf field: string workflow_id = 10
    */
@@ -194,6 +205,8 @@ export const FlowInfoMsg = {
       cron: "",
       nextRunAt: 0,
       lastRunAt: 0,
+      scheduleEnabled: false,
+      inputSchemaJson: "",
       workflowId: "",
       displayName: "",
       rootAlias: "",
@@ -278,7 +291,7 @@ export interface RunSummaryMsg {
   /**
    * @generated from protobuf field: string triggered_by = 6
    */
-  triggeredBy: string;
+  triggeredBy: TriggerKind;
   /**
    * @generated from protobuf field: string workflow_id = 7
    */
@@ -309,7 +322,7 @@ export const RunSummaryMsg = {
       status: "",
       startedAt: 0,
       endedAt: 0,
-      triggeredBy: "",
+      triggeredBy: "manual",
       workflowId: "",
       workflowDisplayName: "",
       createdSequence: "0",

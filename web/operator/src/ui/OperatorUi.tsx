@@ -14,7 +14,8 @@ const EXPLORER_DEFAULT_WIDTH = 280;
 const EXPLORER_RAIL_WIDTH = 48;
 export function OperatorUi({ host, navigation }: OperatorUiProps) {
   const { api, presentation } = host;
-  const { state, startRun, cancelRun, selectRun } = useOperatorProjection(api);
+  const { state, startRun, cancelRun, selectRun, setScheduleEnabled } =
+    useOperatorProjection(api);
   const [localSelection, setLocalSelection] = useState<OperatorUiSelection>();
   const selection = navigation ? navigation.selection : localSelection;
   const workflow = state.catalog?.workflows.find(
@@ -218,6 +219,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
               selectRun={selectRun}
               startRun={startRun}
               cancelRun={cancelRun}
+              setScheduleEnabled={setScheduleEnabled}
               workflowReloadDescription={presentation.workflowReloadDescription}
               definitionLabel={presentation.definitionLabel}
               className="col-start-3 max-[700px]:col-start-1"
