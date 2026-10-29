@@ -615,16 +615,17 @@ export function RunLogPane({
                     : entry.nodeId;
                   return (
                     <article
-                      className="run-log-row absolute top-0 left-0 grid min-h-9 w-full grid-cols-[78px_minmax(120px,180px)_52px_minmax(12rem,1fr)] items-start gap-2 border-b border-log-line bg-log-surface px-[9px] py-1.5 font-mono text-[9px]/[1.45] text-secondary [&>time]:whitespace-nowrap [&>time]:text-muted [&>pre]:m-0 [&>pre]:min-w-0 [&>pre]:whitespace-pre-wrap [&>pre]:text-log-ink [&>pre]:[overflow-wrap:anywhere]"
+                      className="run-log-row absolute top-0 left-0 grid min-h-9 w-full grid-cols-[78px_minmax(120px,180px)_52px_minmax(12rem,1fr)] items-start gap-2 border-b border-log-line bg-log-surface px-[9px] py-3 font-mono text-[9px]/[1.45] text-secondary [&>time]:whitespace-nowrap [&>time]:text-muted [&>pre]:m-0 [&>pre]:min-w-0 [&>pre]:whitespace-pre-wrap [&>pre]:text-log-ink [&>pre]:[overflow-wrap:anywhere]"
                       key={entry.sequence}
                       data-index={virtualRow.index}
                       ref={virtualizer.measureElement}
+                      // 12px vertical padding; stuck cells keep a 6px inset from the pane top.
                       // Use layout coordinates: translating the row also offsets its
                       // sticky children from the scrollport by virtualRow.start.
                       style={{ top: virtualRow.start }}
                     >
                       <time
-                        className="sticky top-0 bg-inherit"
+                        className="sticky top-1.5 bg-inherit"
                         dateTime={new Date(entry.timestamp * 1000).toISOString()}
                       >
                         {logTimestamp(entry.timestamp)}
@@ -632,19 +633,19 @@ export function RunLogPane({
                       {graphNodeId ? (
                         <button
                           type="button"
-                          className="run-log-node sticky top-0 min-w-0 cursor-pointer border-0 bg-inherit p-0 text-left [font:inherit] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>strong]:block [&>strong]:truncate [&>code]:mt-0.5 [&>code]:block [&>code]:truncate [&>code]:text-[8px] [&>code]:text-muted"
+                          className="run-log-node sticky top-1.5 min-w-0 cursor-pointer border-0 bg-inherit p-0 text-left [font:inherit] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>strong]:block [&>strong]:truncate [&>code]:mt-0.5 [&>code]:block [&>code]:truncate [&>code]:text-[8px] [&>code]:text-muted"
                           onClick={() => onSelectNode(graphNodeId)}
                         >
                           <strong>{nodeLabel}</strong>
                           {nodeLabel !== entry.nodeId && <code>{graphNodeId}</code>}
                         </button>
                       ) : (
-                        <span className="run-log-node sticky top-0 min-w-0 bg-inherit text-left [font:inherit] text-acid [&>strong]:block [&>strong]:truncate">
+                        <span className="run-log-node sticky top-1.5 min-w-0 bg-inherit text-left [font:inherit] text-acid [&>strong]:block [&>strong]:truncate">
                           <strong>{nodeLabel}</strong>
                         </span>
                       )}
                       <span
-                        className={`run-log-level sticky top-0 bg-inherit font-bold uppercase ${entry.level === "error" || entry.level === "critical" ? `level-${entry.level} text-danger` : entry.level === "warning" ? "level-warning text-amber" : "text-secondary"}`}
+                        className={`run-log-level sticky top-1.5 bg-inherit font-bold uppercase ${entry.level === "error" || entry.level === "critical" ? `level-${entry.level} text-danger` : entry.level === "warning" ? "level-warning text-amber" : "text-secondary"}`}
                       >
                         {entry.level}
                       </span>

@@ -100,9 +100,10 @@ describe("run logs", () => {
       expect(row.style.transform).toBe("");
       expect(row.style.top).toMatch(/^\d+(\.\d+)?px$/);
       for (const cell of Array.from(row.children).slice(0, 3)) {
-        expect(cell).toHaveClass("sticky", "top-0", "bg-inherit");
+        expect(cell).toHaveClass("sticky", "top-1.5", "bg-inherit");
       }
       expect(row.querySelector("pre")).not.toHaveClass("sticky");
+      expect(row).toHaveClass("py-3");
     }
     expect(view.container.textContent).not.toContain("\u001b[");
     view.rerender(
