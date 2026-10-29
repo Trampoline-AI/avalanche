@@ -1562,7 +1562,9 @@ describe("persisted workspace layout", () => {
         expect(window.localStorage.getItem("avalanche-operator-ui.layout")).toBeNull();
       const second = mountWorkspace(true);
       await screen.findByRole("button", { name: "Collapse timeline" });
-      expect(screen.getByRole("button", { name: /^Logs/ })).toHaveAttribute(
+      // The timeline restores synchronously from storage; the log pane mounts only after the
+      // run snapshot resolves, so wait for it rather than racing the loader.
+      expect(await screen.findByRole("button", { name: /^Logs/ })).toHaveAttribute(
         "aria-expanded",
         "false",
       );
