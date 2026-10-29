@@ -47,6 +47,7 @@ from claude_agent_sdk import (
     create_sdk_mcp_server,
     tool,
 )
+from claude_agent_sdk.types import SystemPromptPreset
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -233,7 +234,10 @@ async def run(
                 else None
             ),
             system_prompt=_system_prompt(
-                signature.instructions, runtime.system_prompt_append, narrate=runtime.narrate
+                signature.instructions,
+                runtime.system_prompt_append,
+                narrate=runtime.narrate,
+                preset=runtime.system_prompt_preset,
             ),
             output_format={
                 "type": "json_schema",
@@ -648,13 +652,23 @@ _NARRATION = (
 )
 
 
-def _system_prompt(instructions: str, append: str | None, *, narrate: bool) -> str:
+def _system_prompt(
+    instructions: str,
+    append: str | None,
+    *,
+    narrate: bool,
+    preset: Literal["claude_code"] | None,
+) -> str | SystemPromptPreset:
     parts = [instructions.strip()]
     if narrate:
         parts.append(_NARRATION)
     if append:
         parts.append(append.strip())
-    return "\n\n".join(parts)
+    prompt = "\n\n".join(parts)
+    if preset is None:
+        return prompt
+    # Claude Code's own system prompt comes first; the step's follows it.
+    return SystemPromptPreset(type="preset", preset=preset, append=prompt)
 
 
 def _mentions(annotation: object, target: type, seen: frozenset[type] = frozenset()) -> bool:

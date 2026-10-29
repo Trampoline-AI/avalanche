@@ -26,7 +26,8 @@ PermissionMode = Literal["default", "acceptEdits", "plan", "bypassPermissions", 
 _REPLACED_OPTIONS: Mapping[str, str] = MappingProxyType(
     {
         "system_prompt": "the step's instructions are the system prompt; add to it with "
-        "system_prompt_append",
+        "system_prompt_append, or put it after Claude Code's own with "
+        "system_prompt_preset='claude_code'",
         "output_format": "the step signature's outputs define the answer",
         "cwd": "give the step an ava.Workspace input to choose the folder Claude works in",
     }
@@ -64,7 +65,9 @@ class ClaudeAgent(BaseModel):
     enabled by default. The step's own tools are always available. With
     ``narrate`` on, the system prompt asks Claude to note what it is about to do
     before each tool call, and its answer must carry a ``run_summary`` that the
-    trace shows on the answering turn.
+    trace shows on the answering turn. With ``system_prompt_preset="claude_code"``,
+    Claude Code's own system prompt comes first and the step's system prompt is
+    appended to it.
 
     Steps run the Claude Code CLI that ships with the Claude Agent SDK package
     (the ``claude`` extra), which must be installed wherever the step runs, Ray
@@ -91,6 +94,7 @@ class ClaudeAgent(BaseModel):
     builtin_tools: Sequence[str] = ()
     permission_mode: PermissionMode = "default"
     system_prompt_append: str | None = None
+    system_prompt_preset: Literal["claude_code"] | None = None
     max_budget_usd: PositiveFloat | None = None
     narrate: bool = True
 
@@ -131,6 +135,7 @@ class ClaudeAgent(BaseModel):
                 "max_turns": effective.max_turns,
                 "permission_mode": effective.permission_mode,
                 "system_prompt_append": effective.system_prompt_append,
+                "system_prompt_preset": effective.system_prompt_preset,
                 "max_budget_usd": effective.max_budget_usd,
                 "narrate": effective.narrate,
             },
