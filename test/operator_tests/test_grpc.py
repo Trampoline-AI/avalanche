@@ -76,6 +76,7 @@ def _run_created_envelope(sequence, run_id, *, instance, status="pending"):
                 status=status,
                 created_sequence=sequence,
                 revision=sequence,
+                triggered_by="manual",
             ),
         ),
     )

@@ -9,6 +9,8 @@ from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal, Mapping
 
+from pydantic import JsonValue
+
 if TYPE_CHECKING:
     from avalanche.agent.declaration import AgentDeclaration
     from avalanche.agent.live import AgentTraceFinished, AgentTraceUnavailable
@@ -41,6 +43,15 @@ class RunStatus(Enum):
     SUCCESS = "success"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+class TriggerKind(Enum):
+    """What started a run: its schedule, a person, a webhook, or an API caller."""
+
+    SCHEDULED = "scheduled"
+    MANUAL = "manual"
+    WEBHOOK = "webhook"
+    API = "api"
 
 
 class LogLevel(Enum):
@@ -112,7 +123,7 @@ class RunState:
     ended_at: float | None = None
     nodes: dict[str, NodeState] = field(default_factory=dict)
     logs: list[LogEntry] = field(default_factory=list)
-    triggered_by: str = "manual"  # "manual" | "scheduled"
+    triggered_by: TriggerKind = TriggerKind.MANUAL
     workflow_id: str = ""
     workflow_display_name: str = ""
     topology: WorkflowTopology = field(default_factory=WorkflowTopology)
@@ -218,7 +229,7 @@ class RunSummary:
     triggered_at: float | None = None
     started_at: float | None = None
     ended_at: float | None = None
-    triggered_by: str = "manual"
+    triggered_by: TriggerKind = TriggerKind.MANUAL
     workflow_id: str = ""
     workflow_display_name: str = ""
     created_sequence: int = 0
@@ -621,6 +632,10 @@ class WorkflowInfo:
     cron: str | None = None  # cron expression for scheduled execution
     next_run_at: float | None = None  # unix timestamp of next scheduled run
     last_run_at: float | None = None  # unix timestamp of last triggered run
+    # True only while the operator will start this workflow's cron runs.
+    schedule_enabled: bool = False
+    # Input each cron run starts with; None means the workflow's declared defaults.
+    schedule_input: dict[str, JsonValue] | None = None
     workflow_id: str = ""
     display_name: str = ""
     builder_symbol: str = ""

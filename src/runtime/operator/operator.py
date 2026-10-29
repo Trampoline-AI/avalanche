@@ -26,6 +26,8 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, Literal, TypeAlias, TypeVar
 from uuid import uuid4
 
+from pydantic import JsonValue
+
 from avalanche.classifier.models import (
     ChoiceAnswer,
     ClassifierDeclaration,
@@ -91,6 +93,8 @@ from .models import (
     TraceDescriptor,
     TraceFinalized,
     TraceHeader,
+    TriggerKind,
+    WorkflowDescriptor,
     WorkflowDiscoveryDiagnostic,
     WorkflowInfo,
     WorkflowReloadStatus,
@@ -179,6 +183,10 @@ class ClassifierDetailExpiredError(KeyError):
 
 class StructuralBaselineUnavailableError(RuntimeError):
     """Raised when a client must restart structural snapshot synchronization."""
+
+
+class NoScheduleError(ValueError):
+    """Raised when a schedule control targets a workflow that declares no cron."""
 
 
 class _ExecutorBackendOmitted:
@@ -290,6 +298,7 @@ class Operator:
         watch: bool = True,
         schedule: bool = True,
         *,
+        schedules_enabled: bool = False,
         executor_backend: ExecutorBackend | _ExecutorBackendOmitted = (
             _EXECUTOR_BACKEND_OMITTED
         ),
@@ -317,6 +326,10 @@ class Operator:
         ``LocalExecutor`` or ``RayExecutor`` classes, or a keyword-only
         ``functools.partial(RayExecutor, ...)``. Use ``executor_backend`` and
         the Ray configuration mappings for new code.
+
+        Discovered cron schedules start disabled; ``schedules_enabled`` starts
+        them all enabled instead. Enable and disable choices are kept in memory
+        only and reset on restart.
         """
         self._executor_config = _resolve_executor_config(
             executor_backend=executor_backend,
@@ -436,7 +449,7 @@ class Operator:
 
         from .scheduler import Scheduler
 
-        self._scheduler = Scheduler(self)
+        self._scheduler = Scheduler(self, enabled_by_default=schedules_enabled)
         try:
             self._scheduler.reconcile(self._registry.descriptors())
             if initial_view is not None:
@@ -520,7 +533,11 @@ class Operator:
                 info.webhook_url = self._webhooks.url_for(route.path)
                 info.webhook_active = self._webhooks.active
             if info.cron:
-                nxt = self._scheduler.next_run_time(info.cron)
+                info.schedule_enabled = self._scheduler.is_enabled(info.workflow_id)
+                info.schedule_input = self._scheduler.input_for(info.workflow_id)
+                nxt = (
+                    self._scheduler.next_run_time(info.cron) if info.schedule_enabled else None
+                )
                 info.next_run_at = nxt.timestamp() if nxt else None
                 info.last_run_at = self._scheduler.last_triggered(info.workflow_id)
         return CatalogSnapshot(
@@ -1480,10 +1497,42 @@ class Operator:
                 else:
                     self._result_leases.pop(run_id, None)
 
+    def set_schedule_enabled(
+        self,
+        selector: str,
+        enabled: bool,
+        run_input: dict[str, JsonValue] | None = None,
+    ) -> WorkflowInfo:
+        """Enable or disable one workflow's cron schedule and publish the change.
+
+        ``run_input`` sets the input cron runs start with and is accepted only when
+        enabling; without it the stored input is kept (initially the workflow's
+        defaults). The input is validated against the workflow's input model when
+        each run starts, as for any other run. The choice lives in operator memory:
+        it survives rediscovery and source reload, and resets to the startup default
+        when the operator restarts.
+        """
+        if run_input is not None and not enabled:
+            raise ValueError("Schedule input can only be set when enabling the schedule")
+        descriptor = self._scheduled_descriptor(selector)
+        self._scheduler.set_enabled(descriptor.workflow_id, enabled, run_input)
+        self._publish_catalog(self._registry.view)
+        return next(
+            info
+            for info in self.get_catalog().workflows
+            if info.workflow_id == descriptor.workflow_id
+        )
+
+    def _scheduled_descriptor(self, selector: str) -> WorkflowDescriptor:
+        descriptor = self._registry.resolve(selector)
+        if descriptor.cron is None:
+            raise NoScheduleError(f"Workflow {descriptor.workflow_id} has no cron schedule")
+        return descriptor
+
     def start_run(
         self,
         flow_name: str,
-        triggered_by: str = "manual",
+        triggered_by: TriggerKind = TriggerKind.MANUAL,
         *,
         run_id: str | None = None,
         input: dict[str, Any] | None = None,
@@ -1620,7 +1669,7 @@ class Operator:
         run_id: str,
         workflow_id: str,
         catalog_display_name: str,
-        triggered_by: str,
+        triggered_by: TriggerKind,
         triggered_at: float,
         handle: _RunHandle,
     ) -> None:
@@ -2112,7 +2161,7 @@ class Operator:
         run_id: str,
         workflow_id: str,
         catalog_display_name: str,
-        triggered_by: str,
+        triggered_by: TriggerKind,
         triggered_at: float,
         prepared: dict[str, Any],
     ) -> RunState:
@@ -3546,7 +3595,7 @@ def _summary_wire_size(summary: RunSummary) -> int:
     return (
         len(summary.run_id.encode())
         + len(summary.flow_name.encode())
-        + len(summary.triggered_by.encode())
+        + len(summary.triggered_by.value.encode())
         + len(summary.workflow_id.encode())
         + len(summary.workflow_display_name.encode())
         + 96

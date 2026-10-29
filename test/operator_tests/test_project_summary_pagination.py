@@ -73,6 +73,7 @@ def _summary_pages(
                     status="running",
                     created_sequence=index,
                     revision=index,
+                    triggered_by="manual",
                 )
             ],
         )

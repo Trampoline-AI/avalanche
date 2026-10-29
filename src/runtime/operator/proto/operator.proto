@@ -22,6 +22,10 @@ service OperatorServiceV2 {
       returns (WorkflowNodeSourceV2);
   rpc StartRun(StartRunRequestV2) returns (StartRunResponseV2);
   rpc CancelRun(CancelRunRequestV2) returns (CancelRunResponseV2);
+  // Enable or disable one workflow's cron schedule, optionally setting the input
+  // its runs start with. The state is kept in operator memory only and resets to
+  // the startup default (disabled, default input) on restart.
+  rpc SetScheduleEnabled(SetScheduleEnabledRequestV2) returns (FlowInfoV2);
   rpc ListRunSummaries(ListRunSummariesRequestV2) returns (RunSummaryPageV2);
   rpc GetRunSnapshot(GetRunSnapshotRequestV2) returns (RunSnapshotV2);
   rpc ListRunActivity(ListRunActivityRequestV2) returns (RunActivityPageV2);
@@ -147,6 +151,12 @@ message FlowInfoV2 {
   map<string, string> evaluation_metadata_json = 17;
   string input_schema_json = 18;
   string version = 19;
+  // True while the operator will start this flow's cron runs. A disabled
+  // schedule has no next_run_at. False when the flow declares no cron.
+  bool schedule_enabled = 20;
+  // JSON input object each cron run starts with. Absent means the workflow's
+  // declared input defaults.
+  optional string schedule_input_json = 21;
 }
 
 message DiscoveryDiagnosticV2 {
@@ -220,6 +230,23 @@ message StartRunRequestV2 {
   repeated FileAttachmentV2 input_files = 5;
   // Optional exact catalog declaration digest; rejected if the selected flow changed.
   optional string expected_version = 6;
+  // Who asked for this run. Callers that do not say are recorded as "api".
+  StartRunTriggerV2 trigger = 7;
+}
+
+// The trigger kinds a StartRun caller may claim. Cron and webhook runs are
+// started only by the operator itself.
+enum StartRunTriggerV2 {
+  START_RUN_TRIGGER_V2_API = 0;
+  START_RUN_TRIGGER_V2_MANUAL = 1;
+}
+
+message SetScheduleEnabledRequestV2 {
+  string workflow_selector = 1;
+  bool enabled = 2;
+  // JSON input object for future cron runs, accepted only when enabling. Absent
+  // keeps the stored input; the workflow validates it when each run starts.
+  optional string input_json = 3;
 }
 
 message StartRunResponseV2 {
@@ -269,6 +296,7 @@ message RunSummaryV2 {
   double ended_at = 6;
   uint64 created_sequence = 7;
   uint64 revision = 8;
+  // One of "scheduled", "manual", "webhook", or "api".
   string triggered_by = 9;
   double triggered_at = 10;
 }

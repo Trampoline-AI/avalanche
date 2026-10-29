@@ -13,11 +13,11 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from enum import Enum
 from numbers import Real
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Literal
 from uuid import uuid4
 
 import grpc
-from pydantic import BaseModel
+from pydantic import BaseModel, JsonValue
 from ulid import ULID
 
 from avalanche.runtime import File
@@ -31,6 +31,8 @@ from .convert_v2 import (
     operator_update_envelope_from_v2,
     run_snapshot_from_v2,
     run_summary_from_v2,
+    schedule_input_to_json,
+    workflow_info_from_v2,
 )
 from .models import (
     AgentEvent,
@@ -62,6 +64,7 @@ from .models import (
     TerminalSealAppended,
     TraceDetail,
     TraceFinalized,
+    TriggerKind,
     WorkflowDiscoveryDiagnostic,
     WorkflowInfo,
     WorkflowReloadStatus,
@@ -98,6 +101,10 @@ MAX_TRANSPORT_METADATA_KEY_BYTES = 256
 MAX_TRANSPORT_METADATA_VALUE_BYTES = 8 * 1024
 MAX_TRANSPORT_METADATA_BYTES = 16 * 1024
 _EVENTS_STREAM = "operator-events"
+_START_RUN_TRIGGERS = {
+    TriggerKind.API: pb.START_RUN_TRIGGER_V2_API,
+    TriggerKind.MANUAL: pb.START_RUN_TRIGGER_V2_MANUAL,
+}
 
 
 class StreamState(str, Enum):
@@ -1893,7 +1900,9 @@ class GrpcStateProvider:
         context: Mapping[str, Any] | BaseModel | None = None,
         files: Mapping[str, File | bytes] | None = None,
         expected_version: str = "",
+        trigger: Literal[TriggerKind.API, TriggerKind.MANUAL] = TriggerKind.API,
     ) -> str:
+        """Start a run, recorded as an API call unless a person asked for it."""
         if self._read_only:
             from tui.state import TuiExtensionError
 
@@ -1921,9 +1930,35 @@ class GrpcStateProvider:
             context_json=_json_payload(context),
             input_files=[],
             expected_version=expected_version,
+            trigger=_START_RUN_TRIGGERS[trigger],
         )
         resp = self._call(self._stub.StartRun, request)
         return resp.run_id
+
+    def set_schedule_enabled(
+        self,
+        workflow_selector: str,
+        enabled: bool,
+        run_input: dict[str, JsonValue] | None = None,
+    ) -> WorkflowInfo:
+        """Enable or disable a workflow's cron schedule until the operator restarts.
+
+        ``run_input``, accepted only when enabling, replaces the input cron runs start
+        with; without it the operator keeps the stored input.
+        """
+        if self._read_only:
+            from tui.state import TuiExtensionError
+
+            raise TuiExtensionError("read_only", "Provider is read-only")
+        response = self._call(
+            self._stub.SetScheduleEnabled,
+            pb.SetScheduleEnabledRequestV2(
+                workflow_selector=workflow_selector,
+                enabled=enabled,
+                input_json=None if run_input is None else schedule_input_to_json(run_input),
+            ),
+        )
+        return workflow_info_from_v2(response)
 
     def cancel_run(self, run_id: str) -> None:
         if self._read_only:

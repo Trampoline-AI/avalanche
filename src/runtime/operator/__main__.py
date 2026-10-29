@@ -47,6 +47,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument("--ray", action="store_true", help="use the Ray executor")
     parser.add_argument(
+        "--schedules-enabled",
+        action="store_true",
+        help="start with every cron schedule enabled (schedules start disabled otherwise)",
+    )
+    parser.add_argument(
         "--discovery-timeout",
         type=float,
         default=DEFAULT_DISCOVERY_TIMEOUT,
@@ -95,6 +100,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             web_port=None if args.no_web else args.web_port,
             discovery_timeout=args.discovery_timeout,
             executor_backend="ray" if args.ray else "local",
+            schedules_enabled=args.schedules_enabled,
         )
     except WorkflowDiscoveryError as exc:
         print("error: Avalanche operator discovery failed", file=sys.stderr)

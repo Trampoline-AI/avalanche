@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from collections.abc import Callable, Mapping
 from datetime import datetime
 
-from pydantic import TypeAdapter
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from avalanche.agent.declaration import AgentDeclaration
 from avalanche.agent.native import TraceHeaderNative
@@ -46,6 +47,7 @@ from .models import (
     TraceDescriptor,
     TraceFinalized,
     TraceHeader,
+    TriggerKind,
     WorkflowDiscoveryDiagnostic,
     WorkflowInfo,
     WorkflowReloadStatus,
@@ -58,6 +60,21 @@ DETAIL_URI_SCHEME = "local://detail/"
 TRACE_URI_SCHEME = "local://trace/"
 RESULT_URI_SCHEME = "local://result/"
 _TERMINAL_SEAL_STATUSES = frozenset({RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED})
+
+
+_SCHEDULE_INPUT = TypeAdapter(dict[str, JsonValue])
+
+
+def schedule_input_from_json(payload: str) -> dict[str, JsonValue]:
+    """Decode a schedule input document, which must be one JSON object."""
+    try:
+        return _SCHEDULE_INPUT.validate_json(payload)
+    except ValidationError as exc:
+        raise ValueError(f"Schedule input must be a JSON object: {exc}") from exc
+
+
+def schedule_input_to_json(value: dict[str, JsonValue]) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 def sha256_hex(data: bytes) -> str:
@@ -114,6 +131,10 @@ def workflow_info_to_v2(info: WorkflowInfo) -> pb.FlowInfoV2:
         cron=info.cron or "",
         next_run_at=info.next_run_at or 0.0,
         last_run_at=info.last_run_at or 0.0,
+        schedule_enabled=info.schedule_enabled,
+        schedule_input_json=(
+            None if info.schedule_input is None else schedule_input_to_json(info.schedule_input)
+        ),
         webhook_path=info.webhook_path or "",
         webhook_url=info.webhook_url or "",
         webhook_active=info.webhook_active,
@@ -172,7 +193,7 @@ def run_summary_to_v2(summary) -> pb.RunSummaryV2:
         ended_at=summary.ended_at or 0.0,
         created_sequence=summary.created_sequence,
         revision=summary.revision,
-        triggered_by=summary.triggered_by,
+        triggered_by=summary.triggered_by.value,
         triggered_at=summary.triggered_at or 0.0,
     )
 
@@ -777,6 +798,12 @@ def workflow_info_from_v2(msg: pb.FlowInfoV2) -> WorkflowInfo:
         cron=msg.cron or None,
         next_run_at=msg.next_run_at or None,
         last_run_at=msg.last_run_at or None,
+        schedule_enabled=msg.schedule_enabled,
+        schedule_input=(
+            schedule_input_from_json(msg.schedule_input_json)
+            if msg.HasField("schedule_input_json")
+            else None
+        ),
         workflow_id=msg.workflow_id or msg.workflow_selector,
         display_name=msg.display_name,
         relative_file=msg.file_path,
@@ -831,7 +858,7 @@ def run_summary_from_v2(msg: pb.RunSummaryV2) -> RunSummary:
         started_at=msg.started_at or None,
         ended_at=msg.ended_at or None,
         triggered_at=msg.triggered_at or None,
-        triggered_by=msg.triggered_by or "manual",
+        triggered_by=TriggerKind(msg.triggered_by),
         workflow_id=msg.workflow_selector,
         workflow_display_name=msg.workflow_display_name,
         created_sequence=msg.created_sequence,

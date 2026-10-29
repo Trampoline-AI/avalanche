@@ -7,6 +7,11 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class StartRunTriggerV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    START_RUN_TRIGGER_V2_API: _ClassVar[StartRunTriggerV2]
+    START_RUN_TRIGGER_V2_MANUAL: _ClassVar[StartRunTriggerV2]
+
 class AgentTraceStatusV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     AGENT_TRACE_STATUS_V2_UNSPECIFIED: _ClassVar[AgentTraceStatusV2]
@@ -28,6 +33,8 @@ class PageOrderV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PAGE_ORDER_V2_FORWARD: _ClassVar[PageOrderV2]
     PAGE_ORDER_V2_NEWEST_FIRST: _ClassVar[PageOrderV2]
 
+START_RUN_TRIGGER_V2_API: StartRunTriggerV2
+START_RUN_TRIGGER_V2_MANUAL: StartRunTriggerV2
 AGENT_TRACE_STATUS_V2_UNSPECIFIED: AgentTraceStatusV2
 AGENT_TRACE_STATUS_V2_SUCCEEDED: AgentTraceStatusV2
 AGENT_TRACE_STATUS_V2_FAILED: AgentTraceStatusV2
@@ -252,6 +259,8 @@ class FlowInfoV2(_message.Message):
         "evaluation_metadata_json",
         "input_schema_json",
         "version",
+        "schedule_enabled",
+        "schedule_input_json",
     )
     class AgentDeclarationsJsonEntry(_message.Message):
         __slots__ = ("key", "value")
@@ -296,6 +305,8 @@ class FlowInfoV2(_message.Message):
     EVALUATION_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     INPUT_SCHEMA_JSON_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
+    SCHEDULE_ENABLED_FIELD_NUMBER: _ClassVar[int]
+    SCHEDULE_INPUT_JSON_FIELD_NUMBER: _ClassVar[int]
     workflow_selector: str
     display_name: str
     manifest_digest: str
@@ -315,6 +326,8 @@ class FlowInfoV2(_message.Message):
     evaluation_metadata_json: _containers.ScalarMap[str, str]
     input_schema_json: str
     version: str
+    schedule_enabled: bool
+    schedule_input_json: str
     def __init__(
         self,
         workflow_selector: _Optional[str] = ...,
@@ -336,6 +349,8 @@ class FlowInfoV2(_message.Message):
         evaluation_metadata_json: _Optional[_Mapping[str, str]] = ...,
         input_schema_json: _Optional[str] = ...,
         version: _Optional[str] = ...,
+        schedule_enabled: bool = ...,
+        schedule_input_json: _Optional[str] = ...,
     ) -> None: ...
 
 class DiscoveryDiagnosticV2(_message.Message):
@@ -595,6 +610,7 @@ class StartRunRequestV2(_message.Message):
         "context_json",
         "input_files",
         "expected_version",
+        "trigger",
     )
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
@@ -602,12 +618,14 @@ class StartRunRequestV2(_message.Message):
     CONTEXT_JSON_FIELD_NUMBER: _ClassVar[int]
     INPUT_FILES_FIELD_NUMBER: _ClassVar[int]
     EXPECTED_VERSION_FIELD_NUMBER: _ClassVar[int]
+    TRIGGER_FIELD_NUMBER: _ClassVar[int]
     run_id: str
     workflow_selector: str
     input_json: str
     context_json: str
     input_files: _containers.RepeatedCompositeFieldContainer[FileAttachmentV2]
     expected_version: str
+    trigger: StartRunTriggerV2
     def __init__(
         self,
         run_id: _Optional[str] = ...,
@@ -616,6 +634,22 @@ class StartRunRequestV2(_message.Message):
         context_json: _Optional[str] = ...,
         input_files: _Optional[_Iterable[_Union[FileAttachmentV2, _Mapping]]] = ...,
         expected_version: _Optional[str] = ...,
+        trigger: _Optional[_Union[StartRunTriggerV2, str]] = ...,
+    ) -> None: ...
+
+class SetScheduleEnabledRequestV2(_message.Message):
+    __slots__ = ("workflow_selector", "enabled", "input_json")
+    WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
+    ENABLED_FIELD_NUMBER: _ClassVar[int]
+    INPUT_JSON_FIELD_NUMBER: _ClassVar[int]
+    workflow_selector: str
+    enabled: bool
+    input_json: str
+    def __init__(
+        self,
+        workflow_selector: _Optional[str] = ...,
+        enabled: bool = ...,
+        input_json: _Optional[str] = ...,
     ) -> None: ...
 
 class StartRunResponseV2(_message.Message):
