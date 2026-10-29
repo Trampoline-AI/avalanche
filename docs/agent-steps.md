@@ -213,7 +213,7 @@ async def summarize(document: str, *, agent: ava.Agent) -> str:
 ```
 
 `ava.runtimes.ClaudeAgent` and `ava.runtimes.OpenAIAgent` run these skills;
-OpenAIAgent's model reads them but cannot run their scripts. PredictRLM does not
+OpenAIAgent's model runs their scripts only with its `"shell"` sandbox tool. PredictRLM does not
 support them yet: a PredictRLM step with `skills=` fails before the agent starts. PredictRLM has
 its own skills, which bundle instructions with sandbox packages, modules and
 tools; pass them on its runtime. The built-in ones are
@@ -303,10 +303,14 @@ async def summarize(document: str, *, agent: ava.Agent) -> str:
     return (await agent(document=document)).outputs.summary
 ```
 
-The model calls the step's tools and nothing else: `ava.File` inputs are attached
-to its message, `ava.File` outputs are text files it answers with, and
-`ava.Workspace` fields are rejected. See [runtimes](api/agents.md#openaiagent) for
-every setting.
+By default the model calls the step's tools and nothing else: `ava.File` inputs
+are attached to its message, `ava.File` outputs are text files it answers with,
+and `ava.Workspace` fields are rejected. With
+`builtin_tools=["filesystem", "shell"]`, it edits files and runs commands in the
+step's `ava.Workspace` input, in place, through the SDK's local sandbox, which
+does not confine commands on Linux. See [runtimes](api/agents.md#openaiagent) for
+every setting, and the [OpenAIAgent runtime](runtimes/openai-agent.md#sandbox-tools)
+page for the sandbox.
 
 ## Native evaluations
 

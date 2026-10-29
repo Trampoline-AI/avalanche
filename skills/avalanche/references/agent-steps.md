@@ -249,7 +249,7 @@ async def draft_proposal(request: ProposalRequest, *, agent: ava.Agent): ...
 ```
 
 `ava.runtimes.ClaudeAgent` and `ava.runtimes.OpenAIAgent` run a step's skills;
-OpenAIAgent's model reads them but cannot run their scripts. A PredictRLM step
+OpenAIAgent's model runs their scripts only with its `"shell"` sandbox tool. A PredictRLM step
 with `skills=` fails before the agent starts; give PredictRLM steps PredictRLM
 skills instead.
 

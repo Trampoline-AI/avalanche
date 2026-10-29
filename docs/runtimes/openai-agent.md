@@ -3,8 +3,10 @@
 OpenAIAgent runs OpenAI models through the
 [OpenAI Agents SDK](https://github.com/openai/openai-agents-python). The model
 calls your step's tools, reads the files you pass as attachments, and answers
-with JSON that matches the signature's outputs. It has no file system and no
-tools of its own.
+with JSON that matches the signature's outputs. With `builtin_tools`, it also
+works in a folder through the SDK's
+[sandbox](https://openai.github.io/openai-agents-python/sandbox_agents/): it
+edits files and runs commands, in place in the step's `ava.Workspace`.
 
 Install it with `uv add 'avalanche-ai[openai]'` wherever the step runs, Ray
 workers included. Each call creates its own OpenAI client, which reads
@@ -38,6 +40,7 @@ async def summarize(document: str, *, agent: ava.Agent) -> str:
 class OpenAIAgent:
     model: str | None = None                  # None: OPENAI_DEFAULT_MODEL, else the SDK's default
     max_turns: PositiveInt | None = None      # most model responses one call may take; None: 10
+    builtin_tools: Sequence[Literal["filesystem", "shell"]] = ()  # sandbox tools (see below)
     system_prompt_append: str | None = None   # added after the signature's instructions
     narrate: bool = True                      # ask the model to say what it is doing (see below)
     tracing: bool = False                     # send the SDK's own trace of each call to OpenAI
@@ -65,6 +68,49 @@ field.
 The SDK sends a trace of every run to OpenAI unless told not to. Avalanche turns
 that off; set `tracing=True` to keep it, and the trace header's
 `external_run_id` then names the SDK trace.
+
+### Sandbox tools
+
+`builtin_tools` turns on the SDK's sandbox tools; none are on by default.
+
+| Name | Tools the model gets |
+| --- | --- |
+| `"filesystem"` | `apply_patch`, which creates, edits and deletes files with a patch, and `view_image`, which shows the model an image file. |
+| `"shell"` | `exec_command`, which runs a shell command, and `write_stdin`, which writes to a command that is still running. |
+
+With either, the step runs as an SDK `SandboxAgent` in a local sandbox on the
+host (the SDK's `UnixLocalSandboxClient`). Its root, which is the commands'
+working directory, is the step's `ava.Workspace` input: the agent edits that
+folder in place, as ClaudeAgent does. A step without a workspace input works in
+a temporary folder, removed after the call. The SDK keeps no snapshot of the
+sandbox: Avalanche snapshots the workspaces a step returns.
+
+```python
+class Tidy(ava.Signature):
+    """Rename todo.txt to done.txt and add the line "checked" at its end."""
+
+    workspace: ava.Workspace = ava.InputField()
+    edited: ava.Workspace = ava.OutputField()
+
+
+@ava.agent_step(
+    Tidy, runtime=ava.runtimes.OpenAIAgent(builtin_tools=["filesystem", "shell"])
+)
+async def tidy(workspace: ava.Workspace, *, agent: ava.Agent) -> ava.Workspace:
+    return (await agent(workspace=workspace)).outputs.edited
+```
+
+The sandbox does not isolate the step. On Linux, commands run as the user that
+runs the step, unconfined: they can read and write anything that user can, and
+reach the network. On macOS, the SDK limits file access with `sandbox-exec`, but
+not the network. Turn on `"shell"` only for steps you would let run commands on
+that machine. The sandbox's other folders are those the step needs: its input
+files' folders and the skills' folder, read-only, and the file output folder.
+
+A step tool named like a sandbox tool raises `AgentStepError` when that tool is
+on. A sandbox tool that fails, such as a command that exits with an error or a
+patch for a missing file, does not fail the step: the model gets the error as
+the tool's result.
 
 ### Model settings
 
@@ -225,7 +271,9 @@ class AgentStarted:                 # the SDK started the step's agent
     kind: Literal["agent.started"]
     agent_name: str                 # the step's name
     model: str | None               # the model setting; None for the SDK's default
-    tools: tuple[str, ...]          # every tool the model can call
+    tools: tuple[str, ...]          # the step's tools and the skill tools
+    builtin_tools: tuple[str, ...]  # the sandbox tools turned on, whose tools the SDK
+                                    # adds when the sandbox starts
 ```
 
 ```json
@@ -241,7 +289,8 @@ class AgentStarted:                 # the SDK started the step's agent
     "kind": "agent.started",
     "agent_name": "summarize",
     "model": "gpt-5.4-mini",
-    "tools": ["lookup_term"]
+    "tools": ["lookup_term"],
+    "builtin_tools": []
   }
 }
 ```
@@ -255,10 +304,10 @@ class AgentStarted:                 # the SDK started the step's agent
 | `signature` instructions | The agent's instructions, followed by the narration paragraph when `narrate` is on, the skill list when the step has skills, then `system_prompt_append`. |
 | `signature` outputs | The agent's output type: an OpenAI strict JSON schema the answer must match, plus a required `run_summary` string when `narrate` is on. |
 | `inputs` | One user message: one instruction line, then the inputs as JSON. |
-| `ava.File` inputs | Attached to the message after the JSON, numbered; the JSON names each file input by its attachment, such as `"attachment 1: report.pdf"`. An image (`image/*`) is sent as an image; any other file as a file the model reads, which the OpenAI API accepts only for types it supports, such as PDF and text. The type is the file's `content_type`, else guessed from its name. |
-| `ava.Workspace` inputs | Rejected with `AgentStepError`: the agent has no file system. |
+| `ava.File` inputs | Attached to the message after the JSON, numbered; the JSON names each file input by its attachment, such as `"attachment 1: report.pdf"`. An image (`image/*`) is sent as an image; any other file as a file the model reads, which the OpenAI API accepts only for types it supports, such as PDF and text. The type is the file's `content_type`, else guessed from its name. With sandbox tools, the JSON also gives each file's path, relative to the sandbox root when the file is inside it: `"attachment 1: report.pdf, at docs/report.pdf"`. |
+| `ava.Workspace` inputs | The sandbox root, which the agent edits in place; the JSON names it `"the sandbox workspace: your current working directory"`. A step takes at most one. Without `builtin_tools`, a workspace input or output raises `AgentStepError`, since the model could not reach it. |
 | `tools` | Offered to the model as function tools under their own names. Their results reach the model as JSON. |
-| `skills` | Listed in the instructions by name and description. The model reads a skill with two tools Avalanche adds: `load_skill(name)` returns its `SKILL.md` and the paths of its files, and `read_skill_file(skill, path)` returns one file's text. The model can read a skill's scripts but not run them. A step tool named `load_skill` or `read_skill_file` raises `AgentStepError` when the step has skills. |
+| `skills` | Listed in the instructions by name and description. The model reads a skill with two tools Avalanche adds: `load_skill(name)` returns its `SKILL.md` and the paths of its files, and `read_skill_file(skill, path)` returns one file's text. With the `"shell"` sandbox tool, Avalanche also writes the skills to a folder made for the call, outside any workspace, removed after it, and the instructions name it, so the model can run a skill's scripts; without a shell, the model can read them but not run them. A step tool named `load_skill` or `read_skill_file` raises `AgentStepError` when the step has skills. |
 | `invocation_id`, `step_name` | The agent is named after the step; the invocation ID is not sent. |
 
 For `document="Avalanche runs DAGs."`, the model's message is:
@@ -271,8 +320,10 @@ Complete the task for these inputs.
 }
 ```
 
-When the signature has `ava.File` outputs, the message ends with one more line
-asking for each file's name and text (see [Outputs](#outputs)).
+When the signature has `ava.File` outputs, the message ends with one more line:
+without sandbox tools, it asks for each file's name and text; with them, it asks
+the model to write each file in the output folder and give its path (see
+[Outputs](#outputs)).
 
 A tool that raises does not fail the step. The model gets `"<error type>:
 <message>"` as the tool's result, and the trace records it in the call's `error`.
@@ -321,7 +372,7 @@ One turn per model response.
 | --- | --- |
 | `message` | What the model wrote. The answering turn's text is its JSON answer; with `narrate` on, the turn shows the answer's `run_summary` instead. |
 | `reasoning` | The response's reasoning summaries and reasoning text, when the model returns them. OpenAI reasoning models return summaries only when asked, for example with `reasoning=Reasoning(summary="auto")`. |
-| `tool_calls` | Each tool the model asked for, with `caller: "model"` and the time the tool took. `arguments` are the model's JSON arguments, or its text when that is not valid JSON; `result` is the text the model got. |
+| `tool_calls` | Each tool the model asked for, with `caller: "model"` and the time the tool took. `arguments` are the model's JSON arguments, or its text when that is not valid JSON; for `apply_patch`, they are the patch text. `result` is the text the model got. |
 | `duration_ms` | From the response's start until its tool calls finished. |
 | `usage` | The response's usage, without cost. |
 | `native` | An `OpenAIAgentTurn`. |
@@ -341,12 +392,14 @@ Tool arguments and results over 256 KiB are replaced by a marker.
 ### Outputs
 
 The model's JSON answer, validated against the signature. OpenAIAgent returns
-`JsonOutputs`, or `PythonOutputs` when the signature has `ava.File` outputs.
+`JsonOutputs`, or `PythonOutputs` when the signature has `ava.File` or
+`ava.Workspace` outputs. File outputs go to a fresh folder in the run workspace,
+`.outputs/<step>/<attempt>/<call>/`, and come back as `ava.File` references.
 
 | Output type | OpenAI Agents SDK |
 | --- | --- |
-| `ava.File`, `list[ava.File]` | The model answers each file with its `name` and whole text `content`. Avalanche writes the text as UTF-8 into a fresh folder in the run workspace, `.outputs/<step>/<attempt>/<call>/`, and returns `ava.File` references. A name with folders, `.` or `..`, or a name used twice in one answer, raises `AgentOutputError`. Binary files cannot be written. |
-| `ava.Workspace` | Rejected with `AgentStepError`: the agent has no file system. |
+| `ava.File`, `list[ava.File]` | With sandbox tools, the model writes each file in the output folder, any kind of file, and answers with its path; a path outside the folder, or to a missing file, raises `AgentOutputError`. Without them, the model answers each file with its `name` and whole text `content`, and Avalanche writes the text as UTF-8; a name with folders, `.` or `..`, or a name used twice in one answer, raises `AgentOutputError`, and binary files cannot be written. |
+| `ava.Workspace` | Needs sandbox tools. The model does not answer it: Avalanche returns the sandbox root, the workspace input when the step has one, else the temporary folder, captured as a snapshot. |
 
 Other output types that hold files, such as a model with an `ava.File` field or
 `ava.File | None`, are rejected.

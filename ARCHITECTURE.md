@@ -148,7 +148,8 @@ Skills follow the same split. `ava.agent.Skill` is a runtime-neutral Agent Skill
 carried in the request and published in the shared part of the declaration. Each
 runtime decides how to offer skills to its agent: ClaudeAgent writes them into a
 temporary Claude Code plugin per call, OpenAIAgent lists them in the agent's
-instructions and lets the model read them through two read-only tools, and
+instructions and lets the model read them through two tools, and, when its SDK
+sandbox has a shell, also writes them to a temporary folder so their scripts run, and
 PredictRLM rejects them until it supports the format. PredictRLM's own skills, which bundle prompt text with sandbox
 packages, modules and tools, stay a PredictRLM runtime setting under
 `ava.runtimes.predict_rlm.skills`.
