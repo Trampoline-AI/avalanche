@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Workflow graph cards use the timeline’s animated status glyphs before monospace
+  titles, flat state-tinted 1px borders/backgrounds and 3px corners. Selected cards
+  keep a primary outline, including running steps; runtime designation labels remain.
+
 - The Deployments tab marks the current deployment in its right-aligned Status
   column and keeps the pinned Current row on Overview only. Non-current deployments
   have visible primary-colour link-style Set current buttons: no border, background,

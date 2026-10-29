@@ -20,7 +20,13 @@ const toneClasses: Record<Tone, string> = {
   neutral: "text-run-status-muted",
 };
 
-export function RunStatus({ status }: { status: string }) {
+export function RunStatus({
+  status,
+  glyphOnly = false,
+}: {
+  status: string;
+  glyphOnly?: boolean;
+}) {
   const normalized = status.toLowerCase();
   const tone = Object.hasOwn(statusTones, normalized) ? statusTones[normalized] : "neutral";
   const glyph =
@@ -40,6 +46,7 @@ export function RunStatus({ status }: { status: string }) {
   }, [tone]);
   return (
     <span
+      aria-label={glyphOnly ? status : undefined}
       data-status={status}
       data-tone={tone}
       className={`run-status-text inline-flex items-center gap-1.5 whitespace-nowrap font-mono font-normal tracking-[0.06em] uppercase ${toneClasses[tone]}`}
@@ -51,7 +58,7 @@ export function RunStatus({ status }: { status: string }) {
         data-glyph={tone === "active" ? "running" : tone}
         data-char={glyph}
       />
-      {status}
+      {!glyphOnly && status}
     </span>
   );
 }

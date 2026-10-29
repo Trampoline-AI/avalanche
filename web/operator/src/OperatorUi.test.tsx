@@ -54,6 +54,7 @@ import {
   CatalogSnapshotMsg,
   FlowInfoMsg,
   LogRecordDescriptorMsg,
+  NodeSnapshotMsg,
   RunSnapshotMsg,
   RunSummaryMsg,
   OperatorUpdateEnvelope,
@@ -133,10 +134,43 @@ describe("agent runtime on graph nodes", () => {
       agentFieldSchemasJson: { claude: "{}", predict: "{}" },
       agentRuntimeKinds: { claude: "claude_agent", predict: "predict_rlm" },
     });
-    render(<GraphCanvas runTopology={topology} onOpenNode={vi.fn()} />);
+    const onOpenNode = vi.fn();
+    const view = render(<GraphCanvas runTopology={topology} onOpenNode={onOpenNode} />);
 
     expect(claudeLogo("Claude step")).toBeInTheDocument();
     expect(claudeLogo("Predict step")).toBeNull();
+    for (const [status, glyph, tone, color] of [
+      ["success", "✓", "success", "success"],
+      ["failed", "✗", "danger", "danger"],
+      ["running", "◐", "active", "active"],
+      ["pending", "○", "neutral", "muted"],
+      [undefined, "○", "neutral", "muted"],
+    ] as const) {
+      view.rerender(
+        <GraphCanvas
+          runTopology={topology}
+          runNodes={status ? [NodeSnapshotMsg.create({ nodeId: "claude", status })] : []}
+          selectedNodeId="claude"
+          onOpenNode={onOpenNode}
+        />,
+      );
+      const card = screen
+        .getByRole("button", { name: "Inspect Claude step" })
+        .closest("article")!;
+      expect(card).toHaveAttribute("data-node-state", status ?? "pending");
+      expect(card).toHaveStyle({ "--node-state-color": `var(--color-run-status-${color})` });
+      expect(card).toHaveStyle({ outline: "2px solid var(--color-acid)" });
+      const marker = card.querySelector(".node-title .run-status-glyph")!;
+      expect(marker).toHaveAttribute("data-glyph", status === "running" ? "running" : tone);
+      expect(marker).toHaveAttribute("data-char", glyph);
+      expect(marker.parentElement).toHaveAttribute("data-tone", tone);
+      expect(marker.parentElement).toHaveClass(`text-run-status-${color}`);
+      expect(card.querySelectorAll(".run-status-glyph")).toHaveLength(1);
+      expect(card.querySelector(".node-title")?.firstElementChild).toBe(marker.parentElement);
+      expect(card.querySelector("svg.node-status-icon")).toBeNull();
+      expect(card.className).not.toMatch(/gradient-animate|shadow-|border-\[3px\]/);
+      expect(card).toHaveClass("node-agent", "node-claude");
+    }
   });
 });
 

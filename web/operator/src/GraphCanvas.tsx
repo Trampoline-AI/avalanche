@@ -1,5 +1,14 @@
-import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowRight, Bot, Check, FlaskConical, ListFilter, X } from "lucide-react";
+import {
+  memo,
+  type CSSProperties,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import { ArrowDown, ArrowRight, Bot, FlaskConical, ListFilter } from "lucide-react";
 
 import {
   Background,
@@ -36,6 +45,7 @@ import { arrangeGraph, createGraphLayout, type RoutedEdgeData } from "./graphLay
 import { highlightConnectedEdges } from "./graphSelection";
 import { useGraphOrientation } from "./useGraphOrientation";
 import { ClaudeLogo, isClaudeRuntime } from "./ClaudeLogo";
+import { RunStatus } from "./RunStatus";
 
 interface FieldMetadata {
   name: string;
@@ -261,25 +271,25 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
     : data.isAgent
       ? `node-agent${data.isClaude ? " node-claude" : ""}`
       : "";
-  const statusColorClass =
-    data.status === "success"
-      ? "text-success"
-      : data.status === "failed"
-        ? "text-failed"
-        : "text-muted";
-  const statusClass =
-    data.status === "success"
-      ? "status-success"
-      : data.status === "failed"
-        ? "status-failed"
-        : data.status === "running"
-          ? "status-running gradient-animate border-[3px]"
-          : "blueprint";
+  const state = data.status ?? "pending";
+  const stateColor =
+    state === "success"
+      ? "var(--color-run-status-success)"
+      : state === "failed"
+        ? "var(--color-run-status-danger)"
+        : state === "running"
+          ? "var(--color-run-status-active)"
+          : "var(--color-run-status-muted)";
   return (
     <article
-      className={`node-card ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded border ${data.isClaude ? "border-claude" : "border-line"} bg-panel text-left shadow-[0_8px_24px_var(--color-shadow-6)] transition-[border-color,box-shadow,transform] duration-150 ease-out hover:-translate-y-px hover:border-acid hover:shadow-[0_10px_28px_var(--color-shadow-7)] motion-reduce:transition-none ${selected && data.status !== "running" ? "border-acid!" : ""} ${designationClass} ${statusClass}`}
+      className={`node-card ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded border text-left motion-reduce:transition-none ${designationClass}`}
+      data-node-state={state}
       style={
-        selected && isCompact ? { outline: `${2 / zoom}px solid var(--color-acid)` } : undefined
+        {
+          "--node-state-color": stateColor,
+          outline: selected ? `${2 / zoom}px solid var(--color-acid)` : undefined,
+          outlineOffset: selected ? "2px" : undefined,
+        } as CSSProperties
       }
       data-node-kind={data.isClassifier ? "classifier" : data.isAgent ? "agent" : "standard"}
       aria-disabled={data.inspectionDisabled || undefined}
@@ -350,24 +360,10 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
           {data.isClassifier ? "Classifier" : data.isAgent ? "Agent" : data.nodeType}
         </span>
         <strong
-          className={`node-title block self-stretch ${isCompact ? "text-xl" : "pr-[76px] text-sm"} leading-tight text-ink`}
+          className={`node-title block self-stretch font-mono ${isCompact ? "text-xl" : "pr-[76px] text-sm"} leading-tight text-ink`}
         >
-          {data.label}
+          <RunStatus status={state} glyphOnly /> {data.label}
           {data.identity && ` ${data.identity}`}
-          {data.status === "success" && (
-            <Check
-              aria-hidden="true"
-              className={`node-status-icon ml-1 inline-block text-success transition-[width,height] duration-200 ease-out motion-reduce:transition-none ${isCompact ? "size-6 align-[-0.15em]" : "size-3 align-[-0.08em]"}`}
-              strokeWidth={2.5}
-            />
-          )}
-          {data.status === "failed" && (
-            <X
-              aria-hidden="true"
-              className={`node-status-icon ml-1 inline-block text-failed transition-[width,height] duration-200 ease-out motion-reduce:transition-none ${isCompact ? "size-6 align-[-0.15em]" : "size-3 align-[-0.08em]"}`}
-              strokeWidth={2.5}
-            />
-          )}
         </strong>
         {data.classifierSummary && (
           <span className="node-classifier-summary mt-1 min-w-0 self-stretch text-[9px] leading-relaxed text-classifier [overflow-wrap:anywhere]">
@@ -384,7 +380,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         )}
         {data.status && (
           <span
-            className={`node-card-meta node-status absolute top-[19px] right-0 font-mono text-[8px] uppercase ${statusColorClass}`}
+            className={`node-card-meta node-status absolute top-[19px] right-0 font-mono text-[8px] uppercase text-[color:var(--node-state-color)]`}
           >
             {data.status}
           </span>
