@@ -11,10 +11,13 @@ import inspect
 import json
 import mimetypes
 import re
+import shutil
+import tempfile
 import time
 import types
 from collections.abc import AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Union, get_args, get_origin
 
 from agents import (
@@ -39,6 +42,10 @@ from agents import (
 )
 from agents.models.interface import ModelProvider
 from agents.models.openai_provider import OpenAIProvider
+from agents.sandbox import Manifest, SandboxAgent, SandboxPathGrant, SandboxRunConfig
+from agents.sandbox.capabilities import Capability, Filesystem, Shell
+from agents.sandbox.sandboxes.unix_local import UnixLocalSandboxClient
+from agents.sandbox.snapshot import NoopSnapshotSpec
 from agents.strict_schema import ensure_strict_json_schema
 from agents.tool_context import ToolContext
 from openai import AsyncOpenAI, OpenAIError
@@ -47,6 +54,7 @@ from openai.types.responses import (
     Response,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
+    ResponseCustomToolCall,
     ResponseFunctionToolCall,
     ResponseInputFileParam,
     ResponseInputImageParam,
@@ -70,9 +78,10 @@ from ...agent.contract import (
     PythonOutputs,
     ToolSpec,
 )
+from ...agent.declaration import OpenAIBuiltinTool
 from ...agent.live import RunStarted, ToolFinished, ToolStarted, TurnFinished
 from ...agent.native import openai_agent as native
-from ...agent.skills import Skill
+from ...agent.skills import SKILL_FILE, Skill
 from ...agent.steps import AgentOutputError, AgentStepError, AgentStepExecutionError
 from ...agent.trace import (
     AgentTrace,
@@ -104,6 +113,15 @@ _MAX_ERROR_CHARS = 4096
 # The tools that offer the step's Agent Skills to the model.
 _LOAD_SKILL = "load_skill"
 _READ_SKILL_FILE = "read_skill_file"
+# The tools each sandbox tool set adds once the sandbox starts.
+_SANDBOX_TOOLS: dict[OpenAIBuiltinTool, tuple[str, ...]] = {
+    "filesystem": ("apply_patch", "view_image"),
+    "shell": ("exec_command", "write_stdin"),
+}
+_CAPABILITIES: dict[OpenAIBuiltinTool, Callable[[], Capability]] = {
+    "filesystem": Filesystem,
+    "shell": Shell,
+}
 
 
 async def run(
@@ -111,6 +129,19 @@ async def run(
 ) -> AgentRunOutcome:
     signature = request.signature
     _check_fields(request)
+    builtin_tools = tuple(dict.fromkeys(runtime.builtin_tools))
+    workspace_inputs = _workspace_fields(signature.input_model)
+    workspace_outputs = _workspace_fields(signature.output_model)
+    if len(workspace_inputs) > 1:
+        raise AgentStepError(
+            f"agent step {request.step_name!r}: OpenAIAgent accepts at most one ava.Workspace "
+            f"input, got {workspace_inputs}"
+        )
+    if (workspace_inputs or workspace_outputs) and not builtin_tools:
+        raise AgentStepError(
+            f"agent step {request.step_name!r}: OpenAIAgent works in an ava.Workspace only "
+            "through its sandbox tools; set builtin_tools to ['filesystem'], ['shell'] or both"
+        )
     file_outputs = {
         name: info.annotation is File
         for name, info in signature.output_model.model_fields.items()
@@ -122,15 +153,18 @@ async def run(
             f"for its own {_SUMMARY_FIELD!r} answer field; rename the signature's output or "
             "set narrate=False"
         )
-    if request.skills:
-        reserved = sorted(
-            {_LOAD_SKILL, _READ_SKILL_FILE} & {spec.name for spec in request.tools}
+    reserved = sorted(
+        {
+            *((_LOAD_SKILL, _READ_SKILL_FILE) if request.skills else ()),
+            *(name for tool_set in builtin_tools for name in _SANDBOX_TOOLS[tool_set]),
+        }
+        & {spec.name for spec in request.tools}
+    )
+    if reserved:
+        raise AgentStepError(
+            f"agent step {request.step_name!r}: the tool names {reserved} are reserved for "
+            "the step's skills and sandbox tools; rename the step's tools"
         )
-        if reserved:
-            raise AgentStepError(
-                f"agent step {request.step_name!r}: the tool names {reserved} are reserved "
-                "for the step's skills; rename the step's tools"
-            )
     if problem := unknown_model_settings(
         runtime.model_settings.keys(),
         {option.name for option in dataclasses.fields(ModelSettings)},
@@ -143,7 +177,13 @@ async def run(
             *(_skill_tools(request.skills, tool_errors) if request.skills else ()),
         ]
         answer_schema = _AnswerSchema(
-            _output_schema(signature.output_model, file_outputs, summary=runtime.narrate)
+            _output_schema(
+                signature.output_model,
+                file_outputs,
+                workspace_outputs,
+                summary=runtime.narrate,
+                paths=bool(builtin_tools),
+            )
         )
     except UserError as exc:
         raise AgentStepError(
@@ -151,23 +191,69 @@ async def run(
             f"as OpenAI strict JSON schemas, which cannot express this step's types: {exc}"
         ) from exc
     max_turns = runtime.max_turns or DEFAULT_MAX_TURNS
-    agent = Agent(
-        name=request.step_name,
-        instructions=_instructions(
-            signature.instructions,
-            runtime.system_prompt_append,
-            request.skills,
-            narrate=runtime.narrate,
-        ),
-        tools=tools,
-        model=runtime.model,
-        model_settings=ModelSettings(**runtime.model_settings),
-        output_type=answer_schema,
-    )
     # File outputs go to a fresh folder in the run workspace, as with every runtime.
     output_folder = AgentOutputFolder(request.step_name) if file_outputs else None
     trace_id = gen_trace_id() if runtime.tracing else None
+    workspace: Workspace | None = (
+        getattr(request.inputs, workspace_inputs[0]) if workspace_inputs else None
+    )
     async with contextlib.AsyncExitStack() as stack:
+        directory: Path | None = None
+        skills_folder: Path | None = None
+        if builtin_tools:
+            # A reference workspace runs in place, so the agent's writes land in the
+            # host's directory; a value workspace runs in its temporary copy.
+            directory = (
+                workspace.path
+                if workspace is not None
+                else Path(
+                    stack.enter_context(tempfile.TemporaryDirectory(prefix="avalanche-openai-"))
+                )
+            )
+            # With a shell, the skills' files sit in a folder made for this call, outside
+            # any workspace the step returns, so the model can run their scripts.
+            if request.skills and "shell" in builtin_tools:
+                skills_folder = _write_skills(
+                    Path(
+                        stack.enter_context(
+                            tempfile.TemporaryDirectory(prefix="avalanche-openai-skills-")
+                        )
+                    ),
+                    request.skills,
+                )
+        instructions = _instructions(
+            signature.instructions,
+            runtime.system_prompt_append,
+            request.skills,
+            skills_folder,
+            narrate=runtime.narrate,
+        )
+        model_settings = ModelSettings(**runtime.model_settings)
+        if directory is None:
+            agent = Agent(
+                name=request.step_name,
+                instructions=instructions,
+                tools=tools,
+                model=runtime.model,
+                model_settings=model_settings,
+                output_type=answer_schema,
+            )
+        else:
+            agent = SandboxAgent(
+                name=request.step_name,
+                instructions=instructions,
+                tools=tools,
+                model=runtime.model,
+                model_settings=model_settings,
+                output_type=answer_schema,
+                default_manifest=Manifest(
+                    root=str(directory),
+                    extra_path_grants=_path_grants(
+                        request, directory, output_folder, skills_folder
+                    ),
+                ),
+                capabilities=[_CAPABILITIES[tool_set]() for tool_set in builtin_tools],
+            )
         try:
             models = await stack.enter_async_context(_models())
         except OpenAIError as exc:
@@ -180,8 +266,13 @@ async def run(
             tracing_disabled=not runtime.tracing,
             trace_id=trace_id,
             workflow_name=f"avalanche: {request.step_name}",
+            # A local sandbox on the host folder, which the SDK keeps after the call.
+            # Avalanche snapshots workspaces itself: the SDK keeps no copy of its own.
+            sandbox=None
+            if directory is None
+            else SandboxRunConfig(client=UnixLocalSandboxClient(), snapshot=NoopSnapshotSpec()),
         )
-        model_input = _model_input(request, file_outputs=bool(file_outputs))
+        model_input = _model_input(request, directory=directory, output_folder=output_folder)
         # The trace records file inputs by reference, never by their bytes.
         inputs, omitted_inputs = retained_fields(
             {name: getattr(request.inputs, name) for name in signature.input_model.model_fields}
@@ -190,7 +281,12 @@ async def run(
             None, RunStarted(model=runtime.model, inputs=inputs, omitted_inputs=omitted_inputs)
         )
         transcript = _Transcript(
-            events, tool_errors, model=runtime.model, max_turns=max_turns, trace_id=trace_id
+            events,
+            tool_errors,
+            model=runtime.model,
+            builtin_tools=builtin_tools,
+            max_turns=max_turns,
+            trace_id=trace_id,
         )
         started = time.monotonic()
         streamed = Runner.run_streamed(
@@ -250,7 +346,15 @@ async def run(
                         f"{_SUMMARY_FIELD!r} text"
                     )
                 del answer[_SUMMARY_FIELD]
-            outputs = _outputs(request, answer, file_outputs, output_folder)
+            outputs = _outputs(
+                request,
+                answer,
+                file_outputs,
+                output_folder,
+                directory=directory,
+                workspace=workspace,
+                workspace_outputs=workspace_outputs,
+            )
         except Exception:
             # The step fails, and its final event says the run returned no outputs.
             events.finished(record.header, outputs=None, complete=True)
@@ -303,21 +407,23 @@ def _mentions(annotation: object, target: type, seen: frozenset[type] = frozense
 
 
 def _check_fields(request: AgentRequest) -> None:
-    """Files only as whole ``ava.File`` or ``list[ava.File]`` fields; no workspaces."""
+    """Files and workspaces only as whole ``ava.File``, ``list[ava.File]`` or
+    ``ava.Workspace`` fields."""
     signature = request.signature
     for role, model in (("input", signature.input_model), ("output", signature.output_model)):
         for name, info in model.model_fields.items():
-            if _mentions(info.annotation, Workspace):
-                raise AgentStepError(
-                    f"agent step {request.step_name!r}: OpenAIAgent {role} {name!r} holds an "
-                    "ava.Workspace, but the agent has no file system; pass files as ava.File "
-                    "inputs, or run the step on ClaudeAgent"
-                )
-            if info.annotation not in (File, list[File]) and _mentions(info.annotation, File):
+            if info.annotation in (File, list[File], Workspace):
+                continue
+            if _mentions(info.annotation, File) or _mentions(info.annotation, Workspace):
                 raise AgentStepError(
                     f"agent step {request.step_name!r}: OpenAIAgent {role} {name!r} must be "
-                    "typed exactly ava.File or list[ava.File] when it holds files"
+                    "typed exactly ava.File, list[ava.File] or ava.Workspace when it holds "
+                    "files"
                 )
+
+
+def _workspace_fields(model: type[BaseModel]) -> list[str]:
+    return [name for name, info in model.model_fields.items() if info.annotation is Workspace]
 
 
 class _AnswerSchema(AgentOutputSchemaBase):
@@ -359,11 +465,18 @@ _NARRATION = (
 
 
 def _output_schema(
-    model: type[BaseModel], file_outputs: Mapping[str, bool], *, summary: bool
+    model: type[BaseModel],
+    file_outputs: Mapping[str, bool],
+    workspace_outputs: list[str],
+    *,
+    summary: bool,
+    paths: bool,
 ) -> dict[str, Any]:
-    """The signature's output schema; a file output is the name and text of a file.
+    """The signature's output schema; Avalanche fills workspaces.
 
-    With ``summary``, the schema also requires the run summary that becomes the
+    A file output is the path of a file the model wrote in the sandbox with
+    ``paths``, and otherwise the name and text of a file Avalanche writes. With
+    ``summary``, the schema also requires the run summary that becomes the
     answering turn's message; it is removed before the outputs are built.
     """
     schema = model.model_json_schema()
@@ -376,6 +489,10 @@ def _output_schema(
             ),
         }
         schema["required"] = [*schema.get("required", ()), _SUMMARY_FIELD]
+    for name in workspace_outputs:
+        del schema["properties"][name]
+        schema["required"] = [field for field in schema.get("required", ()) if field != name]
+    path = {"type": "string", "description": "Path of a file you wrote for this output."}
     written = {
         "type": "object",
         "description": "A text file you write for this output.",
@@ -389,43 +506,65 @@ def _output_schema(
         "required": ["name", "content"],
         "additionalProperties": False,
     }
+    file = path if paths else written
     for name, single in file_outputs.items():
-        schema["properties"][name] = written if single else {"type": "array", "items": written}
+        schema["properties"][name] = file if single else {"type": "array", "items": file}
     return schema
 
 
 def _instructions(
-    instructions: str, append: str | None, skills: tuple[Skill, ...], *, narrate: bool
+    instructions: str,
+    append: str | None,
+    skills: tuple[Skill, ...],
+    skills_folder: Path | None,
+    *,
+    narrate: bool,
 ) -> str:
     parts = [instructions.strip()]
     if narrate:
         parts.append(_NARRATION)
     if skills:
         listing = "\n".join(f"- {skill.name}: {skill.description}" for skill in skills)
+        scripts = (
+            "You can read a skill's scripts but not run them."
+            if skills_folder is None
+            else f"Each skill's files are also in {skills_folder}/<skill name>/: run a "
+            "skill's scripts from there with your shell, without changing them."
+        )
         parts.append(
             "You can use these Agent Skills. Each holds instructions for a kind of task. "
             f"When the task matches a skill's description, call {_LOAD_SKILL} with its name "
             "and follow its instructions; read a file the instructions refer to with "
-            f"{_READ_SKILL_FILE}. You can read a skill's scripts but not run them.\n\n"
-            + listing
+            f"{_READ_SKILL_FILE}. {scripts}\n\n" + listing
         )
     if append:
         parts.append(append.strip())
     return "\n\n".join(parts)
 
 
-def _model_input(request: AgentRequest, *, file_outputs: bool) -> list[ResponseInputItemParam]:
-    """One user message: the instruction and the inputs as JSON, then each input file."""
+def _model_input(
+    request: AgentRequest, *, directory: Path | None, output_folder: AgentOutputFolder | None
+) -> list[ResponseInputItemParam]:
+    """One user message: the instruction and the inputs as JSON, then each input file.
+
+    In a sandbox, rooted at ``directory``, input files are also named by their path,
+    and file outputs are files the model writes in ``output_folder``.
+    """
     values: dict[str, JsonValue] = {}
     attachments: list[File] = []
 
     def attach(file: File) -> str:
         attachments.append(file)
-        return f"attachment {len(attachments)}: {_file_name(file)}"
+        label = f"attachment {len(attachments)}: {_file_name(file)}"
+        if directory is None:
+            return label
+        return f"{label}, at {_prompt_path(file.path, directory)}"
 
     for name, info in request.signature.input_model.model_fields.items():
         value = getattr(request.inputs, name)
-        if info.annotation is File:
+        if info.annotation is Workspace:
+            values[name] = "the sandbox workspace: your current working directory"
+        elif info.annotation is File:
             values[name] = attach(value)
         elif info.annotation == list[File]:
             values[name] = [attach(item) for item in value]
@@ -435,7 +574,13 @@ def _model_input(request: AgentRequest, *, file_outputs: bool) -> list[ResponseI
     if attachments:
         prompt += " Files are attached after this message, numbered as the inputs name them."
     prompt += "\n\n" + json.dumps(values, indent=2, ensure_ascii=False)
-    if file_outputs:
+    if output_folder is not None and directory is not None:
+        prompt += (
+            "\n\nWrite every file output inside "
+            f"{_prompt_path(output_folder.path, directory)} and give its path; relative "
+            "paths are relative to the current working directory."
+        )
+    elif output_folder is not None:
         prompt += "\n\nAnswer each file output with the file's name and its whole text."
     content: list[ResponseInputTextParam | ResponseInputImageParam | ResponseInputFileParam] = [
         ResponseInputTextParam(type="input_text", text=prompt)
@@ -448,6 +593,54 @@ def _model_input(request: AgentRequest, *, file_outputs: bool) -> list[ResponseI
         )
         content.append(_file_part(file))
     return [EasyInputMessageParam(role="user", content=content)]
+
+
+def _prompt_path(path: Path, directory: Path) -> str:
+    """A path relative to the sandbox root when it is inside it, else absolute."""
+    return (
+        path.relative_to(directory).as_posix() if path.is_relative_to(directory) else str(path)
+    )
+
+
+def _path_grants(
+    request: AgentRequest,
+    directory: Path,
+    output_folder: AgentOutputFolder | None,
+    skills_folder: Path | None,
+) -> tuple[SandboxPathGrant, ...]:
+    """The folders outside the sandbox root its tools may reach: input files and skills
+    to read, the file output folder to write."""
+    folders: dict[Path, bool] = {}
+    for name, info in request.signature.input_model.model_fields.items():
+        value = getattr(request.inputs, name)
+        if info.annotation is File:
+            folders.setdefault(value.path.parent, True)
+        elif info.annotation == list[File]:
+            for file in value:
+                folders.setdefault(file.path.parent, True)
+    if skills_folder is not None:
+        folders.setdefault(skills_folder, True)
+    if output_folder is not None:
+        folders[output_folder.path] = False
+    return tuple(
+        SandboxPathGrant(path=str(folder), read_only=read_only)
+        for folder, read_only in sorted(folders.items())
+        if not folder.is_relative_to(directory)
+    )
+
+
+def _write_skills(root: Path, skills: tuple[Skill, ...]) -> Path:
+    """Write each skill's folder under ``root``; return ``root``."""
+    for skill in skills:
+        folder = root / skill.name
+        folder.mkdir()
+        (folder / SKILL_FILE).write_text(skill.skill_md(), encoding="utf-8")
+        for relative, source in skill.files.items():
+            target = folder / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            # Keep permission bits, so a skill's scripts stay executable.
+            shutil.copy(source, target)
+    return root
 
 
 def _file_name(file: File) -> str:
@@ -492,15 +685,38 @@ def _outputs(
     answer: dict[str, JsonValue],
     file_outputs: Mapping[str, bool],
     output_folder: AgentOutputFolder | None,
+    *,
+    directory: Path | None,
+    workspace: Workspace | None,
+    workspace_outputs: list[str],
 ) -> AgentOutputs:
-    """The model's answer, with the files it wrote as references in the run workspace."""
-    if output_folder is None:
+    """The model's answer, with the workspaces and files Avalanche returns.
+
+    Files are references in the run workspace: files the model wrote in the sandbox,
+    rooted at ``directory``, or else files written from its answer.
+    """
+    if not workspace_outputs and output_folder is None:
         return JsonOutputs(text=json.dumps(answer))
     signature = request.signature
+    # A reference snapshot is bound to its directory, which a JSON round trip loses,
+    # so the model's values are validated here and the snapshot joins them as an object.
+    snapshot: Workspace | None = None
+    if workspace_outputs:
+        assert directory is not None, "a workspace output needs the sandbox"
+        snapshot = (
+            workspace.snapshot() if workspace is not None else Workspace.from_path(directory)
+        )
     files: dict[str, File | list[File]] = {}
     for name, single in file_outputs.items():
+        assert output_folder is not None, "file outputs have their folder"
         try:
-            if single:
+            if directory is not None:
+                paths = TypeAdapter(str if single else list[str]).validate_python(answer[name])
+                if isinstance(paths, str):
+                    files[name] = output_folder.file(directory / paths)
+                else:
+                    files[name] = [output_folder.file(directory / path) for path in paths]
+            elif single:
                 files[name] = _write(output_folder, _WrittenFile.model_validate(answer[name]))
             else:
                 files[name] = [
@@ -519,6 +735,7 @@ def _outputs(
                     {
                         **answer,
                         **{name: json.loads(to_json(value)) for name, value in files.items()},
+                        **{name: json.loads(to_json(snapshot)) for name in workspace_outputs},
                     }
                 )
             )
@@ -529,6 +746,7 @@ def _outputs(
             f"signature: {exc}"
         ) from exc
     values = {name: getattr(validated, name) for name in signature.output_model.model_fields}
+    values.update(dict.fromkeys(workspace_outputs, snapshot))
     values.update(files)
     return PythonOutputs(values=values)
 
@@ -711,12 +929,14 @@ class _Transcript:
         tool_errors: ToolErrors,
         *,
         model: str | None,
+        builtin_tools: tuple[OpenAIBuiltinTool, ...],
         max_turns: int,
         trace_id: str | None,
     ) -> None:
         self._events = events
         self._tool_errors = tool_errors
         self._configured_model = model
+        self._builtin_tools = builtin_tools
         self._max_turns = max_turns
         self._trace_id = trace_id
         self._pending: _PendingTurn | None = None
@@ -733,6 +953,7 @@ class _Transcript:
                         agent_name=agent.name,
                         model=self._configured_model,
                         tools=tuple(tool.name for tool in agent.tools),
+                        builtin_tools=self._builtin_tools,
                     ),
                     None,
                 )
@@ -759,16 +980,23 @@ class _Transcript:
         return self._pending
 
     async def _tool_called(self, raw: object) -> None:
-        if not isinstance(raw, ResponseFunctionToolCall):
-            raise AgentStepExecutionError(
-                f"the model called a {type(raw).__name__}, a tool OpenAIAgent does not offer"
-            )
+        # Function tools take JSON arguments; apply_patch, a custom tool, takes a patch.
+        match raw:
+            case ResponseFunctionToolCall():
+                arguments = _arguments(raw.arguments)
+            case ResponseCustomToolCall():
+                arguments = _bounded(raw.input)
+            case _:
+                raise AgentStepExecutionError(
+                    f"the model called a {type(raw).__name__}, a tool OpenAIAgent does not "
+                    "offer"
+                )
         pending = self._pending_turn()
         pending.calls[raw.call_id] = ToolCall(
             call_id=raw.call_id,
             caller="model",
             name=raw.name,
-            arguments=_arguments(raw.arguments),
+            arguments=arguments,
             result=None,
             error=None,
             duration_ms=None,

@@ -1740,7 +1740,7 @@ class UIStore:
                 **common,
                 "skills": step_skills,
                 "models": {"main": runtime["model"]},
-                "runtime": runtime["settings"],
+                "runtime": {**runtime["settings"], "builtin_tools": runtime["builtin_tools"]},
                 "packages": [],
                 "modules": [],
                 "tools": step_tools,

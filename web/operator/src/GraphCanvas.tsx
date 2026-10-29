@@ -166,7 +166,7 @@ export function parseAgentDeclaration(raw: string | undefined): AgentDeclaration
       ...signature,
       runtimeKind: runtime.kind,
       model: { main: { source: "step override", identity: runtime.model } },
-      runtime: runtime.settings,
+      runtime: { ...runtime.settings, builtin_tools: runtime.builtin_tools },
       skills: stepSkills,
       tools: declaration.tools.map(tool),
     };

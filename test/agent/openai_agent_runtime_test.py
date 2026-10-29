@@ -25,6 +25,10 @@ from agents.testing import (  # noqa: E402
     function_call,
 )
 from openai.types.responses import (  # noqa: E402
+    Response,
+    ResponseCompletedEvent,
+    ResponseCreatedEvent,
+    ResponseCustomToolCall,
     ResponseOutputMessage,
     ResponseOutputRefusal,
     ResponseReasoningItem,
@@ -232,7 +236,9 @@ async def test_a_run_maps_onto_outputs_turns_and_live_events(scripted):
         "TurnFinished",
     ]
     started = observed[1].native
-    assert started == AgentStarted(agent_name="total", model=MODEL, tools=("lookup_bonus",))
+    assert started == AgentStarted(
+        agent_name="total", model=MODEL, tools=("lookup_bonus",), builtin_tools=()
+    )
     assert [
         e.turn for e in _live(observed) if isinstance(e.common, ToolStarted | ToolFinished)
     ] == [
@@ -608,6 +614,17 @@ class WorkspaceInput(ava.Signature):
     answer: str = ava.OutputField()
 
 
+class TwoWorkspaces(ava.Signature):
+    first: ava.Workspace = ava.InputField()
+    second: ava.Workspace = ava.InputField()
+    answer: str = ava.OutputField()
+
+
+class WorkspaceInModelInput(ava.Signature):
+    folders: list[ava.Workspace] = ava.InputField()
+    answer: str = ava.OutputField()
+
+
 class WorkspaceOutput(ava.Signature):
     question: str = ava.InputField()
     folder: ava.Workspace = ava.OutputField()
@@ -624,22 +641,37 @@ class OptionalFileOutput(ava.Signature):
 
 
 @pytest.mark.parametrize(
-    ("signature", "inputs", "match"),
+    ("signature", "inputs", "builtin_tools", "match"),
     [
-        (WorkspaceInput, {"folder": ava.Workspace()}, "no file system"),
-        (WorkspaceOutput, {"question": "q"}, "no file system"),
+        (WorkspaceInput, {"folder": ava.Workspace()}, (), "sandbox tools"),
+        (WorkspaceOutput, {"question": "q"}, (), "sandbox tools"),
+        (
+            TwoWorkspaces,
+            {"first": ava.Workspace(), "second": ava.Workspace()},
+            ("shell",),
+            "at most one",
+        ),
+        (WorkspaceInModelInput, {"folders": []}, ("shell",), "typed exactly"),
         (
             FileInModelInput,
             {"attachment": Attachment(file=ava.File.from_path(Path(__file__)))},
+            (),
             "typed exactly",
         ),
-        (OptionalFileOutput, {"question": "q"}, "typed exactly"),
+        (OptionalFileOutput, {"question": "q"}, (), "typed exactly"),
     ],
-    ids=["workspace-input", "workspace-output", "file-in-model-input", "optional-file-output"],
+    ids=[
+        "workspace-input-without-sandbox",
+        "workspace-output-without-sandbox",
+        "two-workspaces",
+        "workspace-in-model-input",
+        "file-in-model-input",
+        "optional-file-output",
+    ],
 )
 @pytest.mark.asyncio
 async def test_unsupported_file_fields_are_rejected_before_the_call(
-    scripted, signature, inputs, match
+    scripted, signature, inputs, builtin_tools, match
 ):
     model = scripted()
     observed = []
@@ -647,7 +679,11 @@ async def test_unsupported_file_fields_are_rejected_before_the_call(
         capture_agent_evidence(observed.append, errors="raise"),
         pytest.raises(AgentStepError, match=match),
     ):
-        await ava.Agent(signature=signature, step_name="step", runtime=OpenAIAgent())(**inputs)
+        await ava.Agent(
+            signature=signature,
+            step_name="step",
+            runtime=OpenAIAgent(builtin_tools=builtin_tools),
+        )(**inputs)
     assert observed == [] and model.calls == ()
 
 
@@ -741,6 +777,194 @@ async def test_skill_tool_names_are_reserved_when_the_step_has_skills(scripted, 
         )(project="heron")
 
 
+def _patch(item_id: str, patch: str, *, call_id: str) -> ModelStep:
+    """A response calling apply_patch, a custom tool the SDK streams only as given."""
+    call = ResponseCustomToolCall(
+        type="custom_tool_call", id=item_id, call_id=call_id, name="apply_patch", input=patch
+    )
+    done = Response(
+        id=f"resp-{call_id}",
+        created_at=0,
+        model=MODEL,
+        object="response",
+        output=[call],
+        tool_choice="auto",
+        tools=[],
+        top_p=None,
+        parallel_tool_calls=False,
+        status="completed",
+    )
+    started = done.model_copy(update={"output": [], "status": "in_progress"})
+    return ModelStep.stream(
+        [
+            ResponseCreatedEvent(type="response.created", response=started, sequence_number=0),
+            ResponseCompletedEvent(type="response.completed", response=done, sequence_number=1),
+        ],
+        output=[call],
+        response_id=done.id,
+    )
+
+
+def _shell(command: str, *, call_id: str) -> ModelStep:
+    return ModelStep(output=[function_call("exec_command", {"cmd": command}, call_id=call_id)])
+
+
+class Edit(ava.Signature):
+    """Write notes.txt into the workspace."""
+
+    workspace: ava.Workspace = ava.InputField()
+    document: ava.File = ava.InputField()
+    edited: ava.Workspace = ava.OutputField()
+    note: str = ava.OutputField()
+
+
+@pytest.mark.asyncio
+async def test_the_sandbox_edits_a_workspace_in_place_and_returns_it(
+    scripted, tmp_path, monkeypatch
+):
+    # The SDK would keep its own snapshot of the workspace under the state folder.
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    folder = tmp_path / "notes"
+    folder.mkdir()
+    (folder / "existing.txt").write_text("kept")
+    (folder / "draft.txt").write_text("draft")
+    workspace = ava.Workspace.from_directory(folder, reference="notes")
+    patch = "*** Begin Patch\n*** Add File: notes.txt\n+written by the agent\n*** End Patch\n"
+    model = scripted(
+        _shell("cat existing.txt", call_id="call-1"),
+        _patch("patch-1", patch, call_id="call-2"),
+        _answer(note="done"),
+    )
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        result = await ava.Agent(
+            signature=Edit,
+            step_name="edit",
+            runtime=OpenAIAgent(model=MODEL, builtin_tools=["filesystem", "shell"]),
+        )(workspace=workspace, document=ava.File.from_path(folder / "draft.txt"))
+
+    assert (folder / "notes.txt").read_text() == "written by the agent"
+    assert sorted(path.name for path in folder.iterdir()) == [
+        "draft.txt",
+        "existing.txt",
+        "notes.txt",
+    ]
+    assert result.outputs.note == "done"
+    assert result.outputs.edited.reference == "notes"
+    # The returned reference stays bound to the directory the agent worked in.
+    assert result.outputs.edited.path == folder
+    assert not (tmp_path / "state").exists()
+
+    call = model.first_call
+    assert {"apply_patch", "view_image", "exec_command"} <= {tool.name for tool in call.tools}
+    assert "edited" not in call.output_schema.json_schema()["properties"]
+    prompt = json.loads(call.input[0]["content"][0]["text"].split("\n\n", 1)[1])
+    # A file inside the sandbox is named by its path there, and still attached.
+    assert prompt["document"] == "attachment 1: draft.txt, at draft.txt"
+    assert prompt["workspace"].startswith("the sandbox workspace")
+
+    shell, edit = (turn.tool_calls[0] for turn in result.trace.turns[:2])
+    assert (shell.name, shell.arguments) == ("exec_command", {"cmd": "cat existing.txt"})
+    assert "kept" in shell.result
+    assert (edit.name, edit.arguments, edit.result) == (
+        "apply_patch",
+        patch,
+        "Created notes.txt",
+    )
+    started = next(event.native for event in observed if isinstance(event.native, AgentStarted))
+    assert started.builtin_tools == ("filesystem", "shell")
+
+
+class Report(ava.Signature):
+    question: str = ava.InputField()
+    report: ava.File = ava.OutputField()
+    appendices: list[ava.File] = ava.OutputField()
+
+
+@pytest.mark.asyncio
+async def test_sandbox_file_outputs_are_files_the_model_writes(scripted, tmp_path):
+    seen: dict[str, str] = {}
+
+    def write_files(call) -> ModelStep:
+        prompt = call.input[0]["content"][0]["text"]
+        seen["folder"] = prompt.split("output inside ", 1)[1].split(" and give", 1)[0]
+        command = (
+            f"printf report > {seen['folder']}/report.bin; printf a > {seen['folder']}/a.txt"
+        )
+        return _shell(command, call_id="call-1")
+
+    def answer(call) -> ModelStep:
+        return _answer(
+            report=f"{seen['folder']}/report.bin", appendices=[f"{seen['folder']}/a.txt"]
+        )
+
+    model = scripted(ModelStep.respond(write_files), ModelStep.respond(answer))
+    (tmp_path / "run").mkdir()
+    workspace = ava.Workspace.from_directory(tmp_path / "run", reference="snapshot:run")
+    with ava.file_reference_context(workspace, attempt="attempt-1"):
+        result = await ava.Agent(
+            signature=Report,
+            step_name="report",
+            runtime=OpenAIAgent(builtin_tools=["shell"]),
+        )(question="q")
+
+    assert result.outputs.report.ref.path.startswith(".outputs/report/attempt-1/")
+    assert result.outputs.report.read_bytes() == b"report"
+    assert [file.read_bytes() for file in result.outputs.appendices] == [b"a"]
+    schema = model.first_call.output_schema.json_schema()["properties"]
+    assert schema["report"]["type"] == "string"
+
+
+@pytest.mark.asyncio
+async def test_with_a_shell_the_model_runs_a_skill_script(scripted, tmp_path):
+    script = tmp_path / "code.sh"
+    script.write_text("#!/bin/sh\necho PELICAN-4217\n")
+    script.chmod(0o755)
+    skill = ava.agent.Skill(
+        name="project-codes",
+        description="Looks up project code words.",
+        instructions="Run scripts/code.sh and answer with what it prints.",
+        files={"scripts/code.sh": script},
+    )
+
+    def run_script(call) -> ModelStep:
+        folder = call.system_instructions.split("files are also in ", 1)[1].split("/<skill", 1)[
+            0
+        ]
+        return _shell(f"{folder}/project-codes/scripts/code.sh", call_id="call-1")
+
+    model = scripted(ModelStep.respond(run_script), _answer(code_word="PELICAN-4217"))
+    result = await ava.Agent(
+        signature=CodeWord,
+        step_name="code_word",
+        runtime=OpenAIAgent(builtin_tools=["shell"]),
+        skills=(skill,),
+    )(project="heron")
+
+    assert result.outputs.code_word == "PELICAN-4217"
+    (run,) = result.trace.turns[0].tool_calls
+    assert "PELICAN-4217" in run.result
+    assert "load_skill" in {tool.name for tool in model.first_call.tools}
+    # The skills' folder is made for the call and removed after it.
+    folder = Path(run.arguments["cmd"].split("/project-codes/", 1)[0])
+    assert not folder.exists()
+
+
+@pytest.mark.asyncio
+async def test_sandbox_tool_names_are_reserved_when_the_sandbox_has_them(scripted):
+    def exec_command(cmd: str) -> str:
+        """Mine."""
+        return cmd
+
+    scripted()
+    with pytest.raises(AgentStepError, match="reserved"):
+        await _agent(tools=(exec_command,), builtin_tools=["shell"])(a=2, b=3)
+    # Without a shell the name is the step's own.
+    scripted(_answer(total=5))
+    result = await _agent(tools=(exec_command,), builtin_tools=["filesystem"])(a=2, b=3)
+    assert result.outputs.total == 5
+
+
 def test_unknown_model_settings_fail_when_the_runtime_is_built():
     with pytest.raises(ValueError, match="agents.ModelSettings"):
         OpenAIAgent(temprature=0.2)
@@ -748,7 +972,9 @@ def test_unknown_model_settings_fail_when_the_runtime_is_built():
 
 
 def test_the_declaration_merges_the_step_over_the_workflow_default():
-    default = OpenAIAgent(model=MODEL, max_turns=4, tracing=True, temperature=0.1)
+    default = OpenAIAgent(
+        model=MODEL, max_turns=4, tracing=True, builtin_tools=["shell"], temperature=0.1
+    )
     step = OpenAIAgent(max_turns=8, narrate=False)
 
     assert step.declaration(workflow_default=default) == OpenAIAgentDeclaration(
@@ -759,6 +985,7 @@ def test_the_declaration_merges_the_step_over_the_workflow_default():
             "narrate": False,
             "tracing": True,
         },
+        builtin_tools=("shell",),
     )
     assert step.merged_over(default).model_settings == {"temperature": 0.1}
 
@@ -841,3 +1068,30 @@ async def test_live_openai_uses_a_step_skill_and_reads_its_file(tmp_path):
     assert result.outputs.code_word.strip() == "PELICAN-4217"
     calls = [call.name for turn in result.trace.turns for call in turn.tool_calls]
     assert "load_skill" in calls and "read_skill_file" in calls
+
+
+@_LIVE
+@pytest.mark.asyncio
+async def test_live_openai_edits_a_workspace_in_its_sandbox(tmp_path):
+    class Tidy(ava.Signature):
+        """In the workspace, rename todo.txt to done.txt and add the line "checked" at its
+        end. Answer with the number of lines done.txt has."""
+
+        workspace: ava.Workspace = ava.InputField()
+        lines: int = ava.OutputField()
+
+    (tmp_path / "todo.txt").write_text("write tests\nship\n")
+    result = await ava.Agent(
+        signature=Tidy,
+        step_name="tidy",
+        runtime=OpenAIAgent(
+            model=LIVE_MODEL, max_turns=8, builtin_tools=["filesystem", "shell"]
+        ),
+    )(workspace=ava.Workspace.from_directory(tmp_path, reference="todo"))
+
+    assert not (tmp_path / "todo.txt").exists()
+    # The model may leave a blank line before the one it adds.
+    lines = (tmp_path / "done.txt").read_text().splitlines()
+    assert [line for line in lines if line.strip()] == ["write tests", "ship", "checked"]
+    assert result.outputs.lines in (3, len(lines))
+    assert result.trace.header.tool_call_count > 0

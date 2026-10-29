@@ -78,13 +78,18 @@ class _Event(BaseModel):
 
 
 class AgentStarted(_Event):
-    """The SDK started the step's agent, with the tools it offers the model."""
+    """The SDK started the step's agent, with the tools it offers the model.
+
+    ``tools`` are the step's tools and the skill tools; ``builtin_tools`` the
+    sandbox tool sets, whose tools the SDK adds when the sandbox starts.
+    """
 
     kind: Literal["agent.started"] = "agent.started"
 
     agent_name: str
     model: str | None
     tools: tuple[str, ...]
+    builtin_tools: tuple[str, ...]
 
 
 OpenAIAgentNativeEvent = Annotated[AgentStarted, Field(discriminator="kind")]

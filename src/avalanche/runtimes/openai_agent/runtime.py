@@ -8,14 +8,14 @@ declarations without the ``openai`` extra installed.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Collection, Mapping
+from collections.abc import Collection, Mapping, Sequence
 from types import MappingProxyType
 from typing import Any, ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict, PositiveInt, model_validator
 
 from ...agent.contract import AgentEventSink, AgentRequest, AgentRunOutcome
-from ...agent.declaration import OpenAIAgentDeclaration
+from ...agent.declaration import OpenAIAgentDeclaration, OpenAIBuiltinTool
 from ...agent.steps import AgentStepExecutionError
 from ...agent.trace import RuntimeKind
 
@@ -51,7 +51,11 @@ class OpenAIAgent(BaseModel):
     ``model`` selects the model, such as ``"gpt-5.4-mini"``; ``None`` lets the SDK
     choose (``OPENAI_DEFAULT_MODEL``, else its own default). ``max_turns`` is the
     most model responses one call may take, 10 when unset. The step's tools are
-    always available; the agent has no other tools and no file system. With
+    always available. ``builtin_tools`` turns on the SDK's sandbox tools:
+    ``"filesystem"`` edits files with ``apply_patch`` and views images, ``"shell"``
+    runs commands. None are enabled by default. With either, the agent works in a
+    local sandbox rooted at the step's ``ava.Workspace`` input, edited in place, or
+    else at a temporary folder; on Linux its commands are not confined. With
     ``narrate`` on, the instructions ask the model to note what it is about to do
     before each tool call, and its answer must carry a ``run_summary`` that the
     trace shows on the answering turn. ``tracing`` sends the SDK's own trace of
@@ -72,6 +76,7 @@ class OpenAIAgent(BaseModel):
 
     model: str | None = None
     max_turns: PositiveInt | None = None
+    builtin_tools: Sequence[OpenAIBuiltinTool] = ()
     system_prompt_append: str | None = None
     narrate: bool = True
     tracing: bool = False
@@ -110,6 +115,7 @@ class OpenAIAgent(BaseModel):
                 "narrate": effective.narrate,
                 "tracing": effective.tracing,
             },
+            builtin_tools=tuple(effective.builtin_tools),
         )
 
     async def invoke(self, request: AgentRequest, events: AgentEventSink) -> AgentRunOutcome:

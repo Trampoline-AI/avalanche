@@ -111,6 +111,7 @@ describe("parseAgentDeclaration", () => {
           kind: "openai_agent",
           model: "gpt-5.4-mini",
           settings: { max_turns: 4, narrate: true },
+          builtin_tools: ["shell"],
         },
       }),
     );
@@ -118,7 +119,11 @@ describe("parseAgentDeclaration", () => {
     expect(declaration?.model).toEqual({
       main: { source: "step override", identity: "gpt-5.4-mini" },
     });
-    expect(declaration?.runtime).toEqual({ max_turns: 4, narrate: true });
+    expect(declaration?.runtime).toEqual({
+      max_turns: 4,
+      narrate: true,
+      builtin_tools: ["shell"],
+    });
     expect(declaration?.tools.map((tool) => tool.name)).toEqual(["lookup"]);
   });
 
