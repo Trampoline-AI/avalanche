@@ -878,3 +878,86 @@ def test_no_web_allows_an_occupied_http_port(monkeypatch, tmp_path):
         )
     with socket.socket() as rebound:
         rebound.bind(("127.0.0.1", bound_ports[0]))
+
+
+def test_ava_schedule_lists_enables_and_disables(tmp_path, capsys):
+    from ava_cli import app
+    from runtime.operator import Operator
+    from runtime.operator.server import serve as serve_operator
+
+    flows = tmp_path / "flows.py"
+    flows.write_text(
+        "import avalanche as ava\n"
+        "@ava.workflow(cron='0 0 1 1 *')\n"
+        "def nightly():\n"
+        "    return None\n"
+        "@ava.workflow\n"
+        "def adhoc():\n"
+        "    return None\n"
+    )
+    operator = Operator([str(flows)], watch=False, schedule=False, webhook_port=0)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    server = serve_operator(operator, port=port, block=False)
+    connect = ["--connect", f"127.0.0.1:{port}"]
+
+    def run(*argv: str) -> tuple[int, str]:
+        status = app.main(list(argv))
+        return status, capsys.readouterr().out
+
+    try:
+        status, listed = run("schedule", "list", *connect)
+        assert status == 0
+        (record,) = json.loads(listed)
+        assert record["cron"] == "0 0 1 1 *"
+        assert record["enabled"] is False
+        assert record["next_run_at"] is None
+        selector = record["selector"]
+
+        status, enabled = run("schedule", "enable", selector, *connect)
+        assert status == 0
+        assert json.loads(enabled)["enabled"] is True
+        assert json.loads(enabled)["next_run_at"] is not None
+
+        status, disabled = run("schedule", "disable", selector, *connect)
+        assert status == 0
+        assert json.loads(disabled)["enabled"] is False
+        assert json.loads(disabled)["next_run_at"] is None
+
+        status, with_input = run(
+            "schedule", "enable", selector, "--input", '{"region": "eu"}', *connect
+        )
+        assert status == 0
+        assert json.loads(with_input)["input"] == {"region": "eu"}
+        assert app.main(["schedule", "enable", selector, "--input", "[]", *connect]) == 1
+        assert capsys.readouterr().err
+
+        adhoc = next(item.selector for item in operator.list_workflows() if not item.cron)
+        assert app.main(["schedule", "enable", adhoc, *connect]) == 1
+        assert capsys.readouterr().err
+    finally:
+        server.stop(grace=0).wait()
+        operator.close()
+
+
+@pytest.mark.parametrize("command", ["operator", "dev"])
+def test_schedules_enabled_flag_reaches_the_operator(monkeypatch, tmp_path, command):
+    from ava_cli import app
+    from runtime.operator import operator as operator_module
+
+    flows = tmp_path / "flows.py"
+    flows.write_text("import avalanche as ava\n")
+    created = []
+
+    class StoppedOperator:
+        def __init__(self, *args, **kwargs):
+            created.append(kwargs)
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(app, "_configure_terminal_logging", lambda _level: None)
+    monkeypatch.setattr(operator_module, "Operator", StoppedOperator)
+    monkeypatch.setattr("runtime.operator.Operator", StoppedOperator)
+    app.main([command, str(flows), "--schedules-enabled"])
+
+    assert created and created[0]["schedules_enabled"] is True
