@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from runtime.operator import Operator
-from runtime.operator.models import RunStatus, WorkflowDescriptor, WorkflowLocator
+from runtime.operator.models import RunStatus, TriggerKind, WorkflowDescriptor, WorkflowLocator
 from runtime.operator.webhooks import MAX_WEBHOOK_BODY_BYTES, routes_for
 
 
@@ -89,7 +89,7 @@ def ingress():
             time.sleep(0.02)
         assert run.status is RunStatus.SUCCESS
         assert operator.get_run_result(run_id) == "delivered"
-        assert run.triggered_by == "webhook"
+        assert run.triggered_by is TriggerKind.WEBHOOK
 
         for method, payload, content_type, length, expected in (
             ("GET", b"", "application/json", None, 405),

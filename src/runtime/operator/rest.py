@@ -63,6 +63,18 @@ class _CreateRun(BaseModel):
     context_json: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class _SetSchedule(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
+
+    enabled: bool = Field(description="True enables the cron schedule; false disables it.")
+    input_json: dict[str, JsonValue] | None = Field(
+        default=None,
+        description=(
+            "Input for future cron runs, only when enabling; omitted keeps the stored input."
+        ),
+    )
+
+
 class _Query(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -263,6 +275,32 @@ def create_rest_app(channel: grpc.Channel) -> FastAPI:
             stub.DiscoverFlows(
                 pb.DiscoverFlowsRequestV2(
                     page_size=query.page_size, continuation=query.continuation_message()
+                ),
+                timeout=_RPC_TIMEOUT_SECONDS,
+            )
+        )
+
+    @router.post(
+        "/v1/flows/{workflow_selector}/schedule",
+        summary="Enable or disable a workflow's cron schedule",
+        description=(
+            "Schedules start disabled. The state lives in operator memory: it survives "
+            "rediscovery and source reload, and resets when the operator restarts."
+        ),
+    )
+    def set_schedule(
+        workflow_selector: str, payload: _SetSchedule, query: Annotated[_Query, Query()]
+    ) -> Response:
+        return _protobuf_response(
+            stub.SetScheduleEnabled(
+                pb.SetScheduleEnabledRequestV2(
+                    workflow_selector=workflow_selector,
+                    enabled=payload.enabled,
+                    input_json=(
+                        None
+                        if payload.input_json is None
+                        else json.dumps(payload.input_json, allow_nan=False)
+                    ),
                 ),
                 timeout=_RPC_TIMEOUT_SECONDS,
             )
