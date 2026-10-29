@@ -30,14 +30,16 @@ from .convert_v2 import (
     log_activity_to_v2,
     run_snapshot_to_v2,
     run_summary_to_v2,
+    schedule_input_from_json,
     sha256_hex,
     update_envelope_to_v2,
     workflow_info_to_v2,
 )
-from .models import CatalogSnapshot, RunCreated, RunSnapshot
+from .models import CatalogSnapshot, RunCreated, RunSnapshot, TriggerKind
 from .operator import (
     ClassifierDetailExpiredError,
     InvalidRunIdError,
+    NoScheduleError,
     Operator,
     RunAlreadyExistsError,
     RunResultNotReadyError,
@@ -940,6 +942,9 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 grpc.StatusCode.INVALID_ARGUMENT,
                 "run_id is required as the idempotency key",
             )
+        trigger = _START_RUN_TRIGGERS.get(request.trigger)
+        if trigger is None:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Unknown start trigger")
         try:
             run_input = _decode_input_payload_v2(request)
             run_context = _decode_json_object(request.context_json, "context_json")
@@ -948,6 +953,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         try:
             run_id = self._op.start_run(
                 request.workflow_selector,
+                trigger,
                 run_id=request.run_id,
                 input=run_input,
                 context=run_context,
@@ -964,6 +970,28 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             context.abort(grpc.StatusCode.NOT_FOUND, exc.args[0])
         except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
             context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+
+    def SetScheduleEnabled(self, request, context):  # noqa: N802
+        if not request.workflow_selector:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "workflow_selector is required")
+        try:
+            run_input = (
+                schedule_input_from_json(request.input_json)
+                if request.HasField("input_json")
+                else None
+            )
+            info = self._op.set_schedule_enabled(
+                request.workflow_selector, request.enabled, run_input
+            )
+        except AmbiguousWorkflow as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
+        except UnknownWorkflow as exc:
+            context.abort(grpc.StatusCode.NOT_FOUND, exc.args[0])
+        except NoScheduleError as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        except ValueError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        return workflow_info_to_v2(info)
 
     def CancelRun(self, request, context):  # noqa: N802
         if not request.run_id:
@@ -1431,6 +1459,12 @@ def _stream_chunks(data: bytes, chunk_type):
             data=chunk,
             eof=offset + len(chunk) == len(data),
         )
+
+
+_START_RUN_TRIGGERS = {
+    pb.START_RUN_TRIGGER_V2_API: TriggerKind.API,
+    pb.START_RUN_TRIGGER_V2_MANUAL: TriggerKind.MANUAL,
+}
 
 
 def _decode_input_payload_v2(request) -> dict[str, Any] | None:

@@ -142,7 +142,15 @@ def workflow_input_schema(workflow: Workflow) -> str:
 def workflow_revision(info: WorkflowInfo) -> str:
     """Current catalog declaration digest, excluding changing schedule observations."""
     fields = asdict(info)
-    for key in ("version", "next_run_at", "last_run_at", "webhook_url", "webhook_active"):
+    for key in (
+        "version",
+        "next_run_at",
+        "last_run_at",
+        "schedule_enabled",
+        "schedule_input",
+        "webhook_url",
+        "webhook_active",
+    ):
         fields.pop(key)
     fields["agent_declarations"] = {
         node_id: declaration.model_dump(mode="json")

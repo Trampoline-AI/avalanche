@@ -37,6 +37,7 @@ from runtime.operator.models import (
     ClassifierNoulSummary,
     ClassifierScoreSummary,
     RunStatus,
+    TriggerKind,
 )
 from runtime.operator.operator import (
     Operator,
@@ -111,7 +112,7 @@ def _seed_run(
         run_id,
         "removed-flow.py::flow",
         "Retained flow",
-        "manual",
+        TriggerKind.MANUAL,
         100.0,
         {
             "type": "prepared",

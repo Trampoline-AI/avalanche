@@ -19,7 +19,7 @@ from runtime.operator.convert_v2 import (
     workflow_topology_from_v2,
     workflow_topology_to_v2,
 )
-from runtime.operator.models import RunStatus
+from runtime.operator.models import RunStatus, TriggerKind
 from runtime.operator.operator import _CoordinatorProtocolError, _validate_preparation_event
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.registry import workflow_to_info
@@ -283,7 +283,7 @@ def test_manual_catalog_and_prepared_topology_own_evaluation_declarations():
     catalog = workflow_to_info(workflow, "flow.py")
     event = {"type": "prepared", **_workflow_metadata(workflow)}
     assert _validate_preparation_event(event) == "prepared"
-    run = Operator._run_from_prepared("run", "flow", "flow", "manual", 100.0, event)
+    run = Operator._run_from_prepared("run", "flow", "flow", TriggerKind.MANUAL, 100.0, event)
     [(node_id, metadata)] = run.topology.evaluation_metadata_json
     assert catalog.evaluation_metadata_json == {node_id: metadata}
     declaration = EvaluationDeclaration.model_validate_json(metadata)

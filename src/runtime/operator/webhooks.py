@@ -10,7 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlsplit
 
-from .models import WorkflowDescriptor
+from .models import TriggerKind, WorkflowDescriptor
 
 if TYPE_CHECKING:
     from .operator import Operator
@@ -165,7 +165,7 @@ class WebhookServer:
             return
         try:
             run_id = self._operator.start_run(
-                route.workflow_id, input=body, triggered_by="webhook"
+                route.workflow_id, input=body, triggered_by=TriggerKind.WEBHOOK
             )
         except Exception:
             self._reply(
