@@ -1955,21 +1955,130 @@ async def test_revamp_schema_start_form_preserves_typed_kwargs_and_confirms():
 
 
 @pytest.mark.asyncio
-async def test_revamp_schedules_inspection_never_offers_a_simulated_toggle():
+async def test_schedules_panel_enables_and_disables_the_selected_workflow():
+    from textual.widgets import DataTable
+
+    from tui.screens.input_form import InputForm
     from tui.screens.tools import ResourceScreen
 
-    app = AvalancheApp()
+    app = AvalancheApp(workflow="ingest_workflow")
+    provider = app.store.provider
+    selector = INGEST_WORKFLOW.selector
+
+    def advertised() -> set[str]:
+        description = app.extension_session.description
+        return {action.id for action in description.actions} if description else set()
+
+    def enabled_cell() -> str:
+        table = app.screen.query_one("#resource-body", DataTable)
+        columns = [column.label.plain for column in table.columns.values()]
+        row = next(
+            table.get_row_at(index)
+            for index in range(table.row_count)
+            if table.get_row_at(index)[0] == json.dumps(selector)
+        )
+        return row[columns.index("enabled")]
+
+    async def confirm() -> None:
+        await _wait_for(pilot, lambda: isinstance(app.screen, InputForm))
+        await pilot.click("#form-validate")
+        await pilot.click("#form-submit")
+        await _wait_for(pilot, lambda: isinstance(app.screen, ResourceScreen))
+
+    async with app.run_test(size=(160, 50)) as pilot:
+        await _wait_for(pilot, lambda: "schedule.enable" in advertised())
+        await pilot.press("ctrl+s")
+        assert isinstance(app.screen, ResourceScreen)
+        await _wait_for(pilot, lambda: enabled_cell() == "false")
+        await _wait_for(pilot, lambda: app.screen.query_one("#panel-action-0").display)
+
+        await pilot.press("1")
+        await confirm()
+        await _wait_for(pilot, lambda: enabled_cell() == "true")
+        assert provider._workflows[selector].schedule_enabled is True
+        assert "schedule.disable" in advertised()
+        # Panel buttons follow the advertised actions on their refresh interval.
+        await _wait_for(pilot, lambda: app.screen.query_one("#panel-action-1").display)
+        assert not app.screen.query_one("#panel-action-0").display
+
+        await pilot.press("1")
+        await confirm()
+        await _wait_for(pilot, lambda: enabled_cell() == "false")
+        assert provider._workflows[selector].schedule_enabled is False
+        await pilot.press("escape")
+        assert app.screen is app._screen
+
+
+@pytest.mark.asyncio
+async def test_enabling_a_schedule_asks_for_input_prefilled_with_defaults():
+    from textual.widgets import Input
+
+    from tui.screens.input_form import InputForm
+
+    app = AvalancheApp(workflow="ingest_workflow")
+    provider = app.store.provider
+    selector = INGEST_WORKFLOW.selector
+    schema = {
+        "type": "object",
+        "properties": {"since_hours": {"type": "integer", "default": 1}},
+    }
+    provider._workflows[selector] = replace(
+        provider._workflows[selector], input_schema_json=json.dumps(schema)
+    )
+
+    def advertised() -> set[str]:
+        description = app.extension_session.description
+        return {action.id for action in description.actions} if description else set()
+
+    async with app.run_test(size=(160, 50)) as pilot:
+        await _wait_for(pilot, lambda: "schedule.enable" in advertised())
+        await pilot.press("ctrl+s")
+        await pilot.press("1")
+        await _wait_for(pilot, lambda: isinstance(app.screen, InputForm))
+        field = app.screen.query_one("#field-0", Input)
+        assert field.value == "1"
+
+        field.value = "6"
+        await pilot.click("#form-validate")
+        await pilot.click("#form-submit")
+        await _wait_for(pilot, lambda: provider._workflows[selector].schedule_enabled)
+        assert provider._workflows[selector].schedule_input == {"since_hours": 6}
+
+        await _wait_for(pilot, lambda: "schedule.disable" in advertised())
+        await pilot.press("1")
+        await _wait_for(pilot, lambda: isinstance(app.screen, InputForm))
+        assert not app.screen.query(Input)
+
+
+@pytest.mark.asyncio
+async def test_run_history_header_marks_a_disabled_schedule():
+    app = AvalancheApp(workflow="ingest_workflow")
+    async with app.run_test(size=(160, 50)) as pilot:
+        history = app._screen.query_one("#run-history")
+        await _wait_for(pilot, lambda: "disabled" in str(history.border_title))
+        assert "next run" not in str(history.border_title)
+        app.store.provider.set_schedule_enabled(INGEST_WORKFLOW.selector, True)
+        await _wait_for(pilot, lambda: "next run" in str(history.border_title))
+        assert "disabled" not in str(history.border_title)
+
+
+@pytest.mark.asyncio
+async def test_schedules_panel_offers_no_controls_for_an_unscheduled_workflow():
+    from tui.screens.tools import ResourceScreen
+
+    app = AvalancheApp(workflow="order_workflow")
     async with app.run_test(size=(120, 40)) as pilot:
         await _wait_for(pilot, lambda: app.extension_session.description is not None)
         await pilot.press("ctrl+s")
         assert isinstance(app.screen, ResourceScreen)
-        assert app.screen.panel.resource == "schedules"
+        await pilot.pause()
+        assert not any(
+            button.display for button in app.screen.query("#resource-actions Button")
+        )
         assert not any(
             action.id.startswith("schedule.")
             for action in app.extension_session.description.actions
         )
-        await pilot.press("escape")
-        assert app.screen is app._screen
 
 
 @pytest.mark.asyncio

@@ -11,6 +11,9 @@ from uuid import uuid4
 
 import pytest
 
+from tui.app import NEXT_RUN_MARK, SCHEDULE_DISABLED_MARK
+from tui.state import DISABLE_SCHEDULE_LABEL, ENABLE_SCHEDULE_LABEL
+
 pytestmark = pytest.mark.tmux
 
 
@@ -112,3 +115,18 @@ def test_terminal_agent_drilldown_and_return(tui_session):
     assert "SANDBOX_STDOUT_SENTINEL" not in screen
     _tmux("send-keys", "-t", tui_session, "Escape")
     _wait_for(tui_session, lambda text: "Agent iteration.recorded" in text)
+
+
+@pytest.mark.parametrize("tui_session", ["ingest_workflow"], indirect=True)
+def test_terminal_schedule_enable_and_disable(tui_session):
+    _wait_for(tui_session, lambda text: SCHEDULE_DISABLED_MARK in text)
+    _tmux("send-keys", "-t", tui_session, "C-s")
+    _wait_for(tui_session, lambda text: ENABLE_SCHEDULE_LABEL in text)
+
+    _tmux("send-keys", "-t", tui_session, "1")
+    _confirm_empty_action(tui_session)
+    _wait_for(tui_session, lambda text: DISABLE_SCHEDULE_LABEL in text)
+
+    _tmux("send-keys", "-t", tui_session, "Escape")
+    screen = _wait_for(tui_session, lambda text: NEXT_RUN_MARK in text)
+    assert SCHEDULE_DISABLED_MARK not in screen

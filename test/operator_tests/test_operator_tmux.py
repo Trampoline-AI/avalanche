@@ -11,7 +11,7 @@ from uuid import uuid4
 import pytest
 
 from runtime.operator.client import GrpcStateProvider, OperatorCallError
-from runtime.operator.models import RunStatus
+from runtime.operator.models import RunStatus, TriggerKind
 
 
 @pytest.mark.tmux
@@ -208,9 +208,16 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
         def cancellable():
             return long_step()
 
-        @ava.workflow(cron="0 0 1 1 *")
+        class Window(ava.BaseInput):
+            hours: int = 1
+
+        @ava.source
+        def tick(payload: Window):
+            return payload.hours
+
+        @ava.workflow(input=Window, cron="0 0 1 1 *")
         def scheduled():
-            return None
+            return tick()
     """)
     )
     with socket.socket() as listener:
@@ -425,12 +432,48 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
             assertions.append("pilot_explicit_download_confirmation_and_no_overwrite")
             schedules = await asyncio.to_thread(extension.read, "schedules", context, limit=1)
             assert schedules.items[0]["cron"] == "0 0 1 1 *"
-            assert schedules.items[0]["control"] == "inspection_only"
+            assert schedules.items[0]["enabled"] is False
+            assert schedules.items[0]["next_run_at"] is None
             assert not any(
                 action.id.startswith("schedule.")
                 for action in extension.describe(context).actions
             )
-            assertions.append("real_schedule_inspection_no_fake_toggle")
+            scheduled = next(flow for flow in flows if flow.name == "scheduled")
+            schedule_context = TuiContext(
+                (), flow=scheduled.selector, version=scheduled.version
+            )
+            enable = next(
+                action
+                for action in extension.describe(schedule_context).actions
+                if action.id == "schedule.enable"
+            )
+            assert enable.input_schema["properties"]["hours"]["default"] == 1
+            enabled = await asyncio.to_thread(
+                extension.invoke,
+                "schedule.enable",
+                schedule_context,
+                {"hours": 6},
+                intent_id="enable-proof",
+            )
+            assert enabled.status == "completed"
+            schedules = await asyncio.to_thread(extension.read, "schedules", context, limit=1)
+            assert schedules.items[0]["enabled"] is True
+            assert schedules.items[0]["input"] == {"hours": 6}
+            assert schedules.items[0]["next_run_at"] is not None
+            assert "schedule.disable" in {
+                action.id for action in extension.describe(schedule_context).actions
+            }
+            assert (await asyncio.to_thread(observer.get_run, run_id)).triggered_by is (
+                TriggerKind.MANUAL
+            )
+            await asyncio.to_thread(
+                extension.invoke,
+                "schedule.disable",
+                schedule_context,
+                {},
+                intent_id="disable-proof",
+            )
+            assertions.append("real_schedule_enable_and_disable")
             from textual.widgets import DataTable
 
             panel = next(

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Callable, Literal, Protocol, runtime_checkable
 
 from .models import (
@@ -151,6 +153,71 @@ class ActionDescriptor:
     input_schema: Schema | None
 
 
+SCHEDULE_ACTION_IDS = ("schedule.enable", "schedule.disable")
+
+
+def _freeze(value: JSON) -> JSON:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    return value
+
+
+def schedule_input_schema(workflow: WorkflowInfo) -> Schema | None:
+    """Input form for enabling a schedule, or None when the workflow takes no input.
+
+    Fields default to the input the schedule already runs with, falling back to the
+    workflow's declared defaults for fields that input leaves out.
+    """
+    if not workflow.input_schema_json:
+        return None
+    schema = json.loads(workflow.input_schema_json)
+    properties = schema.get("properties")
+    if not properties:
+        return None
+    stored = workflow.schedule_input or {}
+    schema["properties"] = {
+        name: {**field, "default": stored[name]} if name in stored else field
+        for name, field in properties.items()
+    }
+    return _freeze(schema)
+
+
+ENABLE_SCHEDULE_LABEL = "Enable schedule"
+DISABLE_SCHEDULE_LABEL = "Disable schedule"
+
+
+def schedule_action(
+    enabled: bool, read_only: bool, input_schema: Schema | None = None
+) -> ActionDescriptor:
+    """Enable or disable the cron schedule of one workflow that declares one.
+
+    Enabling a workflow that declares input asks for the input its runs start with.
+    """
+    if enabled:
+        return ActionDescriptor(
+            "schedule.disable",
+            DISABLE_SCHEDULE_LABEL,
+            None,
+            not read_only,
+            "read_only" if read_only else None,
+            True,
+            "Disable this cron schedule until enabled again or the operator restarts?",
+            None,
+        )
+    return ActionDescriptor(
+        "schedule.enable",
+        ENABLE_SCHEDULE_LABEL,
+        None,
+        not read_only,
+        "read_only" if read_only else None,
+        True,
+        "Enable this cron schedule until disabled or the operator restarts?",
+        input_schema,
+    )
+
+
 @dataclass(frozen=True)
 class PanelDescriptor:
     id: str
@@ -160,6 +227,8 @@ class PanelDescriptor:
     renderer: Literal["table", "tree", "json", "diff", "widget"]
     columns: tuple[str, ...] = ()
     widget_factory: str | None = None
+    # Action IDs the panel offers as buttons when the description advertises them.
+    actions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

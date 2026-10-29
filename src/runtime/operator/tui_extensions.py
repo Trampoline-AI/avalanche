@@ -3,8 +3,9 @@
 Start uses a deterministic caller-owned run ID for each intent. The operator
 rejects reuse of an existing ID; after an uncertain response keep the same
 intent (never silently retry with a new ID). Cancel is an idempotent request,
-not a promise that the worker has already stopped. No wait/schedule controls
-are advertised because the standalone runtime does not implement them.
+not a promise that the worker has already stopped. A workflow with a cron
+schedule also offers enable or disable; that state lives only in the operator's
+memory.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from pydantic import JsonValue
 from avalanche.file import File
 from tui.state import (
     JSON,
+    SCHEDULE_ACTION_IDS,
     ActionDescriptor,
     ActionResult,
     ExtensionDescription,
@@ -38,10 +40,12 @@ from tui.state import (
     TuiContext,
     TuiExtensionError,
     json_plain,
+    schedule_action,
+    schedule_input_schema,
 )
 
 from .client import OperatorCallError
-from .models import RunStatus
+from .models import RunStatus, TriggerKind
 from .proto import operator_pb2 as pb
 
 if TYPE_CHECKING:
@@ -129,6 +133,14 @@ class OperatorTuiExtensions:
                         _object(schema),
                     )
                 )
+            if workflow is not None and workflow.cron:
+                actions.append(
+                    schedule_action(
+                        workflow.schedule_enabled,
+                        provider._read_only,
+                        schedule_input_schema(workflow),
+                    )
+                )
             if context.run is not None:
                 snapshot = provider.get_latest_run_snapshot(
                     context.run, catalog.operator_instance_id
@@ -194,7 +206,8 @@ class OperatorTuiExtensions:
                     "tools",
                     "schedules",
                     "table",
-                    ("id", "cron", "next_run_at", "last_run_at"),
+                    ("id", "enabled", "cron", "input", "next_run_at", "last_run_at"),
+                    actions=SCHEDULE_ACTION_IDS,
                 ),
             ]
             if context.run is not None:
@@ -344,9 +357,35 @@ class OperatorTuiExtensions:
                     run_id=run_id,
                     input={key: json_plain(value) for key, value in payload.items()},
                     expected_version=context.version,
+                    trigger=TriggerKind.MANUAL,
                 )
                 value: dict[str, JsonValue] = {"run_id": run_id}
                 status: Literal["accepted", "completed"] = "accepted"
+            elif action in SCHEDULE_ACTION_IDS:
+                assert context.flow is not None
+                with self._provider._state_lock:
+                    workflow = next(
+                        flow
+                        for flow in self._provider._catalog.workflows
+                        if flow.selector == context.flow
+                    )
+                takes_input = (
+                    action == "schedule.enable" and schedule_input_schema(workflow) is not None
+                )
+                if payload and not takes_input:
+                    raise TuiExtensionError(
+                        "invalid_input", "This schedule control takes no input", context=context
+                    )
+                info = self._provider.set_schedule_enabled(
+                    context.flow,
+                    action == "schedule.enable",
+                    {key: json_plain(value) for key, value in payload.items()}
+                    if takes_input
+                    else None,
+                )
+                value = {"enabled": info.schedule_enabled}
+                # The schedule change has finished once the operator answers.
+                status = "completed"
             elif action == "run.cancel":
                 if payload:
                     raise TuiExtensionError(
