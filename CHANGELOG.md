@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Long browser log entries keep their time, source and level pinned to the log
+  viewport while the message scrolls; these cells leave when their row ends.
+
 - Workflow graph cards use the timeline’s animated status glyphs before monospace
   titles, flat state-tinted 1px borders/backgrounds and 3px corners. Selected cards
   keep a primary outline, including running steps; runtime designation labels remain.

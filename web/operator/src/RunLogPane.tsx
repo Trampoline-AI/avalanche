@@ -619,27 +619,32 @@ export function RunLogPane({
                       key={entry.sequence}
                       data-index={virtualRow.index}
                       ref={virtualizer.measureElement}
-                      style={{ transform: `translateY(${virtualRow.start}px)` }}
+                      // Use layout coordinates: translating the row also offsets its
+                      // sticky children from the scrollport by virtualRow.start.
+                      style={{ top: virtualRow.start }}
                     >
-                      <time dateTime={new Date(entry.timestamp * 1000).toISOString()}>
+                      <time
+                        className="sticky top-0 bg-inherit"
+                        dateTime={new Date(entry.timestamp * 1000).toISOString()}
+                      >
                         {logTimestamp(entry.timestamp)}
                       </time>
                       {graphNodeId ? (
                         <button
                           type="button"
-                          className="run-log-node min-w-0 cursor-pointer border-0 bg-transparent p-0 text-left [font:inherit] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>strong]:block [&>strong]:truncate [&>code]:mt-0.5 [&>code]:block [&>code]:truncate [&>code]:text-[8px] [&>code]:text-muted"
+                          className="run-log-node sticky top-0 min-w-0 cursor-pointer border-0 bg-inherit p-0 text-left [font:inherit] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>strong]:block [&>strong]:truncate [&>code]:mt-0.5 [&>code]:block [&>code]:truncate [&>code]:text-[8px] [&>code]:text-muted"
                           onClick={() => onSelectNode(graphNodeId)}
                         >
                           <strong>{nodeLabel}</strong>
                           {nodeLabel !== entry.nodeId && <code>{graphNodeId}</code>}
                         </button>
                       ) : (
-                        <span className="run-log-node min-w-0 text-left [font:inherit] text-acid [&>strong]:block [&>strong]:truncate">
+                        <span className="run-log-node sticky top-0 min-w-0 bg-inherit text-left [font:inherit] text-acid [&>strong]:block [&>strong]:truncate">
                           <strong>{nodeLabel}</strong>
                         </span>
                       )}
                       <span
-                        className={`run-log-level font-bold uppercase ${entry.level === "error" || entry.level === "critical" ? `level-${entry.level} text-danger` : entry.level === "warning" ? "level-warning text-amber" : "text-secondary"}`}
+                        className={`run-log-level sticky top-0 bg-inherit font-bold uppercase ${entry.level === "error" || entry.level === "critical" ? `level-${entry.level} text-danger` : entry.level === "warning" ? "level-warning text-amber" : "text-secondary"}`}
                       >
                         {entry.level}
                       </span>

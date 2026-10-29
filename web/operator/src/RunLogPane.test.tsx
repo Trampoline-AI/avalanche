@@ -96,6 +96,14 @@ describe("run logs", () => {
       ).toEqual(["Fetched orders", "Validated orders", bodies["log-3"]]),
     );
     expect(view.container.querySelector("img")).toBeNull();
+    for (const row of screen.getAllByRole("article")) {
+      expect(row.style.transform).toBe("");
+      expect(row.style.top).toMatch(/^\d+(\.\d+)?px$/);
+      for (const cell of Array.from(row.children).slice(0, 3)) {
+        expect(cell).toHaveClass("sticky", "top-0", "bg-inherit");
+      }
+      expect(row.querySelector("pre")).not.toHaveClass("sticky");
+    }
     expect(view.container.textContent).not.toContain("\u001b[");
     view.rerender(
       <RunLogPane
