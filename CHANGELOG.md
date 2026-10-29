@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.16.0
+
 - Long browser log entries keep their time, source and level pinned to the log
   viewport while the message scrolls; these cells leave when their row ends.
 
