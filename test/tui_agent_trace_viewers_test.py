@@ -117,8 +117,18 @@ def test_a_pydantic_ai_run_renders_through_its_viewer(monkeypatch):
     # A response that ended in a provider error marks its turn failed.
     assert [view.failed for view in views] == [False, True]
     header = [line for line, _ in viewer.header(final.header)]
-    assert any(final.header.external_run_id in line for line in header)
-    assert any("Retries: 1" in line for line in header)
+    # The run ID is in the shared header; this one adds the conversation.
+    assert final.header.session_id is not None
+    assert any(final.header.session_id in line for line in header)
+    assert not any(final.header.external_run_id in line for line in header)
+    # A retried call adds a header line carrying the count.
+    native = final.header.native
+    assert native.retries == 1
+    unretried = final.header.model_copy(
+        update={"native": native.model_copy(update={"retries": 0})}
+    )
+    (retry_line,) = set(header) - {line for line, _ in viewer.header(unretried)}
+    assert str(native.retries) in retry_line
     labels = [viewer.live_label(event) for event in events]
     assert all(labels)
     assert len(set(labels)) == len({event.kind_label for event in events})
