@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createGraphLayout } from "./graphLayout";
-import { highlightConnectedEdges } from "./graphSelection";
+import {
+  highlightConnectedEdges,
+  INPUT_EDGE_MARKER,
+  INPUT_EDGE_MARKER_CONNECTED,
+} from "./graphSelection";
+import { INPUT_NODE_ID } from "./workflowInput";
 
 const topology = {
   nodeIds: ["root", "before", "selected", "after", "end", "sibling", "other"],
@@ -62,3 +67,36 @@ describe.each(["horizontal", "vertical"] as const)(
     });
   },
 );
+
+describe("run input edges", () => {
+  const inputTopology = {
+    nodeIds: [INPUT_NODE_ID, "load", "report"],
+    graph: {
+      [INPUT_NODE_ID]: { children: ["load", "report"] },
+      load: { children: ["report"] },
+    },
+  };
+
+  it("draws input edges dashed with a diamond, apart from the run order arrows", () => {
+    const { edges } = createGraphLayout(inputTopology, "horizontal");
+    const byId = Object.fromEntries(
+      highlightConnectedEdges(edges).map((edge) => [edge.id, edge]),
+    );
+    for (const id of [`${INPUT_NODE_ID}->load`, `${INPUT_NODE_ID}->report`]) {
+      expect(byId[id].markerEnd).toBe(INPUT_EDGE_MARKER);
+      expect(byId[id].style?.strokeDasharray).toBeDefined();
+    }
+    expect(byId["load->report"].markerEnd).toMatchObject({ type: "arrowclosed" });
+    expect(byId["load->report"].style?.strokeDasharray).toBeUndefined();
+  });
+
+  it("highlights the input edges of a selected step and fades the others", () => {
+    const { edges } = createGraphLayout(inputTopology, "horizontal");
+    const byId = Object.fromEntries(
+      highlightConnectedEdges(edges, "load").map((edge) => [edge.id, edge]),
+    );
+    expect(byId[`${INPUT_NODE_ID}->load`].markerEnd).toBe(INPUT_EDGE_MARKER_CONNECTED);
+    expect(byId[`${INPUT_NODE_ID}->report`].markerEnd).toBe(INPUT_EDGE_MARKER);
+    expect(byId[`${INPUT_NODE_ID}->report`].style?.opacity).toBeLessThan(1);
+  });
+});
