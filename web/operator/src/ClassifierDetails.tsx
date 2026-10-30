@@ -379,7 +379,7 @@ export function ClassifierDefinition({
           </section>
         </div>
       </section>
-      <StepInterfacePanel definition={declaration} />
+      {context === "invocation" && <StepInterfacePanel definition={declaration} framed />}
     </div>
   );
 }

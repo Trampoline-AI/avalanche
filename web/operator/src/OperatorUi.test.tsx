@@ -168,7 +168,8 @@ describe("agent runtime on graph nodes", () => {
         .closest("article")!;
       expect(card).toHaveAttribute("data-node-state", status ?? "pending");
       expect(card).toHaveStyle({
-        "--node-state-color": color === "amber" ? "var(--color-amber)" : `var(--color-run-status-${color})`,
+        "--node-state-color":
+          color === "amber" ? "var(--color-amber)" : `var(--color-run-status-${color})`,
       });
       expect(card).toHaveStyle({ outline: "2px solid var(--color-acid)" });
       const marker = card.querySelector(".node-title .run-status-glyph")!;
@@ -176,7 +177,9 @@ describe("agent runtime on graph nodes", () => {
       expect(marker).toHaveAttribute("data-char", glyph);
       // The glyph is real text, so it reads in the node's DOM text (not only via CSS).
       expect(marker.textContent).toBe(glyph);
-      expect(card.querySelector(".node-title")!.textContent!.trimStart().startsWith(glyph)).toBe(true);
+      expect(
+        card.querySelector(".node-title")!.textContent!.trimStart().startsWith(glyph),
+      ).toBe(true);
       expect(marker.parentElement).toHaveAttribute("data-tone", tone);
       expect(marker.parentElement).toHaveClass(
         color === "amber" ? "text-amber" : `text-run-status-${color}`,
@@ -280,7 +283,8 @@ describe("operator workflows", () => {
         });
         yield* idleUpdates(signal);
       },
-      getWorkflowNodeSource: async () => "def fetch():\n    return 'Current source'",
+      // Source stays unavailable so no editor renders; Code is still the selected tab.
+      getWorkflowNodeSource: async () => undefined,
     });
     render(<OperatorUi host={{ api, presentation }} />);
     await screen.findByRole("button", { name: "Inspect Inventory fetch" });
@@ -296,17 +300,18 @@ describe("operator workflows", () => {
     act(() => publish.resolve());
     await screen.findByRole("button", { name: /run-new, running/ });
     fireEvent.click(await screen.findByRole("button", { name: "Inspect Recorded fetch" }));
-    expect(screen.getByRole("region", { name: "Step interface" })).toHaveTextContent(
+    fireEvent.click(screen.getByRole("tab", { name: "Step interface" }));
+    expect(screen.getByRole("tabpanel", { name: "Step interface" })).toHaveTextContent(
       /unavailable/i,
     );
-    expect(screen.queryByRole("tab", { name: "Run I/O" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Trace" })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel run" }));
     await screen.findByRole("button", { name: /run-new, cancelled/ });
     expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
     await screen.findByRole("button", { name: "Inspect Fetch" });
-    expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveAttribute("aria-selected", "true");
     expect(
       screen.queryByRole("button", { name: "Inspect Recorded fetch" }),
     ).not.toBeInTheDocument();
@@ -455,7 +460,8 @@ describe("operator workflows", () => {
       act(() => ready.resolve(baseline));
       await screen.findByRole("button", { name: "Cancel run" });
       fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
-      expect(screen.getByRole("region", { name: "Step interface" })).toHaveTextContent(
+      fireEvent.click(screen.getByRole("tab", { name: "Step interface" }));
+      expect(screen.getByRole("tabpanel", { name: "Step interface" })).toHaveTextContent(
         /unavailable/i,
       );
       expect(screen.getByText("Viewing a run snapshot")).toBeInTheDocument();
@@ -468,7 +474,7 @@ describe("operator workflows", () => {
         }),
       );
       await screen.findByRole("button", { name: "Run" });
-      expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
+      expect(screen.getByRole("tab", { name: "Code" })).toBeVisible();
       expect(screen.queryByRole("button", { name: "Cancel run" })).not.toBeInTheDocument();
     },
   );
@@ -1196,7 +1202,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
       "true",
     );
     fireEvent.click(node);
-    expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Code" })).toBeVisible();
     expect(snapshots).not.toHaveBeenCalled();
     expect(logs).not.toHaveBeenCalled();
   });
@@ -1240,7 +1246,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     fireEvent.click(screen.getByRole("button", { name: /run-2,/ }));
     await screen.findByText("Loading run snapshot");
     fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
-    expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Code" })).toBeVisible();
     await act(async () => lateSnapshot.resolve(snapshotFor(secondSummary)));
     expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
       "aria-pressed",
@@ -1251,7 +1257,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     fireEvent.click(screen.getByRole("button", { name: /run-2,/ }));
     await screen.findByText("Snapshot was removed");
     fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
-    expect(screen.getByRole("tab", { name: "Definition" })).toBeVisible();
+    expect(screen.getByRole("tab", { name: "Code" })).toBeVisible();
     act(() => {
       runs = [...runs, third];
       reset.resolve();
@@ -1320,9 +1326,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
       "CurrentBatch",
     );
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
-    expect(screen.queryByLabelText("Source code")).not.toBeInTheDocument();
-    expect(getWorkflowNodeSource).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveAttribute("aria-selected", "true");
     expect(await screen.findByLabelText("Source code")).toHaveTextContent("current source");
     getWorkflowNodeSource.mockClear();
     fireEvent.click(screen.getByRole("button", { name: /run-1,/ }));
@@ -1336,6 +1340,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
       "HistoricalBatch",
     );
     expect(historicalCard).not.toHaveTextContent("CurrentBatch");
+    fireEvent.click(screen.getByRole("tab", { name: "Step interface" }));
     expect(screen.getByRole("region", { name: "Step output" })).toHaveTextContent(
       "HistoricalBatch",
     );
@@ -1345,17 +1350,47 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Trace" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Step interface" }));
     expect(screen.getByRole("region", { name: "Step output" })).toHaveTextContent(
       "HistoricalBatch",
     );
     expect(getWorkflowNodeSource).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
-    expect(screen.getByRole("tab", { name: "Definition" })).toHaveAttribute(
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByLabelText("Source code")).toHaveTextContent("current source");
+  });
+
+  it("jumps from a run's step back to the same step's current definition", async () => {
+    // Unavailable source keeps the editor out of this test; the request is what matters.
+    const getWorkflowNodeSource = vi.fn<OperatorApi["getWorkflowNodeSource"]>(
+      async () => undefined,
+    );
+    mount(
+      createApi({ getLatestRunSnapshot: async () => snapshotFor(), getWorkflowNodeSource }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Inspect Fetch" }));
+    fireEvent.click(screen.getByRole("button", { name: /run-1,/ }));
+    const runInspector = await screen.findByRole("complementary", { name: "Run inspector" });
+    getWorkflowNodeSource.mockClear();
+
+    fireEvent.click(within(runInspector).getByRole("button", { name: /current definition/i }));
+
+    expect(screen.getByRole("button", { name: "Current definition" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    const declaration = screen.getByRole("complementary", { name: "Node declaration" });
+    expect(within(declaration).getByRole("heading", { level: 2 })).toHaveTextContent("Fetch");
+    expect(within(declaration).getByRole("tab", { name: "Code" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
-    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
-    expect(await screen.findByLabelText("Source code")).toHaveTextContent("current source");
+    expect(getWorkflowNodeSource).toHaveBeenCalledExactlyOnceWith(
+      expect.any(String),
+      "fetch",
+      expect.any(AbortSignal),
+    );
+    expect(await within(declaration).findByText(/Source code is unavailable/)).toBeVisible();
   });
 
   it("retains a selected node while loading another topology and clears it only when absent", async () => {
@@ -1420,7 +1455,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
       screen.queryByRole("complementary", { name: "Run inspector" }),
     ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Current definition" }));
-    expect(screen.queryByRole("tab", { name: "Definition" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: "Code" })).not.toBeInTheDocument();
   });
 
   it("expands the timeline independently of node inspection and retains filters on collapse", async () => {

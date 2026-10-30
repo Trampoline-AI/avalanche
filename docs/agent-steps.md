@@ -538,8 +538,8 @@ count. When zoomed out, the badge shows only its icon and count. Select the node
 in **Current**, then **Evals**, to inspect named metrics, question types,
 expandable criteria, composite names,
 and effective Jev model and timeout. **Agent definition** contains instructions,
-agent inputs/outputs, models, and resources; **Step definition** contains only the
-step interface card. These tabs describe configuration, not completed judgments.
+agent inputs/outputs, models, and resources; **Step interface** contains only the
+step's declared inputs and output. These tabs describe configuration, not completed judgments.
 Historical run graphs retain their captured declarations after source edits.
 
 Select `evaluations_workflow` and click **Run** without supplying JSON or files.

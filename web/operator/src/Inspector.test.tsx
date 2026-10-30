@@ -12,6 +12,7 @@ import { Inspector } from "./Inspector";
 import type { EvaluationRecord } from "./evaluations";
 import { useRunEvaluations } from "./useRunEvaluations";
 import type { StepInterface } from "./stepInterface";
+import type { StepIo } from "./stepIo";
 import { DETAIL_CACHE_MAX_BYTES } from "./detailProjection";
 import {
   AgentEventDescriptorMsg,
@@ -20,7 +21,7 @@ import {
   FlowInfoMsg,
   RunSnapshotMsg,
 } from "./model";
-import type { AgentEventKind } from "./model";
+import type { AgentEventKind, NodeSnapshotMsg } from "./model";
 import {
   claudeTurnEvent,
   predictRlmTraceHeader,
@@ -632,26 +633,26 @@ describe("retained run inspection", () => {
       within(definition)
         .getAllByRole("tab")
         .map((tab) => tab.textContent),
-    ).toEqual(["Agent definition", "Evals", "Step definition"]);
+    ).toEqual(["Agent definition", "Evals", "Step interface"]);
     expect(definition.querySelector("header")).toHaveTextContent("Agent · Current state");
     expect(definition).toHaveTextContent("Follow the current instructions.");
     const schemaGroup = screen.getByRole("region", { name: "Inputs and outputs" });
     expect(schemaGroup).toHaveTextContent("current_question");
     expect(schemaGroup).toHaveTextContent("current_answer");
     expect(schemaGroup).not.toHaveTextContent("current_payload");
-    expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("tab", { name: "Step definition" }));
+    expect(screen.queryByRole("tabpanel", { name: "Step interface" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Step interface" }));
     expect(
       screen.queryByRole("region", { name: "Inputs and outputs" }),
     ).not.toBeInTheDocument();
-    const currentInterface = screen.getByRole("region", { name: "Step interface" });
+    const currentInterface = screen.getByRole("tabpanel", { name: "Step interface" });
     expect(currentInterface).toHaveTextContent("current_payload");
     expect(currentInterface).not.toHaveTextContent("current_question");
     expect(screen.queryByText("Follow the current instructions.")).not.toBeInTheDocument();
-    fireEvent.keyDown(screen.getByRole("tab", { name: "Step definition" }), { key: "Home" });
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Step interface" }), { key: "Home" });
     expect(screen.getByRole("tab", { name: "Agent definition" })).toHaveFocus();
     expect(screen.getByRole("region", { name: "Inputs and outputs" })).toBeVisible();
-    expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tabpanel", { name: "Step interface" })).not.toBeInTheDocument();
     expect(screen.queryByText("running")).not.toBeInTheDocument();
 
     view.rerender(
@@ -667,7 +668,7 @@ describe("retained run inspection", () => {
     openRunIo();
     expect(await screen.findByText("Historical question")).toBeInTheDocument();
     expect(screen.queryByText("current_question")).not.toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tabpanel", { name: "Step interface" })).not.toBeInTheDocument();
     expect(screen.queryByText("retained_payload")).not.toBeInTheDocument();
     expect(screen.queryByText("current_payload")).not.toBeInTheDocument();
 
@@ -692,7 +693,7 @@ describe("retained run inspection", () => {
     expect(
       screen.getByText("Historical output schema unavailable for this run."),
     ).toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("tabpanel", { name: "Step interface" })).not.toBeInTheDocument();
   });
 
   it("keeps execution tabs separate from definitions and restores the selected run tab", async () => {
@@ -1507,14 +1508,15 @@ describe("regular step inspection", () => {
         onClose={() => undefined}
       />,
     );
-    expect(screen.getByRole("region", { name: "Step inputs" })).toHaveTextContent(
-      "current_payload",
-    );
-    expect(screen.queryByLabelText("Source code")).not.toBeInTheDocument();
-    expect(calls).toBe(0);
-    fireEvent.keyDown(screen.getByRole("tab", { name: "Definition" }), { key: "ArrowRight" });
-    expect(screen.getByRole("tab", { name: "Code" })).toHaveFocus();
-    expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("tablist", { name: "Workflow step views" }))
+        .getAllByRole("tab")
+        .map((tab) => tab.textContent),
+    ).toEqual(["Code", "Step interface"]);
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("region", { name: "Step inputs" })).not.toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(/Loading source/);
+    expect(calls).toBe(1);
     await waitFor(() => expect(oldSignal).toBeDefined());
     const updatedWorkflow = FlowInfoMsg.create({
       ...workflow,
@@ -1561,12 +1563,18 @@ describe("regular step inspection", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("Source code")).toHaveTextContent("new API"),
     );
-    fireEvent.keyDown(screen.getByRole("tab", { name: "Code" }), { key: "Home" });
-    expect(screen.getByRole("tab", { name: "Definition" })).toHaveFocus();
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Code" }), { key: "ArrowRight" });
+    expect(screen.getByRole("tab", { name: "Step interface" })).toHaveFocus();
     expect(screen.queryByLabelText("Source code")).not.toBeInTheDocument();
-    expect(screen.getByRole("region", { name: "Step inputs" })).toHaveTextContent(
-      "retained_payload",
-    );
+    const stepInterface = screen.getByRole("tabpanel", { name: "Step interface" });
+    expect(
+      within(stepInterface).getByRole("region", { name: "Step inputs" }),
+    ).toHaveTextContent("retained_payload");
+    // The tab names the panel; no nested container repeats the title.
+    expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Step interface" }), { key: "Home" });
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveFocus();
+    expect(await screen.findByLabelText("Source code")).toHaveTextContent("new API");
   });
 
   it("pins ordinary run interfaces without loading source or borrowing missing metadata from the catalog", () => {
@@ -1593,6 +1601,13 @@ describe("regular step inspection", () => {
         onClose={() => undefined}
       />,
     );
+    expect(
+      within(screen.getByRole("tablist", { name: "Run step views" }))
+        .getAllByRole("tab")
+        .map((tab) => tab.textContent),
+    ).toEqual(["Run I/O", "Step interface"]);
+    expect(screen.queryByRole("tab", { name: "Code" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Step interface" }));
     expect(screen.getByRole("region", { name: "Step inputs" })).toHaveTextContent(
       "retained_payload",
     );
@@ -1620,7 +1635,7 @@ describe("regular step inspection", () => {
         onClose={() => undefined}
       />,
     );
-    const unavailable = screen.getByRole("region", { name: "Step interface" });
+    const unavailable = screen.getByRole("tabpanel", { name: "Step interface" });
     expect(unavailable).toHaveTextContent(/unavailable/i);
     expect(within(unavailable).queryByRole("region", { name: "Step inputs" })).toBeNull();
     expect(screen.queryByText("current_payload")).not.toBeInTheDocument();
@@ -1642,11 +1657,162 @@ describe("regular step inspection", () => {
         onClose={() => undefined}
       />,
     );
-    const malformed = screen.getByRole("region", { name: "Step interface" });
+    const malformed = screen.getByRole("tabpanel", { name: "Step interface" });
     expect(within(malformed).getByRole("alert")).toHaveTextContent("step_inputs");
     expect(within(malformed).queryByRole("region", { name: "Step inputs" })).toBeNull();
     expect(screen.queryByText("current_payload")).not.toBeInTheDocument();
     expect(getWorkflowNodeSource).not.toHaveBeenCalled();
+  });
+});
+
+describe("standard step run values", () => {
+  const stepIo: StepIo = {
+    inputs: [
+      {
+        name: "batch",
+        value: {
+          kind: "json",
+          typeName: "dict",
+          value: { label: "nightly", rows: [1, 2, "… [+98 more items]"] },
+          truncated: true,
+        },
+      },
+      {
+        name: "frame",
+        value: {
+          kind: "repr",
+          typeName: "polars.dataframe.frame.DataFrame",
+          text: "shape: (2, 1)",
+          truncated: false,
+        },
+      },
+    ],
+    output: { kind: "json", typeName: "dict", value: { count: 100 }, truncated: false },
+  };
+
+  function renderRun(
+    nodeState: Partial<NodeSnapshotMsg>,
+    props: Partial<ComponentProps<typeof Inspector>> = {},
+  ) {
+    return render(
+      <Inspector
+        api={createApi()}
+        workflow={workflow}
+        run={RunSnapshotMsg.create({ ...snapshotFor(), nodes: [{ ...node, ...nodeState }] })}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+        {...props}
+      />,
+    );
+  }
+
+  it("opens on what the step received and returned in this run", () => {
+    renderRun({ status: "success", stepIo });
+
+    expect(screen.getByRole("tab", { name: "Run I/O" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    const inputs = screen.getByRole("region", { name: "Inputs" });
+    expect(
+      within(inputs)
+        .getAllByRole("group", { name: /^(batch|frame)$/ })
+        .map((group) => group.getAttribute("aria-label")),
+    ).toEqual(["batch", "frame"]);
+    const batch = within(inputs).getByRole("group", { name: "batch" });
+    expect(batch).toHaveTextContent("dict");
+    expect(batch).toHaveTextContent("nightly");
+    fireEvent.click(within(batch).getByRole("button", { expanded: false }));
+    expect(batch).toHaveTextContent("more items");
+    expect(within(batch).getByText(/truncated/i)).toBeVisible();
+    const frame = within(inputs).getByRole("group", { name: "frame" });
+    expect(frame).toHaveTextContent("polars.dataframe.frame.DataFrame");
+    expect(frame).toHaveTextContent("shape: (2, 1)");
+    expect(within(frame).queryByText(/truncated/i)).toBeNull();
+    const output = screen.getByRole("region", { name: "Output" });
+    expect(output).toHaveTextContent("count");
+    expect(output).toHaveTextContent("100");
+  });
+
+  it("keeps a failed call's inputs without inventing an output", () => {
+    renderRun({
+      status: "failed",
+      error: "ValueError: boom",
+      stepIo: { inputs: stepIo.inputs },
+    });
+
+    expect(screen.getByRole("region", { name: "Inputs" })).toHaveTextContent("nightly");
+    expect(
+      within(screen.getByRole("region", { name: "Output" })).getByRole("status"),
+    ).toBeVisible();
+    expect(screen.queryByRole("group", { name: "Return value" })).toBeNull();
+  });
+
+  it("reports a step that has not run instead of empty values", () => {
+    renderRun({ status: "pending" });
+
+    expect(screen.getByRole("tabpanel", { name: "Run I/O" })).toContainElement(
+      screen.getByRole("status"),
+    );
+    expect(screen.queryByRole("region", { name: "Inputs" })).toBeNull();
+  });
+
+  it("offers the current definition from a run view only", () => {
+    const onOpenDefinition = vi.fn();
+    const view = renderRun({ status: "success", stepIo }, { onOpenDefinition });
+
+    expect(screen.queryByRole("tab", { name: "Code" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /current definition/i }));
+    expect(onOpenDefinition).toHaveBeenCalledTimes(1);
+
+    view.rerender(
+      <Inspector
+        api={createApi()}
+        workflow={workflow}
+        nodeId={node.nodeId}
+        onOpenDefinition={onOpenDefinition}
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("button", { name: /current definition/i })).toBeNull();
+  });
+
+  it("ends every node type's tabs with Step interface", () => {
+    const view = render(
+      <Inspector
+        api={createApi()}
+        workflow={agentWorkflow}
+        run={run}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(screen.getAllByRole("tab").at(-1)).toHaveTextContent("Step interface");
+    fireEvent.click(screen.getByRole("tab", { name: "Step interface" }));
+    expect(screen.getByRole("tabpanel", { name: "Step interface" })).toHaveTextContent(
+      "retained_payload",
+    );
+
+    for (const props of [
+      { workflow: agentWorkflow },
+      { workflow },
+      { workflow, run: snapshotFor() },
+      { workflow: classifierWorkflow },
+    ]) {
+      view.rerender(
+        <Inspector
+          api={createApi()}
+          nodeId={node.nodeId}
+          onClose={() => undefined}
+          {...props}
+        />,
+      );
+      const tabs = screen.getAllByRole("tab").map((tab) => tab.textContent);
+      expect(tabs.at(-1)).toBe("Step interface");
+      expect(tabs).not.toContain("Step definition");
+      expect(screen.queryByRole("region", { name: "Step interface" })).toBeNull();
+    }
   });
 });
 
@@ -1765,9 +1931,11 @@ function classifierPage(
 }
 
 describe("classifier inspection", () => {
-  it("shows declared questions before a run without fetching execution or source", () => {
+  it("opens on Code and shows declared questions and the step interface in their own tabs", () => {
     const listClassifierEventPage = vi.fn<OperatorApi["listClassifierEventPage"]>();
-    const getWorkflowNodeSource = vi.fn<OperatorApi["getWorkflowNodeSource"]>();
+    const getWorkflowNodeSource = vi
+      .fn<OperatorApi["getWorkflowNodeSource"]>()
+      .mockResolvedValue("return 'classifier'");
     render(
       <Inspector
         api={createApi({ listClassifierEventPage, getWorkflowNodeSource })}
@@ -1777,14 +1945,18 @@ describe("classifier inspection", () => {
       />,
     );
     const declaration = screen.getByRole("complementary", { name: "Classifier declaration" });
-    expect(within(declaration).getByRole("tab", { name: "Definition" })).toHaveAttribute(
+    expect(
+      within(declaration)
+        .getAllByRole("tab")
+        .map((tab) => tab.textContent),
+    ).toEqual(["Code", "Definition", "Step interface"]);
+    expect(within(declaration).getByRole("tab", { name: "Code" })).toHaveAttribute(
       "aria-selected",
       "true",
     );
-    expect(within(declaration).getByRole("tab", { name: "Code" })).toHaveAttribute(
-      "aria-selected",
-      "false",
-    );
+    expect(getWorkflowNodeSource).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(declaration).getByRole("tab", { name: "Definition" }));
+    expect(within(declaration).queryByRole("region", { name: "Step inputs" })).toBeNull();
     expect(within(declaration).getByLabelText("Question category")).toHaveTextContent(
       "Choose the historical category.",
     );
@@ -1794,11 +1966,15 @@ describe("classifier inspection", () => {
     expect(within(declaration).getByLabelText("Question quality")).toHaveTextContent(
       "Assess quality",
     );
+    fireEvent.click(within(declaration).getByRole("tab", { name: "Step interface" }));
+    const stepInterface = within(declaration).getByRole("tabpanel", { name: "Step interface" });
+    expect(within(stepInterface).getByRole("region", { name: "Step inputs" })).toBeVisible();
+    expect(within(stepInterface).queryByLabelText("Question category")).toBeNull();
     expect(listClassifierEventPage).not.toHaveBeenCalled();
-    expect(getWorkflowNodeSource).not.toHaveBeenCalled();
+    expect(getWorkflowNodeSource).toHaveBeenCalledTimes(1);
   });
 
-  it("loads source only in Code and cancels stale requests across tabs, definitions, APIs, and selections", async () => {
+  it("loads source in Code and cancels stale requests across tabs, definitions, APIs, and selections", async () => {
     const pendingSource = Promise.withResolvers<string>();
     const getWorkflowNodeSource = vi
       .fn<OperatorApi["getWorkflowNodeSource"]>()
@@ -1813,7 +1989,6 @@ describe("classifier inspection", () => {
         onClose={() => undefined}
       />,
     );
-    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
     expect(getWorkflowNodeSource).toHaveBeenCalledWith(
       classifierWorkflow.name,
       node.nodeId,
@@ -1827,7 +2002,7 @@ describe("classifier inspection", () => {
       await pendingSource.promise;
     });
     expect(screen.queryByLabelText("Source code")).toBeNull();
-    fireEvent.keyDown(screen.getByRole("tab", { name: "Definition" }), { key: "ArrowRight" });
+    fireEvent.keyDown(screen.getByRole("tab", { name: "Definition" }), { key: "ArrowLeft" });
     expect(screen.getByRole("tab", { name: "Code" })).toHaveFocus();
     expect(await screen.findByLabelText("Source code")).toHaveTextContent("current classifier");
     const updatedWorkflow = FlowInfoMsg.create(classifierWorkflow);
@@ -1931,7 +2106,6 @@ describe("classifier inspection", () => {
         onClose={() => undefined}
       />,
     );
-    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
     const oldSignal = getWorkflowNodeSource.mock.calls[0][2];
     view.rerender(
       <Inspector
@@ -1942,12 +2116,8 @@ describe("classifier inspection", () => {
       />,
     );
     expect(oldSignal?.aborted).toBe(true);
-    expect(screen.getByRole("tab", { name: "Definition" })).toHaveAttribute(
-      "aria-selected",
-      "true",
-    );
-    expect(getWorkflowNodeSource).toHaveBeenCalledTimes(1);
-    fireEvent.click(screen.getByRole("tab", { name: "Code" }));
+    expect(screen.getByRole("tab", { name: "Code" })).toHaveAttribute("aria-selected", "true");
+    expect(getWorkflowNodeSource).toHaveBeenCalledTimes(2);
     expect(await screen.findByLabelText("Source code")).toHaveTextContent("other classifier");
     await act(async () => {
       oldSource.resolve("return 'stale other node'");

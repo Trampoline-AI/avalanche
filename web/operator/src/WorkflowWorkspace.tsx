@@ -266,6 +266,11 @@ export function WorkflowWorkspaceSurface({
     [selectWorkflowRun, startRun],
   );
   const closePanel = useCallback(() => setInspectedNode(undefined), []);
+  // Keeps the inspected node while leaving the run for the current definition.
+  const openCurrentDefinition = useCallback(
+    () => selectWorkflowRun(undefined),
+    [selectWorkflowRun],
+  );
   const openNode = useCallback((nodeId: string) => setInspectedNode(nodeId), []);
   const toggleTimeline = useCallback((expanded: boolean) => {
     timelineBounds.current = timelineElement.current?.getBoundingClientRect();
@@ -528,6 +533,11 @@ export function WorkflowWorkspaceSurface({
                 liveClassifierEvents={state.liveClassifierEvents[liveEventDescriptorKey]}
                 onClose={closePanel}
                 definitionLabel={definitionLabel}
+                onOpenDefinition={
+                  run && inspectedNode && workflow?.nodeIds.includes(inspectedNode)
+                    ? openCurrentDefinition
+                    : undefined
+                }
               />
             </div>
           </>

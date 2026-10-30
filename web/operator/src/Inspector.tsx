@@ -41,9 +41,11 @@ import { ClaudeLogo, isClaudeRuntime } from "./ClaudeLogo";
 import { Markdown } from "./Markdown";
 import { PythonSource } from "./PythonSource";
 import { InspectorFields, InspectorResources } from "./InspectorDefinition";
+import { OpenDefinitionButton } from "./OpenDefinitionButton";
 import { RetainedAgentValue } from "./RetainedAgentValue";
 import { isUnknownRecord } from "./guards";
 import { StepInterfacePanel } from "./StepInterfacePanel";
+import { StepRunValues } from "./StepRunValues";
 import { decodeStepInterface } from "./stepInterface";
 
 interface InspectorProps {
@@ -56,15 +58,36 @@ interface InspectorProps {
   liveClassifierEvents?: ClassifierEventDescriptorMsg[];
   embedded?: boolean;
   definitionLabel?: string;
+  /** Run views only: shows the same node's current definition. */
+  onOpenDefinition?: () => void;
   onClose: () => void;
 }
 
-type AgentTab = "trace" | "io" | "evaluations";
-const AGENT_TABS: readonly AgentTab[] = ["trace", "io", "evaluations"];
-type StepTab = "definition" | "code";
-const STEP_TABS: readonly StepTab[] = ["definition", "code"];
-type AgentDefinitionTab = "agent" | "evals" | "step";
-const AGENT_DEFINITION_TABS: readonly AgentDefinitionTab[] = ["agent", "evals", "step"];
+// Every node type ends its tabs with "Step interface".
+type AgentTab = "trace" | "io" | "evaluations" | "interface";
+const AGENT_TABS: readonly AgentTab[] = ["trace", "io", "evaluations", "interface"];
+const AGENT_TAB_LABELS: Record<AgentTab, string> = {
+  trace: "Trace",
+  io: "Run I/O",
+  evaluations: "Evaluations",
+  interface: "Step interface",
+};
+type StepTab = "code" | "io" | "interface";
+// Code reflects the current deployment, so run views omit it.
+const STEP_DEFINITION_TABS: readonly StepTab[] = ["code", "interface"];
+const STEP_RUN_TABS: readonly StepTab[] = ["io", "interface"];
+const STEP_TAB_LABELS: Record<StepTab, string> = {
+  code: "Code",
+  io: "Run I/O",
+  interface: "Step interface",
+};
+type AgentDefinitionTab = "agent" | "evals" | "interface";
+const AGENT_DEFINITION_TABS: readonly AgentDefinitionTab[] = ["agent", "evals", "interface"];
+const AGENT_DEFINITION_TAB_LABELS: Record<AgentDefinitionTab, string> = {
+  agent: "Agent definition",
+  evals: "Evals",
+  interface: "Step interface",
+};
 type DetailFormat = "json";
 
 interface ScopedResult<T> {
@@ -149,6 +172,7 @@ export function Inspector(props: InspectorProps) {
         liveEvents={props.liveClassifierEvents}
         embedded={props.embedded}
         definitionLabel={props.definitionLabel}
+        onOpenDefinition={props.onOpenDefinition}
         onClose={props.onClose}
       />
     );
@@ -165,6 +189,7 @@ function AgentAndStepInspector({
   liveEvents = EMPTY_EVENTS,
   embedded = false,
   definitionLabel = "Current definition",
+  onOpenDefinition,
   onClose,
 }: InspectorProps) {
   const [selectedTab, setSelectedTab] = useState<AgentTab>("trace");
@@ -206,9 +231,15 @@ function AgentAndStepInspector({
   const eventPageToken = node?.eventPageToken ?? "";
   const hasRunNode = Boolean(run && node);
   const selectionScope = `${operatorInstanceId}\0${runId ?? ""}\0${nodeId ?? ""}`;
-  const stepTabScope = `${workflow?.workflowId ?? workflow?.name ?? ""}\0${selectionScope}`;
+  // Definition tabs follow the catalog entry; run tabs follow only the run node.
+  const stepTabScope = run
+    ? selectionScope
+    : `${workflow?.workflowId ?? workflow?.name ?? ""}\0${selectionScope}`;
+  const stepTabs = run ? STEP_RUN_TABS : STEP_DEFINITION_TABS;
   const stepTab =
-    !run && selectedStepTab?.scope === stepTabScope ? selectedStepTab.tab : "definition";
+    selectedStepTab?.scope === stepTabScope && stepTabs.includes(selectedStepTab.tab)
+      ? selectedStepTab.tab
+      : stepTabs[0];
   const definitionTab =
     !run && selectedDefinitionTab?.scope === stepTabScope ? selectedDefinitionTab.tab : "agent";
   const descriptorScope = `${selectionScope}\0${asOfEventUlid}\0${eventPageToken}`;
@@ -768,6 +799,12 @@ function AgentAndStepInspector({
               {node.error}
             </p>
           )}
+          {run && onOpenDefinition && (
+            <OpenDefinitionButton
+              definitionLabel={definitionLabel}
+              onOpenDefinition={onOpenDefinition}
+            />
+          )}
         </div>
         {headerActions}
       </header>
@@ -809,7 +846,7 @@ function AgentAndStepInspector({
                     document.getElementById(`${tabsId}-${next}`)?.focus();
                   }}
                 >
-                  {item === "trace" ? "Trace" : item === "io" ? "Run I/O" : "Evaluations"}
+                  {AGENT_TAB_LABELS[item]}
                 </button>
               ))}
             </div>
@@ -834,7 +871,9 @@ function AgentAndStepInspector({
                   />
                 </div>
               )}
-              {tab === "evaluations" ? null : tab === "io" ? (
+              {tab === "evaluations" ? null : tab === "interface" ? (
+                stepInterfacePanel
+              ) : tab === "io" ? (
                 <div className="grid min-w-0 gap-6">
                   {(["inputs", "outputs"] as const).map((kind) => (
                     <section
@@ -946,11 +985,7 @@ function AgentAndStepInspector({
                     document.getElementById(`${tabsId}-definition-${next}`)?.focus();
                   }}
                 >
-                  {item === "agent"
-                    ? "Agent definition"
-                    : item === "evals"
-                      ? "Evals"
-                      : "Step definition"}
+                  {AGENT_DEFINITION_TAB_LABELS[item]}
                 </button>
               ))}
             </div>
@@ -962,7 +997,7 @@ function AgentAndStepInspector({
               aria-labelledby={`${tabsId}-definition-${definitionTab}`}
             >
               <div className="grid min-w-0 gap-6">
-                {definitionTab === "step" ? (
+                {definitionTab === "interface" ? (
                   stepInterfacePanel
                 ) : definitionUnavailable ? (
                   <p className="text-[11px] text-muted">{definitionUnavailable}</p>
@@ -1044,51 +1079,53 @@ function AgentAndStepInspector({
         )
       ) : (
         <>
-          {!run && (
-            <div
-              className="inspector-tabs flex shrink-0 border-b border-line px-2.5"
-              role="tablist"
-              aria-label="Workflow step views"
-            >
-              {STEP_TABS.map((item) => (
-                <button
-                  key={item}
-                  type="button"
-                  role="tab"
-                  id={`${tabsId}-${item}`}
-                  aria-controls={`${tabsId}-step-panel`}
-                  aria-selected={stepTab === item}
-                  tabIndex={stepTab === item ? 0 : -1}
-                  className={`flex-1 cursor-pointer border-0 border-b-2 bg-transparent px-[9px] pt-[11px] pb-[9px] font-mono text-[9px] uppercase focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid ${stepTab === item ? "border-acid text-acid" : "border-transparent text-muted"}`}
-                  onClick={() => setSelectedStepTab({ scope: stepTabScope, tab: item })}
-                  onKeyDown={(event) => {
-                    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-                    event.preventDefault();
-                    const next =
+          <div
+            className="inspector-tabs flex shrink-0 border-b border-line px-2.5"
+            role="tablist"
+            aria-label={run ? "Run step views" : "Workflow step views"}
+          >
+            {stepTabs.map((item) => (
+              <button
+                key={item}
+                type="button"
+                role="tab"
+                id={`${tabsId}-${item}`}
+                aria-controls={`${tabsId}-step-panel`}
+                aria-selected={stepTab === item}
+                tabIndex={stepTab === item ? 0 : -1}
+                className={`flex-1 cursor-pointer border-0 border-b-2 bg-transparent px-[9px] pt-[11px] pb-[9px] font-mono text-[9px] uppercase focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid ${stepTab === item ? "border-acid text-acid" : "border-transparent text-muted"}`}
+                onClick={() => setSelectedStepTab({ scope: stepTabScope, tab: item })}
+                onKeyDown={(event) => {
+                  if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                  event.preventDefault();
+                  const index = stepTabs.indexOf(item);
+                  const next =
+                    stepTabs[
                       event.key === "Home"
-                        ? "definition"
+                        ? 0
                         : event.key === "End"
-                          ? "code"
-                          : item === "definition"
-                            ? "code"
-                            : "definition";
-                    setSelectedStepTab({ scope: stepTabScope, tab: next });
-                    document.getElementById(`${tabsId}-${next}`)?.focus();
-                  }}
-                >
-                  {item === "definition" ? "Definition" : "Code"}
-                </button>
-              ))}
-            </div>
-          )}
+                          ? stepTabs.length - 1
+                          : (index + (event.key === "ArrowRight" ? 1 : -1) + stepTabs.length) %
+                            stepTabs.length
+                    ];
+                  setSelectedStepTab({ scope: stepTabScope, tab: next });
+                  document.getElementById(`${tabsId}-${next}`)?.focus();
+                }}
+              >
+                {STEP_TAB_LABELS[item]}
+              </button>
+            ))}
+          </div>
           <div
             className={`inspector-body inspector-body-full min-h-0 min-w-0 flex-1 ${stepTab === "code" ? "overflow-hidden bg-canvas" : "overflow-auto p-5 [scrollbar-gutter:stable]"}`}
-            role={run ? undefined : "tabpanel"}
+            role="tabpanel"
             id={`${tabsId}-step-panel`}
-            aria-labelledby={run ? undefined : `${tabsId}-${stepTab}`}
+            aria-labelledby={`${tabsId}-${stepTab}`}
           >
-            {stepTab === "definition" ? (
+            {stepTab === "interface" ? (
               stepInterfacePanel
+            ) : stepTab === "io" ? (
+              <StepRunValues node={node} />
             ) : definitionUnavailable ? (
               <p className="px-5 text-[11px] text-muted">{definitionUnavailable}</p>
             ) : activeNodeSource?.status === "ready" ? (

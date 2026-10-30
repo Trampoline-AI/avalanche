@@ -13,6 +13,7 @@ import {
   WorkflowTopologyMsg,
 } from "./model";
 import { emptyProjection, projectionReducer, useOperatorProjection } from "./state";
+import type { StepIo } from "./stepIo";
 import {
   baseline,
   createApi,
@@ -428,6 +429,56 @@ describe("live operator projection", () => {
       expect(result.current.state.liveClassifierEventRepairWatermarks).toEqual({});
     },
   );
+
+  it("replaces a selected node's step values from live node updates", () => {
+    let state = projectionReducer(emptyProjection, { type: "baseline", baseline });
+    state = projectionReducer(state, { type: "selectionLoading", runId: summary.runId });
+    state = projectionReducer(state, {
+      type: "selectionReady",
+      runId: summary.runId,
+      snapshot: RunSnapshotMsg.create({ ...snapshotFor(summary), asOfEventUlid: eventUlid(1) }),
+    });
+    const inputs = [
+      {
+        name: "batch",
+        value: {
+          kind: "json" as const,
+          typeName: "dict",
+          value: { rows: 2 },
+          truncated: false,
+        },
+      },
+    ];
+    const changed = (sequence: number, status: string, stepIo?: StepIo) =>
+      envelope(sequence, {
+        oneofKind: "nodeStatusChanged",
+        nodeStatusChanged: {
+          runId: summary.runId,
+          nodeId: node.nodeId,
+          status,
+          revision: String(sequence),
+          startedAt: 1,
+          endedAt: 0,
+          ...(stepIo ? { stepIo } : {}),
+        },
+      });
+    state = projectionReducer(state, {
+      type: "envelopes",
+      envelopes: [changed(2, "running", { inputs })],
+    });
+    expect(state.selectedRun?.nodes[0].stepIo).toEqual({ inputs });
+    const output = {
+      kind: "repr" as const,
+      typeName: "Frame",
+      text: "Frame()",
+      truncated: true,
+    };
+    state = projectionReducer(state, {
+      type: "envelopes",
+      envelopes: [changed(3, "running", { inputs, output })],
+    });
+    expect(state.selectedRun?.nodes[0].stepIo?.output).toEqual(output);
+  });
 
   it("keeps classifier descriptors isolated from other runs, agents, and covered snapshot history", () => {
     let state = projectionReducer(emptyProjection, {

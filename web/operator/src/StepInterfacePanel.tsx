@@ -385,34 +385,42 @@ function StepSchemas({ definition }: { definition: StepInterface }) {
   );
 }
 
+/**
+ * A step's declared inputs and output. Inside a "Step interface" tab the tab names
+ * the panel; `framed` adds its own titled container where no tab does.
+ */
 export function StepInterfacePanel({
   definition,
   error,
   historical = false,
+  framed = false,
 }: {
   definition?: StepInterface;
   error?: string;
   historical?: boolean;
+  framed?: boolean;
 }) {
+  const content = definition ? (
+    <StepSchemas definition={definition} />
+  ) : (
+    <p
+      className={`m-0 text-[11px] [overflow-wrap:anywhere] ${error ? "text-danger" : "text-muted"}`}
+      role={error ? "alert" : undefined}
+    >
+      {historical
+        ? "Historical step interface unavailable for this run."
+        : "Step interface unavailable for this node."}
+      {error && ` ${error}`}
+    </p>
+  );
+  if (!framed) return content;
   return (
     <section
       aria-label="Step interface"
       className="min-w-0 rounded border border-line bg-canvas/50 p-3"
     >
       <h3 className="inspector-section-title">Step interface</h3>
-      {definition ? (
-        <StepSchemas definition={definition} />
-      ) : (
-        <p
-          className={`m-0 text-[11px] [overflow-wrap:anywhere] ${error ? "text-danger" : "text-muted"}`}
-          role={error ? "alert" : undefined}
-        >
-          {historical
-            ? "Historical step interface unavailable for this run."
-            : "Step interface unavailable for this node."}
-          {error && ` ${error}`}
-        </p>
-      )}
+      {content}
     </section>
   );
 }
