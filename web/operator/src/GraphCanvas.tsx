@@ -8,14 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import {
-  ArrowDown,
-  ArrowRight,
-  Bot,
-  FlaskConical,
-  ListFilter,
-  SlidersHorizontal,
-} from "lucide-react";
+import { ArrowDown, ArrowRight, Bot, FlaskConical, ListFilter } from "lucide-react";
 
 import {
   Background,
@@ -37,13 +30,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 
-import type {
-  FlowInfoMsg,
-  NodeSnapshotMsg,
-  RunInputMsg,
-  TriggerKind,
-  WorkflowTopologyMsg,
-} from "./model";
+import type { FlowInfoMsg, NodeSnapshotMsg, TriggerKind, WorkflowTopologyMsg } from "./model";
 import {
   AgentDeclaration as AgentDeclarationSchema,
   type FieldDeclaration,
@@ -66,13 +53,8 @@ import { RunStatus, statusTone, statusToneColor } from "./RunStatus";
 import {
   INPUT_NODE_ID,
   decodeWorkflowInputDeclaration,
-  formatInputValue,
-  runInputFields,
   runTriggerLabel,
   scheduledInputNote,
-  workflowInputFields,
-  type FieldDefault,
-  type RunValueSource,
 } from "./workflowInput";
 
 interface FieldMetadata {
@@ -133,37 +115,16 @@ interface CardData extends Record<string, unknown> {
   inspectionDisabled?: boolean;
 }
 
-interface InputRow {
-  name: string;
-  value: string;
-  /** A run value's origin, or for a definition how the field gets its default. */
-  source: RunValueSource | FieldDefault["kind"];
-}
-
-const INPUT_ROW_TAGS: Record<InputRow["source"], string> = {
-  supplied: "",
-  default: "default",
-  unrecorded: "not recorded",
-  required: "required",
-  value: "",
-  computed: "computed",
-};
-
-interface InputCardData extends Record<string, unknown> {
+interface InputDotData extends Record<string, unknown> {
   typeName?: string;
-  rows: InputRow[];
   trigger?: TriggerKind;
   cron?: string;
   /** What scheduled runs start with; only for a cron workflow's definition. */
   scheduleNote?: string;
-  /** A run whose values were too large or not serializable to report. */
-  valuesUnavailable?: boolean;
   error?: string;
   onOpen: () => void;
   inspectionDisabled?: boolean;
 }
-
-const INPUT_CARD_ROW_LIMIT = 6;
 
 function fields(value: unknown): FieldMetadata[] {
   if (!Array.isArray(value)) return [];
@@ -565,105 +526,32 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
 });
 WorkflowNodeCard.displayName = "WorkflowNodeCard";
 
-/** Horizontal slant of the Input node's parallelogram, in px. */
-const INPUT_SLANT = 24;
-
-const INPUT_SLANTS: ReadonlyMap<string, number> = new Map([[INPUT_NODE_ID, INPUT_SLANT]]);
-
-const WorkflowInputCard = memo(({ data, selected }: NodeProps<Node<InputCardData>>) => {
-  const { zoom } = useViewport();
-  const isCompact = zoom < NODE_DETAIL_ZOOM_THRESHOLD;
-  const hidden = data.rows.length - INPUT_CARD_ROW_LIMIT;
+/**
+ * The run input as a small dot before the workflow's first steps, so it never reads
+ * as a step. Its fields, defaults and run values live in the input inspector.
+ */
+const WorkflowInputDot = memo(({ data, selected }: NodeProps<Node<InputDotData>>) => {
+  const label = data.typeName ? `Input · ${data.typeName}` : "Run input";
+  const detail =
+    data.error ?? (data.trigger ? runTriggerLabel(data.trigger) : data.scheduleNote);
   return (
-    <article
-      className={`node-card node-input relative isolate flex w-[360px] cursor-pointer flex-col items-stretch border-0 bg-transparent text-left ${isCompact ? "node-card--compact min-h-[100px] justify-center gap-0 py-3 pr-10 pl-11" : "min-h-[100px] gap-2 py-4 pr-10 pl-11"}`}
+    <div
+      className="node-input relative grid size-6 place-items-center"
       data-node-kind="input"
       data-selected={selected || undefined}
-      aria-disabled={data.inspectionDisabled || undefined}
+      data-error={data.error ? true : undefined}
+      data-run-trigger={data.trigger}
+      data-cron={data.cron}
+      title={detail ? `${label}\n${detail}` : label}
     >
-      {/* A parallelogram, the flowchart symbol for data coming in, so the input
-          never reads as a step. The slant stays INPUT_SLANT px at any height. */}
-      <svg
-        aria-hidden="true"
-        className="node-input-shape pointer-events-none absolute inset-0 -z-10 size-full overflow-visible"
-        viewBox="0 0 360 100"
-        preserveAspectRatio="none"
-      >
-        <polygon
-          points={`${INPUT_SLANT},0 360,0 ${360 - INPUT_SLANT},100 0,100`}
-          vectorEffect="non-scaling-stroke"
-          strokeWidth={selected ? 2 / zoom : 1.2}
-        />
-      </svg>
       <button
         type="button"
-        className="node-card-action absolute inset-0 z-[2] cursor-pointer rounded-[inherit] border-0 bg-transparent p-0 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-acid"
+        className="node-card-action absolute inset-0 z-[2] cursor-pointer rounded-full border-0 bg-transparent p-0 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-acid"
         onClick={data.onOpen}
         disabled={data.inspectionDisabled}
         aria-label={`Inspect workflow input${data.typeName ? ` ${data.typeName}` : ""}`}
       />
-      <header
-        className={`node-header relative ${
-          isCompact
-            ? "grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)] grid-rows-[1fr_auto_1fr] items-center gap-0 pr-0 text-center"
-            : "flex flex-col items-start gap-1"
-        }`}
-      >
-        <span
-          className={`node-kicker node-input-identity mb-1 inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono ${isCompact ? "text-sm" : "text-[8px]"} tracking-[.12em] uppercase`}
-        >
-          <SlidersHorizontal aria-hidden="true" className={isCompact ? "size-4" : "size-3"} />
-          Input
-        </span>
-        <strong
-          className={`node-title block self-stretch font-mono ${isCompact ? "text-xl" : "text-sm"} leading-tight text-ink`}
-        >
-          {data.typeName ?? "Run input"}
-        </strong>
-        {(data.trigger || data.cron) && (
-          <span
-            className="node-card-meta node-input-note min-w-0 self-stretch font-mono text-[9px] leading-[1.35] text-secondary"
-            data-run-trigger={data.trigger}
-            data-cron={data.cron}
-          >
-            {data.trigger ? runTriggerLabel(data.trigger) : data.scheduleNote}
-          </span>
-        )}
-      </header>
-      {data.error ? (
-        <p className="node-card-details m-0 text-[9px] text-danger">{data.error}</p>
-      ) : data.valuesUnavailable ? (
-        <p
-          className="node-card-details m-0 text-[9px] text-muted"
-          data-run-values="unavailable"
-        >
-          This run's input values are unavailable.
-        </p>
-      ) : (
-        <dl
-          className={`node-card-details node-input-fields m-0 grid grid-cols-[minmax(0,auto)_minmax(0,1fr)_auto] items-baseline gap-x-2 gap-y-[3px] overflow-hidden font-mono text-[8px]/[1.35] ${isCompact ? "" : "border-t border-line pt-2.5"}`}
-          aria-label="Input fields"
-        >
-          {data.rows.slice(0, INPUT_CARD_ROW_LIMIT).map((row) => (
-            <div key={row.name} className="contents" data-value-source={row.source}>
-              <dt className="truncate text-field-ink" title={row.name}>
-                {row.name}
-              </dt>
-              <dd className="m-0 truncate text-muted" title={row.value}>
-                {row.value}
-              </dd>
-              <dd className="m-0 text-[7px] tracking-[.08em] text-muted uppercase">
-                {INPUT_ROW_TAGS[row.source]}
-              </dd>
-            </div>
-          ))}
-          {hidden > 0 && (
-            <div className="contents">
-              <dt className="col-span-3 text-muted">+{hidden} more</dt>
-            </div>
-          )}
-        </dl>
-      )}
+      <span aria-hidden="true" className="node-input-dot size-4 rounded-full" />
       <Handle
         id="source-right"
         className="node-handle pointer-events-none size-px! min-h-0! min-w-0! border-0! bg-transparent! opacity-0"
@@ -678,10 +566,10 @@ const WorkflowInputCard = memo(({ data, selected }: NodeProps<Node<InputCardData
         position={Position.Bottom}
         isConnectable={false}
       />
-    </article>
+    </div>
   );
 });
-WorkflowInputCard.displayName = "WorkflowInputCard";
+WorkflowInputDot.displayName = "WorkflowInputDot";
 
 /** Diamond heads for input edges; edges refer to them by ID (see graphSelection). */
 function InputEdgeMarkers() {
@@ -720,7 +608,7 @@ const RoutedEdge = memo(
 );
 RoutedEdge.displayName = "RoutedEdge";
 
-const NODE_TYPES = { workflow: WorkflowNodeCard, workflowInput: WorkflowInputCard };
+const NODE_TYPES = { workflow: WorkflowNodeCard, workflowInput: WorkflowInputDot };
 const NODE_ORIGIN: [number, number] = [0, 0.5];
 const EDGE_TYPES = { routed: RoutedEdge };
 const FIT_VIEW_OPTIONS = { padding: 0.24 };
@@ -770,8 +658,6 @@ interface GraphCanvasProps {
   workflow?: FlowInfoMsg;
   runTopology?: WorkflowTopologyMsg;
   runNodes?: NodeSnapshotMsg[];
-  /** The values the displayed run started with. */
-  runInput?: RunInputMsg;
   /** How the displayed run started, such as "manual" or "scheduled". */
   runTriggeredBy?: TriggerKind;
   evaluations?: Record<string, EvaluationRecord>;
@@ -786,7 +672,6 @@ function GraphCanvasView({
   workflow,
   runTopology,
   runNodes = [],
-  runInput,
   runTriggeredBy,
   evaluations,
   bottomRightPanel,
@@ -822,7 +707,7 @@ function GraphCanvasView({
     }
   }, [rawInputDeclaration]);
   const hasInputNode = rawInputDeclaration !== "";
-  // The input node leads the graph, with edges into every step that receives it.
+  // The input dot leads the graph, with edges into the workflow's first steps.
   const topologyNodeIds = useMemo(
     () => (topology && hasInputNode ? [INPUT_NODE_ID, ...topology.nodeIds] : topology?.nodeIds),
     [hasInputNode, topology],
@@ -833,14 +718,16 @@ function GraphCanvasView({
         ? {
             ...topology.graph,
             [INPUT_NODE_ID]: {
-              // The catalog graph has keys only for parents, so check the node list.
-              children: (inputDeclaration.declaration?.consumerNodeIds ?? []).filter((nodeId) =>
-                topology.nodeIds.includes(nodeId),
+              children: topology.nodeIds.filter(
+                (nodeId) =>
+                  !Object.values(topology.graph).some(({ children }) =>
+                    children.includes(nodeId),
+                  ),
               ),
             },
           }
         : topology?.graph,
-    [hasInputNode, inputDeclaration, topology],
+    [hasInputNode, topology],
   );
   const [nodeMeasurements, setNodeMeasurements] = useState<
     ReadonlyMap<string, { width: number; height: number }>
@@ -879,7 +766,7 @@ function GraphCanvasView({
     [topologyGraph, topologyNodeIds, orientation],
   );
   const { positions, paths } = useMemo(
-    () => arrangeGraph(layout, nodeMeasurements, orientation, INPUT_SLANTS),
+    () => arrangeGraph(layout, nodeMeasurements, orientation),
     [layout, nodeMeasurements, orientation],
   );
   const edges = useMemo(
@@ -991,53 +878,16 @@ function GraphCanvasView({
   );
   const cron = runTopology ? "" : (workflow?.cron ?? "");
   const scheduleNote = runTopology || !workflow ? undefined : scheduledInputNote(workflow);
-  const inputCard = useMemo<InputCardData | undefined>(() => {
+  const inputCard = useMemo<InputDotData | undefined>(() => {
     if (!hasInputNode) return undefined;
     const onOpen = () => onOpenNode(INPUT_NODE_ID);
     const { declaration, error } = inputDeclaration;
-    if (!declaration) return { rows: [], error, onOpen, inspectionDisabled };
-    const trigger = runTopology ? runTriggeredBy : undefined;
-    if (runTopology && !runInput) {
-      return {
-        typeName: declaration.typeName,
-        rows: [],
-        trigger,
-        valuesUnavailable: true,
-        onOpen,
-        inspectionDisabled,
-      };
-    }
-    let rows: InputRow[];
-    try {
-      rows = runInput
-        ? runInputFields(declaration, runInput).map((field) => ({
-            name: field.name,
-            value: field.value === undefined ? "" : formatInputValue(field.value),
-            source: field.source,
-          }))
-        : workflowInputFields(declaration).map((field) => ({
-            name: field.name,
-            value:
-              field.default.kind === "value"
-                ? `${field.typeLabel} = ${formatInputValue(field.default.value)}`
-                : field.typeLabel,
-            source: field.default.kind,
-          }));
-    } catch {
-      return {
-        typeName: declaration.typeName,
-        rows: [],
-        error: "Run input unavailable",
-        onOpen,
-        inspectionDisabled,
-      };
-    }
     return {
-      typeName: declaration.typeName,
-      rows,
-      trigger,
+      typeName: declaration?.typeName,
+      trigger: runTopology ? runTriggeredBy : undefined,
       cron: runTopology ? undefined : cron || undefined,
       scheduleNote,
+      error,
       onOpen,
       inspectionDisabled,
     };
@@ -1047,7 +897,6 @@ function GraphCanvasView({
     inputDeclaration,
     inspectionDisabled,
     onOpenNode,
-    runInput,
     runTopology,
     runTriggeredBy,
     scheduleNote,
@@ -1119,7 +968,7 @@ function GraphCanvasView({
       };
     });
     if (!inputCard) return nodes;
-    const inputNode: Node<InputCardData> = {
+    const inputNode: Node<InputDotData> = {
       id: INPUT_NODE_ID,
       selected: selectedNodeId === INPUT_NODE_ID,
       type: "workflowInput",
@@ -1241,7 +1090,6 @@ export const GraphCanvas = memo(
   (left, right) =>
     left.workflow === right.workflow &&
     left.runTopology === right.runTopology &&
-    left.runInput === right.runInput &&
     left.runTriggeredBy === right.runTriggeredBy &&
     left.evaluations === right.evaluations &&
     left.bottomRightPanel === right.bottomRightPanel &&
