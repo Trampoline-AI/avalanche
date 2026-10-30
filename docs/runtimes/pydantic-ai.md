@@ -7,10 +7,17 @@ calling Pydantic AI's `final_result` tool with JSON that matches the signature's
 outputs; Pydantic AI asks it to try again when the answer does not validate.
 
 Install it with `uv add 'avalanche-ai[pydantic-ai]'` wherever the step runs, Ray
-workers included. The extra installs the full `pydantic-ai` package, with every
-provider's client. Each provider reads its credentials from its usual environment
-variable, such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, in the process that runs
-the step.
+workers included. The extra installs `pydantic-ai-slim` with the OpenAI,
+Anthropic, Google, Groq and Mistral clients and MCP support; add another
+provider's client with its Pydantic AI extra, such as
+`uv add 'pydantic-ai-slim[bedrock]'`. Each provider reads its credentials from its
+usual environment variable, such as `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`, in the
+process that runs the step.
+
+The extra leaves out Logfire, which the full `pydantic-ai` package installs.
+Logfire adds a plugin to every Pydantic model in the process, and models validated
+under it cannot be sent to Ray workers; with `RayExecutor`, do not install
+`pydantic-ai` or `logfire` next to Avalanche.
 
 ## Using it
 
@@ -272,7 +279,7 @@ An answer that failed validation, and the request to try again:
 | `inputs` | The prompt: one instruction line, then the inputs as JSON. |
 | `ava.File` inputs | Attached to the prompt after the JSON, each after a line naming it, such as `attached file 1: report.pdf`; the JSON gives the label in the field. The model receives the file's bytes. |
 | `ava.Workspace` input | The working folder of the file tools. At most one. |
-| `tools` | Offered under their own names. A tool that raises does not fail the step: the model gets `{"error": "<Error>: <message>"}` as a failed result, and the trace records that text in the call's `error`. |
+| `tools` | Offered under their own names. A tool that raises does not fail the step: the model gets `{"error": "<Error>: <message>"}` as a failed result, and the trace records that text in the call's `error`. Pydantic AI runs a plain `def` tool in a worker thread, and runs the calls of one model response at the same time, so guard state that tools share with a lock, and write a tool that needs the running event loop as `async def`. |
 | `skills` | Each skill is a Pydantic AI capability loaded on demand. The model sees its name and description, and loads its instructions with the `load_capability` tool. Skills with files add a `read_skill_file` tool. |
 | `invocation_id`, `step_name` | The step name is the agent's `name`; the invocation ID is not sent. |
 
@@ -370,7 +377,7 @@ One turn per model response.
 | --- | --- |
 | `message` | The response's text parts, joined by blank lines. |
 | `reasoning` | The response's thinking parts, when the provider returns them. |
-| `tool_calls` | Each call the response made, with `caller: "model"`. `arguments` are the arguments as the model wrote them, a string when they are not JSON. `result` is the tool's return value as JSON, with files by reference. `duration_ms` is measured by Avalanche; `null` for tools the provider ran. |
+| `tool_calls` | Each call the response made, with `caller: "model"`. `arguments` are the arguments as the model wrote them; text that is not JSON is kept as `{"kind": "unparsed", "text": "<text>"}`. `result` is the tool's return value as JSON, with files by reference. `duration_ms` is measured by Avalanche; `null` for tools the provider ran. |
 | `duration_ms` | From the model request to the end of the response's tool calls. |
 | `usage` | The response's usage, with its cost when known. |
 | `native` | A `PydanticAITurn`. |

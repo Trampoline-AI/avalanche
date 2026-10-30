@@ -19,6 +19,7 @@ from pydantic_ai.messages import (  # noqa: E402
     TextPart,
     ThinkingPart,
     ToolCallPart,
+    ToolReturnPart,
     UserPromptPart,
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel  # noqa: E402
@@ -238,6 +239,130 @@ async def test_a_failing_tool_is_told_to_the_model_and_kept_on_its_call(script):
     assert "ValueError: no bonus today" in call.error
     # The agent handled the failure, so the turn did not fail.
     assert not result.trace.turns[0].failed
+
+
+class AsyncBonus:
+    """Look up the bonus for a name."""
+
+    __name__ = "bonus"
+
+    async def __call__(self, name: str) -> int:
+        return 10
+
+
+def coroutine_returning(name: str):
+    """Look up the bonus for a name, failing once awaited."""
+
+    async def fail() -> int:
+        raise ValueError("no bonus today")
+
+    return fail()
+
+
+@pytest.mark.parametrize(
+    ("tool", "result", "error"),
+    [(AsyncBonus(), 10, None), (coroutine_returning, None, "ValueError: no bonus today")],
+)
+@pytest.mark.asyncio
+async def test_tools_that_return_awaitables_are_awaited(script, tool, result, error):
+    name = tool.__name__
+    script(_response(_call(name, {"name": "a"}, "call-1")), _answer(total=15))
+    outcome = await ava.Agent(
+        signature=Total, step_name="total", runtime=PydanticAIAgent(model=MODEL), tools=(tool,)
+    )(a=2, b=3)
+
+    (call,) = outcome.trace.turns[0].tool_calls
+    assert (call.name, call.result) == (name, result)
+    assert (call.error is None) if error is None else (error in call.error)
+
+
+@pytest.mark.asyncio
+async def test_arguments_that_are_not_json_are_kept_as_unparsed_text(script):
+    def lookup_bonus(name: str) -> int:
+        """Look up the bonus for a name."""
+        return 10
+
+    script(
+        _response(_call("lookup_bonus", "{name: a", "broken")),
+        _response(_call("lookup_bonus", {"name": "a"}, "fixed")),
+        _answer(total=15),
+    )
+    result = await ava.Agent(
+        signature=Total,
+        step_name="total",
+        runtime=PydanticAIAgent(model=MODEL),
+        tools=(lookup_bonus,),
+    )(a=2, b=3)
+
+    broken, fixed = (turn.tool_calls[0] for turn in result.trace.turns[:2])
+    assert broken.arguments == {"kind": "unparsed", "text": "{name: a"}
+    assert broken.error is not None
+    assert fixed.arguments == {"name": "a"}
+
+
+@pytest.mark.asyncio
+async def test_a_tool_raising_tool_failed_reports_its_own_message(script):
+    from pydantic_ai.exceptions import ToolFailed
+
+    def closed(name: str) -> int:
+        """Look up a bonus while the bonus office is closed."""
+        raise ToolFailed("the bonus office is closed")
+
+    script(_response(_call("closed", {"name": "a"}, "call-1")), _answer(total=5))
+    result = await ava.Agent(
+        signature=Total,
+        step_name="total",
+        runtime=PydanticAIAgent(model=MODEL),
+        tools=(closed,),
+    )(a=2, b=3)
+
+    (call,) = result.trace.turns[0].tool_calls
+    # Kept as raised, not rewrapped with the exception's class name.
+    assert call.error is not None and "ToolFailed" not in call.error
+    assert "the bonus office is closed" in call.error
+
+
+def scaled_bonus(name: str, scale: int) -> int:
+    """Look up the bonus for a name, scaled."""
+    return 5 * scale
+
+
+async def scaled_bonus_async(name: str, scale: int) -> int:
+    """Look up the bonus for a name, scaled."""
+    return 5 * scale
+
+
+@pytest.mark.parametrize("function", [scaled_bonus, scaled_bonus_async])
+@pytest.mark.asyncio
+async def test_partial_tools_keep_their_parameters_and_bound_arguments(script, function):
+    import functools
+
+    tool = functools.partial(function, scale=2)
+    seen = script(_response(_call("partial", {"name": "a"}, "call-1")), _answer(total=15))
+    outcome = await ava.Agent(
+        signature=Total, step_name="total", runtime=PydanticAIAgent(model=MODEL), tools=(tool,)
+    )(a=2, b=3)
+
+    (offered,) = seen["infos"][0].function_tools
+    assert set(offered.parameters_json_schema["properties"]) == {"name", "scale"}
+    assert offered.parameters_json_schema["required"] == ["name"]
+    (call,) = outcome.trace.turns[0].tool_calls
+    assert call.result == 10
+
+
+@pytest.mark.asyncio
+async def test_empty_text_arguments_are_traced_as_no_arguments(script):
+    def bonus() -> int:
+        """Look up today's bonus."""
+        return 10
+
+    script(_response(_call("bonus", "", "call-1")), _answer(total=15))
+    outcome = await ava.Agent(
+        signature=Total, step_name="total", runtime=PydanticAIAgent(model=MODEL), tools=(bonus,)
+    )(a=2, b=3)
+
+    (call,) = outcome.trace.turns[0].tool_calls
+    assert (call.arguments, call.result) == ({}, 10)
 
 
 @pytest.mark.asyncio
@@ -469,6 +594,9 @@ async def test_file_outputs_are_written_into_the_run_workspace(script, tmp_path)
     [
         ({"name": "../report.md", "text": "x"}, [], "inside the output folder"),
         ({"name": "a.md", "text": "x"}, [{"name": "a.md", "text": "y"}], "more than once"),
+        ({"name": "a", "text": "x"}, [{"name": "a/b.csv", "text": "y"}], "cannot write"),
+        ({"name": "a/b.md", "text": "x"}, [{"name": "a", "text": "y"}], "cannot write"),
+        ({"name": "a\x00.md", "text": "x"}, [], "cannot write"),
     ],
 )
 @pytest.mark.asyncio
@@ -487,6 +615,59 @@ async def test_file_outputs_that_cannot_be_written_are_output_errors(
     assert (observed[-1].kind, observed[-1].outputs) == ("trace_finished", None)
 
 
+@pytest.mark.asyncio
+async def test_an_answer_file_never_replaces_a_file_already_at_its_name(
+    script, tmp_path, monkeypatch
+):
+    class Occupied(sdk_module.AgentOutputFolder):
+        # Stands in for another answer file at the same name, as a name differing only
+        # in letter case is on a case-insensitive file system.
+        def __init__(self, step_name):
+            super().__init__(step_name)
+            (self.path / "report.md").write_text("first")
+
+    monkeypatch.setattr(sdk_module, "AgentOutputFolder", Occupied)
+    script(_answer(report={"name": "report.md", "text": "second"}, appendices=[]))
+    run_workspace = ava.Workspace.from_directory(tmp_path, reference="snapshot:run")
+    with ava.file_reference_context(run_workspace, attempt="attempt-1"):
+        with pytest.raises(AgentOutputError):
+            await ava.Agent(
+                signature=Report, step_name="report", runtime=PydanticAIAgent(model=MODEL)
+            )(question="why")
+
+    (kept,) = tmp_path.glob(".outputs/report/attempt-1/*/report.md")
+    assert kept.read_text() == "first"
+
+
+def _case_sensitive(folder):
+    probe = folder / "case-probe"
+    probe.write_text("")
+    return not (folder / "CASE-PROBE").exists()
+
+
+@pytest.mark.asyncio
+async def test_answer_file_names_differing_only_in_case_clash_where_the_system_ignores_case(
+    script, tmp_path
+):
+    if _case_sensitive(tmp_path):
+        pytest.skip("the file system compares names by letter case")
+    script(
+        _answer(
+            report={"name": "Report.md", "text": "first"},
+            appendices=[{"name": "report.md", "text": "second"}],
+        )
+    )
+    run_workspace = ava.Workspace.from_directory(tmp_path, reference="snapshot:run")
+    with ava.file_reference_context(run_workspace, attempt="attempt-1"):
+        with pytest.raises(AgentOutputError):
+            await ava.Agent(
+                signature=Report, step_name="report", runtime=PydanticAIAgent(model=MODEL)
+            )(question="why")
+
+    (kept,) = tmp_path.glob(".outputs/report/attempt-1/*/*.md")
+    assert kept.read_text() == "first"
+
+
 class Nested(ava.Signature):
     """Nest."""
 
@@ -494,13 +675,32 @@ class Nested(ava.Signature):
     answer: str = ava.OutputField()
 
 
+class TwoWorkspaces(ava.Signature):
+    """Compare."""
+
+    first: ava.Workspace = ava.InputField()
+    second: ava.Workspace = ava.InputField()
+    answer: str = ava.OutputField()
+
+
+@pytest.mark.parametrize(
+    ("signature", "inputs", "problem"),
+    [
+        (Nested, {"folder": {}}, "must be typed exactly"),
+        (TwoWorkspaces, {"first": ava.Workspace(), "second": ava.Workspace()}, "at most one"),
+    ],
+    ids=["file-in-dict-input", "two-workspaces"],
+)
 @pytest.mark.asyncio
-async def test_files_inside_other_types_are_rejected(script):
-    script()
-    with pytest.raises(AgentStepError, match="must be typed exactly"):
+async def test_unsupported_file_and_workspace_fields_are_rejected(
+    script, signature, inputs, problem
+):
+    seen = script()
+    with pytest.raises(AgentStepError, match=problem):
         await ava.Agent(
-            signature=Nested, step_name="nested", runtime=PydanticAIAgent(model=MODEL)
-        )(folder={})
+            signature=signature, step_name="files", runtime=PydanticAIAgent(model=MODEL)
+        )(**inputs)
+    assert seen["messages"] == []
 
 
 class CodeWord(ava.Signature):
@@ -523,8 +723,12 @@ async def test_skills_load_on_demand_and_their_files_are_readable(script, tmp_pa
     plain = ava.agent.Skill(name="greeting", description="Greets.", instructions="Say hi.")
 
     def after_load(messages, info):
-        # The loaded skill's instructions reach the model only once it asked for them.
-        assert "Read references/codes.md" in str(messages[-1])
+        # The loaded skill's instructions reach the model only once it asked for them:
+        # Pydantic AI answers the load call and adds them to the same request as context.
+        loaded, context = messages[-1].parts
+        assert isinstance(loaded, ToolReturnPart) and loaded.tool_call_id == "load"
+        assert isinstance(context, UserPromptPart)
+        assert skill.instructions in context.content
         return _response(
             _call(
                 "read_skill_file",
@@ -551,7 +755,7 @@ async def test_skills_load_on_demand_and_their_files_are_readable(script, tmp_pa
     assert result.outputs.code_word == "PELICAN-4217"
     first = seen["infos"][0]
     assert "project-codes: Looks up project code words." in first.instructions
-    assert "Read references/codes.md" not in first.instructions
+    assert skill.instructions not in first.instructions
     assert [tool.name for tool in first.function_tools] == [
         "load_capability",
         "read_skill_file",
@@ -610,11 +814,15 @@ async def test_a_combined_option_that_is_not_a_list_fails_the_step(script):
 
 def test_declaration_and_merging_follow_the_runtime_rules():
     step = PydanticAIAgent(max_turns=3, retries=2)
-    default = PydanticAIAgent(model=MODEL, model_settings={"temperature": 0})
+    default = PydanticAIAgent(
+        model=MODEL, max_turns=9, retries=5, model_settings={"temperature": 0}
+    )
 
     merged = step.merged_over(default)
-    assert (merged.model, merged.max_turns) == (MODEL, 3)
+    # The step's fields and options win; the ones it leaves unset come from the default.
+    assert (merged.model, merged.max_turns, merged.instructions_append) == (MODEL, 3, None)
     assert dict(merged.agent_options) == {"retries": 2, "model_settings": {"temperature": 0}}
+    assert merged.model_fields_set == {"model", "max_turns", "retries", "model_settings"}
     # Option values are never published; only their names are.
     assert step.declaration(workflow_default=default) == PydanticAIDeclaration(
         model=MODEL,
@@ -770,6 +978,42 @@ async def test_live_loads_a_step_skill_and_reads_its_file(tmp_path):
     assert result.outputs.code_word.strip() == "PELICAN-4217"
     calls = [call.name for turn in result.trace.turns for call in turn.tool_calls]
     assert {"load_capability", "read_skill_file"} <= set(calls)
+
+
+@pytest.mark.asyncio
+async def test_usage_with_cache_tokens_outside_the_input_count_is_not_known(script):
+    # Pydantic AI counts cached tokens inside the input count; this model does not.
+    usage = RequestUsage(input_tokens=5, output_tokens=2, cache_read_tokens=20)
+    script(_response(_call("final_result", {"total": 5}, "answer"), usage=usage))
+    result = await _agent()(a=2, b=3)
+
+    assert result.outputs.total == 5
+    assert result.trace.turns[0].usage is None
+    assert result.trace.header.usage is None
+
+
+@pytest.mark.parametrize("path", ["bad\x00.txt", "loop.txt"])
+@pytest.mark.asyncio
+async def test_workspace_paths_the_system_refuses_are_tool_errors(script, tmp_path, path):
+    folder = tmp_path / "work"
+    folder.mkdir()
+    (folder / "loop.txt").symlink_to(folder / "loop.txt")
+    script(
+        _response(
+            _call("read_file", {"path": path}, "read"),
+            _call("write_file", {"path": path, "text": "x"}, "write"),
+            _call("list_files", {"folder": path}, "list"),
+        ),
+        _answer(summary="done"),
+    )
+    result = await ava.Agent(
+        signature=Edit, step_name="edit", runtime=PydanticAIAgent(model=MODEL)
+    )(workspace=ava.Workspace.from_directory(folder, reference="work"))
+
+    assert result.outputs.summary == "done"
+    calls = result.trace.turns[0].tool_calls
+    assert [call.result for call in calls] == [None, None, None]
+    assert all(call.error for call in calls)
 
 
 @pytest.mark.asyncio
