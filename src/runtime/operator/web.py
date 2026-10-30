@@ -30,6 +30,7 @@ from starlette.routing import Mount, Route
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from ._grpc import _BOUNDED_MESSAGE_OPTIONS
+from .input_files import MAX_STAGED_INPUT_FILE_BYTES
 from .proto import operator_pb2 as pb
 from .rest import create_rest_app
 
@@ -41,6 +42,8 @@ _GRPC_WEB_CONTENT_TYPE = "application/grpc-web+proto"
 _GRPC_SERVICE_PATH = "/avalanche.operator.OperatorServiceV2/"
 _FRAME_HEADER_BYTES = 5
 _MAX_REQUEST_BYTES = 4 * 1024 * 1024
+# A staged input file travels in one request, with room for its other fields.
+_MAX_STAGE_INPUT_FILE_REQUEST_BYTES = MAX_STAGED_INPUT_FILE_BYTES + 64 * 1024
 _STARTUP_TIMEOUT_SECONDS = 10.0
 _SHUTDOWN_TIMEOUT_SECONDS = 2.0
 _HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "TRACE", "CONNECT"]
@@ -129,7 +132,7 @@ def _next_response(responses: Iterator[Message]) -> Message | None:
     return next(responses, None)
 
 
-async def _request_body(request: Request) -> bytes:
+async def _request_body(request: Request, limit: int) -> bytes:
     if request.headers.get("transfer-encoding") is not None:
         raise ValueError("Transfer-Encoding is not supported")
     lengths = request.headers.getlist("content-length")
@@ -138,8 +141,8 @@ async def _request_body(request: Request) -> bytes:
     if len(lengths) != 1 or not lengths[0].isascii() or not lengths[0].isdigit():
         raise ValueError("Content-Length must be an integer")
     length = int(lengths[0])
-    if length > _MAX_REQUEST_BYTES:
-        raise ValueError(f"request body exceeds {_MAX_REQUEST_BYTES} byte limit")
+    if length > limit:
+        raise ValueError(f"request body exceeds {limit} byte limit")
     chunks: list[bytes] = []
     received = 0
     async for chunk in request.stream():
@@ -231,7 +234,12 @@ def _create_browser_app(
                 status_code=HTTPStatus.UNSUPPORTED_MEDIA_TYPE, headers={"Connection": "close"}
             )
         try:
-            message = _decode_request(await _request_body(request), method)
+            limit = (
+                _MAX_STAGE_INPUT_FILE_REQUEST_BYTES
+                if method_name == "StageInputFile"
+                else _MAX_REQUEST_BYTES
+            )
+            message = _decode_request(await _request_body(request, limit), method)
         except (DecodeError, ValueError) as exc:
             return _grpc_response(
                 _trailer_frame(grpc.StatusCode.INVALID_ARGUMENT, str(exc)), close=True
