@@ -67,9 +67,9 @@ a `StagedInputFile`: `name`, `mediaType`, `sizeBytes`, `sha256`, and either
 `objectUri`/`objectKey` or `inlineBytes`, matching the operator's `FileAttachmentV2`.
 Run and the schedule then pass the staged files to `startRun(workflowSelector, input?,
 inputFiles?)` and `setScheduleEnabled(workflowSelector, enabled, input?, inputFiles?)`
-as `InputFileAttachment`s, each with its `fieldName`. A list field is sent as an empty
-list in `input`, and its files are appended in order; a single file field is left out of
-`input`. A host without `stageInputFile` shows file fields as not editable.
+as `InputFileAttachment`s, each with its `fieldName`. The operator places each file by
+its field's declared type: a list field gets its files in order, after any items listed
+in `input`; a single file field is left out of `input`. A host without `stageInputFile` shows file fields as not editable.
 `GrpcWebOperatorApi` uploads to the operator's `StageInputFile` call, which keeps the
 file in the operator's own staging folder.
 
