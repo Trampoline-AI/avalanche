@@ -57,7 +57,10 @@
   steps now share one line beside the row and branch off to each target, instead of
   each running its own parallel line. Skip connections into the same step from
   different points of a chain merge into one line. The graph keeps separate lines
-  when sharing one would make connections cross.
+  when sharing one would make connections cross. Branches are routed
+  symmetrically: mirrored branches of a split or a join turn at the same point, and a
+  split and its matching join mirror each other. Steps after a join line up with the
+  steps before its split, centered between the branches.
 - The operator now validates a declared run input once, while it prepares the run,
   and publishes the validated values on the run snapshot. A run with invalid input
   now fails while it is being prepared, before any step is shown, rather than when

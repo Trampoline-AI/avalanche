@@ -40,10 +40,8 @@ const PORT_INSET = 10;
 const PORT_SPACING = 16;
 const CHANNEL_MARGIN = 28;
 const CHANNEL_SPACING = 16;
-// Long edges pull much harder on each other than on cards, so they run straight, and
-// cards follow the cards they connect to rather than edges passing by.
+// Long edges pull much harder on each other than on cards, so they run straight.
 const WAYPOINT_WEIGHT = 8;
-const CARD_WEIGHT = 2;
 const ORDERING_SWEEPS = 8;
 const PLACEMENT_SWEEPS = 12;
 
@@ -342,7 +340,7 @@ function placePorts(desired: readonly number[], low: number, high: number): numb
   );
 }
 
-interface Segment {
+export interface Segment {
   // One hop between two layer items; edges sharing a trunk share its hops.
   hop: string;
   from: number;
@@ -377,6 +375,64 @@ function orderChannels(segments: readonly Segment[]): Segment[] {
     ordered.splice(bestIndex, 0, segment);
   }
   return ordered;
+}
+
+// Verticals whose spans stay apart can share a column, so mirrored branches bend at
+// the same point. Two that meet only where they leave or reach the same spot share
+// it too, as a fork. Any others keep the order that avoids crossings.
+export function assignColumns(ordered: readonly Segment[]): {
+  columns: Map<string, number>;
+  count: number;
+} {
+  const span = ({ from, to }: Segment) => [Math.min(from, to), Math.max(from, to)] as const;
+  const clash = (first: Segment, second: Segment) => {
+    const [firstLow, firstHigh] = span(first);
+    const [secondLow, secondHigh] = span(second);
+    const fork =
+      Math.abs(first.from - second.from) < 0.5 || Math.abs(first.to - second.to) < 0.5;
+    // A fork may touch at its shared point; other verticals keep a channel apart.
+    const apart = fork ? -0.5 : CHANNEL_SPACING;
+    return Math.max(firstLow, secondLow) < Math.min(firstHigh, secondHigh) + apart;
+  };
+  const fromStart: number[] = [];
+  ordered.forEach((segment, index) => {
+    fromStart.push(
+      Math.max(
+        -1,
+        ...ordered
+          .slice(0, index)
+          .flatMap((other, before) => (clash(other, segment) ? [fromStart[before]] : [])),
+      ) + 1,
+    );
+  });
+  const fromEnd: number[] = [];
+  for (let index = ordered.length - 1; index >= 0; index -= 1) {
+    fromEnd[index] =
+      Math.max(
+        -1,
+        ...ordered
+          .slice(index + 1)
+          .flatMap((other, after) =>
+            clash(ordered[index], other) ? [fromEnd[index + 1 + after]] : [],
+          ),
+      ) + 1;
+  }
+  const count = Math.max(0, ...fromStart.map((column) => column + 1));
+  // Branches spreading out from one card bend near it, and branches converging on
+  // one card bend near that card, so a split and its join mirror each other.
+  const spread = (values: number[]) => Math.max(...values) - Math.min(...values);
+  const converging =
+    ordered.length > 0 &&
+    spread(ordered.map(({ to }) => to)) < spread(ordered.map(({ from }) => from));
+  return {
+    columns: new Map(
+      ordered.map(({ hop }, index) => [
+        hop,
+        converging ? count - 1 - fromEnd[index] : fromStart[index],
+      ]),
+    ),
+    count,
+  };
 }
 
 export function arrangeGraph(
@@ -421,20 +477,49 @@ export function arrangeGraph(
     const middle = ((packed[0] ?? 0) + (packed.at(-1) ?? 0)) / 2;
     layer.forEach((item, index) => across.set(item, packed[index] - middle));
   });
+  // Cards line up with cards, never with the lines passing between them. A run of
+  // cards linked one to one moves as one block, held by the median of the cards it
+  // connects to, so a chain joining two branches sits centered between them.
+  const cardsAround = (item: LayerItem, neighbors: ReadonlyMap<LayerItem, LayerItem[]>) =>
+    (neighbors.get(item) ?? []).filter((other) => other.nodeId !== undefined);
+  const blocks = new Map<LayerItem, Set<LayerItem>>();
+  for (const layer of layout.layers) {
+    for (const item of layer) {
+      if (item.nodeId === undefined) continue;
+      const before = cardsAround(item, above);
+      const joined =
+        before.length === 1 && cardsAround(before[0], below).length === 1
+          ? blocks.get(before[0])
+          : undefined;
+      const block = joined ?? new Set<LayerItem>();
+      block.add(item);
+      blocks.set(item, block);
+    }
+  }
   const linkWeight = (item: LayerItem, other: LayerItem) =>
-    item.nodeId === undefined && other.nodeId === undefined
-      ? WAYPOINT_WEIGHT
-      : item.nodeId !== undefined && other.nodeId !== undefined
-        ? CARD_WEIGHT
-        : 1;
+    item.nodeId === undefined && other.nodeId === undefined ? WAYPOINT_WEIGHT : 1;
   const align = (
     depth: number,
     neighborSets: readonly ReadonlyMap<LayerItem, LayerItem[]>[],
   ) => {
     const layer = layout.layers[depth];
     const pulls = layer.map((item) => {
-      const adjacent = neighborSets.flatMap((neighbors) => neighbors.get(item) ?? []);
-      if (adjacent.length === 0) return [{ value: across.get(item)!, weight: 1 }];
+      const block = blocks.get(item);
+      const adjacent =
+        block === undefined
+          ? neighborSets.flatMap((neighbors) => neighbors.get(item) ?? [])
+          : [...block].flatMap((member) =>
+              neighborSets.flatMap((neighbors) =>
+                cardsAround(member, neighbors).filter((other) => !block.has(other)),
+              ),
+            );
+      // A block with nothing outside to follow still lines up with itself.
+      if (adjacent.length === 0) {
+        return [...(block ?? [item])].map((member) => ({
+          value: across.get(member)!,
+          weight: 1,
+        }));
+      }
       return adjacent.map((other) => ({
         value: across.get(other)!,
         weight: linkWeight(item, other),
@@ -599,7 +684,7 @@ export function arrangeGraph(
       }
     }
   }
-  const channelOrder = gapSegments.map(orderChannels);
+  const channelColumns = gapSegments.map((segments) => assignColumns(orderChannels(segments)));
 
   // Along the layers: leave enough room in each gap for its channels.
   const layerSizes = layout.layers.map((layer) =>
@@ -609,17 +694,19 @@ export function arrangeGraph(
   let forward = 0;
   layout.layers.forEach((_, depth) => {
     layerStarts.push(forward);
-    const channels = channelOrder[depth].length;
+    const channels = channelColumns[depth].count;
     forward +=
       layerSizes[depth] +
       Math.max(LAYER_GAP[orientation], 2 * CHANNEL_MARGIN + (channels - 1) * CHANNEL_SPACING);
   });
-  const channels: Record<string, number>[] = channelOrder.map((ordered, depth) => {
+  const channels: Record<string, number>[] = channelColumns.map(({ columns, count }, depth) => {
     const start = layerStarts[depth] + layerSizes[depth];
     const end = layerStarts[depth + 1] ?? start;
-    const step = (end - start - 2 * CHANNEL_MARGIN) / Math.max(1, ordered.length - 1);
-    const first = ordered.length === 1 ? (start + end) / 2 : start + CHANNEL_MARGIN;
-    return Object.fromEntries(ordered.map(({ hop }, index) => [hop, first + index * step]));
+    const step = (end - start - 2 * CHANNEL_MARGIN) / Math.max(1, count - 1);
+    const first = count === 1 ? (start + end) / 2 : start + CHANNEL_MARGIN;
+    return Object.fromEntries(
+      [...columns].map(([hop, column]) => [hop, first + column * step]),
+    );
   });
 
   const nodeStart = (nodeId: string, depth: number) =>
