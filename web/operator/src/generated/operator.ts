@@ -511,9 +511,10 @@ export interface ScanTargetV2 {
  * operators may accept an inline body instead. A local operator accepts only
  * object_key values its own StageInputFile returned.
  *
- * An attachment sets its field_name in the run input. When the input JSON
- * sets that field to an array, the field's attachments are appended to it in
- * order (a list of files); otherwise a field takes exactly one attachment.
+ * An attachment sets its field_name, which the workflow's input schema must
+ * declare. A field the schema declares as a list (such as list[ava.File])
+ * gets its attachments in order, after any items the input JSON lists for it;
+ * any other field takes exactly one attachment.
  *
  * @generated from protobuf message avalanche.operator.FileAttachmentV2
  */

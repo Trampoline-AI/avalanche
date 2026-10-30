@@ -166,11 +166,48 @@ def missing_required_input(
     )
 
 
-def declared_input_fields(input_schema_json: str) -> tuple[str, ...]:
-    """The field names a workflow's published input schema declares."""
+class _FieldSchema(BaseModel):
+    """The parts of an input field's JSON Schema that say whether it holds a list."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    # JSON Schema itself allows these forms: `type` is one name or a list of names,
+    # and an anyOf branch may be the boolean schema `true` or `false`.
+    type: str | tuple[str, ...] | None = None
+    any_of: tuple[_FieldSchema | bool, ...] = Field(default=(), alias="anyOf")
+
+    @property
+    def holds_list(self) -> bool:
+        """An array, alone or as a branch of an optional field such as ``list[File] | None``."""
+        types = (self.type,) if isinstance(self.type, str) else self.type or ()
+        return "array" in types or any(
+            not isinstance(branch, bool) and branch.holds_list for branch in self.any_of
+        )
+
+
+# A property schema may also be the boolean schema `true` or `false`.
+_PROPERTY_SCHEMA: TypeAdapter[_FieldSchema | bool] = TypeAdapter(_FieldSchema | bool)
+
+
+@dataclass(frozen=True)
+class InputFileFields:
+    """The input fields a workflow declares, by whether each holds one value or a list."""
+
+    declared: frozenset[str]
+    lists: frozenset[str]
+
+
+def input_file_fields(input_schema_json: str) -> InputFileFields:
+    """Read a workflow's published input schema once for where input files may go."""
     if input_schema_json == "":
-        return ()
-    return tuple(_InputSchema.model_validate_json(input_schema_json).properties)
+        return InputFileFields(declared=frozenset(), lists=frozenset())
+    schema = _InputSchema.model_validate_json(input_schema_json)
+    lists: set[str] = set()
+    for name, property_schema in schema.properties.items():
+        kind = _PROPERTY_SCHEMA.validate_python(property_schema)
+        if not isinstance(kind, bool) and kind.holds_list:
+            lists.add(name)
+    return InputFileFields(declared=frozenset(schema.properties), lists=frozenset(lists))
 
 
 class TriggerKind(Enum):

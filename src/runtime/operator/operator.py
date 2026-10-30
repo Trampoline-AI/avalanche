@@ -45,7 +45,11 @@ from .discovery import (
 )
 from .evaluation_models import EvaluationRecord
 from .evaluation_worker import EvaluationOutcome, EvaluationRequest, EvaluationWorkers
-from .input_files import InputFileStaging, StagedInputFile, StagedInputFileError
+from .input_files import (
+    InputFileStaging,
+    StagedInputFile,
+    StagedInputFileError,
+)
 from .models import (
     AgentEvent,
     AgentEventAppended,
@@ -67,6 +71,7 @@ from .models import (
     ClassifierScoreSummary,
     DetailUpdate,
     FinalizedTrace,
+    InputFileFields,
     LogAppended,
     LogDetailAppended,
     LogEntry,
@@ -102,7 +107,7 @@ from .models import (
     WorkflowInfo,
     WorkflowReloadStatus,
     WorkflowTopology,
-    declared_input_fields,
+    input_file_fields,
     missing_required_input,
     schedule_input_from_python,
 )
@@ -1522,11 +1527,15 @@ class Operator:
     ) -> StagedInputFile:
         """Stage one upload for a declared input field of a workflow."""
         descriptor = self._registry.resolve(selector)
-        if field_name not in declared_input_fields(descriptor.input_schema_json):
+        if field_name not in input_file_fields(descriptor.input_schema_json).declared:
             raise StagedInputFileError(
                 f"Workflow {descriptor.workflow_id} declares no input field {field_name!r}"
             )
         return self._input_files.stage(name, media_type, content)
+
+    def input_file_fields(self, selector: str) -> InputFileFields:
+        """The input fields a workflow declares, and which of them hold a list."""
+        return input_file_fields(self._registry.resolve(selector).input_schema_json)
 
     def set_schedule_enabled(
         self,
@@ -1952,9 +1961,9 @@ class Operator:
                 if self._active_runs.get(run_id) is handle:
                     self._active_runs.pop(run_id, None)
         if first_close:
+            self._begin_notification_shutdown(tuple(delayed_drains))
             # Runs are stopped, so no coordinator still reads a staged input file.
             self._input_files.close()
-            self._begin_notification_shutdown(tuple(delayed_drains))
 
     def _result_cleanup_loop(self) -> None:
         retention = self._result_retention_seconds
