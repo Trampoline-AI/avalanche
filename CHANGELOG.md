@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Agents: Avalanche now requires PredictRLM 0.13.2 or later (still below 0.14).
+  With `DirectPythonBackend`, the agent's tool calls, such as several `predict()`
+  calls in one `asyncio.gather`, now run at the same time instead of one after
+  another; a burst of small tool calls no longer hangs until the request
+  deadline; each `predict()` makes one model call instead of two; and pending
+  async tools are cancelled when an iteration times out or the step is
+  cancelled. Its sandboxes also no longer need `mkdir`, `env`, `ps` or `pkill`
+  to be installed.
+
 ## 0.17.0
 
 - Operator web UI: in a run, a standard Python step's sidebar now opens on **Run
