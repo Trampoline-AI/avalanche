@@ -373,7 +373,9 @@ references; they are fetched only for the selected run/node rather than
 included in every update. `StartRun` requires a caller-supplied `run_id` as
 its idempotency key. Input files arrive as `input_files` attachments: a local
 operator accepts inline bodies and `object_key` values that its own
-`StageInputFile` issued, and rejects object URIs and any other key. Staged files
+`StageInputFile` issued, and rejects object URIs and any other key. Each
+attachment names a field the input schema declares; a list field collects its
+attachments in order, and any other field takes exactly one. Staged files
 live in a private folder the operator creates for itself; each run gets an
 `ava.File` built with `File.from_path` over the staged copy. Files no run or
 schedule used expire after 24 hours, and the folder is removed when the operator

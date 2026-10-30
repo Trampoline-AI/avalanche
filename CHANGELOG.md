@@ -25,7 +25,6 @@
   `ava.File` with `File.from_path`; inline attachment bodies are staged the same way
   and now need a file name. Embedding hosts can support file fields by implementing
   the optional `OperatorApi.stageInputFile`; without it, file fields are not editable.
-
 - **BREAKING CHANGE:** discovered cron schedules now start **disabled**; the operator
   no longer runs a `cron` workflow until its schedule is enabled. Start with
   `ava operator --schedules-enabled` (or `ava dev --schedules-enabled`) to keep the

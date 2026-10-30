@@ -173,6 +173,45 @@ def declared_input_fields(input_schema_json: str) -> tuple[str, ...]:
     return tuple(_InputSchema.model_validate_json(input_schema_json).properties)
 
 
+class _FieldSchema(BaseModel):
+    """The parts of an input field's JSON Schema that say whether it holds a list."""
+
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    # JSON Schema allows one type name or several; a union lists its branches in
+    # anyOf, and a branch may be the boolean schema `true` or `false`.
+    type: str | tuple[str, ...] | None = None
+    any_of: tuple[_FieldSchema | bool, ...] = Field(default=(), alias="anyOf")
+
+    @property
+    def holds_list(self) -> bool:
+        """An array, alone or as a branch of an optional field such as ``list[File] | None``."""
+        types = (self.type,) if isinstance(self.type, str) else self.type or ()
+        return "array" in types or any(
+            not isinstance(branch, bool) and branch.holds_list for branch in self.any_of
+        )
+
+
+class _FieldsSchema(BaseModel):
+    """An input JSON Schema's fields, as ``_FieldSchema``s."""
+
+    model_config = ConfigDict(extra="allow")
+
+    properties: dict[str, _FieldSchema | bool] = Field(default_factory=dict)
+
+
+def list_input_fields(input_schema_json: str) -> frozenset[str]:
+    """The declared input fields that hold a list, such as ``list[ava.File]``."""
+    if input_schema_json == "":
+        return frozenset()
+    schema = _FieldsSchema.model_validate_json(input_schema_json)
+    return frozenset(
+        name
+        for name, field in schema.properties.items()
+        if not isinstance(field, bool) and field.holds_list
+    )
+
+
 class TriggerKind(Enum):
     """What started a run: its schedule, a person, a webhook, or an API caller."""
 

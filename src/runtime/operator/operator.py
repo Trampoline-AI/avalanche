@@ -45,7 +45,12 @@ from .discovery import (
 )
 from .evaluation_models import EvaluationRecord
 from .evaluation_worker import EvaluationOutcome, EvaluationRequest, EvaluationWorkers
-from .input_files import InputFileStaging, StagedInputFile, StagedInputFileError
+from .input_files import (
+    InputFileFields,
+    InputFileStaging,
+    StagedInputFile,
+    StagedInputFileError,
+)
 from .models import (
     AgentEvent,
     AgentEventAppended,
@@ -103,6 +108,7 @@ from .models import (
     WorkflowReloadStatus,
     WorkflowTopology,
     declared_input_fields,
+    list_input_fields,
     missing_required_input,
     schedule_input_from_python,
 )
@@ -1528,6 +1534,14 @@ class Operator:
             )
         return self._input_files.stage(name, media_type, content)
 
+    def input_file_fields(self, selector: str) -> InputFileFields:
+        """The input fields a workflow declares, and which of them hold a list."""
+        descriptor = self._registry.resolve(selector)
+        return InputFileFields(
+            declared=frozenset(declared_input_fields(descriptor.input_schema_json)),
+            lists=list_input_fields(descriptor.input_schema_json),
+        )
+
     def set_schedule_enabled(
         self,
         selector: str,
@@ -1952,9 +1966,9 @@ class Operator:
                 if self._active_runs.get(run_id) is handle:
                     self._active_runs.pop(run_id, None)
         if first_close:
+            self._begin_notification_shutdown(tuple(delayed_drains))
             # Runs are stopped, so no coordinator still reads a staged input file.
             self._input_files.close()
-            self._begin_notification_shutdown(tuple(delayed_drains))
 
     def _result_cleanup_loop(self) -> None:
         retention = self._result_retention_seconds
