@@ -10,7 +10,7 @@ import json
 import mimetypes
 import tempfile
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 import pydantic_ai
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from pydantic import create_model as create_pydantic_model
+from pydantic.fields import FieldInfo
 from pydantic_ai import Agent, Tool
 from pydantic_ai.capabilities import Capability
 from pydantic_ai.exceptions import AgentRunError, ModelRetry, ToolFailed
@@ -104,7 +105,7 @@ async def run(
     with contextlib.ExitStack() as stack:
         directory: Path | None = None
         if fields.workspace_input is not None:
-            workspace = getattr(request.inputs, fields.workspace_input)
+            workspace = dict(request.inputs)[fields.workspace_input]
             # A reference workspace runs in place, so the agent's writes land in the
             # host's directory; a value workspace runs in its temporary copy.
             directory = workspace.path
@@ -125,9 +126,7 @@ async def run(
                 else ()
             ),
         ]
-        inputs, omitted_inputs = retained_fields(
-            {name: getattr(request.inputs, name) for name in signature.input_model.model_fields}
-        )
+        inputs, omitted_inputs = retained_fields(dict(request.inputs))
         await events.emit(
             None,
             RunStarted(model=runtime.model, inputs=inputs, omitted_inputs=omitted_inputs),
@@ -309,8 +308,9 @@ def _prompt(request: AgentRequest) -> list[UserContent]:
         )
         return label
 
+    given = dict(request.inputs)
     for name, info in request.signature.input_model.model_fields.items():
-        value = getattr(request.inputs, name)
+        value = given[name]
         if info.annotation is Workspace:
             values[name] = "the folder the file tools work in"
         elif info.annotation is File:
@@ -345,13 +345,14 @@ def _answer_model(output_model: type[BaseModel], fields: FileFields) -> type[Bas
 
     Avalanche fills workspace outputs, and the model writes file outputs as text files.
     """
-    definitions: dict[str, Any] = {}
+    # A field's annotation as Pydantic types it on ``FieldInfo``.
+    definitions: dict[str, tuple[type[Any] | None, FieldInfo]] = {}
     for name, info in output_model.model_fields.items():
         if name in fields.workspace_outputs:
             continue
         if name in fields.file_outputs:
             annotation = _TextFile if fields.file_outputs[name] else list[_TextFile]
-            definitions[name] = (annotation, Field(description=info.description))
+            definitions[name] = (annotation, FieldInfo(description=info.description))
         else:
             definitions[name] = (info.annotation, info)
     return create_pydantic_model(output_model.__name__.removesuffix("Outputs"), **definitions)
@@ -367,10 +368,9 @@ def _outputs(
     output_folder: AgentOutputFolder | None,
 ) -> AgentOutputs:
     """The model's answer, with the workspaces and files Avalanche returns."""
+    # Python values of the signature's output types, validated by ``PythonOutputs``.
     values: dict[str, object] = {
-        name: getattr(answer, name)
-        for name in type(answer).model_fields
-        if name not in fields.file_outputs
+        name: value for name, value in answer if name not in fields.file_outputs
     }
     if output_folder is not None:
         values.update(_output_files(request, answer, fields.file_outputs, output_folder))
@@ -394,6 +394,11 @@ def _output_files(
     written: set[Path] = set()
 
     def write(name: str, text_file: _TextFile) -> File:
+        if "\x00" in text_file.name:
+            raise AgentOutputError(
+                f"agent step {request.step_name!r} output {name!r}: cannot write "
+                f"{text_file.name!r}: a file name cannot contain a NUL character"
+            )
         target = (root / text_file.name).resolve()
         if not target.is_relative_to(root) or target == root:
             raise AgentOutputError(
@@ -406,57 +411,96 @@ def _output_files(
                 f"{text_file.name!r} more than once"
             )
         written.add(target)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(text_file.text, encoding="utf-8")
+        problem = (
+            f"agent step {request.step_name!r} output {name!r}: cannot write {text_file.name!r}"
+        )
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+        except FileExistsError as exc:
+            raise AgentOutputError(
+                f"{problem}: a folder in its name is already another answer file"
+            ) from exc
+        except OSError as exc:
+            raise AgentOutputError(f"{problem}: {exc}") from exc
+        try:
+            # The output folder is new, so anything already at the name is another answer
+            # file or folder; on a case-insensitive file system, also one whose name
+            # differs only in letter case.
+            with target.open("x", encoding="utf-8") as file:
+                file.write(text_file.text)
+        except FileExistsError as exc:
+            raise AgentOutputError(
+                f"{problem}: the answer already has a file or folder of that name, as the "
+                "file system compares names"
+            ) from exc
+        except OSError as exc:
+            # The system rejects the name.
+            raise AgentOutputError(f"{problem}: {exc}") from exc
         return output_folder.file(target)
 
+    answered = dict(answer)
     files: dict[str, File | list[File]] = {}
     for name, single in file_outputs.items():
-        value = getattr(answer, name)
+        value = answered[name]
         files[name] = write(name, value) if single else [write(name, item) for item in value]
     return files
 
 
-def _failing_as_tool_errors(function: Callable[..., object]) -> Callable[..., object]:
+def _failing_as_tool_errors[**P, R](function: Callable[P, R], *, name: str) -> Callable[P, R]:
     """``function`` reporting its exceptions to the model, which can recover.
 
     A tool that raises Pydantic AI's own ``ModelRetry`` or ``ToolFailed`` keeps its
-    meaning: the model is asked to call again, or told the call failed.
+    meaning: the model is asked to call again, or told the call failed. A plain callable
+    may return an awaitable; Pydantic AI awaits it.
     """
+    if isinstance(function, functools.partial):
+        # Pydantic AI reads a partial's signature and its function's type hints itself, so
+        # the function is wrapped and its bound arguments kept; it names the schema after it.
+        bound = functools.partial(
+            _failing_as_tool_errors(function.func, name=name),
+            *function.args,
+            **function.keywords,
+        )
+        bound.__name__ = bound.__qualname__ = name
+        return bound
+    if not inspect.isroutine(function):
+        # A callable object: its bound ``__call__`` carries the signature and type hints
+        # Pydantic AI builds the tool's schema from, and says whether it is async.
+        function = function.__call__
     if inspect.iscoroutinefunction(function):
 
         @functools.wraps(function)
-        async def call_async(*args: object, **kwargs: object) -> object:
-            try:
-                return await function(*args, **kwargs)
-            except (ModelRetry, ToolFailed):
-                raise
-            except Exception as exc:
-                raise ToolFailed(f"{type(exc).__name__}: {exc}") from exc
+        async def call_async(*args: P.args, **kwargs: P.kwargs):
+            return await _reported(function(*args, **kwargs))
 
         return call_async
 
     @functools.wraps(function)
-    def call(*args: object, **kwargs: object) -> object:
+    def call(*args: P.args, **kwargs: P.kwargs) -> R:
         try:
             result = function(*args, **kwargs)
         except (ModelRetry, ToolFailed):
             raise
         except Exception as exc:
             raise ToolFailed(f"{type(exc).__name__}: {exc}") from exc
-        if inspect.isawaitable(result):
-            raise AgentStepError(
-                f"tool {getattr(function, '__name__', function)!r} returned an awaitable "
-                "from a plain function; declare it with async def"
-            )
-        return result
+        return _reported(result) if inspect.isawaitable(result) else result
 
     return call
 
 
+async def _reported[R](awaitable: Awaitable[R]) -> R:
+    """``awaitable``'s result, with its exceptions reported to the model as tool errors."""
+    try:
+        return await awaitable
+    except (ModelRetry, ToolFailed):
+        raise
+    except Exception as exc:
+        raise ToolFailed(f"{type(exc).__name__}: {exc}") from exc
+
+
 def _step_tool(spec: ToolSpec) -> Tool[None]:
     return Tool(
-        _failing_as_tool_errors(spec.function),
+        _failing_as_tool_errors(spec.function, name=spec.name),
         name=spec.name,
         description=spec.description,
         takes_ctx=False,
@@ -468,7 +512,11 @@ def _workspace_tools(directory: Path) -> tuple[Tool[None], ...]:
     root = directory.resolve()
 
     def inside(path: str) -> Path:
-        target = (root / path).resolve()
+        try:
+            target = (root / path).resolve()
+        except (OSError, ValueError) as exc:
+            # A link loop, or a name the system refuses, such as one with a NUL character.
+            raise ToolFailed(f"cannot use the path {path!r}: {exc}") from exc
         if not target.is_relative_to(root):
             raise ToolFailed(f"{path!r} is outside the working folder")
         return target
@@ -478,9 +526,14 @@ def _workspace_tools(directory: Path) -> tuple[Tool[None], ...]:
         base = inside(folder)
         if not base.is_dir():
             raise ToolFailed(f"{folder!r} is not a folder")
-        files = sorted(
-            entry.relative_to(root).as_posix() for entry in base.rglob("*") if entry.is_file()
-        )
+        try:
+            files = sorted(
+                entry.relative_to(root).as_posix()
+                for entry in base.rglob("*")
+                if entry.is_file()
+            )
+        except OSError as exc:
+            raise ToolFailed(f"cannot list {folder!r}: {exc}") from exc
         if len(files) > _MAX_LISTED_FILES:
             raise ToolFailed(
                 f"{folder!r} holds {len(files)} files, more than {_MAX_LISTED_FILES}; list "
@@ -542,11 +595,17 @@ def _skill_file_tool(skills: tuple[Skill, ...]) -> Tool[None]:
 
 
 def _usage(usage: UsageBase) -> TokenUsage | None:
-    """Pydantic AI's token counts; its input count includes the prompt cache, ours not."""
-    if usage.unmeasured_requests:
+    """Pydantic AI's token counts; its input count includes the prompt cache, ours not.
+
+    ``None`` when they are not known: a request went unmeasured, or a model reported its
+    cache tokens outside its input count, against Pydantic AI's contract, so the input
+    count without the cache cannot be told.
+    """
+    cached = usage.cache_read_tokens + usage.cache_write_tokens
+    if usage.unmeasured_requests or usage.input_tokens < cached:
         return None
     return TokenUsage(
-        input_tokens=usage.input_tokens - usage.cache_read_tokens - usage.cache_write_tokens,
+        input_tokens=usage.input_tokens - cached,
         output_tokens=usage.output_tokens,
         cache_read_input_tokens=usage.cache_read_tokens,
         cache_creation_input_tokens=usage.cache_write_tokens,
@@ -562,12 +621,16 @@ def _bounded(value: JsonValue) -> JsonValue:
 
 
 def _arguments(part: BaseToolCallPart) -> JsonValue:
-    """A call's arguments; a model may write them as text that is not JSON."""
-    if isinstance(part.args, str):
+    """A call's arguments; a model may write them as text that is not JSON.
+
+    Such text is kept in an ``unparsed`` marker, so it cannot pass for a string argument.
+    """
+    # Pydantic AI reads empty text, as some providers send for no arguments, as {}.
+    if isinstance(part.args, str) and part.args:
         try:
             return _bounded(_JSON.validate_json(part.args))
         except ValidationError:
-            return _bounded(part.args)
+            return _bounded({"kind": "unparsed", "text": part.args})
     return _bounded(evidence_value(part.args_as_dict()))
 
 

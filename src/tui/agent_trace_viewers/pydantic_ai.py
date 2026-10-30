@@ -30,7 +30,8 @@ class PydanticAIViewer:
     def header(self, header: AgentTraceHeader) -> tuple[tuple[str, str], ...]:
         native = _native(header)
         lines = [
-            (f"Model: {header.model} · Run: {header.external_run_id}", ""),
+            # The shared header already shows the run ID.
+            (f"Model: {header.model} · Conversation: {header.session_id}", ""),
             (
                 f"Turns: {header.turn_count} · Duration: {duration_seconds(header.duration_ms)}"
                 f" · Requests: {native.requests} · Stop: {header.stop_reason}",

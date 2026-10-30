@@ -111,8 +111,10 @@ class PydanticAIAgent(BaseModel):
 
     def merged_over(self, base: PydanticAIAgent) -> PydanticAIAgent:
         """This runtime with the fields it leaves unset taken from ``base``."""
-        fields = {name: getattr(base, name) for name in base.model_fields_set}
-        fields.update({name: getattr(self, name) for name in self.model_fields_set})
+        # Iterating a model gives its fields and its extra ``pydantic_ai.Agent`` options.
+        inherited, own = dict(base), dict(self)
+        fields = {name: inherited[name] for name in base.model_fields_set}
+        fields.update({name: own[name] for name in self.model_fields_set})
         return PydanticAIAgent.model_validate(fields)
 
     def declaration(self, *, workflow_default: PydanticAIAgent | None) -> PydanticAIDeclaration:
