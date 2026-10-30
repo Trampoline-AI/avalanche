@@ -76,6 +76,8 @@ No available input raises `ValueError`; a missing attribute (including descent t
 
 When a workflow declares `input=`, the operator's browser graph starts with a black "inputs" dot, linked to the workflow's first steps by dashed edges with a diamond head, so it doesn't read as a step. Clicking the dot opens the input panel. It lists each field with its type, default or required status and `Field(description=...)`, plus the full schema, and has a box per field to set the value Run and the schedule start with: text fields take plain text, other fields take JSON, and an empty box leaves the field out. A `default_factory` default can't be written into the JSON schema, so it is shown as computed per run.
 
+Fields typed `ava.File` or `list[ava.File]` get a file picker instead of a box (a list field lets you pick several files at once). A picked file uploads to the operator right away, and Run and the schedule then use that copy; picking again replaces the earlier choice, and **Clear** removes it so the field takes its default. Run waits until every picked file has finished uploading. In a host that cannot upload files, file fields are shown but cannot be changed. The step receives an ordinary `ava.File` with the picked file's name. A local operator keeps uploads in a private folder: files no run or schedule used are deleted after 24 hours, and all of them are deleted when the operator stops. One file can be at most 32 MiB.
+
 Starting a run or turning a schedule on is refused when a required field has no value.
 
 A `cron` schedule's runs start with the input stored when the schedule was turned on, or with the defaults when none was stored. For a scheduled workflow, the dot and the inspector say which, or that the schedule is off.
