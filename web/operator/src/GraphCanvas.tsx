@@ -55,7 +55,11 @@ import type { EvaluationRecord } from "./evaluations";
 import { formatElapsedSeconds } from "./elapsedDuration";
 import { CompositeSummary } from "./CompositeSummary";
 import { arrangeGraph, createGraphLayout, type RoutedEdgeData } from "./graphLayout";
-import { highlightConnectedEdges } from "./graphSelection";
+import {
+  highlightConnectedEdges,
+  INPUT_EDGE_MARKER,
+  INPUT_EDGE_MARKER_CONNECTED,
+} from "./graphSelection";
 import { useGraphOrientation } from "./useGraphOrientation";
 import { ClaudeLogo, isClaudeRuntime } from "./ClaudeLogo";
 import { RunStatus, statusTone, statusToneColor } from "./RunStatus";
@@ -544,20 +548,36 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
 });
 WorkflowNodeCard.displayName = "WorkflowNodeCard";
 
+/** Horizontal slant of the Input node's parallelogram, in px. */
+const INPUT_SLANT = 24;
+
+const INPUT_SLANTS: ReadonlyMap<string, number> = new Map([[INPUT_NODE_ID, INPUT_SLANT]]);
+
 const WorkflowInputCard = memo(({ data, selected }: NodeProps<Node<InputCardData>>) => {
   const { zoom } = useViewport();
   const isCompact = zoom < NODE_DETAIL_ZOOM_THRESHOLD;
   const hidden = data.rows.length - INPUT_CARD_ROW_LIMIT;
   return (
     <article
-      className={`node-card node-input relative flex w-[360px] cursor-pointer flex-col items-stretch rounded border border-dashed text-left ${isCompact ? "node-card--compact min-h-[100px] justify-center gap-0 px-4 py-3" : "min-h-[100px] gap-2 p-4"}`}
-      style={{
-        outline: selected ? `${2 / zoom}px solid var(--color-acid)` : undefined,
-        outlineOffset: selected ? "2px" : undefined,
-      }}
+      className={`node-card node-input relative isolate flex w-[360px] cursor-pointer flex-col items-stretch border-0 bg-transparent text-left ${isCompact ? "node-card--compact min-h-[100px] justify-center gap-0 py-3 pr-10 pl-11" : "min-h-[100px] gap-2 py-4 pr-10 pl-11"}`}
       data-node-kind="input"
+      data-selected={selected || undefined}
       aria-disabled={data.inspectionDisabled || undefined}
     >
+      {/* A parallelogram, the flowchart symbol for data coming in, so the input
+          never reads as a step. The slant stays INPUT_SLANT px at any height. */}
+      <svg
+        aria-hidden="true"
+        className="node-input-shape pointer-events-none absolute inset-0 -z-10 size-full overflow-visible"
+        viewBox="0 0 360 100"
+        preserveAspectRatio="none"
+      >
+        <polygon
+          points={`${INPUT_SLANT},0 360,0 ${360 - INPUT_SLANT},100 0,100`}
+          vectorEffect="non-scaling-stroke"
+          strokeWidth={selected ? 2 / zoom : 1.2}
+        />
+      </svg>
       <button
         type="button"
         className="node-card-action absolute inset-0 z-[2] cursor-pointer rounded-[inherit] border-0 bg-transparent p-0 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-acid"
@@ -634,6 +654,34 @@ const WorkflowInputCard = memo(({ data, selected }: NodeProps<Node<InputCardData
   );
 });
 WorkflowInputCard.displayName = "WorkflowInputCard";
+
+/** Diamond heads for input edges; edges refer to them by ID (see graphSelection). */
+function InputEdgeMarkers() {
+  return (
+    <svg aria-hidden="true" className="pointer-events-none absolute size-0 overflow-hidden">
+      <defs>
+        {[
+          [INPUT_EDGE_MARKER, "var(--color-amber)"],
+          [INPUT_EDGE_MARKER_CONNECTED, "var(--color-acid)"],
+        ].map(([id, color]) => (
+          <marker
+            key={id}
+            id={id}
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="12"
+            markerHeight="12"
+            markerUnits="userSpaceOnUse"
+            orient="auto"
+          >
+            <path d="M0 5 L5 0 L10 5 L5 10 Z" style={{ fill: color }} />
+          </marker>
+        ))}
+      </defs>
+    </svg>
+  );
+}
 
 // Paths come from the layout, which routes every edge around cards and other edges.
 const RoutedEdge = memo(
@@ -802,7 +850,7 @@ function GraphCanvasView({
     [topologyGraph, topologyNodeIds, orientation],
   );
   const { positions, paths } = useMemo(
-    () => arrangeGraph(layout, nodeMeasurements, orientation),
+    () => arrangeGraph(layout, nodeMeasurements, orientation, INPUT_SLANTS),
     [layout, nodeMeasurements, orientation],
   );
   const edges = useMemo(
@@ -1076,6 +1124,7 @@ function GraphCanvasView({
         onPaneClick={onClearNode}
         proOptions={{ hideAttribution: true }}
       >
+        <InputEdgeMarkers />
         <FitGraphOnWidthChange
           options={orientation === "vertical" ? VERTICAL_FIT_VIEW_OPTIONS : FIT_VIEW_OPTIONS}
         />

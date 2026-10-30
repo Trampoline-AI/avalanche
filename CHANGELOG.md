@@ -77,8 +77,11 @@
   (they were `manual`); Web UI and TUI starts stay `manual`, and `StartRun` accepts a
   `trigger` field. Clients reject unknown trigger values. Python `RunState` and
   `RunSummary` expose it as `TriggerKind`.
-- The browser workflow graph shows a workflow's run input as a dashed Input node in
-  front of the steps that receive it, through a `BaseInput` annotation or an
+- The browser workflow graph shows a workflow's run input as an amber parallelogram
+  Input node, the flowchart symbol for data coming in, in front of the steps that
+  receive it. Its edges are dashed amber lines with a diamond head, so they read as
+  "this step is given the input" rather than the run-order arrows between steps. Steps
+  receive it through a `BaseInput` annotation or an
   `ava.input` selector. Workflows without `input=` show no Input node. The node lists
   each field with its type and its default, or marks it required. A cron-scheduled
   workflow says that scheduled runs use these defaults. In a run, the node shows the

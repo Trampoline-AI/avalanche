@@ -630,10 +630,15 @@
     border-color: var(--color-line);
   }
 
-  /* The run input is configuration, not a step: dashed and amber, with no run state. */
-  .node-input {
-    border-color: color-mix(in srgb, var(--color-amber) 55%, var(--color-line));
-    background: color-mix(in srgb, var(--color-amber) 6%, var(--color-panel));
+  /* The run input is data coming in, not a step: an amber parallelogram with no
+     run state. Its edges are dashed amber with a diamond head (graphSelection.ts). */
+  .node-input .node-input-shape polygon {
+    fill: color-mix(in srgb, var(--color-amber) 7%, var(--color-panel));
+    stroke: color-mix(in srgb, var(--color-amber) 70%, var(--color-line));
+  }
+
+  .node-input[data-selected] .node-input-shape polygon {
+    stroke: var(--color-acid);
   }
 
   .node-input-identity {

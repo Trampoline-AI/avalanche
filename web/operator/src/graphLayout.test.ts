@@ -323,3 +323,37 @@ describe("placeInOrder", () => {
     ]);
   });
 });
+
+describe("slanted cards", () => {
+  it("starts left-to-right edges on a card's slanted right side", () => {
+    const workflow = {
+      nodeIds: ["input", "first", "second", "third"],
+      graph: { input: { children: ["first", "second", "third"] } },
+    };
+    const layout = createGraphLayout(workflow, "horizontal");
+    const measurements = new Map(
+      workflow.nodeIds.map((nodeId) => [nodeId, { width: 200, height: 90 }]),
+    );
+    const start = (paths: Record<string, string>, target: string) => {
+      const [x, y] = paths[`input->${target}`].slice(2).split(" ")[0].split(",").map(Number);
+      return { x, y };
+    };
+    const square = arrangeGraph(layout, measurements, "horizontal").paths;
+    const slanted = arrangeGraph(
+      layout,
+      measurements,
+      "horizontal",
+      new Map([["input", 24]]),
+    ).paths;
+    const starts = ["first", "second", "third"]
+      .map((target) => ({ square: start(square, target), slanted: start(slanted, target) }))
+      .sort((left, right) => left.slanted.y - right.slanted.y);
+    for (const { square: box, slanted: shape } of starts) {
+      expect(shape.y).toBe(box.y);
+      expect(shape.x).toBeLessThan(box.x);
+      expect(shape.x).toBeGreaterThanOrEqual(box.x - 24);
+    }
+    // Lower ports sit further in, following the slant.
+    expect(starts[2].slanted.x).toBeLessThan(starts[0].slanted.x);
+  });
+});

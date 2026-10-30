@@ -280,6 +280,11 @@ export function arrangeGraph(
   layout: GraphLayout,
   measurements: ReadonlyMap<string, Size>,
   orientation: GraphOrientation,
+  /**
+   * Cards whose right side leans left by this many px from top to bottom, like a
+   * parallelogram. Left-to-right edges leave them from that side, not the box edge.
+   */
+  rightSlants: ReadonlyMap<string, number> = new Map(),
 ): GraphArrangement {
   const vertical = orientation === "vertical";
   const size = (nodeId: string) => measurements.get(nodeId) ?? DEFAULT_SIZE;
@@ -491,9 +496,14 @@ export function arrangeGraph(
     const source = chain[0];
     const target = chain.at(-1)!;
     const sourceDepth = depthOf.get(source)!;
+    const slant = vertical ? 0 : (rightSlants.get(source.nodeId!) ?? 0);
+    const sourceHeight = size(source.nodeId!).height;
+    const fromTop = outPorts[edgeId] - (across.get(source)! - sourceHeight / 2);
     const points = [
       point(
-        nodeStart(source.nodeId!, sourceDepth) + forwardSize(source.nodeId!),
+        nodeStart(source.nodeId!, sourceDepth) +
+          forwardSize(source.nodeId!) -
+          (slant * fromTop) / sourceHeight,
         outPorts[edgeId],
       ),
     ];
