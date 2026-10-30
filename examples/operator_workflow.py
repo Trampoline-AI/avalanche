@@ -6,7 +6,7 @@ Run directly:
 Run through the operator:
     uv run ava operator examples/operator_workflow.py
 
-The workflow runs every five minutes once its schedule is turned on. Schedules
+The workflow runs every minute once its schedule is turned on. Schedules
 start off; turn this one on from the Web UI's run controls, the TUI (Ctrl+S) or
 `ava schedule enable operator_demo_workflow --connect HOST:PORT`.
 """
@@ -59,7 +59,7 @@ def publish_summary(summary: dict[str, object], log=ava.Logger()) -> dict[str, o
     return summary
 
 
-@ava.workflow(cron="*/5 * * * *")
+@ava.workflow(cron="* * * * *")
 def operator_demo_workflow():
     # Equivalent NodeFuture argument form, less visual:
     # orders = fetch_orders()
