@@ -1,10 +1,9 @@
-import { EditorView } from "@codemirror/view";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 
 import { FlowInfoMsg } from "./model";
 import { RunControls } from "./RunControls";
-import { useInputDraft } from "./useInputDraft";
+import { useInputDraft, type InputDraft } from "./useInputDraft";
 import { workflow } from "./test/fixtures";
 
 const nightly = FlowInfoMsg.create({
@@ -16,20 +15,12 @@ const nightly = FlowInfoMsg.create({
     properties: { region: { type: "string", default: "eu" }, limit: { type: "integer" } },
     required: ["limit"],
   }),
+  inputDeclarationJson: JSON.stringify({
+    type_name: "NightlyInput",
+    json_schema: { type: "object" },
+    consumer_node_ids: [],
+  }),
 });
-
-function editor(): EditorView {
-  return EditorView.findFromDOM(screen.getByRole("textbox", { name: "Workflow input JSON" }))!;
-}
-
-function replaceInput(value: unknown) {
-  const view = editor();
-  act(() => {
-    view.dispatch({
-      changes: { from: 0, to: view.state.doc.length, insert: JSON.stringify(value) },
-    });
-  });
-}
 
 interface HarnessProps {
   workflow: FlowInfoMsg;
@@ -39,11 +30,21 @@ interface HarnessProps {
     enabled: boolean,
     input?: Record<string, unknown>,
   ) => Promise<void>;
+  onEditInput: () => void;
+  /** The latest draft, so a test can edit it the way the input panel does. */
+  draft: { current?: InputDraft };
 }
 
 /** The workspace owns the input draft; the harness does the same. */
-function Harness({ workflow, onStart, onSetScheduleEnabled }: HarnessProps) {
+function Harness({
+  workflow,
+  onStart,
+  onSetScheduleEnabled,
+  onEditInput,
+  draft,
+}: HarnessProps) {
   const inputDraft = useInputDraft(workflow);
+  draft.current = inputDraft;
   return (
     <RunControls
       workflow={workflow}
@@ -51,26 +52,32 @@ function Harness({ workflow, onStart, onSetScheduleEnabled }: HarnessProps) {
       onStart={onStart}
       onCancel={async () => undefined}
       onSetScheduleEnabled={onSetScheduleEnabled}
+      onEditInput={onEditInput}
     />
   );
 }
 
-function renderControls(flow: FlowInfoMsg) {
-  const onStart = vi.fn(async () => "run-1");
-  const onSetScheduleEnabled = vi.fn(async () => undefined);
-  const view = render(
-    <Harness workflow={flow} onStart={onStart} onSetScheduleEnabled={onSetScheduleEnabled} />,
-  );
-  return { onStart, onSetScheduleEnabled, view };
+function renderControls(
+  flow: FlowInfoMsg,
+  onSetScheduleEnabled = vi.fn(
+    async (_selector: string, _enabled: boolean, _input?: Record<string, unknown>) => undefined,
+  ),
+) {
+  const onStart = vi.fn(async (_selector: string, _input?: Record<string, unknown>) => "run-1");
+  const onEditInput = vi.fn();
+  const draft: { current?: InputDraft } = {};
+  const props = { onStart, onSetScheduleEnabled, onEditInput, draft };
+  const view = render(<Harness workflow={flow} {...props} />);
+  const edit = (value: unknown) => act(() => draft.current!.setText(JSON.stringify(value)));
+  const rerender = (next: FlowInfoMsg) => view.rerender(<Harness workflow={next} {...props} />);
+  return { ...props, edit, rerender };
 }
 
-it("prefills the run input with defaults and uses it for Run and the schedule", async () => {
-  const { onStart, onSetScheduleEnabled } = renderControls(nightly);
+it("starts Run and the schedule with the edited input", async () => {
+  const { onStart, onSetScheduleEnabled, draft, edit } = renderControls(nightly);
 
-  fireEvent.click(screen.getByRole("button", { name: "Add JSON input" }));
-  expect(JSON.parse(editor().state.doc.toString())).toEqual({ region: "eu", limit: null });
-  replaceInput({ region: "us", limit: 10 });
-
+  expect(JSON.parse(draft.current!.text)).toEqual({ region: "eu", limit: null });
+  edit({ region: "us", limit: 10 });
   fireEvent.click(screen.getByRole("button", { name: "Run" }));
   await waitFor(() =>
     expect(onStart).toHaveBeenCalledWith(nightly.workflowId, { region: "us", limit: 10 }),
@@ -84,27 +91,27 @@ it("prefills the run input with defaults and uses it for Run and the schedule", 
   );
 });
 
-it("enables a schedule with its current input when the input editor is closed", async () => {
-  const { onSetScheduleEnabled } = renderControls(nightly);
+it("leaves the input to the operator while it is unedited", async () => {
+  const { onStart, onSetScheduleEnabled } = renderControls(nightly);
 
+  fireEvent.click(screen.getByRole("button", { name: "Run" }));
   fireEvent.click(screen.getByRole("switch", { name: "Run on schedule" }));
 
+  await waitFor(() => expect(onStart).toHaveBeenCalledWith(nightly.workflowId, undefined));
   await waitFor(() =>
     expect(onSetScheduleEnabled).toHaveBeenCalledWith(nightly.workflowId, true, undefined),
   );
 });
 
 it("offers to update an enabled schedule when the edited input differs", async () => {
-  const { onSetScheduleEnabled } = renderControls({
+  const { onSetScheduleEnabled, edit } = renderControls({
     ...nightly,
     scheduleEnabled: true,
     scheduleInput: { limit: 3 },
   });
 
-  fireEvent.click(screen.getByRole("button", { name: "Add JSON input" }));
-  expect(JSON.parse(editor().state.doc.toString())).toEqual({ region: "eu", limit: 3 });
   expect(screen.queryByRole("button", { name: "Use for schedule" })).not.toBeInTheDocument();
-  replaceInput({ region: "eu", limit: 4 });
+  edit({ region: "eu", limit: 4 });
   fireEvent.click(screen.getByRole("button", { name: "Use for schedule" }));
 
   await waitFor(() =>
@@ -116,9 +123,9 @@ it("offers to update an enabled schedule when the edited input differs", async (
 });
 
 it("disables a schedule without sending input", async () => {
-  const { onSetScheduleEnabled } = renderControls({ ...nightly, scheduleEnabled: true });
+  const { onSetScheduleEnabled, edit } = renderControls({ ...nightly, scheduleEnabled: true });
 
-  fireEvent.click(screen.getByRole("button", { name: "Add JSON input" }));
+  edit({ limit: 4 });
   fireEvent.click(screen.getByRole("switch", { name: "Run on schedule" }));
 
   await waitFor(() =>
@@ -126,30 +133,36 @@ it("disables a schedule without sending input", async () => {
   );
 });
 
-it("rejects input that is not an object before enabling", async () => {
-  const { onSetScheduleEnabled } = renderControls(nightly);
+it.each([
+  ["takes input", nightly, true],
+  ["takes no input", { ...nightly, inputDeclarationJson: "" }, false],
+])("links an error to the input panel when the workflow %s", async (_case, flow, linked) => {
+  const rejected = vi.fn(async () => {
+    throw new Error("Input is missing required fields: limit");
+  });
+  const { onEditInput } = renderControls(flow, rejected);
 
-  fireEvent.click(screen.getByRole("button", { name: "Add JSON input" }));
-  replaceInput([1]);
   fireEvent.click(screen.getByRole("switch", { name: "Run on schedule" }));
+  const alert = await screen.findByRole("alert");
+  const link = screen.queryByRole("button", { name: "Edit inputs" });
 
-  expect(await screen.findByRole("alert")).toBeVisible();
-  expect(onSetScheduleEnabled).not.toHaveBeenCalled();
+  expect(alert).toBeVisible();
+  if (!linked) {
+    expect(link).toBeNull();
+    return;
+  }
+  fireEvent.click(link!);
+  expect(onEditInput).toHaveBeenCalledOnce();
 });
 
 it("follows input stored elsewhere until the draft is edited", () => {
-  const { onStart, onSetScheduleEnabled, view } = renderControls(nightly);
-  const rerender = (flow: FlowInfoMsg) =>
-    view.rerender(
-      <Harness workflow={flow} onStart={onStart} onSetScheduleEnabled={onSetScheduleEnabled} />,
-    );
+  const { draft, edit, rerender } = renderControls(nightly);
 
-  fireEvent.click(screen.getByRole("button", { name: "Add JSON input" }));
   rerender({ ...nightly, scheduleEnabled: true, scheduleInput: { region: "us", limit: 5 } });
-  expect(JSON.parse(editor().state.doc.toString())).toEqual({ region: "us", limit: 5 });
+  expect(JSON.parse(draft.current!.text)).toEqual({ region: "us", limit: 5 });
   expect(screen.queryByRole("button", { name: "Use for schedule" })).not.toBeInTheDocument();
 
-  replaceInput({ region: "us", limit: 7 });
+  edit({ region: "us", limit: 7 });
   rerender({ ...nightly, scheduleEnabled: true, scheduleInput: { region: "ap", limit: 6 } });
-  expect(JSON.parse(editor().state.doc.toString())).toEqual({ region: "us", limit: 7 });
+  expect(JSON.parse(draft.current!.text)).toEqual({ region: "us", limit: 7 });
 });

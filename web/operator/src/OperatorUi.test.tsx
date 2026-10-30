@@ -2233,6 +2233,27 @@ describe("workflow input node", () => {
     ).toHaveAttribute("data-run-trigger", "webhook");
   });
 
+  it("opens the input panel from a run error's Edit inputs link", async () => {
+    const api = createApi({
+      getCatalog: async () => ({ ...baseline.catalog, workflows: [declared] }),
+      loadBaseline: async () => ({
+        ...baseline,
+        catalog: { ...baseline.catalog, workflows: [declared] },
+      }),
+      startRun: async () => {
+        throw new Error("Input is missing required fields: repository");
+      },
+    });
+    render(<WorkflowWorkspace api={api} workflowId={workflow.workflowId} />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Run" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Edit inputs" }));
+
+    expect(
+      await screen.findByRole("complementary", { name: "Workflow input declaration" }),
+    ).toBeVisible();
+  });
+
   it("starts a run with input edited in the workspace's input panel", async () => {
     // Never settles, so the workspace does not go on to follow a run it cannot load.
     const startRun = vi.fn(
