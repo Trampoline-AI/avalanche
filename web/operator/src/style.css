@@ -634,10 +634,53 @@
      edges are dashed with a diamond head (graphSelection.ts). */
   .node-input-dot {
     background: var(--color-ink);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-ink) 18%, transparent);
+    transition:
+      transform 160ms ease-out,
+      box-shadow 160ms ease-out,
+      background-color 160ms ease-out;
   }
 
-  .node-input[data-open] .node-input-dot {
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-ink) 18%, var(--color-panel));
+  .node-input-label {
+    color: var(--color-secondary);
+    transition: color 160ms ease-out;
+  }
+
+  /* Clickable: it grows and gains a soft ring on hover or keyboard focus. */
+  .node-input:hover .node-input-dot,
+  .node-input:has(.node-card-action:focus-visible) .node-input-dot {
+    transform: scale(1.18);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-ink) 14%, transparent);
+  }
+
+  .node-input:hover .node-input-label {
+    color: var(--color-ink);
+  }
+
+  .node-input:active .node-input-dot {
+    transform: scale(1.05);
+  }
+
+  /* Open in the input panel. */
+  .node-input[data-selected] .node-input-dot {
+    background: var(--color-acid);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-acid) 22%, transparent);
+  }
+
+  .node-input[data-selected] .node-input-label {
+    color: var(--color-acid);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .node-input-dot,
+    .node-input-label {
+      transition: none;
+    }
+
+    .node-input:hover .node-input-dot,
+    .node-input:active .node-input-dot {
+      transform: none;
+    }
   }
 
   .node-input[data-error] .node-input-dot {

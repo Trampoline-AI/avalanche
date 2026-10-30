@@ -30,13 +30,7 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 
-import type {
-  FlowInfoMsg,
-  NodeSnapshotMsg,
-  RunInputMsg,
-  TriggerKind,
-  WorkflowTopologyMsg,
-} from "./model";
+import type { FlowInfoMsg, NodeSnapshotMsg, TriggerKind, WorkflowTopologyMsg } from "./model";
 import {
   AgentDeclaration as AgentDeclarationSchema,
   type FieldDeclaration,
@@ -59,15 +53,9 @@ import { RunStatus, statusTone, statusToneColor } from "./RunStatus";
 import {
   INPUT_NODE_ID,
   decodeWorkflowInputDeclaration,
-  runInputFields,
   runTriggerLabel,
   scheduledInputNote,
-  workflowInputFields,
-  type RunInputField,
-  type WorkflowInputField,
 } from "./workflowInput";
-import { InputPopover } from "./InputPopover";
-import type { InputDraft } from "./useInputDraft";
 
 interface FieldMetadata {
   name: string;
@@ -129,16 +117,12 @@ interface CardData extends Record<string, unknown> {
 
 interface InputDotData extends Record<string, unknown> {
   typeName?: string;
-  fields: WorkflowInputField[];
-  /** Editable draft outside a run. */
-  draft?: InputDraft;
-  /** The values a run used, or "unavailable" when it has none to show. */
-  runValues?: RunInputField[] | "unavailable";
   trigger?: TriggerKind;
   cron?: string;
   /** What scheduled runs start with; only for a cron workflow's definition. */
   scheduleNote?: string;
   error?: string;
+  onOpen: () => void;
   inspectionDisabled?: boolean;
 }
 
@@ -544,35 +528,34 @@ WorkflowNodeCard.displayName = "WorkflowNodeCard";
 
 /**
  * The run input as a dot before the workflow's first steps, so it never reads as a
- * step. Clicking it opens its fields over the graph, editable outside a run.
+ * step. Clicking it opens the input panel, where its values can be edited.
  */
-const WorkflowInputDot = memo(({ data }: NodeProps<Node<InputDotData>>) => {
+const WorkflowInputDot = memo(({ data, selected }: NodeProps<Node<InputDotData>>) => {
   const { zoom } = useViewport();
-  const [open, setOpen] = useState(false);
-  const close = useCallback(() => setOpen(false), []);
-  const note = data.trigger ? runTriggerLabel(data.trigger) : data.scheduleNote;
+  const label = data.typeName ? `Inputs · ${data.typeName}` : "Run input";
+  const note = data.error ?? (data.trigger ? runTriggerLabel(data.trigger) : data.scheduleNote);
   return (
     <div
       className="node-input relative grid size-7 place-items-center"
       data-node-kind="input"
-      data-open={open || undefined}
+      data-selected={selected || undefined}
       data-error={data.error ? true : undefined}
       data-run-trigger={data.trigger}
       data-cron={data.cron}
+      title={note ? `${label}\n${note}` : label}
     >
       <button
         type="button"
         className="node-card-action absolute inset-0 z-[2] cursor-pointer rounded-full border-0 bg-transparent p-0 focus-visible:outline-3 focus-visible:outline-offset-3 focus-visible:outline-acid"
-        onClick={() => setOpen((value) => !value)}
+        onClick={data.onOpen}
         disabled={data.inspectionDisabled}
-        aria-expanded={open}
-        aria-label={`Workflow input${data.typeName ? ` ${data.typeName}` : ""}`}
+        aria-label={`Inspect workflow input${data.typeName ? ` ${data.typeName}` : ""}`}
       />
       <span aria-hidden="true" className="node-input-dot size-6 rounded-full" />
       <span
         aria-hidden="true"
-        className="node-input-label pointer-events-none absolute top-full left-1/2 mt-1 font-mono text-[11px] whitespace-nowrap text-secondary"
-        // Readable at any canvas zoom, like the popup.
+        className="node-input-label pointer-events-none absolute top-full left-1/2 mt-1 font-mono text-[11px] whitespace-nowrap"
+        // Readable at any canvas zoom.
         style={{
           transform: `translateX(-50%) scale(${1 / zoom})`,
           transformOrigin: "top center",
@@ -580,23 +563,6 @@ const WorkflowInputDot = memo(({ data }: NodeProps<Node<InputDotData>>) => {
       >
         inputs
       </span>
-      {open && (
-        // Counter the canvas zoom so the popup reads at its normal size.
-        <div
-          className="absolute top-0 left-0 z-[3]"
-          style={{ transform: `scale(${1 / zoom})`, transformOrigin: "top left" }}
-        >
-          <InputPopover
-            typeName={data.typeName}
-            fields={data.fields}
-            draft={data.draft}
-            runValues={data.runValues}
-            note={note}
-            error={data.error}
-            onClose={close}
-          />
-        </div>
-      )}
       <Handle
         id="source-right"
         className="node-handle pointer-events-none size-px! min-h-0! min-w-0! border-0! bg-transparent! opacity-0"
@@ -703,10 +669,6 @@ interface GraphCanvasProps {
   workflow?: FlowInfoMsg;
   runTopology?: WorkflowTopologyMsg;
   runNodes?: NodeSnapshotMsg[];
-  /** The values the displayed run started with. */
-  runInput?: RunInputMsg;
-  /** The editable input draft, outside a run. */
-  inputDraft?: InputDraft;
   /** How the displayed run started, such as "manual" or "scheduled". */
   runTriggeredBy?: TriggerKind;
   evaluations?: Record<string, EvaluationRecord>;
@@ -721,8 +683,6 @@ function GraphCanvasView({
   workflow,
   runTopology,
   runNodes = [],
-  runInput,
-  inputDraft,
   runTriggeredBy,
   evaluations,
   bottomRightPanel,
@@ -932,34 +892,21 @@ function GraphCanvasView({
   const inputCard = useMemo<InputDotData | undefined>(() => {
     if (!hasInputNode) return undefined;
     const { declaration, error } = inputDeclaration;
-    const fields = declaration ? workflowInputFields(declaration) : [];
-    let runValues: InputDotData["runValues"];
-    let valuesError: string | undefined;
-    if (runTopology && declaration) {
-      try {
-        runValues = runInput ? runInputFields(declaration, runInput) : "unavailable";
-      } catch {
-        valuesError = "Run input unavailable";
-      }
-    }
     return {
       typeName: declaration?.typeName,
-      fields,
-      draft: runTopology ? undefined : inputDraft,
-      runValues,
       trigger: runTopology ? runTriggeredBy : undefined,
       cron: runTopology ? undefined : cron || undefined,
       scheduleNote,
-      error: error ?? valuesError,
+      error,
+      onOpen: () => onOpenNode(INPUT_NODE_ID),
       inspectionDisabled,
     };
   }, [
     cron,
     hasInputNode,
     inputDeclaration,
-    inputDraft,
     inspectionDisabled,
-    runInput,
+    onOpenNode,
     runTopology,
     runTriggeredBy,
     scheduleNote,
@@ -1034,8 +981,6 @@ function GraphCanvasView({
     const inputNode: Node<InputDotData> = {
       id: INPUT_NODE_ID,
       selected: selectedNodeId === INPUT_NODE_ID,
-      // Its popup opens over the step cards.
-      zIndex: 1000,
       type: "workflowInput",
       position: positions[INPUT_NODE_ID],
       measured: nodeMeasurements.get(INPUT_NODE_ID),
@@ -1155,8 +1100,6 @@ export const GraphCanvas = memo(
   (left, right) =>
     left.workflow === right.workflow &&
     left.runTopology === right.runTopology &&
-    left.runInput === right.runInput &&
-    left.inputDraft === right.inputDraft &&
     left.runTriggeredBy === right.runTriggeredBy &&
     left.evaluations === right.evaluations &&
     left.bottomRightPanel === right.bottomRightPanel &&
