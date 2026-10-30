@@ -74,11 +74,13 @@ No available input raises `ValueError`; a missing attribute (including descent t
 
 ## Input in the operator browser UI
 
-When a workflow declares `input=`, the operator's browser graph starts with a small amber dot for the run input, linked to the workflow's first steps by dashed amber edges with a diamond head, so it doesn't read as a step. Selecting the dot opens the input inspector: each field with its type, default or required status and `Field(description=...)`, plus the full schema. A `default_factory` default can't be written into the JSON schema, so it is shown as computed per run.
+When a workflow declares `input=`, the operator's browser graph starts with a black "inputs" dot, linked to the workflow's first steps by dashed edges with a diamond head, so it doesn't read as a step. Clicking the dot opens the input panel. It lists each field with its type, default or required status and `Field(description=...)`, plus the full schema, and has a box per field to set the value Run and the schedule start with: text fields take plain text, other fields take JSON, and an empty box leaves the field out. A `default_factory` default can't be written into the JSON schema, so it is shown as computed per run.
+
+Starting a run or turning a schedule on is refused when a required field has no value.
 
 A `cron` schedule's runs start with the input stored when the schedule was turned on, or with the defaults when none was stored. For a scheduled workflow, the dot and the inspector say which, or that the schedule is off.
 
-The operator validates the input once, before any step runs. For a run, the inspector shows the validated values and marks which ones the caller supplied and which took their defaults, and the dot and inspector say whether the run started manually, by its schedule, by a webhook or through the API. Values are not shown when their JSON form is larger than 1 MiB or can't be serialized; the run still executes. Fields excluded from serialization, such as `Field(exclude=True)`, are shown as not recorded.
+The operator validates the input once, before any step runs. For a run, the panel shows only the validated values, with the ones that took their defaults shown fainter, and the dot and panel say whether the run started manually, by its schedule, by a webhook or through the API. Values are not shown when their JSON form is larger than 1 MiB or can't be serialized; the run still executes. Fields excluded from serialization, such as `Field(exclude=True)`, are shown as not recorded.
 
 ## Logger
 
