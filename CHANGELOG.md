@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Agents: new runtime `ava.runtimes.OpenAIAgent` runs agent steps with OpenAI models
+  through the OpenAI Agents SDK; install it with `avalanche-ai[openai]` and set
+  `OPENAI_API_KEY`. The model calls the step's tools, gets `ava.File` inputs as
+  attachments (images as images, other files as files it reads), and reads the
+  step's Agent Skills through two tools, `load_skill` and `read_skill_file`.
+  `builtin_tools=["filesystem", "shell"]` (off by default) turns on the SDK's
+  sandbox tools (`apply_patch`, `view_image`, `exec_command`, `write_stdin`): the
+  step then runs in a local SDK sandbox rooted at its `ava.Workspace` input, which
+  the agent edits in place, or else at a temporary folder; it can return the
+  workspace as an `ava.Workspace` output, writes `ava.File` outputs itself, and
+  with a shell runs skill scripts. The local sandbox does not confine commands on
+  Linux. Without sandbox tools, `ava.File` outputs are text files the model
+  answers with and Avalanche writes to the run workspace, and `ava.Workspace`
+  fields are rejected. Other settings are `model`, `max_turns`,
+  `system_prompt_append`, `narrate` (on by default, as for ClaudeAgent) and
+  `tracing` (off: the SDK's own traces are not sent to OpenAI); any other keyword
+  is an `agents.ModelSettings` field. Its
+  traces have their own format, `openai_agents.responses/v1`, with each response's
+  ID, model, reasoning tokens and refusal, and the TUI and browser UI show them,
+  including the run's turn limit. A failed run, such as one over `max_turns`, still
+  sends its turns and a failed trace header with the reason. The repository's lock
+  file now resolves the `openai` package to 3.x (it was 2.x), which the OpenAI
+  Agents SDK requires; DSPy and PredictRLM accept it.
+
 ## 0.16.1
 
 - `ava.runtimes.ClaudeAgent` takes `system_prompt_preset="claude_code"` to start
@@ -36,29 +60,6 @@
   and supply an Overview | Deployments timeline with controlled or local tab state,
   virtualized deployment paging, selection, and confirmed set-current actions.
 
-- Agents: new runtime `ava.runtimes.OpenAIAgent` runs agent steps with OpenAI models
-  through the OpenAI Agents SDK; install it with `avalanche-ai[openai]` and set
-  `OPENAI_API_KEY`. The model calls the step's tools, gets `ava.File` inputs as
-  attachments (images as images, other files as files it reads), and reads the
-  step's Agent Skills through two tools, `load_skill` and `read_skill_file`.
-  `builtin_tools=["filesystem", "shell"]` (off by default) turns on the SDK's
-  sandbox tools (`apply_patch`, `view_image`, `exec_command`, `write_stdin`): the
-  step then runs in a local SDK sandbox rooted at its `ava.Workspace` input, which
-  the agent edits in place, or else at a temporary folder; it can return the
-  workspace as an `ava.Workspace` output, writes `ava.File` outputs itself, and
-  with a shell runs skill scripts. The local sandbox does not confine commands on
-  Linux. Without sandbox tools, `ava.File` outputs are text files the model
-  answers with and Avalanche writes to the run workspace, and `ava.Workspace`
-  fields are rejected. Other settings are `model`, `max_turns`,
-  `system_prompt_append`, `narrate` (on by default, as for ClaudeAgent) and
-  `tracing` (off: the SDK's own traces are not sent to OpenAI); any other keyword
-  is an `agents.ModelSettings` field. Its
-  traces have their own format, `openai_agents.responses/v1`, with each response's
-  ID, model, reasoning tokens and refusal, and the TUI and browser UI show them,
-  including the run's turn limit. A failed run, such as one over `max_turns`, still
-  sends its turns and a failed trace header with the reason. The repository's lock
-  file now resolves the `openai` package to 3.x (it was 2.x), which the OpenAI
-  Agents SDK requires; DSPy and PredictRLM accept it.
 - Agents: `ava.runtimes.ClaudeAgent` now passes any other keyword to the Claude
   Agent SDK as a `ClaudeAgentOptions` field, such as
   `ClaudeAgent(model="claude-sonnet-5-5", effort="low", mcp_servers={...})`.
