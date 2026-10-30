@@ -2027,7 +2027,12 @@ describe("cron schedules", () => {
 
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
-    expect(setScheduleEnabled).toHaveBeenCalledWith(nightly.workflowId, true, undefined);
+    expect(setScheduleEnabled).toHaveBeenCalledWith(
+      nightly.workflowId,
+      true,
+      undefined,
+      undefined,
+    );
     expect(within(controls).getByRole("time")).toHaveAttribute(
       "datetime",
       new Date(nextRunAt * 1000).toISOString(),
@@ -2293,7 +2298,11 @@ describe("workflow input node", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
     await waitFor(() =>
-      expect(startRun).toHaveBeenCalledWith(declared.workflowId, { repository: "acme/web" }),
+      expect(startRun).toHaveBeenCalledWith(
+        declared.workflowId,
+        { repository: "acme/web" },
+        undefined,
+      ),
     );
   });
 });
