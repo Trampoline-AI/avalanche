@@ -1452,3 +1452,33 @@ export const ListClassifierEventsRequest = {
     };
   },
 };
+
+/**
+ * A file a host staged for one run input field, shaped like the operator's
+ * FileAttachmentV2. The host stores the body somewhere the operator can read it:
+ * under `objectUri`/`objectKey`, or inline in `inlineBytes`.
+ */
+export interface StagedInputFile {
+  name: string;
+  mediaType: string;
+  sizeBytes: number;
+  sha256: string;
+  objectUri: string;
+  objectKey: string;
+  inlineBytes?: Uint8Array;
+}
+
+/**
+ * A staged file and the input field it fills. When the input sets that field to
+ * a list, the field's files are appended to it in order; otherwise a field takes
+ * exactly one file.
+ */
+export interface InputFileAttachment extends StagedInputFile {
+  fieldName: string;
+}
+
+/** The workflow and declared input field a file is staged for. */
+export interface InputFileTarget {
+  workflow: string;
+  field: string;
+}

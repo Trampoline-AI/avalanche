@@ -5,6 +5,9 @@ import { acceptsString, inputFieldText, type WorkflowInputField } from "./workfl
 export interface InputFieldEditor {
   /** Why the fields cannot be edited right now. */
   error?: string;
+  /** The draft's file picks and the field values they replace. */
+  draft: InputDraft;
+  value: (field: WorkflowInputField) => unknown;
   text: (field: WorkflowInputField) => string;
   invalid: (field: WorkflowInputField) => boolean;
   update: (field: WorkflowInputField, text: string) => void;
@@ -25,6 +28,8 @@ export function useInputFieldEditor(draft: InputDraft): InputFieldEditor {
   }
   return {
     error,
+    draft,
+    value: (field) => values?.[field.name],
     text: (field) => pending[field.name] ?? inputFieldText(values?.[field.name], field),
     invalid: (field) => Object.hasOwn(pending, field.name),
     update: (field, text) => {

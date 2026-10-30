@@ -19,6 +19,7 @@ import {
 import type {
   ActivityDetailRefV2,
   ContinuationRefV2,
+  FileAttachmentV2,
   FlowInfoV2,
   FlowListV2,
   LifecycleCursorV2,
@@ -42,6 +43,8 @@ import type {
   ClassifierAnswerSummary,
   ClassifierEventDescriptorMsg,
   FlowInfoMsg,
+  InputFileAttachment,
+  InputFileTarget,
   ListAgentEventsRequest,
   ListClassifierEventsRequest,
   ListLogsRequest,
@@ -51,6 +54,7 @@ import type {
   OperatorUpdateEnvelope,
   RunSnapshotMsg,
   RunSummaryMsg,
+  StagedInputFile,
   TerminalSealMsg,
   TokenUsageMsg,
   TraceDescriptorMsg,
@@ -199,7 +203,12 @@ export interface OperatorApi {
   listRunEvaluations(runId: string, signal?: AbortSignal): Promise<EvaluationRecord[]>;
   readJsonDetail(bodyToken: string, signal?: AbortSignal): Promise<unknown>;
   readTextDetail(bodyToken: string, signal?: AbortSignal): Promise<string>;
-  startRun(workflowSelector: string, input?: Record<string, unknown>): Promise<string>;
+  /** `inputFiles` fill file fields of `input`; see InputFileAttachment. */
+  startRun(
+    workflowSelector: string,
+    input?: Record<string, unknown>,
+    inputFiles?: InputFileAttachment[],
+  ): Promise<string>;
   cancelRun(runId: string): Promise<void>;
   /** Enable or disable a cron schedule; the operator keeps this only in memory. */
   /** `input`, only when enabling, replaces the input cron runs start with. */
@@ -207,7 +216,13 @@ export interface OperatorApi {
     workflowSelector: string,
     enabled: boolean,
     input?: Record<string, unknown>,
+    inputFiles?: InputFileAttachment[],
   ): Promise<FlowInfoMsg>;
+  /**
+   * Store a file picked for a run input field so a later run or schedule can use
+   * it. Optional: a host without it shows file fields as not editable.
+   */
+  stageInputFile?(file: File, target: InputFileTarget): Promise<StagedInputFile>;
 }
 
 interface RegisteredContinuation {
@@ -602,14 +617,18 @@ export class GrpcWebOperatorApi implements OperatorApi {
     return decoded.join("");
   }
 
-  async startRun(workflowSelector: string, input?: Record<string, unknown>): Promise<string> {
+  async startRun(
+    workflowSelector: string,
+    input?: Record<string, unknown>,
+    inputFiles: InputFileAttachment[] = [],
+  ): Promise<string> {
     const runId = `run_${crypto.randomUUID().replaceAll("-", "").slice(0, 8)}`;
     const response = await this.client.startRun({
       runId,
       workflowSelector,
       inputJson: input === undefined ? "" : JSON.stringify(input),
       contextJson: "",
-      inputFiles: [],
+      inputFiles: inputFiles.map(fileAttachmentV2),
       // A person pressed Run in this UI.
       trigger: StartRunTriggerV2.MANUAL,
     }).response;
@@ -620,13 +639,34 @@ export class GrpcWebOperatorApi implements OperatorApi {
     workflowSelector: string,
     enabled: boolean,
     input?: Record<string, unknown>,
+    inputFiles: InputFileAttachment[] = [],
   ): Promise<FlowInfoMsg> {
     const flow = await this.client.setScheduleEnabled({
       workflowSelector,
       enabled,
       inputJson: input === undefined ? undefined : JSON.stringify(input),
+      inputFiles: inputFiles.map(fileAttachmentV2),
     }).response;
     return mapFlowInfo(flow);
+  }
+
+  /** Upload the file to the operator's staging folder. */
+  async stageInputFile(file: File, target: InputFileTarget): Promise<StagedInputFile> {
+    const staged = await this.client.stageInputFile({
+      workflowSelector: target.workflow,
+      fieldName: target.field,
+      name: file.name,
+      mediaType: file.type,
+      content: new Uint8Array(await file.arrayBuffer()),
+    }).response;
+    return {
+      name: staged.name,
+      mediaType: staged.mediaType,
+      sizeBytes: Number(staged.sizeBytes),
+      sha256: staged.sha256,
+      objectUri: staged.objectUri,
+      objectKey: staged.objectKey,
+    };
   }
 
   async cancelRun(runId: string): Promise<void> {
@@ -1277,6 +1317,20 @@ function parseScheduleInput(payload: string): Record<string, unknown> {
   const value: unknown = JSON.parse(payload);
   if (!isUnknownRecord(value)) throw new Error("Schedule input must be a JSON object");
   return value;
+}
+
+function fileAttachmentV2(attachment: InputFileAttachment): FileAttachmentV2 {
+  return {
+    attachmentId: "",
+    fieldName: attachment.fieldName,
+    name: attachment.name,
+    mediaType: attachment.mediaType,
+    objectUri: attachment.objectUri,
+    objectKey: attachment.objectKey,
+    sha256: attachment.sha256,
+    sizeBytes: String(attachment.sizeBytes),
+    inlineBytes: attachment.inlineBytes ?? new Uint8Array(),
+  };
 }
 
 function mapFlowInfo(flow: FlowInfoV2): FlowInfoMsg {

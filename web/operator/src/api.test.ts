@@ -1114,6 +1114,7 @@ describe("operator transport boundary", () => {
     expect(setScheduleEnabled).toHaveBeenCalledWith({
       workflowSelector: "flows.py::nightly",
       enabled: false,
+      inputFiles: [],
     });
     expect(flow).toMatchObject({ cron: "0 9 * * *", scheduleEnabled: false });
   });
@@ -1139,11 +1140,77 @@ describe("operator transport boundary", () => {
       workflowSelector: "flows.py::nightly",
       enabled: true,
       inputJson: '{"region":"eu"}',
+      inputFiles: [],
     });
     expect(flow).toMatchObject({
       scheduleInput: { region: "eu" },
       inputSchemaJson: '{"type":"object"}',
     });
+  });
+
+  it("stages a picked file and starts runs and schedules with it", async () => {
+    const stageInputFile = vi.fn((_request: { content: Uint8Array }) => ({
+      response: Promise.resolve({
+        attachmentId: "k/notes.txt",
+        fieldName: "document",
+        name: "notes.txt",
+        mediaType: "text/plain",
+        objectUri: "",
+        objectKey: "k/notes.txt",
+        sha256: "ab".repeat(32),
+        sizeBytes: "5",
+        inlineBytes: new Uint8Array(),
+      }),
+    }));
+    const startRun = vi.fn(() => ({ response: Promise.resolve({ runId: "started" }) }));
+    const setScheduleEnabled = vi.fn(() => ({
+      response: Promise.resolve(FlowInfoV2.create({ workflowId: "flows.py::nightly" })),
+    }));
+    const api = apiWith({ stageInputFile, startRun, setScheduleEnabled });
+
+    const picked = new File(["hello"], "notes.txt", { type: "text/plain" });
+    // jsdom's File has no arrayBuffer(); browsers do.
+    Object.assign(picked, {
+      arrayBuffer: () => Promise.resolve(new TextEncoder().encode("hello").buffer),
+    });
+    const staged = await api.stageInputFile(picked, {
+      workflow: "flows.py::nightly",
+      field: "document",
+    });
+
+    const [request] = stageInputFile.mock.calls[0];
+    expect({ ...request, content: Array.from(request.content) }).toEqual({
+      workflowSelector: "flows.py::nightly",
+      fieldName: "document",
+      name: "notes.txt",
+      mediaType: "text/plain",
+      content: Array.from(new TextEncoder().encode("hello")),
+    });
+    expect(staged).toEqual({
+      name: "notes.txt",
+      mediaType: "text/plain",
+      sizeBytes: 5,
+      sha256: "ab".repeat(32),
+      objectUri: "",
+      objectKey: "k/notes.txt",
+    });
+    const attachment = expect.objectContaining({
+      fieldName: "attachments",
+      objectKey: "k/notes.txt",
+      sizeBytes: "5",
+    });
+    await api.startRun("flows.py::nightly", { attachments: [] }, [
+      { ...staged, fieldName: "attachments" },
+    ]);
+    expect(startRun).toHaveBeenCalledWith(
+      expect.objectContaining({ inputJson: '{"attachments":[]}', inputFiles: [attachment] }),
+    );
+    await api.setScheduleEnabled("flows.py::nightly", true, { attachments: [] }, [
+      { ...staged, fieldName: "attachments" },
+    ]);
+    expect(setScheduleEnabled).toHaveBeenCalledWith(
+      expect.objectContaining({ inputJson: '{"attachments":[]}', inputFiles: [attachment] }),
+    );
   });
 
   it("rejects run summaries with an unknown trigger kind", async () => {

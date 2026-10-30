@@ -13,7 +13,7 @@ import {
 import type { OperatorApi } from "./api";
 import { GraphCanvas } from "./GraphCanvas";
 import { Inspector } from "./Inspector";
-import type { FlowInfoMsg, RunSnapshotMsg } from "./model";
+import type { FlowInfoMsg, InputFileAttachment, RunSnapshotMsg } from "./model";
 import { RunLogPane } from "./RunLogPane";
 import { RunControls } from "./RunControls";
 import { useInputDraft } from "./useInputDraft";
@@ -117,12 +117,17 @@ interface WorkflowWorkspaceSurfaceProps extends Pick<
   selectedRunId?: string;
   onSelectRun: (runId: string | undefined) => void;
   selectRun: (runId?: string) => Promise<void>;
-  startRun: (workflowSelector: string, input?: Record<string, unknown>) => Promise<string>;
+  startRun: (
+    workflowSelector: string,
+    input?: Record<string, unknown>,
+    inputFiles?: InputFileAttachment[],
+  ) => Promise<string>;
   cancelRun: (runId: string) => Promise<void>;
   setScheduleEnabled: (
     workflowSelector: string,
     enabled: boolean,
     input?: Record<string, unknown>,
+    inputFiles?: InputFileAttachment[],
   ) => Promise<void>;
   workflowReloadDescription?: string;
   className?: string;
@@ -265,9 +270,13 @@ export function WorkflowWorkspaceSurface({
     [latestRunId, onSelectRun, selectRun],
   );
   const startWorkflowRun = useCallback(
-    async (workflowSelector: string, input?: Record<string, unknown>) => {
+    async (
+      workflowSelector: string,
+      input?: Record<string, unknown>,
+      inputFiles?: InputFileAttachment[],
+    ) => {
       const generation = navigationGeneration.current;
-      const runId = await startRun(workflowSelector, input);
+      const runId = await startRun(workflowSelector, input, inputFiles);
       if (navigationGeneration.current === generation) selectWorkflowRun(runId, true);
       return runId;
     },
@@ -322,7 +331,7 @@ export function WorkflowWorkspaceSurface({
 
   const historical = selectedRunId !== undefined;
   // One input draft for Run, the schedule and the graph's input popup.
-  const inputDraft = useInputDraft(!historical ? workflow : undefined);
+  const inputDraft = useInputDraft(!historical ? workflow : undefined, api);
   const loadedRun =
     historical &&
     state.selectedRunId === selectedRunId &&
