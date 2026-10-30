@@ -15,7 +15,7 @@ import shutil
 import tempfile
 import time
 import types
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any, Union, get_args, get_origin
@@ -32,6 +32,7 @@ from agents import (
     RunContextWrapper,
     RunItemStreamEvent,
     Runner,
+    RunResultStreaming,
     StreamEvent,
     ToolCallItem,
     ToolCallOutputItem,
@@ -66,7 +67,7 @@ from openai.types.responses import (
     ResponseReasoningItem,
     ResponseUsage,
 )
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import to_json, to_jsonable_python
 
 from ...agent.contract import (
@@ -166,7 +167,7 @@ async def run(
             "the step's skills and sandbox tools; rename the step's tools"
         )
     if problem := unknown_model_settings(
-        runtime.model_settings.keys(),
+        runtime.model_setting_names,
         {option.name for option in dataclasses.fields(ModelSettings)},
     ):
         raise AgentStepError(f"agent step {request.step_name!r}: {problem}")
@@ -183,7 +184,8 @@ async def run(
                 workspace_outputs,
                 summary=runtime.narrate,
                 paths=bool(builtin_tools),
-            )
+            ),
+            summary=runtime.narrate,
         )
     except UserError as exc:
         raise AgentStepError(
@@ -228,7 +230,10 @@ async def run(
             skills_folder,
             narrate=runtime.narrate,
         )
-        model_settings = ModelSettings(**runtime.model_settings)
+        # The SDK's own setting types, which the SDK and the API check.
+        settings = runtime.model_extra
+        assert settings is not None, "OpenAIAgent allows extra fields"
+        model_settings = ModelSettings(**settings)
         if directory is None:
             agent = Agent(
                 name=request.step_name,
@@ -292,11 +297,11 @@ async def run(
         streamed = Runner.run_streamed(
             agent, input=model_input, max_turns=max_turns, run_config=run_config
         )
+        stream = streamed.stream_events()
         try:
-            async for event in streamed.stream_events():
+            async for event in stream:
                 await transcript.add(event)
         except asyncio.CancelledError:
-            streamed.cancel()
             events.unavailable(
                 status="cancelled",
                 error="the agent call was cancelled",
@@ -305,62 +310,79 @@ async def run(
             )
             raise
         except Exception as exc:
-            # The turn in progress keeps the tool calls it made before the run failed.
-            await transcript.finish_turn()
             error = f"{type(exc).__name__}: {exc}"
-            events.finished(
-                transcript.header(
-                    status="failed",
-                    stop_reason=_snake_case(type(exc).__name__),
-                    usage=streamed.context_wrapper.usage,
-                    duration_ms=_elapsed_ms(started),
-                    errors=(error[:_MAX_ERROR_CHARS],),
-                ),
-                outputs=None,
-                complete=True,
-            )
+            try:
+                # The turn in progress keeps the tool calls it made before the run failed.
+                await transcript.finish_turn()
+            finally:
+                # The final event goes out even when sending events is what failed; a
+                # second failure carries the first as its context.
+                events.finished(
+                    transcript.header(
+                        status="failed",
+                        stop_reason=_snake_case(type(exc).__name__),
+                        usage=streamed.context_wrapper.usage,
+                        duration_ms=_elapsed_ms(started),
+                        errors=(error[:_MAX_ERROR_CHARS],),
+                    ),
+                    outputs=None,
+                    complete=True,
+                )
             raise AgentStepExecutionError(
                 f"agent step {request.step_name!r} failed calling OpenAI: {error}"
             ) from exc
-        answer = _ANSWER.validate_python(streamed.final_output)
-        summary = answer.get(_SUMMARY_FIELD) if runtime.narrate else None
-        # The answering turn says what the model did, in the summary it answered with.
-        await transcript.finish_turn(
-            answer=True, summary=summary if isinstance(summary, str) else None
-        )
-        record = AgentTrace(
-            header=transcript.header(
-                status="succeeded",
-                stop_reason="final_output",
-                usage=streamed.context_wrapper.usage,
-                duration_ms=_elapsed_ms(started),
-                errors=(),
-            ),
-            turns=tuple(transcript.turns),
-        )
+        finally:
+            await _stop(streamed, stream)
+        answer = _StepAnswer.model_validate(streamed.final_output)
+        sent = False
         try:
-            if runtime.narrate:
-                if not isinstance(summary, str):
-                    raise AgentOutputError(
-                        f"agent step {request.step_name!r}: the model's answer has no "
-                        f"{_SUMMARY_FIELD!r} text"
-                    )
-                del answer[_SUMMARY_FIELD]
+            # The answering turn says what the model did, in the summary it answered with.
+            await transcript.finish_turn(answer=True, summary=answer.summary)
+            sent = True
+        finally:
+            record = AgentTrace(
+                header=transcript.header(
+                    status="succeeded",
+                    stop_reason="final_output",
+                    usage=streamed.context_wrapper.usage,
+                    duration_ms=_elapsed_ms(started),
+                    errors=(),
+                ),
+                turns=tuple(transcript.turns),
+            )
+            if not sent:
+                # Sending the answering turn failed: the final event still goes out.
+                events.finished(record.header, outputs=None, complete=True)
+        try:
             outputs = _outputs(
                 request,
-                answer,
+                answer.values,
                 file_outputs,
                 output_folder,
                 directory=directory,
                 workspace=workspace,
                 workspace_outputs=workspace_outputs,
             )
-        except Exception:
+        except AgentOutputError:
             # The step fails, and its final event says the run returned no outputs.
             events.finished(record.header, outputs=None, complete=True)
             raise
         events.finished(record.header, outputs=outputs, complete=True)
         return AgentRunOutcome(outputs=outputs, trace=record)
+
+
+async def _stop(
+    streamed: RunResultStreaming, stream: AsyncGenerator[StreamEvent, None]
+) -> None:
+    """End the SDK's run and wait for it, so that its model requests and tools never
+    outlive the call's client and folders."""
+    if not streamed.is_complete:
+        streamed.cancel()
+    # Closing the stream waits for the run and the sandbox's own cleanup, except after
+    # the stream itself was cancelled.
+    await stream.aclose()
+    if streamed.run_loop_task is not None:
+        await asyncio.wait((streamed.run_loop_task,))
 
 
 @contextlib.asynccontextmanager
@@ -426,11 +448,29 @@ def _workspace_fields(model: type[BaseModel]) -> list[str]:
     return [name for name, info in model.model_fields.items() if info.annotation is Workspace]
 
 
+class _StepAnswer(BaseModel):
+    """The model's answer: the step's values, and the run summary narration asks for."""
+
+    model_config = ConfigDict(strict=True, frozen=True)
+
+    values: dict[str, JsonValue]
+    summary: str | None
+
+
+class _Narrated(BaseModel):
+    """An answer with the run summary, beside the step's values."""
+
+    model_config = ConfigDict(strict=True, extra="allow")
+
+    summary: str = Field(alias="run_summary")
+
+
 class _AnswerSchema(AgentOutputSchemaBase):
     """The step's answer: a JSON object in the signature's shape, checked by Avalanche."""
 
-    def __init__(self, schema: dict[str, Any]) -> None:
+    def __init__(self, schema: dict[str, JsonValue], *, summary: bool) -> None:
         self._schema = ensure_strict_json_schema(schema)
+        self._summary = summary
 
     def is_plain_text(self) -> bool:
         return False
@@ -444,11 +484,19 @@ class _AnswerSchema(AgentOutputSchemaBase):
     def is_strict_json_schema(self) -> bool:
         return True
 
-    def validate_json(self, json_str: str) -> dict[str, JsonValue]:
+    def validate_json(self, json_str: str) -> _StepAnswer:
         try:
-            return _ANSWER.validate_json(json_str)
+            if not self._summary:
+                return _StepAnswer(values=_ANSWER.validate_json(json_str), summary=None)
+            narrated = _Narrated.model_validate_json(json_str)
+            return _StepAnswer(
+                values=_ANSWER.validate_python(narrated.model_extra), summary=narrated.summary
+            )
         except ValidationError as exc:
-            raise ModelBehaviorError(f"the model's answer is not a JSON object: {exc}") from exc
+            raise ModelBehaviorError(
+                f"the model's answer is not a JSON object with {_SUMMARY_FIELD!r} text "
+                f"when narration asks for it: {exc}"
+            ) from exc
 
 
 # The answer field holding the run summary that narration asks for.
@@ -471,7 +519,7 @@ def _output_schema(
     *,
     summary: bool,
     paths: bool,
-) -> dict[str, Any]:
+) -> dict[str, JsonValue]:
     """The signature's output schema; Avalanche fills workspaces.
 
     A file output is the path of a file the model wrote in the sandbox with
@@ -703,9 +751,16 @@ def _outputs(
     snapshot: Workspace | None = None
     if workspace_outputs:
         assert directory is not None, "a workspace output needs the sandbox"
-        snapshot = (
-            workspace.snapshot() if workspace is not None else Workspace.from_path(directory)
-        )
+        try:
+            if workspace is not None:
+                snapshot = workspace.snapshot()
+            else:
+                snapshot = Workspace.from_path(directory)
+        except (OSError, ValueError) as exc:
+            # Such as a symbolic link the agent made, which a snapshot cannot hold.
+            raise AgentOutputError(
+                f"agent step {request.step_name!r}: its workspace cannot be returned: {exc}"
+            ) from exc
     files: dict[str, File | list[File]] = {}
     for name, single in file_outputs.items():
         assert output_folder is not None, "file outputs have their folder"
@@ -723,7 +778,7 @@ def _outputs(
                     _write(output_folder, written)
                     for written in TypeAdapter(list[_WrittenFile]).validate_python(answer[name])
                 ]
-        except (OSError, ValueError) as exc:
+        except (KeyError, OSError, ValueError) as exc:
             # ValidationError is a ValueError: a missing or malformed file.
             raise AgentOutputError(
                 f"agent step {request.step_name!r} output {name!r} is not a usable file: {exc}"
@@ -772,17 +827,15 @@ def _error_recorder(errors: ToolErrors) -> Callable[[RunContextWrapper[None], Ex
 def _step_tool(spec: ToolSpec, errors: ToolErrors) -> FunctionTool:
     """A step tool whose result reaches the model as JSON."""
     function = spec.function
-    if inspect.iscoroutinefunction(function):
 
-        @functools.wraps(function)
-        async def call(*args: object, **kwargs: object) -> str:
-            return to_json(await function(*args, **kwargs)).decode()
-
-    else:
-
-        @functools.wraps(function)
-        def call(*args: object, **kwargs: object) -> str:
-            return to_json(function(*args, **kwargs)).decode()
+    # A tool may return an awaitable without being a coroutine function, such as a
+    # partial of one; its result is awaited, as with every runtime.
+    @functools.wraps(function)
+    async def call(*args: object, **kwargs: object) -> str:
+        result = function(*args, **kwargs)
+        if inspect.isawaitable(result):
+            result = await result
+        return to_json(result).decode()
 
     # The SDK reads the parameters through the wrapper; the result is always JSON text.
     call.__annotations__ = {

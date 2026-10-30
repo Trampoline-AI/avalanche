@@ -131,13 +131,6 @@ def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monke
     assert all(viewer.live_label(event) for event in events)
 
 
-def test_the_openai_agent_viewer_labels_every_native_kind():
-    from avalanche.agent.native import openai_agent as native
-    from tui.agent_trace_viewers.openai_agent import _LABELS
-
-    assert set(_LABELS) == _kinds(native.OpenAIAgentNativeEvent)
-
-
 def test_an_openai_run_renders_through_its_viewer(monkeypatch):
     import asyncio
     import contextlib
@@ -149,6 +142,7 @@ def test_an_openai_run_renders_through_its_viewer(monkeypatch):
 
     import avalanche as ava
     from avalanche._agent_evidence import capture_agent_evidence
+    from avalanche.agent.native import openai_agent as native
     from avalanche.runtimes import OpenAIAgent
     from tui.agent_trace_viewers import InspectionTurn, viewer_for
 
@@ -208,6 +202,8 @@ def test_an_openai_run_renders_through_its_viewer(monkeypatch):
     assert viewer.turn_limit(None) is None
     assert viewer.submitted(final.header)
     assert viewer.header(final.header)
+    # The run sends every native kind, and the viewer names each event.
+    assert {e.native.kind for e in events if e.native} == _kinds(native.OpenAIAgentNativeEvent)
     assert all(viewer.live_label(event) for event in events)
 
 

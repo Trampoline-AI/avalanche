@@ -9,6 +9,7 @@ import importlib
 import json
 import os
 import sys
+from collections.abc import Awaitable
 from pathlib import Path
 
 import pytest
@@ -38,6 +39,7 @@ from openai.types.responses.response_usage import (  # noqa: E402
     InputTokensDetails,
     OutputTokensDetails,
 )
+from openai.types.shared import Reasoning  # noqa: E402
 
 import avalanche as ava  # noqa: E402
 from avalanche._agent_evidence import capture_agent_evidence  # noqa: E402
@@ -357,6 +359,133 @@ async def test_a_tool_result_reaches_the_model_as_json(scripted):
 
 
 @pytest.mark.asyncio
+async def test_a_tool_that_returns_an_awaitable_is_awaited(scripted):
+    async def bonus(name: str) -> int:
+        return 10
+
+    def lookup_bonus(name: str) -> Awaitable[int]:
+        """Return the bonus for a name."""
+        return bonus(name)
+
+    scripted(_lookup(), _answer(total=15))
+    result = await _agent(tools=(lookup_bonus,))(a=2, b=3)
+
+    assert result.trace.turns[0].tool_calls[0].result == "10"
+
+
+def _waiting_tool() -> tuple[object, dict[str, bool]]:
+    """A step tool that waits until it is cancelled, and whether it is still running."""
+    state = {"started": False, "running": False}
+
+    async def lookup_bonus(name: str) -> int:
+        """Return the bonus for a name."""
+        state["started"] = state["running"] = True
+        try:
+            await asyncio.Event().wait()
+        finally:
+            state["running"] = False
+        return 0
+
+    return lookup_bonus, state
+
+
+@pytest.mark.asyncio
+async def test_a_failing_observer_stops_the_run_before_the_call_ends(scripted):
+    tool, state = _waiting_tool()
+    scripted(_lookup(), _answer(total=5))
+
+    def observe(event):
+        if isinstance(event, AgentLiveEvent) and isinstance(event.common, ToolStarted):
+            raise RuntimeError("observer failed")
+
+    with (
+        capture_agent_evidence(observe, errors="raise"),
+        pytest.raises(AgentStepExecutionError, match="observer failed"),
+    ):
+        await _agent(tools=(tool,))(a=2, b=3)
+
+    started = state["started"]
+    assert not state["running"]
+    # Nothing of the run is left to start the tool later.
+    await asyncio.sleep(0.05)
+    assert state == {"started": started, "running": False}
+
+
+@pytest.mark.asyncio
+async def test_an_observer_that_keeps_failing_still_gets_the_final_event(scripted):
+    tool, _ = _waiting_tool()
+    scripted(_lookup(), _answer(total=5))
+    observed = []
+
+    def observe(event):
+        observed.append(event)
+        if isinstance(event, AgentLiveEvent) and isinstance(
+            event.common, ToolStarted | TurnFinished
+        ):
+            raise RuntimeError(f"observer failed on {event.common.kind}")
+
+    with (
+        capture_agent_evidence(observe, errors="raise"),
+        pytest.raises(RuntimeError, match="turn.finished") as raised,
+    ):
+        await _agent(tools=(tool,))(a=2, b=3)
+
+    # The first failure is kept as the context of the second.
+    assert "tool.started" in str(raised.value.__context__)
+    assert isinstance(observed[-1], AgentTraceFinished)
+    assert observed[-1].header.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_an_observer_failing_on_the_answering_turn_still_gets_the_final_event(scripted):
+    scripted(_answer(total=5))
+    observed = []
+
+    def observe(event):
+        observed.append(event)
+        if isinstance(event, AgentLiveEvent) and isinstance(event.common, TurnFinished):
+            raise RuntimeError("observer failed")
+
+    with (
+        capture_agent_evidence(observe, errors="raise"),
+        pytest.raises(RuntimeError, match="observer failed"),
+    ):
+        await _agent()(a=2, b=3)
+
+    assert isinstance(observed[-1], AgentTraceFinished)
+    assert observed[-1].outputs is None
+
+
+@pytest.mark.asyncio
+async def test_a_cancelled_call_stops_the_tool_it_was_running(scripted):
+    tool, state = _waiting_tool()
+    scripted(_lookup(), _answer(total=5))
+    task = asyncio.create_task(_agent(tools=(tool,))(a=2, b=3))
+    while not state["started"]:
+        await asyncio.sleep(0.01)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert not state["running"]
+
+
+@pytest.mark.asyncio
+async def test_with_narration_an_answer_without_its_summary_fails_the_run(scripted):
+    scripted(_answer(summary=None, total=5))
+    observed = []
+    with (
+        capture_agent_evidence(observed.append, errors="raise"),
+        pytest.raises(AgentStepExecutionError, match="run_summary"),
+    ):
+        await _agent()(a=2, b=3)
+
+    final = observed[-1]
+    assert isinstance(final, AgentTraceFinished)
+    assert (final.header.status, final.outputs) == ("failed", None)
+
+
+@pytest.mark.asyncio
 async def test_a_refusal_fails_its_turn(scripted):
     refusal = ResponseOutputMessage(
         id="msg-refusal",
@@ -589,6 +718,22 @@ async def test_a_file_output_must_be_a_plain_file_name(scripted, tmp_path, name)
 
     assert (observed[-1].header.status, observed[-1].outputs) == ("succeeded", None)
     assert not (tmp_path / "escape.txt").exists()
+
+
+@pytest.mark.asyncio
+async def test_an_answer_without_a_file_output_fails_after_the_final_event(scripted, tmp_path):
+    scripted(_answer(extras=[]))
+    (tmp_path / "run").mkdir()
+    workspace = ava.Workspace.from_directory(tmp_path / "run", reference="snapshot:run")
+    observed = []
+    with (
+        capture_agent_evidence(observed.append, errors="raise"),
+        ava.file_reference_context(workspace, attempt="attempt-1"),
+        pytest.raises(AgentOutputError, match="'shouted' is not a usable file"),
+    ):
+        await ava.Agent(signature=Shout, step_name="shout", runtime=OpenAIAgent())(text="x")
+
+    assert observed[-1].outputs is None
 
 
 @pytest.mark.asyncio
@@ -882,6 +1027,24 @@ class Report(ava.Signature):
 
 
 @pytest.mark.asyncio
+async def test_a_workspace_with_a_link_fails_after_the_final_event(scripted):
+    # Without a workspace input the sandbox is a temporary folder, captured when returned.
+    scripted(_shell("touch a.txt && ln -s a.txt link.txt", call_id="call-1"), _answer())
+    observed = []
+    with (
+        capture_agent_evidence(observed.append, errors="raise"),
+        pytest.raises(AgentOutputError, match="workspace cannot be returned"),
+    ):
+        await ava.Agent(
+            signature=WorkspaceOutput,
+            step_name="folder",
+            runtime=OpenAIAgent(model=MODEL, builtin_tools=["shell"]),
+        )(question="?")
+
+    assert observed[-1].outputs is None
+
+
+@pytest.mark.asyncio
 async def test_sandbox_file_outputs_are_files_the_model_writes(scripted, tmp_path):
     seen: dict[str, str] = {}
 
@@ -968,12 +1131,18 @@ async def test_sandbox_tool_names_are_reserved_when_the_sandbox_has_them(scripte
 def test_unknown_model_settings_fail_when_the_runtime_is_built():
     with pytest.raises(ValueError, match="agents.ModelSettings"):
         OpenAIAgent(temprature=0.2)
-    assert OpenAIAgent(temperature=0.2).model_settings == {"temperature": 0.2}
+    assert OpenAIAgent(temperature=0.2).model_extra == {"temperature": 0.2}
 
 
 def test_the_declaration_merges_the_step_over_the_workflow_default():
+    reasoning = Reasoning(effort="low")
     default = OpenAIAgent(
-        model=MODEL, max_turns=4, tracing=True, builtin_tools=["shell"], temperature=0.1
+        model=MODEL,
+        max_turns=4,
+        tracing=True,
+        builtin_tools=["shell"],
+        temperature=0.1,
+        reasoning=reasoning,
     )
     step = OpenAIAgent(max_turns=8, narrate=False)
 
@@ -987,7 +1156,8 @@ def test_the_declaration_merges_the_step_over_the_workflow_default():
         },
         builtin_tools=("shell",),
     )
-    assert step.merged_over(default).model_settings == {"temperature": 0.1}
+    # Model settings keep the SDK objects they were given as.
+    assert step.merged_over(default).model_extra == {"temperature": 0.1, "reasoning": reasoning}
 
 
 @pytest.mark.asyncio
