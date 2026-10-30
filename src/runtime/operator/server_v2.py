@@ -9,10 +9,13 @@ attachments are rejected because no remote object plane exists locally.
 from __future__ import annotations
 
 import hashlib
+import json
 import queue
 import threading
 from collections import OrderedDict
+from collections.abc import Mapping
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any
 
 import grpc
@@ -23,6 +26,7 @@ from avalanche.runtime import File
 from .convert_v2 import (
     DETAIL_URI_SCHEME,
     RESULT_URI_SCHEME,
+    START_RUN_TRIGGERS,
     TRACE_URI_SCHEME,
     agent_event_activity_to_v2,
     classifier_event_activity_to_v2,
@@ -30,7 +34,6 @@ from .convert_v2 import (
     log_activity_to_v2,
     run_snapshot_to_v2,
     run_summary_to_v2,
-    schedule_input_from_json,
     sha256_hex,
     update_envelope_to_v2,
     workflow_info_to_v2,
@@ -942,9 +945,9 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 grpc.StatusCode.INVALID_ARGUMENT,
                 "run_id is required as the idempotency key",
             )
-        trigger = _START_RUN_TRIGGERS.get(request.trigger)
-        if trigger is None:
+        if request.trigger not in _START_RUN_TRIGGERS:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Unknown start trigger")
+        trigger = _START_RUN_TRIGGERS[request.trigger]
         try:
             run_input = _decode_input_payload_v2(request)
             run_context = _decode_json_object(request.context_json, "context_json")
@@ -975,11 +978,13 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         if not request.workflow_selector:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "workflow_selector is required")
         try:
-            run_input = (
-                schedule_input_from_json(request.input_json)
-                if request.HasField("input_json")
-                else None
-            )
+            # The operator validates the decoded input for every caller. A present
+            # field always carries input, so JSON null must not read as "none given".
+            run_input = None
+            if request.HasField("input_json"):
+                run_input = json.loads(request.input_json)
+                if run_input is None:
+                    raise ValueError("input_json must be a JSON object, not null")
             info = self._op.set_schedule_enabled(
                 request.workflow_selector, request.enabled, run_input
             )
@@ -1461,10 +1466,10 @@ def _stream_chunks(data: bytes, chunk_type):
         )
 
 
-_START_RUN_TRIGGERS = {
-    pb.START_RUN_TRIGGER_V2_API: TriggerKind.API,
-    pb.START_RUN_TRIGGER_V2_MANUAL: TriggerKind.MANUAL,
-}
+# START_RUN_TRIGGERS by StartRunTriggerV2 value.
+_START_RUN_TRIGGERS: Mapping[int, TriggerKind] = MappingProxyType(
+    {value: kind for kind, value in START_RUN_TRIGGERS.items()}
+)
 
 
 def _decode_input_payload_v2(request) -> dict[str, Any] | None:

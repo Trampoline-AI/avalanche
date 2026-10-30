@@ -186,6 +186,33 @@ describe("operator transport boundary", () => {
     await expect(api.loadBaseline()).rejects.toThrow(/summary cursor changed/i);
   });
 
+  it("reloads the baseline when the catalog is republished at the same revision", async () => {
+    const api = apiWith({
+      discoverFlows: vi
+        .fn()
+        .mockReturnValueOnce({
+          response: Promise.resolve(
+            FlowListV2.create({ scopeRef, cursor: cursor(5), revision: "1" }),
+          ),
+        })
+        .mockReturnValueOnce({
+          response: Promise.resolve(
+            FlowListV2.create({ scopeRef, cursor: cursor(7), revision: "1" }),
+          ),
+        }),
+      listRunSummaries: () => ({
+        response: Promise.resolve(
+          RunSummaryPageV2.create({
+            scopeRef,
+            cursor: cursor(8),
+            projectSummaryCursor: summaryCursor,
+          }),
+        ),
+      }),
+    });
+    await expect(api.loadBaseline()).rejects.toThrow(/changed while loading/i);
+  });
+
   it.each([
     { scopeRef: { reference: "operator-2" } },
     { cursor: cursor(9) },
@@ -259,6 +286,21 @@ describe("operator transport boundary", () => {
     await expect(api.getLatestRunSnapshot("run-1", "operator-2")).rejects.toThrow(
       /operator instance/i,
     );
+  });
+
+  it("rejects a run summary with an unknown trigger", async () => {
+    const api = apiWith({
+      getRunSnapshot: () => ({
+        response: Promise.resolve(
+          RunSnapshotV2.create({
+            scopeRef,
+            cursor: cursor(),
+            summary: RunSummaryV2.create({ runId: "run-1", triggeredBy: "carrier-pigeon" }),
+          }),
+        ),
+      }),
+    });
+    await expect(api.getLatestRunSnapshot("run-1", "operator-1")).rejects.toThrow(/trigger/i);
   });
 
   it("maps the run input and the input declaration pinned to the run", async () => {

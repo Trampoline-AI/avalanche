@@ -930,8 +930,11 @@ def test_ava_schedule_lists_enables_and_disables(tmp_path, capsys):
         )
         assert status == 0
         assert json.loads(with_input)["input"] == {"region": "eu"}
-        assert app.main(["schedule", "enable", selector, "--input", "[]", *connect]) == 1
-        assert capsys.readouterr().err
+        for bad_input in ("[]", '{"region": NaN}'):
+            assert (
+                app.main(["schedule", "enable", selector, "--input", bad_input, *connect]) == 1
+            )
+            assert capsys.readouterr().err
 
         adhoc = next(item.selector for item in operator.list_workflows() if not item.cron)
         assert app.main(["schedule", "enable", adhoc, *connect]) == 1

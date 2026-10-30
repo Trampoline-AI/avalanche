@@ -53,6 +53,13 @@ Use `GrpcWebOperatorApi` when the host has a compatible gRPC-Web endpoint, or im
 `OperatorApi` interface for another transport. `WorkflowWorkspace` is also available when the
 host supplies its own surrounding navigation and layout.
 
+A custom `OperatorApi` must implement
+`setScheduleEnabled(workflowSelector, enabled, input?)`, which returns the updated
+`FlowInfoMsg`. The run controls call it from the **Run on schedule** switch and the
+**Use for schedule** action; `input` is sent only when enabling and replaces the input
+the schedule's runs start with. `GrpcWebOperatorApi` implements it with the operator's
+`SetScheduleEnabled` call.
+
 The UI bundles the same Nacelle Regular and SemiBold fonts as Delta Console;
 code and filename references remain monospace.
 

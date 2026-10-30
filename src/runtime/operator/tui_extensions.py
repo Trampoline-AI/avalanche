@@ -42,6 +42,7 @@ from tui.state import (
     json_plain,
     schedule_action,
     schedule_input_schema,
+    schedule_request,
 )
 
 from .client import OperatorCallError
@@ -362,26 +363,11 @@ class OperatorTuiExtensions:
                 value: dict[str, JsonValue] = {"run_id": run_id}
                 status: Literal["accepted", "completed"] = "accepted"
             elif action in SCHEDULE_ACTION_IDS:
-                assert context.flow is not None
-                with self._provider._state_lock:
-                    workflow = next(
-                        flow
-                        for flow in self._provider._catalog.workflows
-                        if flow.selector == context.flow
-                    )
-                takes_input = (
-                    action == "schedule.enable" and schedule_input_schema(workflow) is not None
+                request = schedule_request(
+                    self._provider.list_workflows(), action, context, payload
                 )
-                if payload and not takes_input:
-                    raise TuiExtensionError(
-                        "invalid_input", "This schedule control takes no input", context=context
-                    )
                 info = self._provider.set_schedule_enabled(
-                    context.flow,
-                    action == "schedule.enable",
-                    {key: json_plain(value) for key, value in payload.items()}
-                    if takes_input
-                    else None,
+                    request.selector, request.enabled, request.run_input
                 )
                 value = {"enabled": info.schedule_enabled}
                 # The schedule change has finished once the operator answers.

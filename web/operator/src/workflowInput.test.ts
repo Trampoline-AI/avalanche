@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { FlowInfoMsg } from "./model";
-import { workflowInputDraft } from "./workflowInput";
+import { scheduledInputNote, workflowInputDraft } from "./workflowInput";
 
 const schema = JSON.stringify({
   type: "object",
@@ -35,5 +35,21 @@ describe("workflowInputDraft", () => {
     ["an empty input model", JSON.stringify({ type: "object", properties: {} })],
   ])("asks for no input for %s", (_name, inputSchemaJson) => {
     expect(workflowInputDraft(FlowInfoMsg.create({ inputSchemaJson }))).toBeUndefined();
+  });
+});
+
+describe("scheduledInputNote", () => {
+  it("says what a workflow's scheduled runs start with", () => {
+    const cron = "0 6 * * *";
+    expect(scheduledInputNote(FlowInfoMsg.create({}))).toBeUndefined();
+    expect(scheduledInputNote(FlowInfoMsg.create({ cron }))).toMatch(/off/);
+    expect(scheduledInputNote(FlowInfoMsg.create({ cron, scheduleEnabled: true }))).toMatch(
+      /defaults/,
+    );
+    expect(
+      scheduledInputNote(
+        FlowInfoMsg.create({ cron, scheduleEnabled: true, scheduleInput: { limit: 3 } }),
+      ),
+    ).toMatch(/schedule's input/);
   });
 });

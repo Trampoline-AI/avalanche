@@ -7,8 +7,9 @@ import json
 import math
 from collections.abc import Callable, Mapping
 from datetime import datetime
+from types import MappingProxyType
 
-from pydantic import JsonValue, TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter
 
 from avalanche.agent.declaration import AgentDeclaration
 from avalanche.agent.native import TraceHeaderNative
@@ -53,6 +54,7 @@ from .models import (
     WorkflowInfo,
     WorkflowReloadStatus,
     WorkflowTopology,
+    schedule_input_from_json,
 )
 from .proto import operator_pb2 as pb
 from .registry import workflow_revision
@@ -63,15 +65,14 @@ RESULT_URI_SCHEME = "local://result/"
 _TERMINAL_SEAL_STATUSES = frozenset({RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED})
 
 
-_SCHEDULE_INPUT = TypeAdapter(dict[str, JsonValue])
-
-
-def schedule_input_from_json(payload: str) -> dict[str, JsonValue]:
-    """Decode a schedule input document, which must be one JSON object."""
-    try:
-        return _SCHEDULE_INPUT.validate_json(payload)
-    except ValidationError as exc:
-        raise ValueError(f"Schedule input must be a JSON object: {exc}") from exc
+# The StartRunTriggerV2 value for each trigger kind a StartRun caller may claim.
+# Scheduled and webhook runs are started only by the operator itself.
+START_RUN_TRIGGERS: Mapping[TriggerKind, int] = MappingProxyType(
+    {
+        TriggerKind.API: pb.START_RUN_TRIGGER_V2_API,
+        TriggerKind.MANUAL: pb.START_RUN_TRIGGER_V2_MANUAL,
+    }
+)
 
 
 def schedule_input_to_json(value: dict[str, JsonValue]) -> str:

@@ -138,7 +138,11 @@ while the schedule is disabled, so enabling it again reuses it, and replaced onl
 when you enable with new input. Like any run input, it is validated against the
 input model when each run starts: an invalid input makes each scheduled run fail.
 
-A disabled schedule starts no runs and reports no next run time. You can still run
+A disabled schedule starts no runs and reports no next run time. Once enabled, its
+first run is the next cron occurrence after the minute you enabled it, even if the
+current minute matches. A scheduled run that fails, for example because its stored
+input is invalid, shows as a failed run with the Scheduled trigger in the run list;
+enable the schedule again with corrected input to fix it. You can still run
 the workflow by hand like any other. Whether a schedule is enabled, and its input, live only
 in the operator's memory: they are kept across rediscovery and source reload,
 including when the cron expression changes, and reset to disabled with default input

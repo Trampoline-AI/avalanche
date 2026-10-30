@@ -100,6 +100,7 @@ from .models import (
     WorkflowInfo,
     WorkflowReloadStatus,
     WorkflowTopology,
+    schedule_input_from_python,
 )
 from .registry import (
     AmbiguousWorkflow,
@@ -120,7 +121,11 @@ from .run_worker import run_worker
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
 from .webhooks import DEFAULT_WEBHOOK_PORT, WebhookServer, routes_for
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
-from .workflow_metadata import PreparedRunInput, WorkflowInputDeclaration
+from .workflow_metadata import (
+    MAX_PREPARED_INPUT_LENGTH,
+    PreparedRunInput,
+    WorkflowInputDeclaration,
+)
 
 if TYPE_CHECKING:
     from avalanche.agent.trace import AgentTraceHeader
@@ -1517,13 +1522,19 @@ class Operator:
         """
         if run_input is not None and not enabled:
             raise ValueError("Schedule input can only be set when enabling the schedule")
-        descriptor = self._scheduled_descriptor(selector)
-        self._scheduler.set_enabled(descriptor.workflow_id, enabled, run_input)
-        self._publish_catalog(self._registry.view)
+        if run_input is not None:
+            # The one check for every caller: input that is not finite JSON could
+            # never be sent back to clients.
+            run_input = schedule_input_from_python(run_input)
+        # A reload swaps the registry view inside this boundary, so the view read
+        # here is never older than one a reload has published, and it still holds
+        # the resolved workflow.
+        with self._scheduler.reconciliation_boundary():
+            descriptor = self._scheduled_descriptor(selector)
+            self._scheduler.set_enabled(descriptor.workflow_id, enabled, run_input)
+            catalog = self._publish_catalog(self._registry.view)
         return next(
-            info
-            for info in self.get_catalog().workflows
-            if info.workflow_id == descriptor.workflow_id
+            info for info in catalog.workflows if info.workflow_id == descriptor.workflow_id
         )
 
     def _scheduled_descriptor(self, selector: str) -> WorkflowDescriptor:
@@ -3314,7 +3325,7 @@ class Operator:
             )
         self._wait_for_notifications(notifications)
 
-    def _publish_catalog(self, view: CatalogView) -> None:
+    def _publish_catalog(self, view: CatalogView) -> CatalogSnapshot:
         with self._lock:
             self._sequence += 1
             self._catalog_sequence = self._sequence
@@ -3341,6 +3352,7 @@ class Operator:
             )
             self._notification_queue.put_nowait(notifications)
         self._wait_for_notifications(notifications)
+        return catalog
 
     def publish_update(self, change: OperatorUpdateChange) -> None:
         """Publish one caller-owned typed lifecycle update."""
@@ -3699,7 +3711,7 @@ _MAX_EVENT_EVALUATION_METADATA_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_STEP_INTERFACE_BYTES = 1024 * 1024
 _MAX_EVENT_STEP_INTERFACES_TOTAL_BYTES = 16 * 1024 * 1024
 _MAX_EVENT_TRACEBACK_LENGTH = 262_144
-_MAX_EVENT_INPUT_LENGTH = 1024 * 1024
+_MAX_EVENT_INPUT_DECLARATION_LENGTH = 1024 * 1024
 _MAX_EVENT_TIMESTAMP_MAGNITUDE = 10**12
 
 
@@ -3993,22 +4005,27 @@ def _validate_preparation_event(event: object) -> str:
 
 def _validate_prepared_input(event: dict[str, Any], node_ids: list[str]) -> None:
     declaration_json = _string_field(
-        event, "input_declaration_json", maximum_length=_MAX_EVENT_INPUT_LENGTH
+        event, "input_declaration_json", maximum_length=_MAX_EVENT_INPUT_DECLARATION_LENGTH
     )
     run_input = _required_field(event, "input")
-    if (run_input is None) != (declaration_json == ""):
-        raise _CoordinatorProtocolError(
-            "field 'input' must be present exactly when the workflow declares an input"
-        )
-    if run_input is None:
+    if declaration_json == "":
+        if run_input is not None:
+            raise _CoordinatorProtocolError(
+                "field 'input' is present but the workflow declares no input"
+            )
         return
     try:
         declaration = WorkflowInputDeclaration.model_validate_json(declaration_json)
-        prepared = PreparedRunInput.model_validate(run_input, strict=True)
+        # Absent values mean they exceeded the display bound; the run still executes.
+        prepared = (
+            None
+            if run_input is None
+            else PreparedRunInput.model_validate(run_input, strict=True)
+        )
     except (ValueError, TypeError, RecursionError) as exc:
         # Validation errors may echo user values; keep those out of protocol diagnostics.
         raise _CoordinatorProtocolError("invalid run input metadata") from exc
-    if len(prepared.values_json) > _MAX_EVENT_INPUT_LENGTH:
+    if prepared is not None and len(prepared.values_json) > MAX_PREPARED_INPUT_LENGTH:
         raise _CoordinatorProtocolError("field 'input' exceeds the maximum length")
     unknown_consumers = set(declaration.consumer_node_ids).difference(node_ids)
     if unknown_consumers:

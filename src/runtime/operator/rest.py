@@ -22,6 +22,7 @@ from starlette.requests import ClientDisconnect
 from starlette.routing import Match
 from starlette.types import Scope
 
+from .models import ScheduleInput
 from .proto import operator_pb2 as pb
 from .proto import operator_pb2_grpc as pb_grpc
 
@@ -67,7 +68,7 @@ class _SetSchedule(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
     enabled: bool = Field(description="True enables the cron schedule; false disables it.")
-    input_json: dict[str, JsonValue] | None = Field(
+    input_json: ScheduleInput | None = Field(
         default=None,
         description=(
             "Input for future cron runs, only when enabling; omitted keeps the stored input."

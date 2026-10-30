@@ -17,27 +17,40 @@ export interface WorkflowInputDeclaration {
   consumerNodeIds: string[];
 }
 
+/**
+ * How a field gets its value when the caller omits it. A "computed" default comes from
+ * a `default_factory`, which the JSON schema cannot state, so each run computes it.
+ */
+export type FieldDefault =
+  { kind: "required" } | { kind: "value"; value: JsonValue } | { kind: "computed" };
+
 export interface WorkflowInputField {
   name: string;
   typeLabel: string;
-  required: boolean;
-  /** Absent when the field is required. */
-  defaultValue?: JsonValue;
+  default: FieldDefault;
   description?: string;
   schema: Schema;
 }
 
-/** One field's value in a run, and whether the caller supplied it. */
+/**
+ * Where a run's field value came from. "unrecorded" fields are excluded from
+ * serialization, such as `Field(exclude=True)` secrets, so the run has no value to show.
+ */
+export type RunValueSource = "supplied" | "default" | "unrecorded";
+
+/** One field's value in a run, and where that value came from. */
 export interface RunInputField extends WorkflowInputField {
-  value: JsonValue;
-  supplied: boolean;
+  /** Absent when the field is unrecorded. */
+  value?: JsonValue;
+  source: RunValueSource;
 }
 
 function stringList(value: unknown, path: string): string[] {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) {
-    throw new Error(`${path} must be a list of strings`);
-  }
-  return value as string[];
+  if (!Array.isArray(value)) throw new Error(`${path} must be a list of strings`);
+  return value.map((item: unknown, index) => {
+    if (typeof item !== "string") throw new Error(`${path}[${index}] must be a string`);
+    return item;
+  });
 }
 
 /** Validate the published input declaration; an empty value means no declared input. */
@@ -87,12 +100,16 @@ export function workflowInputFields(
   const { jsonSchema } = declaration;
   return Object.entries(jsonSchema.properties ?? {}).map(([name, schema]) => {
     const property = typeof schema === "boolean" ? undefined : schema;
-    const hasDefault = property !== undefined && Object.hasOwn(property, "default");
+    const fieldDefault: FieldDefault =
+      jsonSchema.required?.includes(name) === true
+        ? { kind: "required" }
+        : property !== undefined && property.default !== undefined
+          ? { kind: "value", value: property.default }
+          : { kind: "computed" };
     return {
       name,
       typeLabel: typeLabel(schema),
-      required: jsonSchema.required?.includes(name) ?? false,
-      defaultValue: hasDefault ? property.default : undefined,
+      default: fieldDefault,
       description: property?.description,
       schema,
     };
@@ -109,17 +126,20 @@ export function runInputFields(
     throw new Error("run input must be an object");
   }
   const supplied = new Set(input.suppliedFields);
-  return workflowInputFields(declaration).map((field) => {
-    if (!Object.hasOwn(values, field.name)) {
-      throw new Error(`run input is missing field ${field.name}`);
-    }
-    return { ...field, value: values[field.name], supplied: supplied.has(field.name) };
-  });
+  return workflowInputFields(declaration).map((field) =>
+    Object.hasOwn(values, field.name)
+      ? {
+          ...field,
+          value: values[field.name],
+          source: supplied.has(field.name) ? "supplied" : "default",
+        }
+      : { ...field, source: "unrecorded" },
+  );
 }
 
 /** Short, single-line rendering of a value for graph cards and tables. */
-export function formatInputValue(value: JsonValue | undefined): string {
-  return JSON.stringify(value ?? null);
+export function formatInputValue(value: JsonValue): string {
+  return JSON.stringify(value);
 }
 
 const TRIGGER_LABELS: Record<TriggerKind, string> = {
@@ -132,6 +152,15 @@ const TRIGGER_LABELS: Record<TriggerKind, string> = {
 /** Describe how a run started, from its summary's `triggeredBy`. */
 export function runTriggerLabel(triggeredBy: TriggerKind): string {
   return TRIGGER_LABELS[triggeredBy];
+}
+
+/** What a workflow's cron runs start with, or undefined when it has no schedule. */
+export function scheduledInputNote(workflow: FlowInfoMsg): string | undefined {
+  if (!workflow.cron) return undefined;
+  if (!workflow.scheduleEnabled) return `Scheduled runs (${workflow.cron}) are off`;
+  return workflow.scheduleInput
+    ? `Scheduled runs (${workflow.cron}) use the schedule's input`
+    : `Scheduled runs (${workflow.cron}) use these defaults`;
 }
 
 /**

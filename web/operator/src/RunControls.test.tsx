@@ -113,6 +113,28 @@ it("rejects input that is not an object before enabling", async () => {
   replaceInput([1]);
   fireEvent.click(screen.getByRole("switch", { name: "Run on schedule" }));
 
-  expect(await screen.findByText("Run input must be a JSON object")).toBeVisible();
+  expect(await screen.findByRole("alert")).toBeVisible();
   expect(onSetScheduleEnabled).not.toHaveBeenCalled();
+});
+
+it("follows input stored elsewhere until the draft is edited", () => {
+  const { onStart, onSetScheduleEnabled, view } = renderControls(nightly);
+  const rerender = (flow: FlowInfoMsg) =>
+    view.rerender(
+      <RunControls
+        workflow={flow}
+        onStart={onStart}
+        onCancel={async () => undefined}
+        onSetScheduleEnabled={onSetScheduleEnabled}
+      />,
+    );
+
+  fireEvent.click(screen.getByRole("button", { name: "Add JSON input" }));
+  rerender({ ...nightly, scheduleEnabled: true, scheduleInput: { region: "us", limit: 5 } });
+  expect(JSON.parse(editor().state.doc.toString())).toEqual({ region: "us", limit: 5 });
+  expect(screen.queryByRole("button", { name: "Use for schedule" })).not.toBeInTheDocument();
+
+  replaceInput({ region: "us", limit: 7 });
+  rerender({ ...nightly, scheduleEnabled: true, scheduleInput: { region: "ap", limit: 6 } });
+  expect(JSON.parse(editor().state.doc.toString())).toEqual({ region: "us", limit: 7 });
 });
