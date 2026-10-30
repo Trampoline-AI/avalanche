@@ -8,9 +8,8 @@ declarations without the ``openai`` extra installed.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Collection, Mapping, Sequence
-from types import MappingProxyType
-from typing import Any, ClassVar, Self
+from collections.abc import Collection, Sequence
+from typing import ClassVar, Self
 
 from pydantic import BaseModel, ConfigDict, PositiveInt, model_validator
 
@@ -83,7 +82,7 @@ class OpenAIAgent(BaseModel):
 
     @model_validator(mode="after")
     def _check_model_settings(self) -> Self:
-        names = self.model_settings.keys()
+        names = self.model_setting_names
         # Importing the SDK is slow: only a runtime with model settings pays for it.
         known = _model_setting_names() if names else None
         if known is not None and (problem := unknown_model_settings(names, known)):
@@ -91,17 +90,21 @@ class OpenAIAgent(BaseModel):
         return self
 
     @property
-    def model_settings(self) -> Mapping[str, Any]:
-        """The ``agents.ModelSettings`` fields given by keyword, by name, unchecked."""
-        # Values are the SDK's own types, checked by the SDK and the API.
-        extra = self.__pydantic_extra__
+    def model_setting_names(self) -> frozenset[str]:
+        """The ``agents.ModelSettings`` fields given by keyword.
+
+        Their values, the SDK's own types, are in ``model_extra``; the SDK and the API
+        check them.
+        """
+        extra = self.model_extra
         assert extra is not None, "OpenAIAgent allows extra fields"
-        return MappingProxyType(extra)
+        return frozenset(extra)
 
     def merged_over(self, base: OpenAIAgent) -> OpenAIAgent:
         """This runtime with the fields it leaves unset taken from ``base``."""
-        fields = {name: getattr(base, name) for name in base.model_fields_set}
-        fields.update({name: getattr(self, name) for name in self.model_fields_set})
+        # Iterating keeps model settings as the SDK objects they were given as.
+        fields = {name: value for name, value in base if name in base.model_fields_set}
+        fields.update((name, value) for name, value in self if name in self.model_fields_set)
         return OpenAIAgent.model_validate(fields)
 
     def declaration(self, *, workflow_default: OpenAIAgent | None) -> OpenAIAgentDeclaration:
