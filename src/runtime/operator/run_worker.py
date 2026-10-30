@@ -44,7 +44,7 @@ from .result_store import (
     publish_workflow_result,
 )
 from .results import encode_workflow_result
-from .step_io import preview_step_inputs, preview_value
+from .step_io import preview_step_inputs, preview_value, step_signatures
 from .workflow_metadata import node_docstring_lines_for_workflow, step_interface_for_workflow
 
 _log_attempt: ContextVar[str] = ContextVar("operator_log_attempt", default="")
@@ -715,10 +715,10 @@ def _with_step_io(
         or getattr(fn, "__classifier_step__", None) is not None
     ):
         return fn
-    signature = inspect.signature(fn)
+    signatures = step_signatures(fn)
 
     def publish_inputs(args: tuple[object, ...], kwargs: dict[str, object]) -> None:
-        inputs = preview_step_inputs(signature, args, kwargs)
+        inputs = preview_step_inputs(signatures, args, kwargs)
         event_queue.put(
             {"type": "step_inputs", "node_id": node_id, "inputs": inputs.model_dump_json()}
         )

@@ -112,8 +112,11 @@ dataclasses, and Pydantic models) is shown as JSON. Each value shows at most 20
 items per list or dictionary, 6 levels of nesting, 512 characters per string, and
 about 8,000 characters in total; whatever is cut is replaced by a `…` marker and
 the value is labeled **Truncated preview**. Other objects, such as data frames
-or arrays, are shown as their bounded `repr()` text. A step called again, such as
-a retry, replaces the previous preview.
+or arrays, are shown as their bounded `repr()` text. Integers beyond JavaScript's
+exact range are shown as text. If a preview cannot be built, for example because
+an object's `repr()` raises, it is marked unavailable and the cause is written to
+the step's logs; the step's own result is never affected. A step called again, such
+as a retry, replaces the previous preview.
 
 ## Connect nodes
 
