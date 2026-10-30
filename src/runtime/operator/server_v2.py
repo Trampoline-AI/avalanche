@@ -13,12 +13,13 @@ import json
 import queue
 import threading
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
 import grpc
+from pydantic_core import to_jsonable_python
 from ulid import ULID
 
 from avalanche.runtime import File
@@ -38,6 +39,7 @@ from .convert_v2 import (
     update_envelope_to_v2,
     workflow_info_to_v2,
 )
+from .input_files import InputFileStaging, StagedInputFileError
 from .models import (
     CatalogSnapshot,
     MissingRunInputError,
@@ -955,7 +957,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Unknown start trigger")
         trigger = _START_RUN_TRIGGERS[request.trigger]
         try:
-            run_input = _decode_input_payload_v2(request)
+            run_input = _decode_input_payload_v2(request, self._op.input_files)
             run_context = _decode_json_object(request.context_json, "context_json")
         except ValueError as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
@@ -991,6 +993,13 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 run_input = json.loads(request.input_json)
                 if run_input is None:
                     raise ValueError("input_json must be a JSON object, not null")
+            if request.input_files:
+                if not isinstance(run_input, dict):
+                    raise ValueError("Schedule input files require an input_json object")
+                # The schedule keeps JSON, so each file is stored as its reference.
+                run_input = to_jsonable_python(
+                    _attach_input_files(run_input, request.input_files, self._op.input_files)
+                )
             info = self._op.set_schedule_enabled(
                 request.workflow_selector, request.enabled, run_input
             )
@@ -1003,6 +1012,35 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         except ValueError as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
         return workflow_info_to_v2(info)
+
+    def StageInputFile(self, request, context):  # noqa: N802
+        if not request.workflow_selector:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "workflow_selector is required")
+        if not request.field_name:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "field_name is required")
+        try:
+            staged = self._op.stage_input_file(
+                request.workflow_selector,
+                request.field_name,
+                request.name,
+                request.media_type,
+                request.content,
+            )
+        except AmbiguousWorkflow as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
+        except UnknownWorkflow as exc:
+            context.abort(grpc.StatusCode.NOT_FOUND, exc.args[0])
+        except StagedInputFileError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        return pb.FileAttachmentV2(
+            attachment_id=staged.object_key,
+            field_name=request.field_name,
+            name=staged.name,
+            media_type=staged.media_type,
+            object_key=staged.object_key,
+            sha256=staged.sha256,
+            size_bytes=staged.size_bytes,
+        )
 
     def CancelRun(self, request, context):  # noqa: N802
         if not request.run_id:
@@ -1478,21 +1516,51 @@ _START_RUN_TRIGGERS: Mapping[int, TriggerKind] = MappingProxyType(
 )
 
 
-def _decode_input_payload_v2(request) -> dict[str, Any] | None:
+def _decode_input_payload_v2(request, staging: InputFileStaging) -> dict[str, Any] | None:
     payload = _decode_json_object(request.input_json, "input_json") or {}
-    for attachment in request.input_files:
-        if not attachment.field_name:
+    return _attach_input_files(payload, request.input_files, staging) or None
+
+
+def _attach_input_files(
+    payload: dict[str, Any],
+    attachments: Iterable[pb.FileAttachmentV2],
+    staging: InputFileStaging,
+) -> dict[str, Any]:
+    """Set each attachment's field; a field the input sets to a list collects them."""
+    payload = dict(payload)
+    appended: set[str] = set()
+    for attachment in attachments:
+        field = attachment.field_name
+        if not field:
             raise ValueError("input file attachment is missing field_name")
-        if attachment.object_uri or attachment.object_key:
-            raise ValueError(
-                "staged object attachments are not supported by the local loopback operator"
-            )
-        if attachment.field_name in payload:
-            raise ValueError(f"Duplicate input field '{attachment.field_name}'")
-        payload[attachment.field_name] = File(
-            name=attachment.name or None,
-            content=bytes(attachment.inline_bytes),
-            content_type=attachment.media_type or None,
-            sha256=attachment.sha256 or None,
+        file = _attachment_file(attachment, staging)
+        if isinstance(payload.get(field), list):
+            if field not in appended:
+                payload[field] = list(payload[field])
+                appended.add(field)
+            payload[field].append(file)
+        elif field in payload:
+            raise ValueError(f"Duplicate input field '{field}'")
+        else:
+            payload[field] = file
+    return payload
+
+
+def _attachment_file(attachment: pb.FileAttachmentV2, staging: InputFileStaging) -> File:
+    if attachment.object_uri:
+        raise ValueError("object_uri attachments are not supported by the local operator")
+    if attachment.object_key:
+        if attachment.inline_bytes:
+            raise ValueError("an input file attachment cannot have both object_key and a body")
+        return staging.claim(
+            attachment.object_key,
+            sha256=attachment.sha256,
+            size_bytes=attachment.size_bytes,
         )
-    return payload or None
+    # A loopback inline body is staged too, so every input file is path-backed.
+    staged = staging.stage(
+        attachment.name, attachment.media_type, bytes(attachment.inline_bytes)
+    )
+    if attachment.sha256 and attachment.sha256 != staged.sha256:
+        raise ValueError(f"Input file {attachment.name!r} does not match its sha256")
+    return staging.claim(staged.object_key, sha256=staged.sha256, size_bytes=staged.size_bytes)

@@ -166,6 +166,13 @@ def missing_required_input(
     )
 
 
+def declared_input_fields(input_schema_json: str) -> tuple[str, ...]:
+    """The field names a workflow's published input schema declares."""
+    if input_schema_json == "":
+        return ()
+    return tuple(_InputSchema.model_validate_json(input_schema_json).properties)
+
+
 class TriggerKind(Enum):
     """What started a run: its schedule, a person, a webhook, or an API caller."""
 
