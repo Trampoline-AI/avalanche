@@ -7,6 +7,12 @@ from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
 
+class StepValuePreviewKindV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    STEP_VALUE_PREVIEW_KIND_V2_UNSPECIFIED: _ClassVar[StepValuePreviewKindV2]
+    STEP_VALUE_PREVIEW_KIND_V2_JSON: _ClassVar[StepValuePreviewKindV2]
+    STEP_VALUE_PREVIEW_KIND_V2_REPR: _ClassVar[StepValuePreviewKindV2]
+
 class AgentTraceStatusV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = ()
     AGENT_TRACE_STATUS_V2_UNSPECIFIED: _ClassVar[AgentTraceStatusV2]
@@ -28,6 +34,9 @@ class PageOrderV2(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     PAGE_ORDER_V2_FORWARD: _ClassVar[PageOrderV2]
     PAGE_ORDER_V2_NEWEST_FIRST: _ClassVar[PageOrderV2]
 
+STEP_VALUE_PREVIEW_KIND_V2_UNSPECIFIED: StepValuePreviewKindV2
+STEP_VALUE_PREVIEW_KIND_V2_JSON: StepValuePreviewKindV2
+STEP_VALUE_PREVIEW_KIND_V2_REPR: StepValuePreviewKindV2
 AGENT_TRACE_STATUS_V2_UNSPECIFIED: AgentTraceStatusV2
 AGENT_TRACE_STATUS_V2_SUCCEEDED: AgentTraceStatusV2
 AGENT_TRACE_STATUS_V2_FAILED: AgentTraceStatusV2
@@ -793,6 +802,7 @@ class NodeSnapshotV2(_message.Message):
         "running_elapsed_seconds",
         "trace",
         "activity_continuation",
+        "step_io",
     )
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
@@ -805,6 +815,7 @@ class NodeSnapshotV2(_message.Message):
     RUNNING_ELAPSED_SECONDS_FIELD_NUMBER: _ClassVar[int]
     TRACE_FIELD_NUMBER: _ClassVar[int]
     ACTIVITY_CONTINUATION_FIELD_NUMBER: _ClassVar[int]
+    STEP_IO_FIELD_NUMBER: _ClassVar[int]
     node_id: str
     name: str
     node_type: str
@@ -816,6 +827,7 @@ class NodeSnapshotV2(_message.Message):
     running_elapsed_seconds: float
     trace: TraceDescriptorV2
     activity_continuation: ContinuationRefV2
+    step_io: StepIoV2
     def __init__(
         self,
         node_id: _Optional[str] = ...,
@@ -829,6 +841,49 @@ class NodeSnapshotV2(_message.Message):
         running_elapsed_seconds: _Optional[float] = ...,
         trace: _Optional[_Union[TraceDescriptorV2, _Mapping]] = ...,
         activity_continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ...,
+        step_io: _Optional[_Union[StepIoV2, _Mapping]] = ...,
+    ) -> None: ...
+
+class StepValuePreviewV2(_message.Message):
+    __slots__ = ("kind", "type_name", "preview_json", "truncated")
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    TYPE_NAME_FIELD_NUMBER: _ClassVar[int]
+    PREVIEW_JSON_FIELD_NUMBER: _ClassVar[int]
+    TRUNCATED_FIELD_NUMBER: _ClassVar[int]
+    kind: StepValuePreviewKindV2
+    type_name: str
+    preview_json: str
+    truncated: bool
+    def __init__(
+        self,
+        kind: _Optional[_Union[StepValuePreviewKindV2, str]] = ...,
+        type_name: _Optional[str] = ...,
+        preview_json: _Optional[str] = ...,
+        truncated: bool = ...,
+    ) -> None: ...
+
+class StepParameterPreviewV2(_message.Message):
+    __slots__ = ("name", "value")
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    value: StepValuePreviewV2
+    def __init__(
+        self,
+        name: _Optional[str] = ...,
+        value: _Optional[_Union[StepValuePreviewV2, _Mapping]] = ...,
+    ) -> None: ...
+
+class StepIoV2(_message.Message):
+    __slots__ = ("inputs", "output")
+    INPUTS_FIELD_NUMBER: _ClassVar[int]
+    OUTPUT_FIELD_NUMBER: _ClassVar[int]
+    inputs: _containers.RepeatedCompositeFieldContainer[StepParameterPreviewV2]
+    output: StepValuePreviewV2
+    def __init__(
+        self,
+        inputs: _Optional[_Iterable[_Union[StepParameterPreviewV2, _Mapping]]] = ...,
+        output: _Optional[_Union[StepValuePreviewV2, _Mapping]] = ...,
     ) -> None: ...
 
 class TokenUsageV2(_message.Message):

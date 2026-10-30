@@ -113,6 +113,7 @@ from .result_store import (
 from .results import EncodedWorkflowResult, decode_workflow_result
 from .run_worker import run_worker
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
+from .step_io import StepInputs, StepIo, StepValuePreview
 from .webhooks import DEFAULT_WEBHOOK_PORT, WebhookServer, routes_for
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
 
@@ -1142,6 +1143,7 @@ class Operator:
                     node.elapsed if node.status is NodeStatus.RUNNING else None
                 ),
                 error=node.error,
+                step_io=node.step_io,
                 trace=self._trace_descriptors.get((run.run_id, node.node_id)),
                 revision=self._node_revisions.get(
                     (run.run_id, node.node_id),
@@ -2349,6 +2351,18 @@ class Operator:
                             changed_node_ids = (node.node_id,)
                             status_node_ids = changed_node_ids
                             mutated = True
+                    elif event_type in {"step_inputs", "step_output"}:
+                        node = run.nodes.get(event["node_id"])
+                        if node is None:
+                            raise _CoordinatorProtocolError(
+                                "step value event references unpublished node "
+                                f"{_bounded_ascii(event['node_id'])}"
+                            )
+                        if run.status != RunStatus.CANCELLED:
+                            node.step_io = _step_io_from_event(event_type, event, node.step_io)
+                            changed_node_ids = (node.node_id,)
+                            status_node_ids = changed_node_ids
+                            mutated = True
                     elif event_type == "agent_evidence":
                         node_id = event["node_id"]
                         if node_id not in run.nodes:
@@ -3105,6 +3119,7 @@ class Operator:
                         ),
                         revision=publication_sequence,
                         error=node.error,
+                        step_io=node.step_io,
                     )
                 )
             if log_entry is not None:
@@ -3619,6 +3634,8 @@ _RUN_EVENT_TYPES = {
     "agent_evidence",
     "classifier_evidence",
     "evaluation_submitted",
+    "step_inputs",
+    "step_output",
     "log",
     "terminal",
 }
@@ -3687,6 +3704,25 @@ def _validate_agent_detail_depth(value: object, *, detail_kind: str = "agent") -
                 active.remove(identity)
 
     walk(value, 0)
+
+
+def _step_io_from_event(
+    event_type: str,
+    event: dict[str, Any],
+    current: StepIo | None,
+) -> StepIo:
+    """Validate one worker preview payload once and merge it into the node's values."""
+    try:
+        if event_type == "step_inputs":
+            # A new call (such as a retry) starts with no output.
+            return StepIo(inputs=StepInputs.model_validate_json(event["inputs"]).parameters)
+        output = StepValuePreview.model_validate_json(event["output"])
+    except ValueError as exc:
+        # Validation errors can contain previewed values; never retain those in a log.
+        raise _CoordinatorProtocolError(f"invalid {event_type} payload") from exc
+    if current is None:
+        raise _CoordinatorProtocolError("step output arrived before its inputs")
+    return StepIo(inputs=current.inputs, output=output)
 
 
 def _classifier_invocation_from_payload(value: object) -> ClassifierInvocation:
@@ -3952,6 +3988,12 @@ def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
         agent_event = _required_field(event, "event")
         if type(agent_event) is not dict:
             raise _CoordinatorProtocolError("field 'event' must be a dict")
+    elif event_type in {"step_inputs", "step_output"}:
+        payload_key = "inputs" if event_type == "step_inputs" else "output"
+        _require_exact_event_keys(event, {"type", "node_id", payload_key})
+        _string_field(event, "node_id", maximum_length=_MAX_EVENT_FIELD_LENGTH)
+        if type(_required_field(event, payload_key)) is not str:
+            raise _CoordinatorProtocolError(f"field '{payload_key}' must be a JSON string")
     elif event_type == "evaluation_submitted":
         _require_exact_event_keys(event, {"type", "node_id", "submission"})
         _string_field(event, "node_id", maximum_length=_MAX_EVENT_FIELD_LENGTH)

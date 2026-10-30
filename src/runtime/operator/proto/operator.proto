@@ -307,6 +307,39 @@ message NodeSnapshotV2 {
   TraceDescriptorV2 trace = 10;
   // Snapshot-pinned continuation for this node's agent or classifier events.
   ContinuationRefV2 activity_continuation = 11;
+  // Standard steps only: previews of the latest call's arguments and return value.
+  // Unset until the step is called.
+  StepIoV2 step_io = 12;
+}
+
+enum StepValuePreviewKindV2 {
+  STEP_VALUE_PREVIEW_KIND_V2_UNSPECIFIED = 0;
+  // preview_json is a bounded JSON rendering of plain data.
+  STEP_VALUE_PREVIEW_KIND_V2_JSON = 1;
+  // preview_json is a JSON string holding the bounded repr of an opaque object.
+  STEP_VALUE_PREVIEW_KIND_V2_REPR = 2;
+}
+
+// A bounded, display-only rendering of one value, never the value itself. Cut
+// content is replaced by an explicit "…" marker and truncated is set.
+message StepValuePreviewV2 {
+  StepValuePreviewKindV2 kind = 1;
+  // The Python type of the value, such as "dict" or "polars.dataframe.frame.DataFrame".
+  string type_name = 2;
+  string preview_json = 3;
+  bool truncated = 4;
+}
+
+message StepParameterPreviewV2 {
+  string name = 1;
+  StepValuePreviewV2 value = 2;
+}
+
+message StepIoV2 {
+  // In signature order; injected loggers are omitted.
+  repeated StepParameterPreviewV2 inputs = 1;
+  // Unset until the call returns.
+  StepValuePreviewV2 output = 2;
 }
 
 // Token counts for an agent invocation; absent figures were not reported.
