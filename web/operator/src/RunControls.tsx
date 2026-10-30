@@ -1,8 +1,8 @@
 import { ChevronDown, Clock } from "lucide-react";
-import { useLayoutEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useState } from "react";
 
-import type { FlowInfoMsg, RunSnapshotMsg, RunSummaryMsg } from "./model";
-import { ScheduleDetails } from "./ScheduleDetails";
+import { describeCron, formatCountdown } from "./cron";
+import type { FlowInfoMsg, RunSnapshotMsg } from "./model";
 import type { InputDraft } from "./useInputDraft";
 import { workflowInputDraft } from "./workflowInput";
 import type { OperatorProjection } from "./state";
@@ -11,8 +11,6 @@ import { isUnknownRecord } from "./guards";
 interface RunControlsProps {
   workflow?: FlowInfoMsg;
   run?: RunSnapshotMsg;
-  /** Run history, for the schedule details' last scheduled run. */
-  runs?: Record<string, RunSummaryMsg>;
   pending?: OperatorProjection["action"];
   onStart: (workflowSelector: string, input?: Record<string, unknown>) => Promise<string>;
   onCancel: (runId: string) => Promise<void>;
@@ -21,7 +19,6 @@ interface RunControlsProps {
     enabled: boolean,
     input?: Record<string, unknown>,
   ) => Promise<void>;
-  onSelectRun?: (runId: string) => void;
   runActionsEnabled?: boolean;
   /** The workflow's input draft, edited in the input panel. */
   inputDraft?: InputDraft;
@@ -49,12 +46,10 @@ export function parseRunInput(draft: string): Record<string, unknown> {
 export function RunControls({
   workflow,
   run,
-  runs = {},
   pending,
   onStart,
   onCancel,
   onSetScheduleEnabled,
-  onSelectRun,
   runActionsEnabled = true,
   inputDraft,
   onEditInput,
@@ -168,6 +163,9 @@ export function RunControls({
                   className={`absolute top-0.5 size-3 rounded-full bg-on-accent shadow transition-[left] ${scheduleEnabled ? "left-3.5" : "left-0.5"}`}
                 />
               </button>
+              {scheduleEnabled && workflow.nextRunAt > 0 && (
+                <NextRunCountdown at={workflow.nextRunAt} />
+              )}
               <button
                 type="button"
                 aria-expanded={showSchedule}
@@ -247,10 +245,33 @@ export function RunControls({
             </div>
           )}
           {workflow && runActionsEnabled && scheduled && showSchedule && (
-            <ScheduleDetails workflow={workflow} runs={runs} onSelectRun={onSelectRun} />
+            <p className="schedule-summary m-0 self-end rounded border border-line-strong bg-panel px-3 py-2 text-[11px] text-ink shadow-[0_18px_50px_var(--color-shadow-1)]">
+              {describeCron(workflow.cron) ?? "Custom schedule"}{" "}
+              <code className="font-mono text-secondary">({workflow.cron})</code>
+            </p>
           )}
         </div>
       )}
     </div>
+  );
+}
+
+/** Time left until the next scheduled run, ticking every second. */
+function NextRunCountdown({ at }: { at: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const remaining = at - now / 1000;
+  const next = new Date(at * 1000);
+  return (
+    <time
+      className="schedule-countdown font-mono text-[10px] text-secondary tabular-nums"
+      dateTime={next.toISOString()}
+      title={`Next run ${next.toLocaleString()}`}
+    >
+      {remaining > 0 ? `in ${formatCountdown(remaining)}` : "starting…"}
+    </time>
   );
 }

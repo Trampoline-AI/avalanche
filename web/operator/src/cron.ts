@@ -82,3 +82,16 @@ export function describeCron(expression: string): string | undefined {
     ? undefined
     : `Every year on ${MONTHS[month - 1]} ${day} at ${time}`;
 }
+
+/** Time left until a run, such as "42s", "3:05", "1:02:09" or "2d 4h". */
+export function formatCountdown(seconds: number): string {
+  const total = Math.max(0, Math.ceil(seconds));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const rest = total % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}:${pad(minutes)}:${pad(rest)}`;
+  if (minutes > 0) return `${minutes}:${pad(rest)}`;
+  return `${rest}s`;
+}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { describeCron } from "./cron";
+import { describeCron, formatCountdown } from "./cron";
 
 describe("describeCron", () => {
   it.each([
@@ -26,4 +26,16 @@ describe("describeCron", () => {
       expect(describeCron(expression)).toBeUndefined();
     },
   );
+});
+
+describe("formatCountdown", () => {
+  it.each([
+    [0, "0s"],
+    [42.2, "43s"],
+    [185, "3:05"],
+    [3729, "1:02:09"],
+    [2 * 86400 + 4 * 3600 + 59, "2d 4h"],
+  ])("formats %s seconds as %s", (seconds, expected) => {
+    expect(formatCountdown(seconds)).toBe(expected);
+  });
 });

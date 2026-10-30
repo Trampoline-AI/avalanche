@@ -273,10 +273,6 @@ export function WorkflowWorkspaceSurface({
     },
     [selectWorkflowRun, startRun],
   );
-  const openScheduledRun = useCallback(
-    (runId: string) => selectWorkflowRun(runId),
-    [selectWorkflowRun],
-  );
   const closePanel = useCallback(() => setInspectedNode(undefined), []);
   // Keeps the inspected node while leaving the run for the current definition.
   const openCurrentDefinition = useCallback(
@@ -405,11 +401,9 @@ export function WorkflowWorkspaceSurface({
       workflow={!historical ? workflow : undefined}
       run={loadedRun}
       pending={state.action}
-      runs={state.runs}
       onStart={startWorkflowRun}
       onCancel={cancelRun}
       onSetScheduleEnabled={setScheduleEnabled}
-      onSelectRun={openScheduledRun}
       runActionsEnabled={runActionsEnabled}
       inputDraft={!historical ? inputDraft : undefined}
       onEditInput={() => openNode(INPUT_NODE_ID)}
