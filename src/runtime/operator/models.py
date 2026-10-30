@@ -10,7 +10,15 @@ from enum import Enum
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Literal, Mapping
 
-from pydantic import AfterValidator, JsonValue, TypeAdapter, ValidationError
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    JsonValue,
+    TypeAdapter,
+    ValidationError,
+)
 
 if TYPE_CHECKING:
     from avalanche.agent.declaration import AgentDeclaration
@@ -84,6 +92,56 @@ def schedule_input_from_json(payload: str) -> dict[str, JsonValue]:
         return _SCHEDULE_INPUT.validate_json(payload)
     except ValidationError as exc:
         raise ValueError(f"Schedule input must be a JSON object: {exc}") from exc
+
+
+class MissingRunInputError(ValueError):
+    """A run or schedule would start without a value for a required input field."""
+
+    def __init__(self, fields: tuple[str, ...]) -> None:
+        self.fields = fields
+        super().__init__(f"Input is missing required fields: {', '.join(fields)}")
+
+
+class _InputSchema(BaseModel):
+    """The parts of a workflow's input JSON Schema that say which fields are required."""
+
+    model_config = ConfigDict(extra="allow")
+
+    # A schema without these keywords declares no required fields.
+    required: tuple[str, ...] = ()
+    properties: dict[str, JsonValue] = Field(default_factory=dict)
+
+
+def _accepts_null(schema: JsonValue) -> bool:
+    if schema is True:
+        return True
+    if not isinstance(schema, dict):
+        return False
+    kind = schema.get("type")
+    if kind == "null" or (isinstance(kind, list) and "null" in kind):
+        return True
+    branches = schema.get("anyOf")
+    return isinstance(branches, list) and any(_accepts_null(item) for item in branches)
+
+
+def missing_required_input(
+    input_schema_json: str, run_input: Mapping[str, JsonValue] | None
+) -> tuple[str, ...]:
+    """Required fields the input leaves out, or sets to null where null is not allowed.
+
+    The operator does not import workflow code, so this checks only presence against
+    the published schema; the run still validates every value when it starts.
+    """
+    if input_schema_json == "":
+        return ()
+    schema = _InputSchema.model_validate_json(input_schema_json)
+    values = run_input or {}
+    return tuple(
+        name
+        for name in schema.required
+        if name not in values
+        or (values[name] is None and not _accepts_null(schema.properties.get(name, False)))
+    )
 
 
 class TriggerKind(Enum):

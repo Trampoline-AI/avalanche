@@ -72,6 +72,7 @@ from .models import (
     LogLevel,
     LogPage,
     LogRecordDescriptor,
+    MissingRunInputError,
     NodeSnapshot,
     NodeState,
     NodeStatus,
@@ -100,6 +101,7 @@ from .models import (
     WorkflowInfo,
     WorkflowReloadStatus,
     WorkflowTopology,
+    missing_required_input,
     schedule_input_from_python,
 )
 from .registry import (
@@ -1533,6 +1535,16 @@ class Operator:
         # the resolved workflow.
         with self._scheduler.reconciliation_boundary():
             descriptor = self._scheduled_descriptor(selector)
+            if enabled:
+                # Every cron run would fail without its required fields.
+                missing = missing_required_input(
+                    descriptor.input_schema_json,
+                    run_input
+                    if run_input is not None
+                    else self._scheduler.input_for(descriptor.workflow_id),
+                )
+                if missing:
+                    raise MissingRunInputError(missing)
             self._scheduler.set_enabled(descriptor.workflow_id, enabled, run_input)
             catalog = self._publish_catalog(self._registry.view)
         return next(
@@ -1576,6 +1588,13 @@ class Operator:
             run_id = run_id or f"run_{str(uuid4())[:8]}"
             if run_id in self._runs or run_id in self._active_runs:
                 raise RunAlreadyExistsError(f"Run {run_id} already exists")
+            # Callers learn about a missing required field now, not from a run that
+            # fails while it is prepared. Cron and webhook runs report it as a failed
+            # run. A reused run ID still reports the existing run first.
+            if triggered_by in (TriggerKind.MANUAL, TriggerKind.API):
+                missing = missing_required_input(descriptor.input_schema_json, input)
+                if missing:
+                    raise MissingRunInputError(missing)
             require_worker_descriptor_transfer()
             event_queue = self._mp.Queue()
             cancel_event = self._mp.Event()

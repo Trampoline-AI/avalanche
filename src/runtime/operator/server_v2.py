@@ -38,7 +38,13 @@ from .convert_v2 import (
     update_envelope_to_v2,
     workflow_info_to_v2,
 )
-from .models import CatalogSnapshot, RunCreated, RunSnapshot, TriggerKind
+from .models import (
+    CatalogSnapshot,
+    MissingRunInputError,
+    RunCreated,
+    RunSnapshot,
+    TriggerKind,
+)
 from .operator import (
     ClassifierDetailExpiredError,
     InvalidRunIdError,
@@ -963,7 +969,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 expected_version=request.expected_version,
             )
             return pb.StartRunResponseV2(run_id=run_id)
-        except InvalidRunIdError as exc:
+        except (InvalidRunIdError, MissingRunInputError) as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
         except RunAlreadyExistsError as exc:
             context.abort(grpc.StatusCode.ALREADY_EXISTS, str(exc))

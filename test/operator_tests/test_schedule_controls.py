@@ -15,7 +15,14 @@ import pytest
 
 from runtime.operator.client import GrpcStateProvider, OperatorCallError
 from runtime.operator.convert_v2 import run_summary_from_v2
-from runtime.operator.models import CatalogReplaced, RunStatus, TriggerKind, WorkflowInfo
+from runtime.operator.models import (
+    CatalogReplaced,
+    MissingRunInputError,
+    RunStatus,
+    TriggerKind,
+    WorkflowInfo,
+    missing_required_input,
+)
 from runtime.operator.operator import NoScheduleError, Operator
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
@@ -428,3 +435,57 @@ def test_grpc_rejects_invalid_schedule_input_without_storing_it(served, payload,
     flow = _flow(operator, "greeting")
     assert (flow.schedule_enabled, flow.schedule_input) == (False, None)
     assert stub.DiscoverFlows(pb.DiscoverFlowsRequestV2()).flows
+
+
+def test_a_schedule_cannot_be_enabled_without_its_required_input(operator):
+    selector = _flow(operator, "greeting").selector
+
+    with pytest.raises(MissingRunInputError) as error:
+        operator.set_schedule_enabled(selector, True, {"punctuation": "?"})
+    assert error.value.fields == ("name",)
+    with pytest.raises(MissingRunInputError):
+        operator.set_schedule_enabled(selector, True)
+    assert _flow(operator, "greeting").schedule_enabled is False
+
+    operator.set_schedule_enabled(selector, True, {"name": "ops"})
+    operator.set_schedule_enabled(selector, False)
+    # The stored input still carries the required field.
+    assert operator.set_schedule_enabled(selector, True).schedule_enabled is True
+
+
+@pytest.mark.parametrize("trigger", [TriggerKind.MANUAL, TriggerKind.API])
+def test_a_run_without_its_required_input_is_refused_before_it_starts(operator, trigger):
+    selector = _flow(operator, "greeting").selector
+
+    with pytest.raises(MissingRunInputError):
+        operator.start_run(selector, trigger, run_id="missing", input={"punctuation": "?"})
+
+    assert operator.list_runs(selector) == []
+
+
+def test_grpc_refuses_runs_and_schedules_without_required_input(operator, provider):
+    selector = _flow(operator, "greeting").selector
+
+    with pytest.raises(OperatorCallError) as start:
+        provider.start_run(selector, run_id="missing", input={})
+    with pytest.raises(OperatorCallError) as enable:
+        provider.set_schedule_enabled(selector, True)
+
+    assert start.value.status is grpc.StatusCode.INVALID_ARGUMENT
+    assert enable.value.status is grpc.StatusCode.INVALID_ARGUMENT
+
+
+def test_null_counts_as_missing_only_when_the_field_rejects_null():
+    schema = json.dumps(
+        {
+            "properties": {
+                "name": {"type": "string"},
+                "note": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+            },
+            "required": ["name", "note"],
+        }
+    )
+
+    assert missing_required_input(schema, {"name": None, "note": None}) == ("name",)
+    assert missing_required_input(schema, None) == ("name", "note")
+    assert missing_required_input("", None) == ()
