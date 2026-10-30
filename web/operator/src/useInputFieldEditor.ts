@@ -5,7 +5,7 @@ import type { InputDraft } from "./useInputDraft";
 import { acceptsString, inputFieldText, type WorkflowInputField } from "./workflowInput";
 
 export interface InputFieldEditor {
-  /** Why the fields cannot be edited right now, such as invalid JSON in the run controls. */
+  /** Why the fields cannot be edited right now. */
   error?: string;
   text: (field: WorkflowInputField) => string;
   invalid: (field: WorkflowInputField) => boolean;
@@ -24,7 +24,7 @@ export function useInputFieldEditor(draft: InputDraft): InputFieldEditor {
   try {
     values = parseRunInput(draft.text);
   } catch {
-    error = "The JSON input has an error; fix it in the run controls.";
+    error = "The input draft is not a JSON object.";
   }
   return {
     error,

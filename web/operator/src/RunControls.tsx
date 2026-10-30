@@ -1,8 +1,5 @@
-import { json } from "@codemirror/lang-json";
-import { EditorState } from "@codemirror/state";
-import { EditorView, keymap } from "@codemirror/view";
 import { ChevronDown, Clock } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useState } from "react";
 
 import type { FlowInfoMsg, RunSnapshotMsg, RunSummaryMsg } from "./model";
 import { ScheduleDetails } from "./ScheduleDetails";
@@ -10,68 +7,6 @@ import type { InputDraft } from "./useInputDraft";
 import { workflowInputDraft } from "./workflowInput";
 import type { OperatorProjection } from "./state";
 import { isUnknownRecord } from "./guards";
-
-interface JsonEditorProps {
-  value: string;
-  onChange: (value: string) => void;
-  label?: string;
-}
-
-export function JsonEditor({
-  value,
-  onChange,
-  label = "Workflow input JSON",
-}: JsonEditorProps) {
-  const parent = useRef<HTMLDivElement>(null);
-  const editor = useRef<EditorView>(undefined);
-  useEffect(() => {
-    if (!parent.current) return;
-    const view = new EditorView({
-      parent: parent.current,
-      state: EditorState.create({
-        doc: value,
-        extensions: [
-          json(),
-          keymap.of([]),
-          EditorView.lineWrapping,
-          EditorView.contentAttributes.of({
-            "aria-label": label,
-          }),
-          EditorView.theme({
-            "&": { backgroundColor: "var(--color-panel)", color: "var(--color-ink)" },
-            ".cm-content": { caretColor: "var(--color-acid)", minHeight: "110px" },
-            ".cm-gutters": {
-              backgroundColor: "var(--color-canvas)",
-              color: "var(--color-code-gutter)",
-              border: "0",
-            },
-            "&.cm-focused": { outline: "1px solid var(--color-code-focus)" },
-          }),
-          EditorView.updateListener.of((update) => {
-            if (update.docChanged) onChange(update.state.doc.toString());
-          }),
-        ],
-      }),
-    });
-    editor.current = view;
-    return () => {
-      editor.current = undefined;
-      view.destroy();
-    };
-  }, []);
-  // Follow edits made elsewhere, such as the graph's input popup.
-  useEffect(() => {
-    const view = editor.current;
-    if (!view || view.state.doc.toString() === value) return;
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
-  }, [value]);
-  return (
-    <div
-      className="json-editor overflow-hidden rounded border border-line text-[10px]"
-      ref={parent}
-    />
-  );
-}
 
 interface RunControlsProps {
   workflow?: FlowInfoMsg;
@@ -88,8 +23,10 @@ interface RunControlsProps {
   ) => Promise<void>;
   onSelectRun?: (runId: string) => void;
   runActionsEnabled?: boolean;
-  /** The workflow's input draft, shared with the graph's input popup. */
+  /** The workflow's input draft, edited in the input panel. */
   inputDraft?: InputDraft;
+  /** Opens the input panel, offered next to errors when the workflow takes input. */
+  onEditInput?: () => void;
 }
 
 /** Key-order independent JSON, to tell whether two inputs differ. */
@@ -120,20 +57,15 @@ export function RunControls({
   onSelectRun,
   runActionsEnabled = true,
   inputDraft,
+  onEditInput,
 }: RunControlsProps) {
-  const [showInput, setShowInput] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
   // One input for both Run and the cron schedule (see useInputDraft).
   const draft = inputDraft?.text ?? "{}";
-  const setDraft = (text: string) => inputDraft?.setText(text);
   const draftEdited = inputDraft !== undefined && inputDraft.text !== inputDraft.seed;
+  const takesInput = Boolean(workflow?.inputDeclarationJson);
   const [error, setError] = useState<string>();
   const workflowId = workflow?.workflowId;
-  useLayoutEffect(() => {
-    if (!runActionsEnabled) {
-      setShowInput(false);
-    }
-  }, [runActionsEnabled]);
   useLayoutEffect(() => {
     setShowSchedule(false);
     setError(undefined);
@@ -143,9 +75,9 @@ export function RunControls({
   const scheduleEnabled = workflow?.scheduleEnabled ?? false;
   const scheduleBusy = pending?.kind === "schedule";
 
-  /** The input to send, or undefined to keep the operator's own (defaults or stored). */
+  /** The edited input, or undefined to keep the operator's own (defaults or stored). */
   const editedInput = (): Record<string, unknown> | undefined =>
-    showInput || draftEdited ? parseRunInput(draft) : undefined;
+    draftEdited ? parseRunInput(draft) : undefined;
 
   const setSchedule = async (enabled: boolean, input?: Record<string, unknown>) => {
     if (!workflow || !onSetScheduleEnabled) return;
@@ -174,7 +106,7 @@ export function RunControls({
 
   // Offer to update an enabled schedule when the edited input differs from its input.
   let draftDiffersFromSchedule = false;
-  if (scheduled && scheduleEnabled && (showInput || draftEdited) && workflow) {
+  if (scheduled && scheduleEnabled && draftEdited && workflow) {
     try {
       draftDiffersFromSchedule =
         canonicalJson(parseRunInput(draft)) !==
@@ -220,13 +152,6 @@ export function RunControls({
             </svg>
             <span>Run</span>
           </button>
-          <button
-            type="button"
-            className={`input-toggle cursor-pointer border-0 bg-transparent p-0.5 text-[9px] text-acid underline underline-offset-2 hover:text-acid-hover ${showInput ? "active text-acid-hover" : ""}`}
-            onClick={() => setShowInput((value) => !value)}
-          >
-            {showInput ? "Hide JSON input" : "Add JSON input"}
-          </button>
           {scheduled && (
             <span className="schedule-controls ml-1 flex items-center gap-1.5 border-l border-line pl-2.5 text-[10px] text-ink">
               <button
@@ -257,6 +182,19 @@ export function RunControls({
                   className={`size-3 transition-transform ${showSchedule ? "rotate-180" : ""}`}
                 />
               </button>
+              {draftDiffersFromSchedule && (
+                <button
+                  type="button"
+                  className="cursor-pointer border-0 bg-transparent p-0.5 text-[9px] text-acid underline underline-offset-2 hover:text-acid-hover"
+                  disabled={scheduleBusy}
+                  onClick={() => {
+                    setError(undefined);
+                    void setSchedule(true, parseRunInput(draft));
+                  }}
+                >
+                  Use for schedule
+                </button>
+              )}
             </span>
           )}
         </>
@@ -289,46 +227,27 @@ export function RunControls({
           )}
         </div>
       )}
-      {(error ||
-        (workflow && runActionsEnabled && (showInput || (scheduled && showSchedule)))) && (
+      {(error || (workflow && runActionsEnabled && scheduled && showSchedule)) && (
         <div className="run-popovers absolute right-0 bottom-[43px] z-20 flex w-[390px] flex-col gap-2 max-[700px]:w-[calc(100vw-32px)]">
           {error && (
             <div
               role="alert"
-              className="action-error rounded border border-error-line bg-error-surface px-[18px] py-2 text-xs text-error-ink"
+              className="action-error flex items-baseline gap-3 rounded border border-error-line bg-error-surface px-[18px] py-2 text-xs text-error-ink"
             >
-              {error}
+              <span className="min-w-0 flex-1">{error}</span>
+              {takesInput && onEditInput && (
+                <button
+                  type="button"
+                  className="shrink-0 cursor-pointer border-0 bg-transparent p-0 text-[11px] text-error-ink underline underline-offset-2 hover:text-ink"
+                  onClick={onEditInput}
+                >
+                  Edit inputs
+                </button>
+              )}
             </div>
           )}
           {workflow && runActionsEnabled && scheduled && showSchedule && (
             <ScheduleDetails workflow={workflow} runs={runs} onSelectRun={onSelectRun} />
-          )}
-          {workflow && runActionsEnabled && showInput && (
-            <div className="input-popover rounded border border-line-strong bg-panel p-[13px] shadow-[0_18px_50px_var(--color-shadow-1)]">
-              <div className="mb-[9px] flex items-center justify-between gap-2">
-                <strong className="text-[11px]">Workflow input</strong>
-                {draftDiffersFromSchedule && (
-                  <button
-                    type="button"
-                    className="cursor-pointer border-0 bg-transparent p-0 text-[9px] text-acid underline underline-offset-2 hover:text-acid-hover"
-                    disabled={scheduleBusy}
-                    onClick={() => {
-                      setError(undefined);
-                      void setSchedule(true, parseRunInput(draft));
-                    }}
-                  >
-                    Use for schedule
-                  </button>
-                )}
-              </div>
-              <JsonEditor value={draft} onChange={setDraft} key={workflowId} />
-              {scheduled && (
-                <p className="m-0 mt-1.5 text-[9px] text-secondary">
-                  Run starts with this input. Turning the schedule on saves it for scheduled
-                  runs.
-                </p>
-              )}
-            </div>
           )}
         </div>
       )}

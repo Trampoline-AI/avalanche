@@ -412,6 +412,7 @@ export function WorkflowWorkspaceSurface({
       onSelectRun={openScheduledRun}
       runActionsEnabled={runActionsEnabled}
       inputDraft={!historical ? inputDraft : undefined}
+      onEditInput={() => openNode(INPUT_NODE_ID)}
     />
   ) : undefined;
   const displayedRunId = run?.summary?.runId;
