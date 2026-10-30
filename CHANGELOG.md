@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.16.2
+
 - Agents: new runtime `ava.runtimes.OpenAIAgent` runs agent steps with OpenAI models
   through the OpenAI Agents SDK; install it with `avalanche-ai[openai]` and set
   `OPENAI_API_KEY`. The model calls the step's tools, gets `ava.File` inputs as
