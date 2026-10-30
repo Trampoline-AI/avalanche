@@ -2,8 +2,8 @@ import { ChevronDown, Clock } from "lucide-react";
 import { useEffect, useLayoutEffect, useState } from "react";
 
 import { describeCron, formatCountdown } from "./cron";
-import type { FlowInfoMsg, RunSnapshotMsg } from "./model";
-import type { InputDraft } from "./useInputDraft";
+import type { FlowInfoMsg, InputFileAttachment, RunSnapshotMsg } from "./model";
+import { applyInputFiles, type InputDraft } from "./useInputDraft";
 import { workflowInputDraft } from "./workflowInput";
 import type { OperatorProjection } from "./state";
 import { isUnknownRecord } from "./guards";
@@ -12,12 +12,17 @@ interface RunControlsProps {
   workflow?: FlowInfoMsg;
   run?: RunSnapshotMsg;
   pending?: OperatorProjection["action"];
-  onStart: (workflowSelector: string, input?: Record<string, unknown>) => Promise<string>;
+  onStart: (
+    workflowSelector: string,
+    input?: Record<string, unknown>,
+    inputFiles?: InputFileAttachment[],
+  ) => Promise<string>;
   onCancel: (runId: string) => Promise<void>;
   onSetScheduleEnabled?: (
     workflowSelector: string,
     enabled: boolean,
     input?: Record<string, unknown>,
+    inputFiles?: InputFileAttachment[],
   ) => Promise<void>;
   runActionsEnabled?: boolean;
   /** The workflow's input draft, edited in the input panel. */
@@ -35,6 +40,13 @@ function canonicalJson(value: unknown): string {
         )
       : item,
   );
+}
+
+/** Input JSON and the file attachments that fill its file fields. */
+interface StartInput {
+  input?: Record<string, unknown>;
+  /** Absent when no file field has picked files. */
+  inputFiles?: InputFileAttachment[];
 }
 
 export function parseRunInput(draft: string): Record<string, unknown> {
@@ -57,7 +69,10 @@ export function RunControls({
   const [showSchedule, setShowSchedule] = useState(false);
   // One input for both Run and the cron schedule (see useInputDraft).
   const draft = inputDraft?.text ?? "{}";
-  const draftEdited = inputDraft !== undefined && inputDraft.text !== inputDraft.seed;
+  const pickedFiles = inputDraft?.files ?? {};
+  const filesPicked = Object.keys(pickedFiles).length > 0;
+  const draftEdited =
+    inputDraft !== undefined && (inputDraft.text !== inputDraft.seed || filesPicked);
   const takesInput = Boolean(workflow?.inputDeclarationJson);
   // Fields whose typed text does not parse yet; their draft value is stale.
   const invalidFields = Object.keys(inputDraft?.pending ?? {});
@@ -77,26 +92,32 @@ export function RunControls({
   const scheduleEnabled = workflow?.scheduleEnabled ?? false;
   const scheduleBusy = pending?.kind === "schedule";
 
-  /** The edited input, or undefined to keep the operator's own (defaults or stored). */
-  const editedInput = (): Record<string, unknown> | undefined =>
-    draftEdited ? parseRunInput(draft) : undefined;
+  /** The draft's input, with its picked files when it has any. */
+  const draftStart = (): StartInput =>
+    filesPicked
+      ? applyInputFiles(parseRunInput(draft), pickedFiles)
+      : { input: parseRunInput(draft) };
+
+  /** The edited input, or no input to keep the operator's own (defaults or stored). */
+  const editedInput = (): StartInput => (draftEdited ? draftStart() : {});
 
   /**
    * The input a manual run starts with. A manual run never uses the schedule's
    * stored input, so send the draft whenever it holds a value, including when it was
    * seeded from the schedule's input.
    */
-  const runInput = (): Record<string, unknown> | undefined => {
-    if (!inputDraft || !workflow) return undefined;
+  const runInput = (): StartInput => {
+    if (!inputDraft || !workflow) return {};
+    if (filesPicked) return draftStart();
     // The draft holds only set values; an empty one lets the run take every default.
     const input = parseRunInput(draft);
-    return Object.keys(input).length > 0 ? input : undefined;
+    return Object.keys(input).length > 0 ? { input } : {};
   };
 
-  const setSchedule = async (enabled: boolean, input?: Record<string, unknown>) => {
+  const setSchedule = async (enabled: boolean, start: StartInput = {}) => {
     if (!workflow || !onSetScheduleEnabled) return;
     try {
-      await onSetScheduleEnabled(workflow.workflowId, enabled, input);
+      await onSetScheduleEnabled(workflow.workflowId, enabled, start.input, start.inputFiles);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Operator rejected the change");
     }
@@ -109,14 +130,14 @@ export function RunControls({
       return;
     }
     if (refuseInvalid()) return;
-    let input: Record<string, unknown> | undefined;
+    let start: StartInput;
     try {
-      input = editedInput();
+      start = editedInput();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Run input is invalid JSON");
       return;
     }
-    void setSchedule(true, input);
+    void setSchedule(true, start);
   };
 
   // Offer to update an enabled schedule when the edited input differs from its input.
@@ -124,8 +145,9 @@ export function RunControls({
   if (scheduled && scheduleEnabled && draftEdited && workflow) {
     try {
       draftDiffersFromSchedule =
+        filesPicked ||
         canonicalJson(parseRunInput(draft)) !==
-        canonicalJson(workflowInputDraft(workflow) ?? {});
+          canonicalJson(workflowInputDraft(workflow) ?? {});
     } catch {
       draftDiffersFromSchedule = false;
     }
@@ -140,15 +162,15 @@ export function RunControls({
     if (!workflow) return;
     setError(undefined);
     if (refuseInvalid()) return;
-    let input: Record<string, unknown> | undefined;
+    let start: StartInput;
     try {
-      input = runInput();
+      start = runInput();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Run input is invalid JSON");
       return;
     }
     try {
-      await onStart(workflow.workflowId, input);
+      await onStart(workflow.workflowId, start.input, start.inputFiles);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Operator rejected the run");
     }
@@ -209,7 +231,16 @@ export function RunControls({
                   onClick={() => {
                     setError(undefined);
                     if (refuseInvalid()) return;
-                    void setSchedule(true, parseRunInput(draft));
+                    let start: StartInput;
+                    try {
+                      start = draftStart();
+                    } catch (reason) {
+                      setError(
+                        reason instanceof Error ? reason.message : "Run input is invalid JSON",
+                      );
+                      return;
+                    }
+                    void setSchedule(true, start);
                   }}
                 >
                   Use for schedule

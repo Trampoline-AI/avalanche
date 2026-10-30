@@ -30,6 +30,43 @@ export interface WorkflowInputField {
   default: FieldDefault;
   description?: string;
   schema: Schema;
+  /** Set when the field takes an `ava.File` ("single") or a `list[ava.File]` ("list"). */
+  file?: FileFieldKind;
+}
+
+export type FileFieldKind = "single" | "list";
+
+/** Whether a `$ref` names the `ava.File` model, which pins `kind` to "file". */
+function refersToFile(schema: Schema, definitions: Record<string, Schema>): boolean {
+  if (typeof schema === "boolean" || schema.$ref === undefined) return false;
+  const target = definitions[referenceName(schema.$ref)];
+  if (target === undefined || typeof target === "boolean") return false;
+  const kind = target.properties?.kind;
+  return kind !== undefined && typeof kind !== "boolean" && kind.const === "file";
+}
+
+/** How a field takes files, looking through an optional `| None`. */
+function fileFieldKind(
+  schema: Schema,
+  definitions: Record<string, Schema>,
+): FileFieldKind | undefined {
+  if (typeof schema === "boolean") return undefined;
+  if (schema.anyOf) {
+    const [kind, ...others] = schema.anyOf
+      .filter((option) => typeof option === "boolean" || option.type !== "null")
+      .map((option) => fileFieldKind(option, definitions));
+    return others.length === 0 ? kind : undefined;
+  }
+  if (refersToFile(schema, definitions)) return "single";
+  if (
+    schema.type === "array" &&
+    schema.items !== undefined &&
+    !Array.isArray(schema.items) &&
+    refersToFile(schema.items, definitions)
+  ) {
+    return "list";
+  }
+  return undefined;
 }
 
 /**
@@ -112,6 +149,7 @@ export function workflowInputFields(
       default: fieldDefault,
       description: property?.description,
       schema,
+      file: fileFieldKind(schema, jsonSchema.$defs ?? {}),
     };
   });
 }
@@ -205,4 +243,20 @@ export function inputFieldText(value: unknown, field: WorkflowInputField): strin
   if (value === undefined || value === null) return "";
   if (typeof value === "string" && acceptsString(field.schema)) return value;
   return JSON.stringify(value);
+}
+
+/** The names of the files an input value refers to, or undefined when it holds none. */
+export function inputValueFileNames(value: unknown): string[] | undefined {
+  const name = (item: unknown): string | undefined => {
+    if (!isUnknownRecord(item) || item.kind !== "file") return undefined;
+    if (typeof item.name === "string") return item.name;
+    return isUnknownRecord(item.ref) && typeof item.ref.path === "string"
+      ? item.ref.path
+      : undefined;
+  };
+  const single = name(value);
+  if (single !== undefined) return [single];
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const names = value.map(name);
+  return names.every((item) => item !== undefined) ? names : undefined;
 }
