@@ -964,3 +964,40 @@ def test_schedules_enabled_flag_reaches_the_operator(monkeypatch, tmp_path, comm
     app.main([command, str(flows), "--schedules-enabled"])
 
     assert created and created[0]["schedules_enabled"] is True
+
+
+def test_schedule_enable_requires_the_required_input(tmp_path, capsys):
+    from ava_cli import app
+    from runtime.operator import Operator
+    from runtime.operator.server import serve as serve_operator
+
+    flows = tmp_path / "flows.py"
+    flows.write_text(
+        "import avalanche as ava\n"
+        "class Report(ava.BaseInput):\n"
+        "    recipient: str\n"
+        "@ava.source\n"
+        "def address(payload: Report) -> str:\n"
+        "    return payload.recipient\n"
+        "@ava.workflow(input=Report, cron='0 0 1 1 *')\n"
+        "def nightly():\n"
+        "    return address()\n"
+    )
+    operator = Operator([str(flows)], watch=False, schedule=False, webhook_port=0)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    server = serve_operator(operator, port=port, block=False)
+    connect = ["--connect", f"127.0.0.1:{port}"]
+    try:
+        assert app.main(["schedule", "enable", "nightly", *connect]) == 1
+        assert "recipient" in capsys.readouterr().err
+        assert (
+            app.main(
+                ["schedule", "enable", "nightly", "--input", '{"recipient": "ops"}', *connect]
+            )
+            == 0
+        )
+    finally:
+        server.stop(grace=0).wait()
+        operator.close()

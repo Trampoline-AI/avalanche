@@ -1,5 +1,3 @@
-import { useState } from "react";
-
 import { parseRunInput } from "./RunControls";
 import type { InputDraft } from "./useInputDraft";
 import { acceptsString, inputFieldText, type WorkflowInputField } from "./workflowInput";
@@ -17,8 +15,7 @@ export interface InputFieldEditor {
  * typed; other fields take JSON. An empty field leaves the field out of the input.
  */
 export function useInputFieldEditor(draft: InputDraft): InputFieldEditor {
-  // Text that does not parse yet, kept per field until it does.
-  const [pending, setPending] = useState<Record<string, string>>({});
+  const { pending, setPending } = draft;
   let values: Record<string, unknown> | undefined;
   let error: string | undefined;
   try {

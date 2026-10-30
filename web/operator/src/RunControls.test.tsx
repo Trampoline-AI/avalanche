@@ -76,7 +76,8 @@ function renderControls(
 it("starts Run and the schedule with the edited input", async () => {
   const { onStart, onSetScheduleEnabled, draft, edit } = renderControls(nightly);
 
-  expect(JSON.parse(draft.current!.text)).toEqual({ region: "eu", limit: null });
+  // Defaults stay out of the draft, so the run records them as defaults.
+  expect(JSON.parse(draft.current!.text)).toEqual({});
   edit({ region: "us", limit: 10 });
   fireEvent.click(screen.getByRole("button", { name: "Run" }));
   await waitFor(() =>
@@ -113,9 +114,7 @@ it("starts a manual run with the schedule's input the panel shows", async () => 
   // Unedited, the draft holds the schedule's input, which a manual run does not inherit.
   fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
-  await waitFor(() =>
-    expect(onStart).toHaveBeenCalledWith(nightly.workflowId, { region: "eu", limit: 3 }),
-  );
+  await waitFor(() => expect(onStart).toHaveBeenCalledWith(nightly.workflowId, { limit: 3 }));
 });
 
 it("offers to update an enabled schedule when the edited input differs", async () => {
@@ -180,4 +179,40 @@ it("follows input stored elsewhere until the draft is edited", () => {
   edit({ region: "us", limit: 7 });
   rerender({ ...nightly, scheduleEnabled: true, scheduleInput: { region: "ap", limit: 6 } });
   expect(JSON.parse(draft.current!.text)).toEqual({ region: "us", limit: 7 });
+});
+
+it("refuses to start while a field holds text that is not valid JSON", async () => {
+  const { onStart, onSetScheduleEnabled, draft } = renderControls(nightly);
+
+  act(() => draft.current!.setPending((current) => ({ ...current, limit: "[4," })));
+  fireEvent.click(screen.getByRole("button", { name: "Run" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("limit");
+  fireEvent.click(screen.getByRole("switch", { name: "Run on schedule" }));
+
+  expect(onStart).not.toHaveBeenCalled();
+  expect(onSetScheduleEnabled).not.toHaveBeenCalled();
+});
+
+it("refuses Use for schedule while a field holds text that is not valid JSON", async () => {
+  const { onSetScheduleEnabled, draft, edit } = renderControls({
+    ...nightly,
+    scheduleEnabled: true,
+    scheduleInput: { limit: 3 },
+  });
+
+  edit({ region: "eu", limit: 4 });
+  act(() => draft.current!.setPending((current) => ({ ...current, region: "[" })));
+  fireEvent.click(screen.getByRole("button", { name: "Use for schedule" }));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("region");
+  expect(onSetScheduleEnabled).not.toHaveBeenCalled();
+});
+
+it("drops invalid typed text when the draft is replaced", () => {
+  const { draft, rerender } = renderControls(nightly);
+
+  act(() => draft.current!.setPending((current) => ({ ...current, limit: "[4," })));
+  rerender({ ...nightly, workflowId: "other.py::other" });
+
+  expect(draft.current!.pending).toEqual({});
 });

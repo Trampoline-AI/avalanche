@@ -124,10 +124,13 @@ uv run ava schedule disable flows.py::nightly
 ```
 
 When the workflow declares an input model, enabling its schedule sets the input each
-cron run starts with. In the Web UI, the run controls' JSON input is prefilled with
-the field defaults (a required field without one starts as `null`); Run uses it, and
-turning on the **Run on schedule** switch saves it for cron runs. The TUI opens its
-input form prefilled the same way; the CLI and REST API take it explicitly:
+cron run starts with. In the Web UI, click the workflow's **inputs** dot to open the
+input panel. It starts empty, or with the schedule's stored input, and shows each
+field's default as placeholder text; only the values you set are sent. Run uses
+them, and turning on the **Run on schedule** switch saves them for cron runs.
+Starting a run or turning the schedule on is refused while a required field has no
+value. The TUI opens its input form prefilled with the defaults; the CLI and REST
+API take the input explicitly:
 
 ```bash
 uv run ava schedule enable flows.py::nightly --input '{"region": "eu"}'

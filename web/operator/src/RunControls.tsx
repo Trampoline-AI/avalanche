@@ -59,6 +59,13 @@ export function RunControls({
   const draft = inputDraft?.text ?? "{}";
   const draftEdited = inputDraft !== undefined && inputDraft.text !== inputDraft.seed;
   const takesInput = Boolean(workflow?.inputDeclarationJson);
+  // Fields whose typed text does not parse yet; their draft value is stale.
+  const invalidFields = Object.keys(inputDraft?.pending ?? {});
+  const refuseInvalid = (): boolean => {
+    if (invalidFields.length === 0) return false;
+    setError(`Fix the input before starting: ${invalidFields.join(", ")} is not valid JSON`);
+    return true;
+  };
   const [error, setError] = useState<string>();
   const workflowId = workflow?.workflowId;
   useLayoutEffect(() => {
@@ -76,14 +83,14 @@ export function RunControls({
 
   /**
    * The input a manual run starts with. A manual run never uses the schedule's
-   * stored input, so send the draft whenever it differs from the declared defaults,
-   * including when it was seeded from the schedule's input.
+   * stored input, so send the draft whenever it holds a value, including when it was
+   * seeded from the schedule's input.
    */
   const runInput = (): Record<string, unknown> | undefined => {
     if (!inputDraft || !workflow) return undefined;
+    // The draft holds only set values; an empty one lets the run take every default.
     const input = parseRunInput(draft);
-    const defaults = workflowInputDraft({ ...workflow, scheduleInput: undefined }) ?? {};
-    return canonicalJson(input) === canonicalJson(defaults) ? undefined : input;
+    return Object.keys(input).length > 0 ? input : undefined;
   };
 
   const setSchedule = async (enabled: boolean, input?: Record<string, unknown>) => {
@@ -101,6 +108,7 @@ export function RunControls({
       void setSchedule(false);
       return;
     }
+    if (refuseInvalid()) return;
     let input: Record<string, unknown> | undefined;
     try {
       input = editedInput();
@@ -131,6 +139,7 @@ export function RunControls({
   const start = async () => {
     if (!workflow) return;
     setError(undefined);
+    if (refuseInvalid()) return;
     let input: Record<string, unknown> | undefined;
     try {
       input = runInput();
@@ -199,6 +208,7 @@ export function RunControls({
                   disabled={scheduleBusy}
                   onClick={() => {
                     setError(undefined);
+                    if (refuseInvalid()) return;
                     void setSchedule(true, parseRunInput(draft));
                   }}
                 >

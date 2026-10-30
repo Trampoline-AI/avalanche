@@ -165,9 +165,9 @@ export function scheduledInputNote(workflow: FlowInfoMsg): string | undefined {
 
 /**
  * Starting input for a workflow's runs, or undefined when the workflow declares
- * no input fields. The input its schedule already runs with wins; other fields
- * take their declared default, and required fields without one are left as null
- * for the operator to fill in.
+ * no input fields. It holds only values someone set (the schedule's stored input),
+ * never schema defaults: those don't always validate back as supplied values (a
+ * `None` default, a masked secret), and the run should record them as defaults.
  */
 export function workflowInputDraft(workflow: FlowInfoMsg): Record<string, unknown> | undefined {
   if (!workflow.inputSchemaJson) return undefined;
@@ -175,13 +175,20 @@ export function workflowInputDraft(workflow: FlowInfoMsg): Record<string, unknow
   if (!isUnknownRecord(schema)) throw new Error("Workflow input schema must be a JSON object");
   const properties = schema.properties;
   if (!isUnknownRecord(properties) || Object.keys(properties).length === 0) return undefined;
-  const required = Array.isArray(schema.required) ? schema.required : [];
-  const draft: Record<string, unknown> = {};
-  for (const [name, field] of Object.entries(properties)) {
-    if (isUnknownRecord(field) && "default" in field) draft[name] = field.default;
-    else if (required.includes(name)) draft[name] = null;
-  }
-  return { ...draft, ...workflow.scheduleInput };
+  return { ...workflow.scheduleInput };
+}
+
+/** Placeholder for a field whose default is computed when each run starts. */
+export const COMPUTED_DEFAULT_PLACEHOLDER = "computed per run";
+
+/** What a field's empty box shows: its default, so the value it falls back to is visible. */
+export function defaultPlaceholder(field: WorkflowInputField): string {
+  if (field.default.kind === "computed") return COMPUTED_DEFAULT_PLACEHOLDER;
+  if (field.default.kind === "required") return "";
+  const value = field.default.value;
+  return typeof value === "string" && acceptsString(field.schema)
+    ? value
+    : JSON.stringify(value);
 }
 
 /** Whether a field takes text, so the popup can store what is typed as a plain string. */

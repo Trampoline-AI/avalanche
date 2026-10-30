@@ -463,6 +463,34 @@ def test_a_run_without_its_required_input_is_refused_before_it_starts(operator, 
     assert operator.list_runs(selector) == []
 
 
+@pytest.mark.parametrize("trigger", [TriggerKind.SCHEDULED, TriggerKind.WEBHOOK])
+def test_cron_and_webhook_runs_without_required_input_still_start_and_fail(operator, trigger):
+    selector = _flow(operator, "greeting").selector
+
+    run_id = operator.start_run(selector, trigger, run_id="unattended", input={})
+
+    assert _wait_terminal(operator, run_id).status is RunStatus.FAILED
+
+
+def test_rest_refuses_runs_and_schedules_without_required_input(served):
+    operator, browser, _ = served
+    selector = _flow(operator, "greeting").selector
+
+    enable_status, enable_error = _rest(
+        browser, "POST", _flow_path(selector), {"enabled": True}
+    )
+    start_status, start_error = _rest(
+        browser,
+        "POST",
+        "/api/v1/runs",
+        {"workflow_selector": selector, "run_id": "missing", "input_json": {}},
+    )
+
+    assert (enable_status, start_status) == (400, 400)
+    assert enable_error["error"]["code"] == start_error["error"]["code"] == "INVALID_ARGUMENT"
+    assert operator.list_runs(selector) == []
+
+
 def test_grpc_refuses_runs_and_schedules_without_required_input(operator, provider):
     selector = _flow(operator, "greeting").selector
 
@@ -475,17 +503,33 @@ def test_grpc_refuses_runs_and_schedules_without_required_input(operator, provid
     assert enable.value.status is grpc.StatusCode.INVALID_ARGUMENT
 
 
-def test_null_counts_as_missing_only_when_the_field_rejects_null():
+@pytest.mark.parametrize(
+    ("field", "rejects_null"),
+    [
+        ({"type": "string"}, True),
+        ({"type": ["integer", "null"]}, False),
+        ({"anyOf": [{"type": "string"}, {"type": "null"}]}, False),
+        ({"oneOf": [{"type": "string"}, {"type": "integer"}]}, True),
+        ({"enum": ["a", "b"]}, True),
+        ({"const": None}, False),
+        # Any / JsonValue: no constraint, so null is allowed.
+        ({}, False),
+        ({"$ref": "#/$defs/Region"}, True),
+        ({"$ref": "#/$defs/Anything"}, False),
+        ({"allOf": [{"$ref": "#/$defs/Region"}]}, True),
+    ],
+)
+def test_null_counts_as_missing_only_when_the_field_rejects_null(field, rejects_null):
     schema = json.dumps(
         {
-            "properties": {
-                "name": {"type": "string"},
-                "note": {"anyOf": [{"type": "string"}, {"type": "null"}]},
-            },
-            "required": ["name", "note"],
+            "properties": {"value": field},
+            "required": ["value"],
+            "$defs": {"Region": {"enum": ["eu", "us"]}, "Anything": {}},
         }
     )
 
-    assert missing_required_input(schema, {"name": None, "note": None}) == ("name",)
-    assert missing_required_input(schema, None) == ("name", "note")
+    assert missing_required_input(schema, {"value": None}) == (
+        ("value",) if rejects_null else ()
+    )
+    assert missing_required_input(schema, None) == ("value",)
     assert missing_required_input("", None) == ()
