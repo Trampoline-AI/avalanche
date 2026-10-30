@@ -103,6 +103,21 @@ it("leaves the input to the operator while it is unedited", async () => {
   );
 });
 
+it("starts a manual run with the schedule's input the panel shows", async () => {
+  const { onStart } = renderControls({
+    ...nightly,
+    scheduleEnabled: true,
+    scheduleInput: { limit: 3 },
+  });
+
+  // Unedited, the draft holds the schedule's input, which a manual run does not inherit.
+  fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+  await waitFor(() =>
+    expect(onStart).toHaveBeenCalledWith(nightly.workflowId, { region: "eu", limit: 3 }),
+  );
+});
+
 it("offers to update an enabled schedule when the edited input differs", async () => {
   const { onSetScheduleEnabled, edit } = renderControls({
     ...nightly,

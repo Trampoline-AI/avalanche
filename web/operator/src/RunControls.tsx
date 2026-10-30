@@ -74,6 +74,18 @@ export function RunControls({
   const editedInput = (): Record<string, unknown> | undefined =>
     draftEdited ? parseRunInput(draft) : undefined;
 
+  /**
+   * The input a manual run starts with. A manual run never uses the schedule's
+   * stored input, so send the draft whenever it differs from the declared defaults,
+   * including when it was seeded from the schedule's input.
+   */
+  const runInput = (): Record<string, unknown> | undefined => {
+    if (!inputDraft || !workflow) return undefined;
+    const input = parseRunInput(draft);
+    const defaults = workflowInputDraft({ ...workflow, scheduleInput: undefined }) ?? {};
+    return canonicalJson(input) === canonicalJson(defaults) ? undefined : input;
+  };
+
   const setSchedule = async (enabled: boolean, input?: Record<string, unknown>) => {
     if (!workflow || !onSetScheduleEnabled) return;
     try {
@@ -121,7 +133,7 @@ export function RunControls({
     setError(undefined);
     let input: Record<string, unknown> | undefined;
     try {
-      input = editedInput();
+      input = runInput();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Run input is invalid JSON");
       return;
