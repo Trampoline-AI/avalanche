@@ -183,3 +183,19 @@ export function workflowInputDraft(workflow: FlowInfoMsg): Record<string, unknow
   }
   return { ...draft, ...workflow.scheduleInput };
 }
+
+/** Whether a field takes text, so the popup can store what is typed as a plain string. */
+export function acceptsString(schema: Schema): boolean {
+  if (typeof schema === "boolean") return schema;
+  if (schema.enum) return schema.enum.every((item) => typeof item === "string");
+  if (schema.anyOf) return schema.anyOf.some(acceptsString);
+  if (Array.isArray(schema.type)) return schema.type.includes("string");
+  return schema.type === "string";
+}
+
+/** How a draft value shows in the popup: text as typed, anything else as JSON, null as empty. */
+export function inputFieldText(value: unknown, field: WorkflowInputField): string {
+  if (value === undefined || value === null) return "";
+  if (typeof value === "string" && acceptsString(field.schema)) return value;
+  return JSON.stringify(value);
+}
