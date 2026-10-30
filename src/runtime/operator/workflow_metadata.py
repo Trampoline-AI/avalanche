@@ -24,6 +24,10 @@ class WorkflowInputDeclaration(BaseModel):
     consumer_node_ids: list[str]
 
 
+# Run input has no size limit of its own; larger values are run but not displayed.
+MAX_PREPARED_INPUT_LENGTH = 1024 * 1024
+
+
 class PreparedRunInput(BaseModel):
     """The validated values a run starts with and the fields its caller supplied."""
 
@@ -33,17 +37,21 @@ class PreparedRunInput(BaseModel):
     supplied_fields: list[str]
 
 
-def _receives_run_input(future: NodeFuture) -> bool:
+def _receives_run_input(future: NodeFuture, input_type: type[BaseInput]) -> bool:
     if any(isinstance(value, InputRef) for value in (*future.args, *future.kwargs.values())):
         return True
+    # Step decorators publish a signature whose postponed annotations are resolved.
     for name, parameter in inspect.signature(future.node.fn).parameters.items():
         annotation = parameter.annotation
         if get_origin(annotation) is Annotated:
             annotation = get_args(annotation)[0]
+        # The runtime injects into parameters not passed by keyword whose annotation
+        # the run input is an instance of.
         if (
             name not in future.kwargs
             and isinstance(annotation, type)
             and issubclass(annotation, BaseInput)
+            and issubclass(input_type, annotation)
         ):
             return True
     return False
@@ -55,9 +63,11 @@ def input_declaration_for_workflow(workflow: Workflow, node_ids: list[str]) -> s
         return ""
     return WorkflowInputDeclaration(
         type_name=workflow.input_type.__name__,
-        json_schema=workflow.input_type.model_json_schema(),
+        json_schema=workflow.input_type.model_json_schema(by_alias=False),
         consumer_node_ids=[
-            node_id for node_id in node_ids if _receives_run_input(workflow.nodes[node_id])
+            node_id
+            for node_id in node_ids
+            if _receives_run_input(workflow.nodes[node_id], workflow.input_type)
         ],
     ).model_dump_json()
 

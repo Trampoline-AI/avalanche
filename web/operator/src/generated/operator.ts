@@ -711,6 +711,8 @@ export interface RunSummaryV2 {
      */
     revision: string;
     /**
+     * One of "manual", "scheduled", or "webhook".
+     *
      * @generated from protobuf field: string triggered_by = 9
      */
     triggeredBy: string;

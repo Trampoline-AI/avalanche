@@ -1,7 +1,7 @@
 import { GrpcWebFetchTransport } from "@protobuf-ts/grpcweb-transport";
 
 import { AgentEventKindV2, AgentTraceStatusV2, PageOrderV2 } from "./generated/operator";
-import { DescriptorPageOrder } from "./model";
+import { DescriptorPageOrder, parseRunTrigger } from "./model";
 import { mapEvaluationRecord, type EvaluationRecord } from "./evaluations";
 import { parseTraceHeaderNative } from "./agentTrace/common";
 
@@ -1222,7 +1222,7 @@ function mapRunSummary(summary: RunSummaryV2): RunSummaryMsg {
     status: summary.status,
     startedAt: summary.startedAt,
     endedAt: summary.endedAt,
-    triggeredBy: summary.triggeredBy,
+    triggeredBy: parseRunTrigger(summary.triggeredBy),
     workflowId: summary.workflowSelector,
     workflowDisplayName: summary.workflowDisplayName,
     createdSequence: summary.createdSequence,

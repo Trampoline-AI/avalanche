@@ -256,6 +256,16 @@ export const CatalogSnapshotMsg = {
   },
 };
 
+export const RUN_TRIGGERS = ["manual", "scheduled", "webhook"] as const;
+export type RunTrigger = (typeof RUN_TRIGGERS)[number];
+
+/** Validate a run's trigger at the transport boundary; unknown triggers throw. */
+export function parseRunTrigger(value: string): RunTrigger {
+  const trigger = RUN_TRIGGERS.find((item) => item === value);
+  if (trigger === undefined) throw new Error(`Unknown run trigger ${JSON.stringify(value)}`);
+  return trigger;
+}
+
 export interface RunSummaryMsg {
   /**
    * @generated from protobuf field: string run_id = 1
@@ -277,10 +287,8 @@ export interface RunSummaryMsg {
    * @generated from protobuf field: double ended_at = 5
    */
   endedAt: number;
-  /**
-   * @generated from protobuf field: string triggered_by = 6
-   */
-  triggeredBy: string;
+  /** How the run started. */
+  triggeredBy: RunTrigger;
   /**
    * @generated from protobuf field: string workflow_id = 7
    */
@@ -311,7 +319,7 @@ export const RunSummaryMsg = {
       status: "",
       startedAt: 0,
       endedAt: 0,
-      triggeredBy: "",
+      triggeredBy: "manual",
       workflowId: "",
       workflowDisplayName: "",
       createdSequence: "0",

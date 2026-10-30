@@ -37,7 +37,13 @@ import {
   type NodeProps,
 } from "@xyflow/react";
 
-import type { FlowInfoMsg, NodeSnapshotMsg, RunInputMsg, WorkflowTopologyMsg } from "./model";
+import type {
+  FlowInfoMsg,
+  NodeSnapshotMsg,
+  RunInputMsg,
+  RunTrigger,
+  WorkflowTopologyMsg,
+} from "./model";
 import {
   AgentDeclaration as AgentDeclarationSchema,
   type FieldDeclaration,
@@ -60,6 +66,8 @@ import {
   runInputFields,
   runTriggerLabel,
   workflowInputFields,
+  type FieldDefault,
+  type RunValueSource,
 } from "./workflowInput";
 
 interface FieldMetadata {
@@ -123,14 +131,26 @@ interface CardData extends Record<string, unknown> {
 interface InputRow {
   name: string;
   value: string;
-  /** Marks a value taken from its default, or a field with no default. */
-  tag?: "default" | "required";
+  /** A run value's origin, or for a definition how the field gets its default. */
+  source: RunValueSource | FieldDefault["kind"];
 }
+
+const INPUT_ROW_TAGS: Record<InputRow["source"], string> = {
+  supplied: "",
+  default: "default",
+  unrecorded: "not recorded",
+  required: "required",
+  value: "",
+  computed: "computed",
+};
 
 interface InputCardData extends Record<string, unknown> {
   typeName?: string;
   rows: InputRow[];
-  note?: string;
+  trigger?: RunTrigger;
+  cron?: string;
+  /** A run whose values were too large or not serializable to report. */
+  valuesUnavailable?: boolean;
   error?: string;
   onOpen: () => void;
   inspectionDisabled?: boolean;
@@ -567,21 +587,34 @@ const WorkflowInputCard = memo(({ data, selected }: NodeProps<Node<InputCardData
         >
           {data.typeName ?? "Run input"}
         </strong>
-        {data.note && (
-          <span className="node-card-meta node-input-note min-w-0 self-stretch font-mono text-[9px] leading-[1.35] text-secondary">
-            {data.note}
+        {(data.trigger || data.cron) && (
+          <span
+            className="node-card-meta node-input-note min-w-0 self-stretch font-mono text-[9px] leading-[1.35] text-secondary"
+            data-run-trigger={data.trigger}
+            data-cron={data.cron}
+          >
+            {data.trigger
+              ? runTriggerLabel(data.trigger)
+              : `Scheduled runs (${data.cron}) use these defaults`}
           </span>
         )}
       </header>
       {data.error ? (
         <p className="node-card-details m-0 text-[9px] text-danger">{data.error}</p>
+      ) : data.valuesUnavailable ? (
+        <p
+          className="node-card-details m-0 text-[9px] text-muted"
+          data-run-values="unavailable"
+        >
+          This run's input values are unavailable.
+        </p>
       ) : (
         <dl
           className={`node-card-details node-input-fields m-0 grid grid-cols-[minmax(0,auto)_minmax(0,1fr)_auto] items-baseline gap-x-2 gap-y-[3px] overflow-hidden font-mono text-[8px]/[1.35] ${isCompact ? "" : "border-t border-line pt-2.5"}`}
           aria-label="Input fields"
         >
           {data.rows.slice(0, INPUT_CARD_ROW_LIMIT).map((row) => (
-            <div key={row.name} className="contents">
+            <div key={row.name} className="contents" data-value-source={row.source}>
               <dt className="truncate text-field-ink" title={row.name}>
                 {row.name}
               </dt>
@@ -589,7 +622,7 @@ const WorkflowInputCard = memo(({ data, selected }: NodeProps<Node<InputCardData
                 {row.value}
               </dd>
               <dd className="m-0 text-[7px] tracking-[.08em] text-muted uppercase">
-                {row.tag ?? ""}
+                {INPUT_ROW_TAGS[row.source]}
               </dd>
             </div>
           ))}
@@ -681,7 +714,7 @@ interface GraphCanvasProps {
   /** The values the displayed run started with. */
   runInput?: RunInputMsg;
   /** How the displayed run started, such as "manual" or "scheduled". */
-  runTriggeredBy?: string;
+  runTriggeredBy?: RunTrigger;
   evaluations?: Record<string, EvaluationRecord>;
   bottomRightPanel?: ReactNode;
   selectedNodeId?: string;
@@ -741,8 +774,9 @@ function GraphCanvasView({
         ? {
             ...topology.graph,
             [INPUT_NODE_ID]: {
+              // The catalog graph has keys only for parents, so check the node list.
               children: (inputDeclaration.declaration?.consumerNodeIds ?? []).filter((nodeId) =>
-                Object.hasOwn(topology.graph, nodeId),
+                topology.nodeIds.includes(nodeId),
               ),
             },
           }
@@ -902,20 +936,32 @@ function GraphCanvasView({
     const onOpen = () => onOpenNode(INPUT_NODE_ID);
     const { declaration, error } = inputDeclaration;
     if (!declaration) return { rows: [], error, onOpen, inspectionDisabled };
+    const trigger = runTopology ? runTriggeredBy : undefined;
+    if (runTopology && !runInput) {
+      return {
+        typeName: declaration.typeName,
+        rows: [],
+        trigger,
+        valuesUnavailable: true,
+        onOpen,
+        inspectionDisabled,
+      };
+    }
     let rows: InputRow[];
     try {
       rows = runInput
         ? runInputFields(declaration, runInput).map((field) => ({
             name: field.name,
-            value: formatInputValue(field.value),
-            tag: field.supplied ? undefined : "default",
+            value: field.value === undefined ? "" : formatInputValue(field.value),
+            source: field.source,
           }))
         : workflowInputFields(declaration).map((field) => ({
             name: field.name,
-            value: field.required
-              ? field.typeLabel
-              : `${field.typeLabel} = ${formatInputValue(field.defaultValue)}`,
-            tag: field.required ? "required" : undefined,
+            value:
+              field.default.kind === "value"
+                ? `${field.typeLabel} = ${formatInputValue(field.default.value)}`
+                : field.typeLabel,
+            source: field.default.kind,
           }));
     } catch {
       return {
@@ -926,14 +972,14 @@ function GraphCanvasView({
         inspectionDisabled,
       };
     }
-    const note = runTopology
-      ? runTriggeredBy
-        ? runTriggerLabel(runTriggeredBy)
-        : undefined
-      : cron
-        ? `Scheduled runs (${cron}) use these defaults`
-        : undefined;
-    return { typeName: declaration.typeName, rows, note, onOpen, inspectionDisabled };
+    return {
+      typeName: declaration.typeName,
+      rows,
+      trigger,
+      cron: runTopology ? undefined : cron || undefined,
+      onOpen,
+      inspectionDisabled,
+    };
   }, [
     cron,
     hasInputNode,

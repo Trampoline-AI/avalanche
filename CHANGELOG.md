@@ -20,6 +20,12 @@
   and publishes the validated values on the run snapshot. A run with invalid input
   now fails while it is being prepared, before any step is shown, rather than when
   execution starts.
+  Input values larger than 1 MiB once serialized, or that cannot be serialized, still
+  run, but the UI says their values are unavailable. Fields excluded from serialization, such as
+  `Field(exclude=True)` secrets, are shown as not recorded.
+- Embedding hosts: `RunSummaryMsg.triggeredBy` is now the `RunTrigger` type
+  (`"manual" | "scheduled" | "webhook"`), and the browser client rejects a run summary
+  with any other trigger.
 
 ## 0.16.0
 

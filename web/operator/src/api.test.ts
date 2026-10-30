@@ -95,7 +95,7 @@ const classifierContinuation = ContinuationRefV2.create({
 const classifierSnapshot = RunSnapshotV2.create({
   scopeRef,
   cursor: cursor(),
-  summary: { runId: "run-1" },
+  summary: { runId: "run-1", triggeredBy: "manual" },
   nodes: [{ nodeId: "classify", activityContinuation: classifierContinuation }],
   topology: {
     nodeIds: ["classify"],
@@ -164,6 +164,7 @@ describe("operator transport boundary", () => {
               RunSummaryV2.create({
                 runId: request.continuation ? "run-2" : "run-1",
                 workflowSelector: "flows.py::orders",
+                triggeredBy: "manual",
               }),
             ],
             nextPage: request.continuation ? undefined : continuation,
@@ -225,7 +226,7 @@ describe("operator transport boundary", () => {
           RunSnapshotV2.create({
             scopeRef,
             cursor: cursor(),
-            summary: RunSummaryV2.create({ runId: "run-1" }),
+            summary: RunSummaryV2.create({ runId: "run-1", triggeredBy: "manual" }),
             logContinuation: page,
           }),
         ),
@@ -259,6 +260,21 @@ describe("operator transport boundary", () => {
     );
   });
 
+  it("rejects a run summary with an unknown trigger", async () => {
+    const api = apiWith({
+      getRunSnapshot: () => ({
+        response: Promise.resolve(
+          RunSnapshotV2.create({
+            scopeRef,
+            cursor: cursor(),
+            summary: RunSummaryV2.create({ runId: "run-1", triggeredBy: "carrier-pigeon" }),
+          }),
+        ),
+      }),
+    });
+    await expect(api.getLatestRunSnapshot("run-1", "operator-1")).rejects.toThrow(/trigger/i);
+  });
+
   it("maps the run input and the input declaration pinned to the run", async () => {
     const inputDeclarationJson = JSON.stringify({
       type_name: "ReviewInput",
@@ -271,7 +287,7 @@ describe("operator transport boundary", () => {
           RunSnapshotV2.create({
             scopeRef,
             cursor: cursor(),
-            summary: RunSummaryV2.create({ runId: "run-1" }),
+            summary: RunSummaryV2.create({ runId: "run-1", triggeredBy: "manual" }),
             topology: { inputDeclarationJson },
             input: { valuesJson: '{"limit":3}', suppliedFields: [] },
           }),
@@ -341,7 +357,7 @@ describe("operator transport boundary", () => {
           RunSnapshotV2.create({
             scopeRef,
             cursor: cursor(),
-            summary: RunSummaryV2.create({ runId: "run-1" }),
+            summary: RunSummaryV2.create({ runId: "run-1", triggeredBy: "manual" }),
             nodes: Object.keys(bodies).map((key) =>
               NodeSnapshotV2.create({
                 nodeId: key,
@@ -400,7 +416,7 @@ describe("operator transport boundary", () => {
           RunSnapshotV2.create({
             scopeRef,
             cursor: cursor(),
-            summary: RunSummaryV2.create({ runId: "run-1" }),
+            summary: RunSummaryV2.create({ runId: "run-1", triggeredBy: "manual" }),
             nodes: [
               NodeSnapshotV2.create({
                 nodeId: "agent",

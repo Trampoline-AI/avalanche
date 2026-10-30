@@ -272,6 +272,7 @@ message RunSummaryV2 {
   double ended_at = 6;
   uint64 created_sequence = 7;
   uint64 revision = 8;
+  // One of "manual", "scheduled", or "webhook".
   string triggered_by = 9;
   double triggered_at = 10;
 }

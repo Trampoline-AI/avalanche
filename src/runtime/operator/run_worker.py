@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from uuid import uuid4
 
+from pydantic_core import PydanticSerializationError
+
 from avalanche._agent_evidence import (
     AgentEvidenceObserverEvent,
     capture_agent_evidence,
@@ -46,6 +48,7 @@ from .result_store import (
 )
 from .results import encode_workflow_result
 from .workflow_metadata import (
+    MAX_PREPARED_INPUT_LENGTH,
     PreparedRunInput,
     input_declaration_for_workflow,
     node_docstring_lines_for_workflow,
@@ -161,18 +164,21 @@ def _run_worker(
         workflow = builder()
         if not isinstance(workflow, Workflow):
             raise TypeError("Marked builder did not return a Workflow")
-        run_input: BaseInput | dict[str, Any] | None = input_value
-        prepared_input: dict[str, Any] | None = None
+        validated_input: BaseInput | None = None
+        prepared_input: PreparedRunInput | None = None
         if workflow.input_type is not None:
             # Validate once here so the run executes exactly the values it reports.
-            run_input = workflow.input_type.model_validate(input_value or {})
-            prepared_input = PreparedRunInput(
-                values_json=run_input.model_dump_json(),
-                supplied_fields=sorted(run_input.model_fields_set),
-            ).model_dump()
+            validated_input = workflow.input_type.model_validate(
+                {} if input_value is None else input_value
+            )
+            prepared_input = _display_copy(validated_input)
         _put_preparation_event(
             event_queue,
-            {"type": "prepared", **_workflow_metadata(workflow), "input": prepared_input},
+            {
+                "type": "prepared",
+                **_workflow_metadata(workflow),
+                "input": None if prepared_input is None else prepared_input.model_dump(),
+            },
         )
     except BaseException as exc:
         _put_preparation_event(
@@ -263,7 +269,7 @@ def _run_worker(
         result = workflow.run(
             executor=executor,
             hooks=hooks,
-            input=run_input,
+            input=input_value if validated_input is None else validated_input,
             context=context_value,
             run_id=run_id,
         ).result()
@@ -370,6 +376,21 @@ def _import_workflow_module(root: Path, relative_file: str):
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _display_copy(validated_input: BaseInput) -> PreparedRunInput | None:
+    """Report the run's input values; values that cannot be shown never block the run."""
+    try:
+        # Field names, not aliases, key both the values and the declared schema.
+        values_json = validated_input.model_dump_json(by_alias=False)
+    except PydanticSerializationError:
+        return None
+    if len(values_json) > MAX_PREPARED_INPUT_LENGTH:
+        return None
+    return PreparedRunInput(
+        values_json=values_json,
+        supplied_fields=sorted(validated_input.model_fields_set),
+    )
 
 
 def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
