@@ -16,7 +16,6 @@ import {
   scheduledInputNote,
   workflowInputFields,
   type RunInputField,
-  type RunValueSource,
   type WorkflowInputField,
 } from "./workflowInput";
 
@@ -38,12 +37,6 @@ type InspectedInput =
       values?: RunInputField[];
     }
   | { error: string };
-
-const VALUE_SOURCE_LABELS: Record<RunValueSource, string> = {
-  supplied: "Supplied",
-  default: "Default",
-  unrecorded: "Not recorded",
-};
 
 function FieldDefaultLabel({ field }: { field: WorkflowInputField }) {
   const fieldDefault = field.default;
@@ -150,18 +143,19 @@ export function WorkflowInputInspector({
                     >
                       <div className="flex items-baseline gap-2">
                         <strong className="font-semibold">{field.name}</strong>
-                        <span
-                          className={`ml-auto shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] uppercase ${field.source === "supplied" ? "bg-acid/10 text-acid" : "bg-canvas text-muted"}`}
-                        >
-                          {VALUE_SOURCE_LABELS[field.source]}
-                        </span>
+                        {field.source === "default" && (
+                          <span className="text-[10px] text-muted italic">default</span>
+                        )}
                       </div>
                       {field.source === "unrecorded" ? (
                         <p className="m-0 text-muted">
                           Excluded from serialization, so the run did not record it.
                         </p>
                       ) : (
-                        <ValueView value={field.value} jsonOnly />
+                        // A value the run took from its default reads quieter than one supplied.
+                        <div className={field.source === "default" ? "opacity-55" : undefined}>
+                          <ValueView value={field.value} jsonOnly />
+                        </div>
                       )}
                     </li>
                   ))}
@@ -173,18 +167,23 @@ export function WorkflowInputInspector({
                 Input values are unavailable for this run.
               </p>
             )}
-            <section aria-label="Input fields" className="min-w-0">
-              <h3 className="inspector-section-title">Fields</h3>
-              {inputDraft && !run ? (
-                <EditableFieldList fields={inspected.fields} draft={inputDraft} />
-              ) : (
-                <FieldList fields={inspected.fields} />
-              )}
-            </section>
-            <section aria-label="Input schema" className="min-w-0">
-              <h3 className="inspector-section-title">Schema</h3>
-              <DeclaredSchema label={inspected.typeName} schema={inspected.jsonSchema} />
-            </section>
+            {/* Fields and schema describe the definition; a run shows only its values. */}
+            {!run && (
+              <>
+                <section aria-label="Input fields" className="min-w-0">
+                  <h3 className="inspector-section-title">Fields</h3>
+                  {inputDraft && !run ? (
+                    <EditableFieldList fields={inspected.fields} draft={inputDraft} />
+                  ) : (
+                    <FieldList fields={inspected.fields} />
+                  )}
+                </section>
+                <section aria-label="Input schema" className="min-w-0">
+                  <h3 className="inspector-section-title">Schema</h3>
+                  <DeclaredSchema label={inspected.typeName} schema={inspected.jsonSchema} />
+                </section>
+              </>
+            )}
           </>
         )}
       </div>

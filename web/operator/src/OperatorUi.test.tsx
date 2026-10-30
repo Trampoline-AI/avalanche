@@ -2232,6 +2232,9 @@ describe("workflow input node", () => {
 
     expect(values.limit.source).toBe("supplied");
     expect(values.post_reviews.source).toBe("default");
+    // A run shows only its values; fields and schema belong to the definition.
+    expect(screen.queryByRole("region", { name: "Input fields" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Input schema" })).toBeNull();
     expect(
       screen.getByRole("complementary").querySelector("[data-run-trigger]"),
     ).toHaveAttribute("data-run-trigger", "webhook");
