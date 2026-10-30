@@ -452,8 +452,6 @@ export function WorkflowWorkspaceSurface({
                     runTopology={previewWorkflow ? undefined : run?.topology}
                     runNodes={requestingRun ? undefined : run?.nodes}
                     runTriggeredBy={previewWorkflow ? undefined : run?.summary?.triggeredBy}
-                    runInput={previewWorkflow ? undefined : run?.input}
-                    inputDraft={!historical && runActionsEnabled ? inputDraft : undefined}
                     inspectionDisabled={requestingRun}
                     evaluations={evaluationState.records}
                     selectedNodeId={inspectedNode}
@@ -566,6 +564,7 @@ export function WorkflowWorkspaceSurface({
                     ? openCurrentDefinition
                     : undefined
                 }
+                inputDraft={!historical && runActionsEnabled ? inputDraft : undefined}
               />
             </div>
           </>

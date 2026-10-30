@@ -2115,7 +2115,7 @@ describe("workflow input node", () => {
     expect(screen.queryByRole("button", { name: /workflow input/i })).toBeNull();
   });
 
-  it("opens the declared fields over the dot, with defaults and nothing otherwise", () => {
+  it("opens the input panel from the definition's input dot", () => {
     const open = vi.fn();
     render(<GraphCanvas workflow={declared} onOpenNode={open} />);
     const dot = inputDot();
@@ -2124,28 +2124,37 @@ describe("workflow input node", () => {
     expect(dot).toHaveAttribute("data-cron", declared.cron);
     expect(dot).not.toHaveAttribute("data-run-trigger");
     fireEvent.click(inspectInput());
-    const dialog = screen.getByRole("dialog", { name: /workflow input/i });
-    expect(
-      within(dialog)
-        .getAllByRole("textbox")
-        .map((box) => (box as HTMLInputElement).value),
-    ).toEqual(["", "false", "3"]);
-    // No sidebar: the popup is the only view of the input.
-    expect(open).not.toHaveBeenCalled();
-    fireEvent.keyDown(document, { key: "Escape" });
-    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(open).toHaveBeenCalledWith("ava:input");
   });
 
-  it("edits the shared input draft from the popup", () => {
+  it("marks how a run started on its input dot", () => {
+    render(
+      <GraphCanvas runTopology={runTopology} runTriggeredBy="scheduled" onOpenNode={vi.fn()} />,
+    );
+    const dot = inputDot();
+
+    expect(dot).toHaveAttribute("data-run-trigger", "scheduled");
+    expect(dot).not.toHaveAttribute("data-cron");
+  });
+
+  it("edits the shared input draft from the input panel", () => {
     const drafts: string[] = [];
     function Harness() {
       const inputDraft = useInputDraft(declared);
       drafts.push(inputDraft.text);
-      return <GraphCanvas workflow={declared} inputDraft={inputDraft} onOpenNode={vi.fn()} />;
+      return (
+        <Inspector
+          api={createApi()}
+          workflow={declared}
+          nodeId="ava:input"
+          inputDraft={inputDraft}
+          onClose={vi.fn()}
+        />
+      );
     }
     render(<Harness />);
-    fireEvent.click(inspectInput());
-    const [repository, , limit] = within(screen.getByRole("dialog")).getAllByRole("textbox");
+    const repository = screen.getByRole("textbox", { name: "repository value" });
+    const limit = screen.getByRole("textbox", { name: "limit value" });
     const draft = () => JSON.parse(drafts.at(-1)!);
 
     fireEvent.change(repository, { target: { value: "acme/web" } });
@@ -2158,34 +2167,6 @@ describe("workflow input node", () => {
 
     fireEvent.change(limit, { target: { value: "" } });
     expect(draft()).toEqual({ repository: "acme/web" });
-  });
-
-  it("shows the values a run used and where each came from", () => {
-    render(
-      <GraphCanvas
-        runTopology={runTopology}
-        runInput={{
-          // A field excluded from serialization has no recorded value.
-          valuesJson: JSON.stringify({ post_reviews: false, limit: 5 }),
-          suppliedFields: ["limit"],
-        }}
-        runTriggeredBy="scheduled"
-        onOpenNode={vi.fn()}
-      />,
-    );
-    const dot = inputDot();
-    expect(dot).toHaveAttribute("data-run-trigger", "scheduled");
-    expect(dot).not.toHaveAttribute("data-cron");
-
-    fireEvent.click(inspectInput());
-    const fields = rows(screen.getByRole("dialog"));
-    expect(fields.limit).toMatchObject({
-      source: "supplied",
-      text: expect.stringContaining("5"),
-    });
-    expect(fields.post_reviews.source).toBe("default");
-    expect(fields.repository.source).toBe("unrecorded");
-    expect(within(screen.getByRole("dialog")).queryByRole("textbox")).toBeNull();
   });
 
   it("leads into the workflow's first steps, whichever steps receive the input", () => {
@@ -2252,7 +2233,7 @@ describe("workflow input node", () => {
     ).toHaveAttribute("data-run-trigger", "webhook");
   });
 
-  it("starts a run with input edited in the workspace's input popup", async () => {
+  it("starts a run with input edited in the workspace's input panel", async () => {
     // Never settles, so the workspace does not go on to follow a run it cannot load.
     const startRun = vi.fn(
       (_selector: string, _input?: Record<string, unknown>) =>
@@ -2269,13 +2250,16 @@ describe("workflow input node", () => {
     render(<WorkflowWorkspace api={api} workflowId={workflow.workflowId} />);
 
     fireEvent.click(await screen.findByRole("button", { name: /workflow input/i }));
-    const [repository] = within(screen.getByRole("dialog")).getAllByRole("textbox");
-    fireEvent.change(repository, { target: { value: "acme/web" } });
+    const panel = await screen.findByRole("complementary", {
+      name: "Workflow input declaration",
+    });
+    fireEvent.change(within(panel).getByRole("textbox", { name: "repository value" }), {
+      target: { value: "acme/web" },
+    });
     fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
     await waitFor(() =>
       expect(startRun).toHaveBeenCalledWith(declared.workflowId, { repository: "acme/web" }),
     );
-    expect(screen.queryByRole("complementary", { name: /workflow input/i })).toBeNull();
   });
 });

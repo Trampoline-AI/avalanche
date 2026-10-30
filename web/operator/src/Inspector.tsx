@@ -48,6 +48,7 @@ import { StepInterfacePanel } from "./StepInterfacePanel";
 import { StepRunValues } from "./StepRunValues";
 import { decodeStepInterface } from "./stepInterface";
 import { WorkflowInputInspector } from "./WorkflowInputInspector";
+import type { InputDraft } from "./useInputDraft";
 import { INPUT_NODE_ID } from "./workflowInput";
 
 interface InspectorProps {
@@ -62,6 +63,8 @@ interface InspectorProps {
   definitionLabel?: string;
   /** Run views only: shows the same node's current definition. */
   onOpenDefinition?: () => void;
+  /** The workflow's input draft, editable from the input panel. */
+  inputDraft?: InputDraft;
   onClose: () => void;
 }
 
@@ -164,6 +167,7 @@ export function Inspector(props: InspectorProps) {
         run={run}
         embedded={props.embedded}
         definitionLabel={props.definitionLabel}
+        inputDraft={props.inputDraft}
         onClose={props.onClose}
       />
     );
