@@ -488,10 +488,14 @@ def _set_schedule_enabled(
 
 
 def _enable_schedule(args: argparse.Namespace) -> int:
+    from runtime.operator.models import schedule_input_from_json
+
     try:
-        run_input = _parse_json_object(args.input_json, "--input")
+        run_input = (
+            None if args.input_json is None else schedule_input_from_json(args.input_json)
+        )
     except ValueError as exc:
-        print(str(exc), file=sys.stderr)
+        print(f"--input: {exc}", file=sys.stderr)
         return 1
     return _set_schedule_enabled(args, True, run_input)
 
@@ -1735,13 +1739,23 @@ def _make_provider(address: str) -> GrpcStateProvider:
     return GrpcStateProvider(address)
 
 
-def _parse_json_object(payload: str | None, flag: str) -> dict | None:
+class _NonStandardJsonError(ValueError):
+    """``NaN`` or ``Infinity``, which Python's JSON parser accepts but JSON does not."""
+
+
+def _reject_json_constant(name: str) -> float:
+    raise _NonStandardJsonError(name)
+
+
+def _parse_json_object(payload: str | None, flag: str) -> dict[str, JsonValue] | None:
     if payload is None:
         return None
     try:
-        value = json.loads(payload)
+        value = json.loads(payload, parse_constant=_reject_json_constant)
     except json.JSONDecodeError as exc:
         raise ValueError(f"{flag} must be valid JSON: {exc.msg}") from exc
+    except _NonStandardJsonError as exc:
+        raise ValueError(f"{flag} must be valid JSON: {exc} is not a JSON number") from exc
     if not isinstance(value, dict):
         raise ValueError(f"{flag} must be a JSON object")
     return value

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Callable, Literal, Protocol, runtime_checkable
+
+from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from .models import (
     CatalogSnapshot,
@@ -164,24 +165,33 @@ def _freeze(value: JSON) -> JSON:
     return value
 
 
+class _InputSchema(BaseModel):
+    """The part of a workflow's input JSON Schema the schedule form changes."""
+
+    model_config = ConfigDict(extra="allow")
+
+    # A schema without properties declares no input fields.
+    properties: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
+
+
 def schedule_input_schema(workflow: WorkflowInfo) -> Schema | None:
     """Input form for enabling a schedule, or None when the workflow takes no input.
 
     Fields default to the input the schedule already runs with, falling back to the
     workflow's declared defaults for fields that input leaves out.
     """
-    if not workflow.input_schema_json:
+    if workflow.input_schema_json == "":
         return None
-    schema = json.loads(workflow.input_schema_json)
-    properties = schema.get("properties")
-    if not properties:
+    schema = _InputSchema.model_validate_json(workflow.input_schema_json)
+    if not schema.properties:
         return None
-    stored = workflow.schedule_input or {}
-    schema["properties"] = {
-        name: {**field, "default": stored[name]} if name in stored else field
-        for name, field in properties.items()
-    }
-    return _freeze(schema)
+    stored = workflow.schedule_input
+    if stored is not None:
+        schema.properties = {
+            name: {**field, "default": stored[name]} if name in stored else field
+            for name, field in schema.properties.items()
+        }
+    return _freeze(schema.model_dump())
 
 
 ENABLE_SCHEDULE_LABEL = "Enable schedule"
@@ -215,6 +225,43 @@ def schedule_action(
         True,
         "Enable this cron schedule until disabled or the operator restarts?",
         input_schema,
+    )
+
+
+@dataclass(frozen=True)
+class ScheduleRequest:
+    """One schedule action, checked and ready for ``set_schedule_enabled``."""
+
+    selector: str
+    enabled: bool
+    run_input: dict[str, JSON] | None
+
+
+def schedule_request(
+    workflows: Iterable[WorkflowInfo], action: str, context: TuiContext, payload: Object
+) -> ScheduleRequest:
+    """Check a schedule action against the selected workflow.
+
+    Only enabling a workflow that declares input takes a payload; it becomes the
+    input the schedule's runs start with.
+    """
+    if context.flow is None:
+        raise TuiExtensionError(
+            "invalid_input", "Schedule controls require a workflow", context=context
+        )
+    workflow = next((flow for flow in workflows if flow.selector == context.flow), None)
+    if workflow is None:
+        raise TuiExtensionError("not_found", "Unknown workflow", context=context)
+    enabling = action == "schedule.enable"
+    takes_input = enabling and schedule_input_schema(workflow) is not None
+    if payload and not takes_input:
+        raise TuiExtensionError(
+            "invalid_input", "This schedule control takes no input", context=context
+        )
+    return ScheduleRequest(
+        context.flow,
+        enabling,
+        {key: json_plain(value) for key, value in payload.items()} if takes_input else None,
     )
 
 

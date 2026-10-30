@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from types import MappingProxyType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from .models import RunStatus
 from .state import (
@@ -19,9 +19,9 @@ from .state import (
     PanelDescriptor,
     TuiContext,
     TuiExtensionError,
-    json_plain,
     schedule_action,
     schedule_input_schema,
+    schedule_request,
 )
 
 if TYPE_CHECKING:
@@ -162,30 +162,30 @@ class MockTuiExtensions:
             value = MappingProxyType(
                 {"run_id": self.provider.start_run(context.flow, **payload)}
             )
+            changed: Literal["runs", "schedules"] = "runs"
+            status: Literal["accepted", "completed"] = "accepted"
         elif action in SCHEDULE_ACTION_IDS:
-            assert context.flow is not None
-            workflow = next(
-                w for w in self.provider.list_workflows() if w.selector == context.flow
-            )
-            takes_input = (
-                action == "schedule.enable" and schedule_input_schema(workflow) is not None
-            )
+            request = schedule_request(self.provider.list_workflows(), action, context, payload)
             info = self.provider.set_schedule_enabled(
-                context.flow,
-                action == "schedule.enable",
-                {key: json_plain(value) for key, value in payload.items()}
-                if takes_input
-                else None,
+                request.selector, request.enabled, request.run_input
             )
             value = MappingProxyType({"enabled": info.schedule_enabled})
-        else:
-            assert context.run is not None
+            changed = "schedules"
+            status = "completed"
+        elif action == "run.cancel":
+            if context.run is None:
+                raise TuiExtensionError(
+                    "invalid_input", "Cancel requires a run", context=context
+                )
             self.provider.cancel_run(context.run)
             value = MappingProxyType({"run_id": context.run})
-        status = "completed" if action.startswith("schedule.") else "accepted"
+            changed = "runs"
+            status = "accepted"
+        else:
+            raise TuiExtensionError("unsupported", "Unknown mock action", context=context)
         result = ActionResult(context, intent_id, status, str(self._revision), value)
         self._intents[intent_id] = (action, context, MappingProxyType(dict(payload)), result)
-        self.invalidate("schedules" if action.startswith("schedule.") else "runs")
+        self.invalidate(changed)
         return result
 
     def subscribe(self, callback: Callable[[Invalidation], None]) -> Callable[[], None]:
@@ -197,7 +197,7 @@ class MockTuiExtensions:
 
         return unsubscribe
 
-    def invalidate(self, resource: str = "runs") -> None:
+    def invalidate(self, resource: Literal["runs", "schedules"]) -> None:
         self._revision += 1
         notice = Invalidation(
             self._context, resource, str(self._revision), None, "changed", None

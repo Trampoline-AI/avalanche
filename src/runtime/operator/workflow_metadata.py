@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import inspect
 import textwrap
-from typing import Annotated, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 from avalanche.agent.declaration import AgentDeclaration
-from avalanche.dag import NodeFuture, NodeType, Workflow
+from avalanche.dag import NodeFuture, NodeType, Workflow, run_input_parameters
 from avalanche.input_ref import InputRef
 from avalanche.runtime import BaseInput
 
@@ -21,7 +20,11 @@ class WorkflowInputDeclaration(BaseModel):
 
     type_name: str
     json_schema: dict[str, JsonValue]
-    consumer_node_ids: list[str]
+    consumer_node_ids: tuple[str, ...]
+
+
+# Run input has no size limit of its own; larger values are run but not displayed.
+MAX_PREPARED_INPUT_LENGTH = 1024 * 1024
 
 
 class PreparedRunInput(BaseModel):
@@ -30,23 +33,14 @@ class PreparedRunInput(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     values_json: str
-    supplied_fields: list[str]
+    supplied_fields: tuple[str, ...]
 
 
-def _receives_run_input(future: NodeFuture) -> bool:
+def _receives_run_input(future: NodeFuture, input_type: type[BaseInput]) -> bool:
     if any(isinstance(value, InputRef) for value in (*future.args, *future.kwargs.values())):
         return True
-    for name, parameter in inspect.signature(future.node.fn).parameters.items():
-        annotation = parameter.annotation
-        if get_origin(annotation) is Annotated:
-            annotation = get_args(annotation)[0]
-        if (
-            name not in future.kwargs
-            and isinstance(annotation, type)
-            and issubclass(annotation, BaseInput)
-        ):
-            return True
-    return False
+    # The same rule the runtime uses to inject the run input into a step.
+    return bool(run_input_parameters(future.node.fn, future.args, future.kwargs, input_type))
 
 
 def input_declaration_for_workflow(workflow: Workflow, node_ids: list[str]) -> str:
@@ -55,10 +49,12 @@ def input_declaration_for_workflow(workflow: Workflow, node_ids: list[str]) -> s
         return ""
     return WorkflowInputDeclaration(
         type_name=workflow.input_type.__name__,
-        json_schema=workflow.input_type.model_json_schema(),
-        consumer_node_ids=[
-            node_id for node_id in node_ids if _receives_run_input(workflow.nodes[node_id])
-        ],
+        json_schema=workflow.input_type.model_json_schema(by_alias=False),
+        consumer_node_ids=tuple(
+            node_id
+            for node_id in node_ids
+            if _receives_run_input(workflow.nodes[node_id], workflow.input_type)
+        ),
     ).model_dump_json()
 
 

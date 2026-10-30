@@ -355,6 +355,8 @@ export class GrpcWebOperatorApi implements OperatorApi {
       catalog.operatorInstanceId !== operatorInstanceId ||
       confirmedCatalog.operatorInstanceId !== operatorInstanceId ||
       catalog.revision !== confirmedCatalog.revision ||
+      // Schedule changes republish the catalog at the same revision.
+      catalog.asOfEventUlid !== confirmedCatalog.asOfEventUlid ||
       catalog.asOfEventUlid > asOfEventUlid
     ) {
       throw new Error("Operator state changed while loading the browser baseline");

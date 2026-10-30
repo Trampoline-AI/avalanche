@@ -2067,10 +2067,17 @@ async def test_schedules_panel_offers_no_controls_for_an_unscheduled_workflow():
     from tui.screens.tools import ResourceScreen
 
     app = AvalancheApp(workflow="order_workflow")
+
+    def schedules_panel_advertised() -> bool:
+        description = app.extension_session.description
+        return description is not None and any(
+            panel.resource == "schedules" for panel in description.panels
+        )
+
     async with app.run_test(size=(120, 40)) as pilot:
-        await _wait_for(pilot, lambda: app.extension_session.description is not None)
+        await _wait_for(pilot, schedules_panel_advertised)
         await pilot.press("ctrl+s")
-        assert isinstance(app.screen, ResourceScreen)
+        await _wait_for(pilot, lambda: isinstance(app.screen, ResourceScreen))
         await pilot.pause()
         assert not any(
             button.display for button in app.screen.query("#resource-actions Button")

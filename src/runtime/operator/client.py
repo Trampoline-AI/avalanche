@@ -25,6 +25,7 @@ from avalanche.workspace import Workspace
 
 from ._grpc import _BOUNDED_MESSAGE_OPTIONS
 from .convert_v2 import (
+    START_RUN_TRIGGERS,
     agent_event_descriptor_from_v2,
     catalog_snapshot_from_v2,
     log_record_descriptor_from_v2,
@@ -101,10 +102,6 @@ MAX_TRANSPORT_METADATA_KEY_BYTES = 256
 MAX_TRANSPORT_METADATA_VALUE_BYTES = 8 * 1024
 MAX_TRANSPORT_METADATA_BYTES = 16 * 1024
 _EVENTS_STREAM = "operator-events"
-_START_RUN_TRIGGERS = {
-    TriggerKind.API: pb.START_RUN_TRIGGER_V2_API,
-    TriggerKind.MANUAL: pb.START_RUN_TRIGGER_V2_MANUAL,
-}
 
 
 class StreamState(str, Enum):
@@ -1930,7 +1927,7 @@ class GrpcStateProvider:
             context_json=_json_payload(context),
             input_files=[],
             expected_version=expected_version,
-            trigger=_START_RUN_TRIGGERS[trigger],
+            trigger=START_RUN_TRIGGERS[trigger],
         )
         resp = self._call(self._stub.StartRun, request)
         return resp.run_id

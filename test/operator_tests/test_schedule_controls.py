@@ -6,12 +6,15 @@ import http.client
 import json
 import socket
 import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote
 
 import grpc
 import pytest
 
+from runtime.operator.client import GrpcStateProvider, OperatorCallError
+from runtime.operator.convert_v2 import run_summary_from_v2
 from runtime.operator.models import CatalogReplaced, RunStatus, TriggerKind, WorkflowInfo
 from runtime.operator.operator import NoScheduleError, Operator
 from runtime.operator.proto import operator_pb2 as pb
@@ -166,9 +169,12 @@ def test_scheduled_runs_start_with_the_schedule_input(flows):
     operator = Operator([str(flows)], watch=False, schedule=False, webhook_port=0)
     try:
         selector = _flow(operator, "greeting").selector
+        now = datetime(2026, 10, 29, 9, 0, 40)
+        operator._scheduler._clock = lambda: now
         enabled = operator.set_schedule_enabled(selector, True, {"name": "ops"})
         assert enabled.schedule_input == {"name": "ops"}
 
+        now += timedelta(minutes=1)
         operator._scheduler._check_schedules()
 
         (started,) = operator.list_runs(selector)
@@ -201,6 +207,16 @@ def test_schedule_input_is_only_accepted_when_enabling(operator):
     with pytest.raises(ValueError):
         operator.set_schedule_enabled(selector, False, {"name": "ops"})
     assert _flow(operator, "greeting").schedule_input is None
+
+
+def test_operator_rejects_non_finite_schedule_input_from_python_callers(operator):
+    selector = _flow(operator, "greeting").selector
+
+    with pytest.raises(ValueError):
+        operator.set_schedule_enabled(selector, True, {"name": ["ops", float("inf")]})
+
+    flow = _flow(operator, "greeting")
+    assert (flow.schedule_enabled, flow.schedule_input) == (False, None)
 
 
 def _free_port() -> int:
@@ -283,6 +299,7 @@ def test_rest_enables_a_schedule_with_input(served):
         ("scheduled", {}, 400),
         ("greeting", {"enabled": True, "input_json": ["ops"]}, 400),
         ("greeting", {"enabled": False, "input_json": {"name": "ops"}}, 400),
+        ("greeting", {"enabled": True, "input_json": {"name": float("nan")}}, 400),
     ],
 )
 def test_rest_schedule_route_rejects_invalid_targets_and_bodies(served, name, body, status):
@@ -331,3 +348,83 @@ def test_api_starts_are_api_triggers_unless_marked_manual(served):
             )
         )
     assert error.value.code() is grpc.StatusCode.INVALID_ARGUMENT
+
+
+@pytest.fixture
+def provider(operator):
+    port = _free_port()
+    grpc_server = serve_operator(operator, port=port, block=False)
+    client = GrpcStateProvider(f"127.0.0.1:{port}")
+    try:
+        yield client
+    finally:
+        client.close()
+        grpc_server.stop(grace=0).wait()
+
+
+def test_grpc_client_enables_and_disables_a_schedule_with_input(operator, provider):
+    selector = _flow(operator, "greeting").selector
+
+    enabled = provider.set_schedule_enabled(selector, True, {"name": "ops"})
+    assert (enabled.schedule_enabled, enabled.schedule_input) == (True, {"name": "ops"})
+    assert enabled.next_run_at
+
+    disabled = provider.set_schedule_enabled(selector, False)
+    assert (disabled.schedule_enabled, disabled.schedule_input) == (False, {"name": "ops"})
+    assert disabled.next_run_at is None
+
+    again = provider.set_schedule_enabled(selector, True)
+    assert again.schedule_input == {"name": "ops"}
+
+
+@pytest.mark.parametrize(
+    ("name", "enabled", "run_input", "status"),
+    [
+        ("unscheduled", True, None, grpc.StatusCode.FAILED_PRECONDITION),
+        ("missing", True, None, grpc.StatusCode.NOT_FOUND),
+        ("greeting", False, {"name": "ops"}, grpc.StatusCode.INVALID_ARGUMENT),
+    ],
+)
+def test_grpc_schedule_control_rejects_invalid_requests(
+    operator, provider, name, enabled, run_input, status
+):
+    selector = next(
+        (item.selector for item in operator.list_workflows() if item.name == name),
+        "missing.py::missing",
+    )
+
+    with pytest.raises(OperatorCallError) as error:
+        provider.set_schedule_enabled(selector, enabled, run_input)
+
+    assert error.value.status is status
+
+
+def test_clients_reject_unknown_trigger_kinds():
+    with pytest.raises(ValueError):
+        run_summary_from_v2(pb.RunSummaryV2(run_id="run-1", triggered_by="timer"))
+
+
+@pytest.mark.parametrize(
+    ("payload", "enabled"),
+    [
+        ('{"name": NaN}', True),
+        ('{"name": ["ops", Infinity]}', True),
+        ("null", True),
+        ("null", False),
+    ],
+)
+def test_grpc_rejects_invalid_schedule_input_without_storing_it(served, payload, enabled):
+    operator, _, stub = served
+    selector = _flow(operator, "greeting").selector
+
+    with pytest.raises(grpc.RpcError) as error:
+        stub.SetScheduleEnabled(
+            pb.SetScheduleEnabledRequestV2(
+                workflow_selector=selector, enabled=enabled, input_json=payload
+            )
+        )
+
+    assert error.value.code() is grpc.StatusCode.INVALID_ARGUMENT
+    flow = _flow(operator, "greeting")
+    assert (flow.schedule_enabled, flow.schedule_input) == (False, None)
+    assert stub.DiscoverFlows(pb.DiscoverFlowsRequestV2()).flows

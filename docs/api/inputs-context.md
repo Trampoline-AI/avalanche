@@ -72,6 +72,14 @@ They do not support mapping-key lookup, subscripts, expressions, or recursive re
 
 No available input raises `ValueError`; a missing attribute (including descent through `None`) raises `AttributeError` before the consuming node executes. Failures name the node, workflow, and selector. Use whole-input annotation injection to access fields that cannot be represented as dot selectors.
 
+## Input in the operator browser UI
+
+When a workflow declares `input=`, the operator's browser graph starts with an Input node, drawn as an amber parallelogram so it doesn't read as a step. Dashed amber edges with a diamond head lead from it to every step that receives the input, through annotation injection or an `ava.input` selector. The node lists each field with its type and default, or marks it required. A `default_factory` default can't be written into the JSON schema, so it is shown as computed per run. Selecting the node shows each field's `Field(description=...)` and the full schema.
+
+A `cron` schedule's runs start with the input stored when the schedule was turned on, or with the defaults when none was stored. The Input node of a scheduled workflow says which, or that its schedule is off.
+
+The operator validates the input once, before any step runs. A run's Input node shows the validated values and marks which ones the caller supplied and which took their defaults. It also says whether the run started manually, by its schedule, or by a webhook. Values are not shown when their JSON form is larger than 1 MiB or can't be serialized; the run still executes. Fields excluded from serialization, such as `Field(exclude=True)`, are shown as not recorded.
+
 ## Logger
 
 ```python

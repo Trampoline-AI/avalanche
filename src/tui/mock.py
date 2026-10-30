@@ -838,7 +838,7 @@ class MockStateProvider:
         self.stream_state = "live"
 
     def _notify_run(self, run: RunState) -> None:
-        self._mock_extensions.invalidate()
+        self._mock_extensions.invalidate("runs")
         for cb in self._run_callbacks:
             cb(run)
 
