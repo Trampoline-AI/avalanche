@@ -2098,7 +2098,7 @@ describe("workflow input node", () => {
     suppliedFields: ["repository", "limit"],
   };
   const inspectInput = () => screen.getByRole("button", { name: /workflow input/i });
-  const inputCard = () => inspectInput().closest("article")!;
+  const inputDot = () => inspectInput().closest<HTMLElement>("[data-node-kind]")!;
   // Field names and values are data; the row's source attribute carries its meaning.
   const rows = (container: HTMLElement) =>
     Object.fromEntries(
@@ -2114,66 +2114,41 @@ describe("workflow input node", () => {
     expect(screen.queryByRole("button", { name: /workflow input/i })).toBeNull();
   });
 
-  it("lists declared fields with defaults and opens the input from the definition", () => {
+  it("marks the definition's input with a dot that opens the input", () => {
     const open = vi.fn();
     render(<GraphCanvas workflow={declared} onOpenNode={open} />);
-    const card = inputCard();
-    const fields = rows(card);
+    const dot = inputDot();
 
-    expect(card).toHaveAttribute("data-node-kind", "input");
-    expect(Object.keys(fields)).toEqual(["repository", "post_reviews", "limit"]);
-    expect(fields.repository.source).toBe("required");
-    expect(fields.limit.source).toBe("value");
-    expect(fields.limit.text).toContain("3");
-    expect(card.querySelector("[data-cron]")).toHaveAttribute("data-cron", declared.cron);
-    expect(card.querySelector("[data-run-trigger]")).toBeNull();
+    expect(dot).toHaveAttribute("data-node-kind", "input");
+    expect(dot).toHaveAttribute("data-cron", declared.cron);
+    expect(dot).not.toHaveAttribute("data-run-trigger");
+    // Fields live in the inspector, not on the graph.
+    expect(dot.querySelector("[data-value-source]")).toBeNull();
     fireEvent.click(inspectInput());
     expect(open).toHaveBeenCalledWith("ava:input");
   });
 
-  it("shows the values a run used and where each came from", () => {
+  it("marks how a run started on its input dot", () => {
     render(
-      <GraphCanvas
-        runTopology={runTopology}
-        runInput={{
-          // A field excluded from serialization has no recorded value.
-          valuesJson: JSON.stringify({ post_reviews: false, limit: 5 }),
-          suppliedFields: ["limit"],
-        }}
-        runTriggeredBy="scheduled"
-        onOpenNode={vi.fn()}
-      />,
+      <GraphCanvas runTopology={runTopology} runTriggeredBy="scheduled" onOpenNode={vi.fn()} />,
     );
-    const card = inputCard();
-    const fields = rows(card);
+    const dot = inputDot();
 
-    expect(fields.limit).toMatchObject({
-      source: "supplied",
-      text: expect.stringContaining("5"),
-    });
-    expect(fields.post_reviews).toMatchObject({
-      source: "default",
-      text: expect.stringContaining("false"),
-    });
-    expect(fields.repository.source).toBe("unrecorded");
-    expect(card.querySelector("[data-run-trigger]")).toHaveAttribute(
-      "data-run-trigger",
-      "scheduled",
-    );
-    expect(card.querySelector("[data-cron]")).toBeNull();
+    expect(dot).toHaveAttribute("data-run-trigger", "scheduled");
+    expect(dot).not.toHaveAttribute("data-cron");
   });
 
-  it("leads only into the steps that receive the input", () => {
+  it("leads into the workflow's first steps, whichever steps receive the input", () => {
     const steps = FlowInfoMsg.create({
       ...declared,
       nodeIds: ["fetch", "store", "audit"],
-      // Like the catalog, the graph has keys only for parents; both dests are leaves.
-      graph: { fetch: { children: ["store", "audit"] } },
+      // Like the catalog, the graph has keys only for parents.
+      graph: { fetch: { children: ["store"] } },
       nodeTypes: { fetch: "step", store: "dest", audit: "dest" },
       displayNames: { fetch: "Fetch", store: "Store", audit: "Audit" },
       inputDeclarationJson: JSON.stringify({
         ...JSON.parse(inputDeclarationJson),
-        consumer_node_ids: ["fetch", "store"],
+        consumer_node_ids: ["store"],
       }),
     });
     const { container } = render(<GraphCanvas workflow={steps} onOpenNode={vi.fn()} />);
@@ -2182,47 +2157,8 @@ describe("workflow input node", () => {
         edge.getAttribute("data-edge-target"),
       );
 
-    expect(targets("ava:input")).toEqual(["fetch", "store"]);
-    expect(targets("fetch")).toEqual(["store", "audit"]);
-  });
-
-  it("caps the card's field list and states computed and required defaults", () => {
-    const properties = Object.fromEntries(
-      Array.from({ length: 8 }, (_, index) => [
-        `field_${index}`,
-        { type: "integer", default: index },
-      ]),
-    );
-    const wide = FlowInfoMsg.create({
-      ...workflow,
-      inputDeclarationJson: JSON.stringify({
-        type_name: "WideInput",
-        json_schema: {
-          type: "object",
-          properties: { token: { type: "string" }, ...properties },
-          required: ["field_0"],
-        },
-        consumer_node_ids: [],
-      }),
-    });
-    render(<GraphCanvas workflow={wide} onOpenNode={vi.fn()} />);
-    const card = inputCard();
-    const fields = rows(card);
-
-    expect(Object.keys(fields)).toHaveLength(6);
-    expect(fields.token.source).toBe("computed");
-    expect(fields.field_0.source).toBe("required");
-    expect(fields.field_1.source).toBe("value");
-    expect(within(card).getByText(/\+3\b/)).toBeInTheDocument();
-  });
-
-  it("says a run's values are unavailable instead of showing the defaults", () => {
-    const { container } = render(
-      <GraphCanvas runTopology={runTopology} runTriggeredBy="manual" onOpenNode={vi.fn()} />,
-    );
-
-    expect(container.querySelector('[data-run-values="unavailable"]')).toBeInTheDocument();
-    expect(rows(inputCard())).toEqual({});
+    expect(targets("ava:input").sort()).toEqual(["audit", "fetch"]);
+    expect(targets("fetch")).toEqual(["store"]);
   });
 
   it("inspects the declaration and the run's supplied and default values", () => {
