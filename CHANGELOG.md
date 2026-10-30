@@ -29,29 +29,36 @@
   in operator memory only: it is kept across rediscovery and reload and resets on
   restart.
 - Enabling a schedule can set the input its cron runs start with. In the Web UI, the
-  run controls' JSON input is the one place to define input: it is prefilled with
-  the field defaults (or the schedule's input), Run uses it, and turning the
-  schedule on saves it for cron runs. The TUI opens its input form prefilled the
-  same way; the REST route and `SetScheduleEnabled` take `input_json`, and
-  `ava schedule enable` takes `--input`. Flows report the stored input as
-  `schedule_input_json`; without one, scheduled runs use the input defaults.
+  input panel is the one place to define input: it is prefilled with the field
+  defaults (or the schedule's input), Run uses it, and turning the schedule on
+  saves it for cron runs. The TUI opens its input form prefilled the same way; the
+  REST route and `SetScheduleEnabled` take `input_json`, and `ava schedule enable`
+  takes `--input`. Flows report the stored input as `schedule_input_json`; without
+  one, scheduled runs use the input defaults.
+- Turning a schedule on, or starting a run from the UI, the API, `ava run` or REST,
+  is refused with `INVALID_ARGUMENT` when a required input field is missing or null,
+  instead of starting a run that fails while it is prepared. The Web UI's error then
+  offers an Edit inputs link to the input panel.
 - The Web UI marks scheduled workflows with a clock badge. Its run controls gain a
-  schedule switch next to Run, with collapsible schedule details (cron in plain
-  words, input, next and last run).
+  schedule switch next to Run with a countdown to the next run, and a Schedule
+  toggle that shows the cron in plain words with the expression in parentheses. The
+  operator republishes the workflow list after each scheduled start, so the next run
+  time stays current. The Add JSON input editor is gone; the input panel replaces it.
 - **BREAKING CHANGE:** run summaries' `triggered_by` is now one of `scheduled`,
   `manual`, `webhook`, or `api`. REST, gRPC, and `ava run` starts are now `api`
   (they were `manual`); Web UI and TUI starts stay `manual`, and `StartRun` accepts a
   `trigger` field. Clients reject unknown trigger values. Python `RunState` and
   `RunSummary` expose it as `TriggerKind`.
-- The browser workflow graph shows a workflow's run input as a small amber dot in
-  front of the workflow's first steps, linked to them by dashed amber lines with a
-  diamond head, so it doesn't read as a step. Workflows without `input=` show no
-  dot. Hovering it names the input model and, for a cron workflow, whether scheduled
-  runs use the defaults or the schedule's stored input, or that the schedule is off;
-  in a run, it says how the run started (manually, by its cron schedule, by a
-  webhook, or through the API). Selecting it opens an inspector with each field's
-  type, default or required status, description and the full schema, and in a run
-  the values the run actually used, marking which came from defaults.
+- The browser workflow graph shows a workflow's run input as a black "inputs" dot in
+  front of the workflow's first steps, linked to them by dashed lines with a diamond
+  head, so it doesn't read as a step. Workflows without `input=` show no dot. It
+  grows on hover, and clicking it opens the input panel: in the current definition,
+  a box per field to set the value Run and the schedule use, with each field's
+  type, default or required status, description and the full schema; in a run, only
+  the values the run used, with defaults shown fainter. Hovering the dot names the
+  input model and, for a cron workflow, whether scheduled runs use the defaults or
+  the schedule's stored input, or that the schedule is off; in a run, it says how
+  the run started (manually, by its cron schedule, by a webhook, or through the API).
 - The browser workflow graph keeps steps that run one after another on one straight
   row instead of a staircase. Connections from one step that skip ahead past several
   steps now share one line beside the row and branch off to each target, instead of
