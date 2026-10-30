@@ -54,34 +54,37 @@ function staged(name: string): StagedInputFile {
 type Stage = (file: File, target: InputFileTarget) => Promise<StagedInputFile>;
 
 function Harness({
+  workflow = documents,
   api,
   onStart,
   onSetScheduleEnabled,
 }: {
+  workflow?: FlowInfoMsg;
   api: Pick<OperatorApi, "stageInputFile">;
   onStart: Parameters<typeof RunControls>[0]["onStart"];
   onSetScheduleEnabled?: Parameters<typeof RunControls>[0]["onSetScheduleEnabled"];
 }) {
-  const draft = useInputDraft(documents, api);
+  const draft = useInputDraft(workflow, api);
   return (
     <>
       <RunControls
-        workflow={documents}
+        workflow={workflow}
         onStart={onStart}
         onCancel={vi.fn()}
         onSetScheduleEnabled={onSetScheduleEnabled}
         inputDraft={draft}
       />
-      <WorkflowInputInspector workflow={documents} inputDraft={draft} onClose={vi.fn()} />
+      <WorkflowInputInspector workflow={workflow} inputDraft={draft} onClose={vi.fn()} />
     </>
   );
 }
 
-function renderFields(stageInputFile?: Stage) {
+function renderFields(stageInputFile?: Stage, workflow?: FlowInfoMsg) {
   const onStart = vi.fn(async () => "run-1");
   const onSetScheduleEnabled = vi.fn(async () => undefined);
   render(
     <Harness
+      workflow={workflow}
       api={{ stageInputFile }}
       onStart={onStart}
       onSetScheduleEnabled={onSetScheduleEnabled}
@@ -109,7 +112,7 @@ it("stages a single file when it is picked and runs with it", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Run" }));
 
   await waitFor(() =>
-    expect(onStart).toHaveBeenCalledWith(documents.workflowId, { attachments: [], note: "" }, [
+    expect(onStart).toHaveBeenCalledWith(documents.workflowId, {}, [
       { ...staged("report.txt"), fieldName: "document" },
     ]),
   );
@@ -138,7 +141,7 @@ it("stages every file picked for a list field in order", async () => {
   await waitFor(() =>
     expect(onStart).toHaveBeenCalledWith(
       documents.workflowId,
-      { attachments: [], note: "" },
+      { attachments: [] },
       expectedFiles,
     ),
   );
@@ -147,8 +150,36 @@ it("stages every file picked for a list field in order", async () => {
     expect(onSetScheduleEnabled).toHaveBeenCalledWith(
       documents.workflowId,
       true,
-      { attachments: [], note: "" },
+      { attachments: [] },
       expectedFiles,
+    ),
+  );
+});
+
+it("replaces an earlier pick and sends the files with Use for schedule", async () => {
+  const stageInputFile = vi.fn<Stage>(async (file) => staged(file.name));
+  const scheduled = FlowInfoMsg.create({ ...documents, scheduleEnabled: true });
+  const { onSetScheduleEnabled } = renderFields(stageInputFile, scheduled);
+  const picker = screen.getByLabelText("attachments files");
+
+  await userEvent.upload(screen.getByLabelText("document file"), text("main.txt"));
+  await userEvent.upload(picker, [text("old-a.txt"), text("old-b.txt")]);
+  await userEvent.upload(picker, text("new.txt"));
+  const chosen = await screen.findByRole("list", { name: "attachments files chosen" });
+  await waitFor(() => expect(within(chosen).getAllByRole("listitem")).toHaveLength(1));
+  await waitFor(() => expect(chosen).toHaveAttribute("data-file-status", "staged"));
+
+  await userEvent.click(screen.getByRole("button", { name: "Use for schedule" }));
+
+  await waitFor(() =>
+    expect(onSetScheduleEnabled).toHaveBeenCalledWith(
+      scheduled.workflowId,
+      true,
+      { attachments: [] },
+      [
+        { ...staged("main.txt"), fieldName: "document" },
+        { ...staged("new.txt"), fieldName: "attachments" },
+      ],
     ),
   );
 });
