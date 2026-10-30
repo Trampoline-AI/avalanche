@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { arrangeGraph, createGraphLayout, placeInOrder, type GraphLayout } from "./graphLayout";
+import {
+  arrangeGraph,
+  createGraphLayout,
+  placeAtMedians,
+  placeInOrder,
+  type GraphLayout,
+} from "./graphLayout";
 import type { GraphOrientation } from "./useGraphOrientation";
 import type { WorkflowTopologyMsg } from "./model";
 
@@ -214,7 +220,7 @@ describe.each(["horizontal", "vertical"] as const)("%s edge routing", (orientati
   const { layout, positions, paths } = arrange(orientation);
   const routes = layout.edges.map((edge) => ({ edge, points: pathPoints(paths[edge.id]) }));
 
-  it("leaves each source and lands each arrowhead on its own spot of the target card", () => {
+  it("leaves and enters each card through one spot per link or shared trunk", () => {
     for (const { edge, points } of routes) {
       const source = cardBox(positions[edge.source]);
       const target = cardBox(positions[edge.target]);
@@ -240,19 +246,33 @@ describe.each(["horizontal", "vertical"] as const)("%s edge routing", (orientati
         expect(beforeEnd.x).toBe(end.x);
       }
     }
-    const arrivals = routes.map(
-      ({ edge, points }) => `${edge.target}@${JSON.stringify(points.at(-1))}`,
+    // Edges share a spot exactly when they share the hop next to the card.
+    const ids = new Map<object, number>();
+    const id = (item: object) => ids.get(item) ?? ids.set(item, ids.size).get(item)!;
+    const spots = (end: (points: Point[]) => Point, hop: (chain: object[]) => object[]) => {
+      const hops = routes.map(({ edge }) => hop(layout.chains[edge.id]).map(id).join(">"));
+      const points = routes.map(({ points }) => JSON.stringify(end(points)));
+      return [new Set(points).size, new Set(hops).size];
+    };
+    const [arrivals, arrivalHops] = spots(
+      (points) => points.at(-1)!,
+      (chain) => chain.slice(-2),
     );
-    expect(new Set(arrivals).size).toBe(routes.length);
-    const departures = routes.map(
-      ({ edge, points }) => `${edge.source}@${JSON.stringify(points[0])}`,
+    expect(arrivals).toBe(arrivalHops);
+    const [departures, departureHops] = spots(
+      (points) => points[0],
+      (chain) => chain.slice(0, 2),
     );
-    expect(new Set(departures).size).toBe(routes.length);
+    expect(departures).toBe(departureHops);
   });
 
-  it("never shares a segment between two connections", () => {
+  it("shares segments only along a trunk the connections have in common", () => {
     for (const [index, first] of routes.entries()) {
       for (const second of routes.slice(index + 1)) {
+        const trunk = layout.chains[first.edge.id]
+          .slice(1, -1)
+          .some((item) => layout.chains[second.edge.id].includes(item));
+        if (trunk) continue;
         for (const a of segments(first.points)) {
           for (const b of segments(second.points)) {
             expect(overlapLength(a, b), `${first.edge.id} and ${second.edge.id}`).toBeLessThan(
@@ -308,6 +328,132 @@ describe.each(["horizontal", "vertical"] as const)("%s edge routing", (orientati
     // The memo's skip to the publisher runs level through both layers it passes.
     const skip = routes.find(({ edge }) => edge.id === "write_memo->publish_bakeoff")!.points;
     expect(skip.length).toBeLessThanOrEqual(6);
+  });
+});
+
+describe("straight rows", () => {
+  // The run input feeds every step of a chain, as in the operator demo workflow.
+  const inputChain = {
+    nodeIds: ["input", "fetch", "validate", "summarize", "publish"],
+    graph: {
+      input: { children: ["fetch", "validate", "summarize", "publish"] },
+      fetch: { children: ["validate"] },
+      validate: { children: ["summarize"] },
+      summarize: { children: ["publish"] },
+    },
+  };
+
+  it.each(["horizontal", "vertical"] as const)(
+    "keeps a chain fed by one source level and sends its long edges along one trunk in %s layout",
+    (orientation) => {
+      const { layout, positions, paths } = arrange(orientation, inputChain);
+      const across = orientation === "vertical" ? "x" : "y";
+      const level = new Set(inputChain.nodeIds.map((nodeId) => positions[nodeId][across]));
+      expect(level.size).toBe(1);
+      const long = ["validate", "summarize", "publish"].map((target) =>
+        pathPoints(paths[`input->${target}`]),
+      );
+      expect(new Set(long.map((points) => JSON.stringify(points[0]))).size).toBe(1);
+      // Every long edge runs on the same line beside the row, apart from the row itself.
+      const runs = new Set(long.map((points) => points[2][across]));
+      expect(runs.size).toBe(1);
+      expect([...runs][0]).not.toBe(positions.fetch[across]);
+      const trunk = layout.chains["input->publish"].slice(1, -1);
+      expect(layout.chains["input->summarize"].slice(1, -1)).toEqual(trunk.slice(0, 2));
+      expect(layout.layers.map((layer) => layer.length)).toEqual([1, 2, 2, 2, 1]);
+    },
+  );
+
+  it("keeps a plain chain on one line with straight edges", () => {
+    const chain = {
+      nodeIds: ["load", "parse", "score", "report"],
+      graph: {
+        load: { children: ["parse"] },
+        parse: { children: ["score"] },
+        score: { children: ["report"] },
+      },
+    };
+    const { positions, paths } = arrange("horizontal", chain);
+    expect(new Set(chain.nodeIds.map((nodeId) => positions[nodeId].y)).size).toBe(1);
+    for (const path of Object.values(paths)) expect(pathPoints(path)).toHaveLength(2);
+  });
+
+  it("merges long edges into one target and keeps the chain they skip level", () => {
+    const skips = {
+      nodeIds: ["load", "parse", "first", "second", "finalize"],
+      graph: {
+        load: { children: ["parse", "finalize"] },
+        parse: { children: ["first", "finalize"] },
+        first: { children: ["second"] },
+        second: { children: ["finalize"] },
+      },
+    };
+    const { layout, positions, paths } = arrange("horizontal", skips);
+    expect(new Set(skips.nodeIds.map((nodeId) => positions[nodeId].y)).size).toBe(1);
+    const end = (edgeId: string) => JSON.stringify(pathPoints(paths[edgeId]).at(-1));
+    expect(end("load->finalize")).toBe(end("parse->finalize"));
+    expect(end("second->finalize")).not.toBe(end("load->finalize"));
+    expect(layout.chains["load->finalize"].slice(2, -1)).toEqual(
+      layout.chains["parse->finalize"].slice(1, -1),
+    );
+  });
+
+  it.each([
+    ["a fan-out", { load: { children: ["a", "b", "c"] } }, "load", ["a", "b", "c"]],
+    ["a fan-in", { a: { children: ["join"] }, b: { children: ["join"] } }, "join", ["a", "b"]],
+    [
+      "a diamond",
+      { load: { children: ["a", "b"] }, a: { children: ["join"] }, b: { children: ["join"] } },
+      "join",
+      ["a", "b"],
+    ],
+  ])("centers the shared card of %s between its branches", (_, graph, center, branches) => {
+    const nodeIds = [...new Set([...Object.keys(graph), ...branches, center])];
+    const { positions } = arrange("horizontal", { nodeIds, graph });
+    const ys = branches.map((nodeId) => positions[nodeId].y);
+    expect(positions[center].y).toBeCloseTo((Math.min(...ys) + Math.max(...ys)) / 2);
+    expect(new Set(ys).size).toBe(branches.length);
+  });
+
+  it("keeps the graph centered however many sweeps its medians tie", () => {
+    const { positions } = arrange("horizontal", {
+      nodeIds: ["input", "plan", "research", "draft", "review", "send"],
+      graph: {
+        input: { children: ["plan", "draft", "send"] },
+        plan: { children: ["research", "draft"] },
+        research: { children: ["review"] },
+        draft: { children: ["review"] },
+        review: { children: ["send"] },
+      },
+    });
+    const ys = Object.values(positions).map(({ y }) => y);
+    expect(Math.abs(Math.min(...ys) + Math.max(...ys))).toBeLessThan(DEFAULT_SIZE.height);
+  });
+});
+
+describe("placeAtMedians", () => {
+  it("snaps to the strongest pull instead of averaging pulls", () => {
+    const pulls = [
+      { value: 0, weight: 2 },
+      { value: 100, weight: 1 },
+    ];
+    expect(placeAtMedians([pulls], [])).toEqual([0]);
+    expect(
+      placeAtMedians(
+        [
+          [
+            { value: 0, weight: 1 },
+            { value: 100, weight: 1 },
+          ],
+        ],
+        [],
+      ),
+    ).toEqual([50]);
+  });
+
+  it("keeps the requested gaps between items pulled to one spot", () => {
+    const pull = [{ value: 0, weight: 1 }];
+    expect(placeAtMedians([pull, pull, pull], [10, 10])).toEqual([-10, 0, 10]);
   });
 });
 

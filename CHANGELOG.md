@@ -52,6 +52,12 @@
   webhook, or through the API). Selecting it opens an inspector with each field's
   type, default or required status, description and the full schema, and in a run
   the values the run actually used, marking which came from defaults.
+- The browser workflow graph keeps steps that run one after another on one straight
+  row instead of a staircase. Connections from one step that skip ahead past several
+  steps now share one line beside the row and branch off to each target, instead of
+  each running its own parallel line. Skip connections into the same step from
+  different points of a chain merge into one line. The graph keeps separate lines
+  when sharing one would make connections cross.
 - The operator now validates a declared run input once, while it prepares the run,
   and publishes the validated values on the run snapshot. A run with invalid input
   now fails while it is being prepared, before any step is shown, rather than when
