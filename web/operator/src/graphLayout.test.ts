@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   arrangeGraph,
   createGraphLayout,
+  assignColumns,
   placeAtMedians,
   placeInOrder,
   type GraphLayout,
@@ -364,6 +365,25 @@ describe("straight rows", () => {
     },
   );
 
+  it.each(["horizontal", "vertical"] as const)(
+    "keeps separate lines in %s layout where a shared trunk would cross another edge",
+    (orientation) => {
+      // The memo's skips to the judge and the publisher would have to cross the
+      // deck siblings' own skips if they shared one trunk.
+      const { layout, paths } = arrange(orientation, bakeoff);
+      const memoToJudge = layout.chains["write_memo->judge_decks"].slice(1, -1);
+      const memoToPublish = layout.chains["write_memo->publish_bakeoff"].slice(1, -1);
+      expect(memoToJudge.some((item) => memoToPublish.includes(item))).toBe(false);
+      const minimal = layout.chains["build_minimal_deck->publish_bakeoff"].slice(1, -1);
+      const dense = layout.chains["build_dense_deck->publish_bakeoff"].slice(1, -1);
+      expect(minimal.some((item) => dense.includes(item))).toBe(false);
+      const end = (edgeId: string) => JSON.stringify(pathPoints(paths[edgeId]).at(-1));
+      expect(end("build_minimal_deck->publish_bakeoff")).not.toBe(
+        end("build_dense_deck->publish_bakeoff"),
+      );
+    },
+  );
+
   it("keeps a plain chain on one line with straight edges", () => {
     const chain = {
       nodeIds: ["load", "parse", "score", "report"],
@@ -415,6 +435,28 @@ describe("straight rows", () => {
     expect(new Set(ys).size).toBe(branches.length);
   });
 
+  it.each(["horizontal", "vertical"] as const)(
+    "centers the chains before a split and after its join on one line in %s layout",
+    (orientation) => {
+      const across = orientation === "vertical" ? "x" : "y";
+      // The input also feeds the last step, which must not pull the join chain aside.
+      const { positions } = arrange(orientation, {
+        nodeIds: ["input", "plan", "research", "draft", "review", "send"],
+        graph: {
+          input: { children: ["plan", "draft", "send"] },
+          plan: { children: ["research", "draft"] },
+          research: { children: ["review"] },
+          draft: { children: ["review"] },
+          review: { children: ["send"] },
+        },
+      });
+      const middle = (positions.research[across] + positions.draft[across]) / 2;
+      for (const nodeId of ["input", "plan", "review", "send"]) {
+        expect(positions[nodeId][across], nodeId).toBeCloseTo(middle);
+      }
+    },
+  );
+
   it("keeps the graph centered however many sweeps its medians tie", () => {
     const { positions } = arrange("horizontal", {
       nodeIds: ["input", "plan", "research", "draft", "review", "send"],
@@ -428,6 +470,102 @@ describe("straight rows", () => {
     });
     const ys = Object.values(positions).map(({ y }) => y);
     expect(Math.abs(Math.min(...ys) + Math.max(...ys))).toBeLessThan(DEFAULT_SIZE.height);
+  });
+});
+
+describe.each(["horizontal", "vertical"] as const)("%s symmetry", (orientation) => {
+  const forward = orientation === "vertical" ? "y" : "x";
+  // Where a route turns from leaving its source toward its target.
+  const bend = (path: string) => pathPoints(path)[1][forward];
+
+  it("bends mirrored branches of a fan-out and a fan-in at the same point", () => {
+    const fanOut = arrange(orientation, {
+      nodeIds: ["load", "a", "b", "c"],
+      graph: { load: { children: ["a", "b", "c"] } },
+    }).paths;
+    expect(bend(fanOut["load->a"])).toBe(bend(fanOut["load->c"]));
+    const fanIn = arrange(orientation, {
+      nodeIds: ["a", "b", "c", "join"],
+      graph: {
+        a: { children: ["join"] },
+        b: { children: ["join"] },
+        c: { children: ["join"] },
+      },
+    }).paths;
+    expect(bend(fanIn["a->join"])).toBe(bend(fanIn["c->join"]));
+  });
+
+  it("mirrors a wide split and its join", () => {
+    const shards = ["s1", "s2", "s3", "s4", "s5", "s6"];
+    const { positions, paths } = arrange(orientation, {
+      nodeIds: ["load", ...shards, "gather"],
+      graph: {
+        load: { children: shards },
+        ...Object.fromEntries(shards.map((shard) => [shard, { children: ["gather"] }])),
+      },
+    });
+    const sourceEnd = pathPoints(paths["load->s1"])[0][forward];
+    const targetStart = pathPoints(paths["s1->gather"]).at(-1)![forward];
+    const shardStart =
+      positions.s1[forward] - (orientation === "vertical" ? DEFAULT_SIZE.height / 2 : 0);
+    const shardEnd = pathPoints(paths["s1->gather"])[0][forward];
+    for (const [index, shard] of shards.entries()) {
+      const mirror = shards[shards.length - 1 - index];
+      // Top and bottom branches turn at the same point...
+      expect(bend(paths[`load->${shard}`])).toBe(bend(paths[`load->${mirror}`]));
+      expect(bend(paths[`${shard}->gather`])).toBe(bend(paths[`${mirror}->gather`]));
+      // ...and the join mirrors the split around the column of shards.
+      const straight = pathPoints(paths[`load->${shard}`]).length === 2;
+      expect(pathPoints(paths[`${shard}->gather`]).length === 2).toBe(straight);
+      if (straight) continue;
+      expect(bend(paths[`load->${shard}`]) - sourceEnd).toBeCloseTo(
+        targetStart - bend(paths[`${shard}->gather`]),
+      );
+    }
+    expect(shardStart - sourceEnd).toBeCloseTo(targetStart - shardEnd);
+  });
+});
+
+describe("assignColumns", () => {
+  const segment = (hop: string, from: number, to: number) => ({ hop, from, to });
+
+  it("lets verticals that stay apart, or fork from one spot, share a column", () => {
+    expect(assignColumns([segment("up", 0, -100), segment("down", 50, 150)]).columns).toEqual(
+      new Map([
+        ["up", 0],
+        ["down", 0],
+      ]),
+    );
+    expect(assignColumns([segment("up", 0, -100), segment("down", 0, 100)]).columns).toEqual(
+      new Map([
+        ["up", 0],
+        ["down", 0],
+      ]),
+    );
+  });
+
+  it("keeps overlapping verticals in their order, from the card they spread from", () => {
+    const spreading = assignColumns([segment("outer", 0, -200), segment("inner", 10, -100)]);
+    expect(spreading).toEqual({
+      columns: new Map([
+        ["outer", 0],
+        ["inner", 1],
+      ]),
+      count: 2,
+    });
+    // The same pair converging bends next to the card it reaches.
+    const converging = assignColumns([
+      segment("inner", -100, 10),
+      segment("outer", -200, 0),
+      segment("lone", 200, 20),
+    ]);
+    expect(converging.columns).toEqual(
+      new Map([
+        ["inner", 0],
+        ["outer", 1],
+        ["lone", 1],
+      ]),
+    );
   });
 });
 
