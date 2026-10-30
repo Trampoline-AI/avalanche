@@ -5,6 +5,7 @@ import type {
   AgentEventDescriptorMsg,
   CatalogSnapshotMsg,
   ClassifierEventDescriptorMsg,
+  InputFileAttachment,
   LogRecordDescriptorMsg,
   OperatorUpdate,
   OperatorUpdateEnvelope,
@@ -797,10 +798,14 @@ export function useOperatorProjection(api: OperatorApi) {
   }, [loadSelectedRun, repairWatermark, selectedRunId]);
 
   const startRun = useCallback(
-    async (workflowSelector: string, input?: Record<string, unknown>) => {
+    async (
+      workflowSelector: string,
+      input?: Record<string, unknown>,
+      inputFiles?: InputFileAttachment[],
+    ) => {
       dispatch({ type: "action", action: { kind: "start", target: workflowSelector } });
       try {
-        return await api.startRun(workflowSelector, input);
+        return await api.startRun(workflowSelector, input, inputFiles);
       } finally {
         dispatch({ type: "action", action: undefined });
       }
@@ -822,10 +827,15 @@ export function useOperatorProjection(api: OperatorApi) {
 
   // The streamed catalog replacement is the only source of schedule state.
   const setScheduleEnabled = useCallback(
-    async (workflowSelector: string, enabled: boolean, input?: Record<string, unknown>) => {
+    async (
+      workflowSelector: string,
+      enabled: boolean,
+      input?: Record<string, unknown>,
+      inputFiles?: InputFileAttachment[],
+    ) => {
       dispatch({ type: "action", action: { kind: "schedule", target: workflowSelector } });
       try {
-        await api.setScheduleEnabled(workflowSelector, enabled, input);
+        await api.setScheduleEnabled(workflowSelector, enabled, input, inputFiles);
       } finally {
         dispatch({ type: "action", action: undefined });
       }

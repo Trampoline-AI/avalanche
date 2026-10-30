@@ -81,14 +81,20 @@ it("starts Run and the schedule with the edited input", async () => {
   edit({ region: "us", limit: 10 });
   fireEvent.click(screen.getByRole("button", { name: "Run" }));
   await waitFor(() =>
-    expect(onStart).toHaveBeenCalledWith(nightly.workflowId, { region: "us", limit: 10 }),
+    expect(onStart).toHaveBeenCalledWith(
+      nightly.workflowId,
+      { region: "us", limit: 10 },
+      undefined,
+    ),
   );
   fireEvent.click(screen.getByRole("switch", { name: "Run on schedule" }));
   await waitFor(() =>
-    expect(onSetScheduleEnabled).toHaveBeenCalledWith(nightly.workflowId, true, {
-      region: "us",
-      limit: 10,
-    }),
+    expect(onSetScheduleEnabled).toHaveBeenCalledWith(
+      nightly.workflowId,
+      true,
+      { region: "us", limit: 10 },
+      undefined,
+    ),
   );
 });
 
@@ -98,9 +104,16 @@ it("leaves the input to the operator while it is unedited", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Run" }));
   fireEvent.click(screen.getByRole("switch", { name: "Run on schedule" }));
 
-  await waitFor(() => expect(onStart).toHaveBeenCalledWith(nightly.workflowId, undefined));
   await waitFor(() =>
-    expect(onSetScheduleEnabled).toHaveBeenCalledWith(nightly.workflowId, true, undefined),
+    expect(onStart).toHaveBeenCalledWith(nightly.workflowId, undefined, undefined),
+  );
+  await waitFor(() =>
+    expect(onSetScheduleEnabled).toHaveBeenCalledWith(
+      nightly.workflowId,
+      true,
+      undefined,
+      undefined,
+    ),
   );
 });
 
@@ -114,7 +127,9 @@ it("starts a manual run with the schedule's input the panel shows", async () => 
   // Unedited, the draft holds the schedule's input, which a manual run does not inherit.
   fireEvent.click(screen.getByRole("button", { name: "Run" }));
 
-  await waitFor(() => expect(onStart).toHaveBeenCalledWith(nightly.workflowId, { limit: 3 }));
+  await waitFor(() =>
+    expect(onStart).toHaveBeenCalledWith(nightly.workflowId, { limit: 3 }, undefined),
+  );
 });
 
 it("offers to update an enabled schedule when the edited input differs", async () => {
@@ -129,10 +144,12 @@ it("offers to update an enabled schedule when the edited input differs", async (
   fireEvent.click(screen.getByRole("button", { name: "Use for schedule" }));
 
   await waitFor(() =>
-    expect(onSetScheduleEnabled).toHaveBeenCalledWith(nightly.workflowId, true, {
-      region: "eu",
-      limit: 4,
-    }),
+    expect(onSetScheduleEnabled).toHaveBeenCalledWith(
+      nightly.workflowId,
+      true,
+      { region: "eu", limit: 4 },
+      undefined,
+    ),
   );
 });
 
@@ -143,7 +160,12 @@ it("disables a schedule without sending input", async () => {
   fireEvent.click(screen.getByRole("switch", { name: "Run on schedule" }));
 
   await waitFor(() =>
-    expect(onSetScheduleEnabled).toHaveBeenCalledWith(nightly.workflowId, false, undefined),
+    expect(onSetScheduleEnabled).toHaveBeenCalledWith(
+      nightly.workflowId,
+      false,
+      undefined,
+      undefined,
+    ),
   );
 });
 
