@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.16.1
+
 - `ava.runtimes.ClaudeAgent` takes `system_prompt_preset="claude_code"` to start
   a step's system prompt with Claude Code's own and add the signature's
   instructions, the narration paragraph and `system_prompt_append` after it. The
