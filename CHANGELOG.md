@@ -29,9 +29,10 @@
   in operator memory only: it is kept across rediscovery and reload and resets on
   restart.
 - Enabling a schedule can set the input its cron runs start with. In the Web UI, the
-  input panel is the one place to define input: it is prefilled with the field
-  defaults (or the schedule's input), Run uses it, and turning the schedule on
-  saves it for cron runs. The TUI opens its input form prefilled the same way; the
+  input panel is the one place to define input: it holds the schedule's input and
+  what you type, shows each default as a placeholder, and sends only the values set,
+  so the run records defaults as defaults. Run uses it, and turning the schedule on
+  saves it for cron runs. The TUI opens its input form prefilled with defaults; the
   REST route and `SetScheduleEnabled` take `input_json`, and `ava schedule enable`
   takes `--input`. Flows report the stored input as `schedule_input_json`; without
   one, scheduled runs use the input defaults.

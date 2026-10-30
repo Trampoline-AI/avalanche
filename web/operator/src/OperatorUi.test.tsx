@@ -2161,6 +2161,12 @@ describe("workflow input node", () => {
     const limit = screen.getByRole("textbox", { name: "limit value" });
     const draft = () => JSON.parse(drafts.at(-1)!);
 
+    // Defaults show as placeholders; only values someone sets enter the draft.
+    expect(limit).toHaveValue("");
+    expect(limit).toHaveAttribute("placeholder", "3");
+    expect(repository).toHaveAttribute("placeholder", "");
+    expect(draft()).toEqual({});
+
     fireEvent.change(repository, { target: { value: "acme/web" } });
     fireEvent.change(limit, { target: { value: "7" } });
     expect(draft()).toEqual({ repository: "acme/web", limit: 7 });

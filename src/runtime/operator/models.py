@@ -105,23 +105,45 @@ class MissingRunInputError(ValueError):
 class _InputSchema(BaseModel):
     """The parts of a workflow's input JSON Schema that say which fields are required."""
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
 
-    # A schema without these keywords declares no required fields.
+    # A schema without these keywords declares no required fields or definitions.
     required: tuple[str, ...] = ()
     properties: dict[str, JsonValue] = Field(default_factory=dict)
+    definitions: dict[str, JsonValue] = Field(default_factory=dict, alias="$defs")
 
 
-def _accepts_null(schema: JsonValue) -> bool:
-    if schema is True:
-        return True
+def _rejects_null(schema: JsonValue, definitions: Mapping[str, JsonValue]) -> bool:
+    """Whether the schema certainly rejects null; anything undecided accepts it.
+
+    The run's own validation has the final word, so this only refuses input the
+    schema clearly forbids, never input Pydantic might accept.
+    """
     if not isinstance(schema, dict):
-        return False
+        # `true` accepts everything; `false` accepts nothing.
+        return schema is False
+    reference = schema.get("$ref")
+    if isinstance(reference, str) and reference.startswith("#/$defs/"):
+        target = definitions.get(reference.removeprefix("#/$defs/"))
+        if target is not None and _rejects_null(target, definitions):
+            return True
     kind = schema.get("type")
-    if kind == "null" or (isinstance(kind, list) and "null" in kind):
+    if isinstance(kind, str) and kind != "null":
         return True
-    branches = schema.get("anyOf")
-    return isinstance(branches, list) and any(_accepts_null(item) for item in branches)
+    if isinstance(kind, list) and "null" not in kind:
+        return True
+    if "const" in schema and schema["const"] is not None:
+        return True
+    enum = schema.get("enum")
+    if isinstance(enum, list) and None not in enum:
+        return True
+    for keyword in ("anyOf", "oneOf"):
+        branches = schema.get(keyword)
+        if isinstance(branches, list) and branches:
+            if all(_rejects_null(branch, definitions) for branch in branches):
+                return True
+    every = schema.get("allOf")
+    return isinstance(every, list) and any(_rejects_null(item, definitions) for item in every)
 
 
 def missing_required_input(
@@ -135,12 +157,12 @@ def missing_required_input(
     if input_schema_json == "":
         return ()
     schema = _InputSchema.model_validate_json(input_schema_json)
-    values = run_input or {}
+    values: Mapping[str, JsonValue] = {} if run_input is None else run_input
     return tuple(
         name
         for name in schema.required
         if name not in values
-        or (values[name] is None and not _accepts_null(schema.properties.get(name, False)))
+        or (values[name] is None and _rejects_null(schema.properties[name], schema.definitions))
     )
 
 

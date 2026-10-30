@@ -10,6 +10,7 @@ import type { JsonSchema } from "./stepInterface";
 import { ValueView } from "./ValueView";
 import {
   decodeWorkflowInputDeclaration,
+  defaultPlaceholder,
   formatInputValue,
   runInputFields,
   runTriggerLabel,
@@ -233,7 +234,7 @@ function FieldList({
                 aria-label={`${field.name} value`}
                 className={`mt-1.5 w-full rounded border bg-panel px-2 py-1.5 font-mono text-[11px] text-ink outline-none focus:border-acid ${editor.invalid(field) ? "border-danger" : "border-line"}`}
                 value={editor.text(field)}
-                placeholder={field.default.kind === "computed" ? "computed per run" : ""}
+                placeholder={defaultPlaceholder(field)}
                 disabled={editor.error !== undefined}
                 aria-invalid={editor.invalid(field) || undefined}
                 onChange={(event) => editor.update(field, event.target.value)}
