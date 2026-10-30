@@ -630,16 +630,14 @@
     border-color: var(--color-line);
   }
 
-  /* The run input is data coming in, not a step: an amber dot with no run state.
-     Its edges are dashed amber with a diamond head (graphSelection.ts). */
+  /* The run input is data coming in, not a step: a dot with no run state. Its
+     edges are dashed with a diamond head (graphSelection.ts). */
   .node-input-dot {
-    background: var(--color-amber);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-amber) 22%, var(--color-panel));
+    background: var(--color-ink);
   }
 
-  .node-input[data-selected] .node-input-dot {
-    background: var(--color-acid);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-acid) 22%, var(--color-panel));
+  .node-input[data-open] .node-input-dot {
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-ink) 18%, var(--color-panel));
   }
 
   .node-input[data-error] .node-input-dot {

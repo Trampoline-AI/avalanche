@@ -19,14 +19,14 @@ export function highlightConnectedEdges(
     const stateClass = connected ? " dag-edge--connected" : muted ? " dag-edge--muted" : "";
     if (edge.source === INPUT_NODE_ID) {
       // Input edges mean "this step is given the run input", not "runs after":
-      // always dashed amber with a diamond head, and faded rather than re-dashed when muted.
+      // always dashed with a diamond head, and faded rather than re-dashed when muted.
       return {
         ...edge,
         className: `${edge.className ?? ""} dag-edge--input${stateClass}`,
         ariaLabel,
         style: {
           ...edge.style,
-          stroke: connected ? "var(--color-acid)" : "var(--color-amber)",
+          stroke: connected ? "var(--color-acid)" : "var(--color-ink)",
           strokeWidth: connected ? 2.4 : 1.4,
           strokeDasharray: "5 4",
           opacity: muted ? 0.35 : undefined,
