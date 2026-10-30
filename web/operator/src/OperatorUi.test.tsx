@@ -2014,20 +2014,24 @@ describe("cron schedules", () => {
     ).toBeVisible();
     const toggle = screen.getByRole("switch", { name: "Run on schedule" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
-    // Schedule details stay hidden until expanded.
-    expect(screen.queryByRole("region", { name: "Schedule" })).not.toBeInTheDocument();
+    // The schedule in words stays hidden until expanded.
     const details = screen.getByRole("button", { name: "Schedule details" });
+    expect(screen.queryByText("(* * * * *)")).not.toBeInTheDocument();
     fireEvent.click(details);
     expect(details).toHaveAttribute("aria-expanded", "true");
-    const schedule = screen.getByRole("region", { name: "Schedule" });
-    expect(within(schedule).getByText("Every minute")).toBeVisible();
-    expect(within(schedule).getByRole("button", { name: /run-cron, failed/ })).toBeVisible();
-    expect(within(schedule).getAllByRole("time")).toHaveLength(1);
+    const summary = screen.getByText("(* * * * *)").closest("p")!;
+    expect(summary).toHaveTextContent("Every minute (* * * * *)");
+    const controls = toggle.closest<HTMLElement>(".schedule-controls")!;
+    // No countdown while the schedule is off.
+    expect(within(controls).queryByRole("time")).toBeNull();
 
     fireEvent.click(toggle);
     await waitFor(() => expect(toggle).toHaveAttribute("aria-checked", "true"));
     expect(setScheduleEnabled).toHaveBeenCalledWith(nightly.workflowId, true, undefined);
-    expect(within(schedule).getAllByRole("time")).toHaveLength(2);
+    expect(within(controls).getByRole("time")).toHaveAttribute(
+      "datetime",
+      new Date(nextRunAt * 1000).toISOString(),
+    );
     expect(screen.getByRole("img", { name: /\* \* \* \* \*/ })).toHaveAttribute(
       "data-schedule-enabled",
       "true",

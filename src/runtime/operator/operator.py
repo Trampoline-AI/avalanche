@@ -1551,6 +1551,11 @@ class Operator:
             info for info in catalog.workflows if info.workflow_id == descriptor.workflow_id
         )
 
+    def publish_schedule_state(self) -> None:
+        """Republish the catalog so clients see current next and last run times."""
+        with self._scheduler.reconciliation_boundary():
+            self._publish_catalog(self._registry.view)
+
     def _scheduled_descriptor(self, selector: str) -> WorkflowDescriptor:
         descriptor = self._registry.resolve(selector)
         if descriptor.cron is None:

@@ -31,12 +31,16 @@ class _Operator:
     def __init__(self) -> None:
         self.started: list[tuple[str, TriggerKind]] = []
         self.inputs: list[dict | None] = []
+        self.published = 0
 
     def start_run(
         self, workflow_id: str, triggered_by: TriggerKind, input: dict | None
     ) -> None:
         self.started.append((workflow_id, triggered_by))
         self.inputs.append(input)
+
+    def publish_schedule_state(self) -> None:
+        self.published += 1
 
 
 class _Clock:
@@ -142,6 +146,17 @@ def test_enabling_during_a_due_minute_waits_for_the_next_occurrence():
     clock.now += timedelta(days=1)
     scheduler._check_schedules()
     assert operator.started == [("flow.py::daily", TriggerKind.SCHEDULED)]
+
+
+def test_each_scheduled_start_republishes_the_schedule_state():
+    operator = _Operator()
+    scheduler = Scheduler(operator, enabled_by_default=True, clock=_Clock())
+    scheduler.reconcile([_descriptor("flow.py::a"), _descriptor("flow.py::b")])
+
+    scheduler._check_schedules()
+
+    assert len(operator.started) == 2
+    assert operator.published == 2
 
 
 def test_schedules_start_disabled_until_toggled():

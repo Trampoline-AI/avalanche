@@ -146,6 +146,8 @@ class Scheduler:
                             triggered_by=TriggerKind.SCHEDULED,
                             input=run_input,
                         )
+                        # Clients learn the new last and next run times.
+                        self._operator.publish_schedule_state()
                     logger.info(
                         "Scheduled run: %s (cron=%s)",
                         descriptor.workflow_id,
