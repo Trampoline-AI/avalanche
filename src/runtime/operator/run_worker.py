@@ -44,6 +44,7 @@ from .result_store import (
     publish_workflow_result,
 )
 from .results import encode_workflow_result
+from .step_io import preview_step_inputs, preview_value
 from .workflow_metadata import node_docstring_lines_for_workflow, step_interface_for_workflow
 
 _log_attempt: ContextVar[str] = ContextVar("operator_log_attempt", default="")
@@ -521,6 +522,7 @@ def _with_local_node_observers(
         fn = _with_evaluations(node_id, fn, event_queue)
     if getattr(fn, "__classifier_step__", None) is not None:
         fn = _with_classifier_evidence(node_id, fn, event_queue)
+    fn = _with_step_io(node_id, fn, event_queue)
     return _with_node_streams(node_id, fn, stdout, stderr)
 
 
@@ -698,6 +700,56 @@ def _with_evaluations(
     return wrapper
 
 
+def _with_step_io(
+    node_id: str,
+    fn: Callable[..., object],
+    event_queue: _RunEventQueue,
+) -> Callable[..., object]:
+    """Publish bounded previews of a standard step's arguments and return value.
+
+    Agent and classifier steps already retain their own typed inputs and outputs.
+    The previews are built where the call runs, from values the call already holds.
+    """
+    if (
+        getattr(fn, "__agent_step__", None) is not None
+        or getattr(fn, "__classifier_step__", None) is not None
+    ):
+        return fn
+    signature = inspect.signature(fn)
+
+    def publish_inputs(args: tuple[object, ...], kwargs: dict[str, object]) -> None:
+        inputs = preview_step_inputs(signature, args, kwargs)
+        event_queue.put(
+            {"type": "step_inputs", "node_id": node_id, "inputs": inputs.model_dump_json()}
+        )
+
+    def publish_output(value: object) -> None:
+        output = preview_value(value)
+        event_queue.put(
+            {"type": "step_output", "node_id": node_id, "output": output.model_dump_json()}
+        )
+
+    if inspect.iscoroutinefunction(fn):
+
+        @wraps(fn)
+        async def async_wrapper(*args: object, **kwargs: object) -> object:
+            publish_inputs(args, kwargs)
+            result = await fn(*args, **kwargs)
+            publish_output(result)
+            return result
+
+        return async_wrapper
+
+    @wraps(fn)
+    def wrapper(*args: object, **kwargs: object) -> object:
+        publish_inputs(args, kwargs)
+        result = fn(*args, **kwargs)
+        publish_output(result)
+        return result
+
+    return wrapper
+
+
 _RAY_LOG_STOP = {"type": "_ray_log_stop"}
 
 
@@ -711,6 +763,7 @@ def _with_ray_node_observers(
         fn = _with_evaluations(node_id, fn, ray_log_queue)
     if getattr(fn, "__classifier_step__", None) is not None:
         fn = _with_classifier_evidence(node_id, fn, ray_log_queue)
+    fn = _with_step_io(node_id, fn, ray_log_queue)
     return _with_ray_node_streams(node_id, fn, ray_log_queue)
 
 

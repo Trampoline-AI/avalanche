@@ -15,6 +15,8 @@ if TYPE_CHECKING:
     from avalanche.agent.native import TraceHeaderNative
     from avalanche.agent.trace import AgentTraceStatus, TokenUsage
 
+    from .step_io import StepIo
+
 
 # The common kind of an agent live event; "native" when it has no common equivalent.
 AgentEventKind = Literal[
@@ -89,6 +91,7 @@ class NodeState:
     started_at: float | None = None
     ended_at: float | None = None
     error: str | None = None
+    step_io: StepIo | None = None
     agent_trace_json: str | None = None
     trace: TraceDescriptor | None = None
     revision: int = 0
@@ -202,6 +205,7 @@ class NodeSnapshot:
     started_at: float | None = None
     ended_at: float | None = None
     error: str | None = None
+    step_io: StepIo | None = None
     trace: TraceDescriptor | None = None
     revision: int = 0
     event_page_token: str = ""
@@ -516,6 +520,7 @@ class NodeStatusChanged:
     error: str | None = None
     revision: int = 0
     running_elapsed_seconds: float | None = None
+    step_io: StepIo | None = None
 
 
 @dataclass(frozen=True)

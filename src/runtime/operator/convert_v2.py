@@ -53,6 +53,7 @@ from .models import (
 )
 from .proto import operator_pb2 as pb
 from .registry import workflow_revision
+from .step_io import StepIo, StepParameterPreview, StepValuePreview, StepValuePreviewKind
 
 DETAIL_URI_SCHEME = "local://detail/"
 TRACE_URI_SCHEME = "local://trace/"
@@ -298,6 +299,63 @@ def terminal_seal_descriptor_to_v2(
     )
 
 
+_STEP_VALUE_PREVIEW_KINDS_TO_V2 = {
+    StepValuePreviewKind.JSON: pb.STEP_VALUE_PREVIEW_KIND_V2_JSON,
+    StepValuePreviewKind.REPR: pb.STEP_VALUE_PREVIEW_KIND_V2_REPR,
+}
+_STEP_VALUE_PREVIEW_KINDS_FROM_V2 = {
+    wire: kind for kind, wire in _STEP_VALUE_PREVIEW_KINDS_TO_V2.items()
+}
+
+
+def step_value_preview_to_v2(preview: StepValuePreview) -> pb.StepValuePreviewV2:
+    return pb.StepValuePreviewV2(
+        kind=_STEP_VALUE_PREVIEW_KINDS_TO_V2[preview.kind],
+        type_name=preview.type_name,
+        preview_json=preview.preview_json,
+        truncated=preview.truncated,
+    )
+
+
+def step_io_to_v2(step_io: StepIo) -> pb.StepIoV2:
+    message = pb.StepIoV2(
+        inputs=[
+            pb.StepParameterPreviewV2(
+                name=parameter.name, value=step_value_preview_to_v2(parameter.value)
+            )
+            for parameter in step_io.inputs
+        ]
+    )
+    if step_io.output is not None:
+        message.output.CopyFrom(step_value_preview_to_v2(step_io.output))
+    return message
+
+
+def step_value_preview_from_v2(msg: pb.StepValuePreviewV2) -> StepValuePreview:
+    try:
+        kind = _STEP_VALUE_PREVIEW_KINDS_FROM_V2[msg.kind]
+    except KeyError:
+        raise ValueError(f"Unknown step value preview kind {msg.kind}") from None
+    return StepValuePreview(
+        kind=kind,
+        type_name=msg.type_name,
+        preview_json=msg.preview_json,
+        truncated=msg.truncated,
+    )
+
+
+def step_io_from_v2(msg: pb.StepIoV2) -> StepIo:
+    return StepIo(
+        inputs=tuple(
+            StepParameterPreview(
+                name=parameter.name, value=step_value_preview_from_v2(parameter.value)
+            )
+            for parameter in msg.inputs
+        ),
+        output=step_value_preview_from_v2(msg.output) if msg.HasField("output") else None,
+    )
+
+
 def node_snapshot_to_v2(
     node: NodeSnapshot,
     *,
@@ -317,6 +375,8 @@ def node_snapshot_to_v2(
         message.running_elapsed_seconds = node.running_elapsed_seconds
     if node.error is not None:
         message.error = node.error
+    if node.step_io is not None:
+        message.step_io.CopyFrom(step_io_to_v2(node.step_io))
     if node.trace is not None:
         message.trace.CopyFrom(trace_descriptor_to_v2(node.trace, detail_ref=trace_detail_ref))
     if activity_continuation is not None:
@@ -600,6 +660,7 @@ def update_envelope_to_v2(
                         error=change.error,
                         revision=change.revision,
                         running_elapsed_seconds=change.running_elapsed_seconds,
+                        step_io=change.step_io,
                     ),
                 ),
             )
@@ -901,6 +962,7 @@ def node_snapshot_from_v2(msg: pb.NodeSnapshotV2) -> NodeSnapshot:
         started_at=msg.started_at or None,
         ended_at=msg.ended_at or None,
         error=msg.error if msg.HasField("error") else None,
+        step_io=step_io_from_v2(msg.step_io) if msg.HasField("step_io") else None,
         trace=trace_descriptor_from_v2(msg.trace) if msg.HasField("trace") else None,
         revision=msg.revision,
         event_page_token=msg.activity_continuation.continuation_id,
@@ -1086,6 +1148,7 @@ def operator_update_envelope_from_v2(
                 if node.HasField("running_elapsed_seconds")
                 else None
             ),
+            step_io=step_io_from_v2(node.step_io) if node.HasField("step_io") else None,
         )
     elif payload == "activity_appended":
         appended = msg.activity_appended
