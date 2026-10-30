@@ -4,7 +4,8 @@ import type { GraphOrientation } from "./useGraphOrientation";
 
 // One slot in a layer: a workflow node, or the point where a longer edge crosses
 // that layer. Edges that skip layers reserve a slot in each skipped layer, so they
-// pass between cards instead of wrapping around the outside of the graph.
+// pass between cards instead of wrapping around the outside of the graph. Long edges
+// from one source, or into one target, share those slots and run as one trunk.
 export interface LayerItem {
   nodeId: string | undefined;
 }
@@ -39,8 +40,10 @@ const PORT_INSET = 10;
 const PORT_SPACING = 16;
 const CHANNEL_MARGIN = 28;
 const CHANNEL_SPACING = 16;
-// Long edges pull much harder on each other than on cards, so they run straight.
+// Long edges pull much harder on each other than on cards, so they run straight, and
+// cards follow the cards they connect to rather than edges passing by.
 const WAYPOINT_WEIGHT = 8;
+const CARD_WEIGHT = 2;
 const ORDERING_SWEEPS = 8;
 const PLACEMENT_SWEEPS = 12;
 
@@ -74,7 +77,7 @@ export function createGraphLayout(
     depths[root] = Math.min(...consumers.map((id) => depths[id])) - 1;
     if (depths[root] > 0) deferredInputs.add(root);
   }
-  const layers: LayerItem[][] = [];
+  const nodeLayers: LayerItem[][] = [];
   const items = new Map<string, LayerItem>();
   // Keep the existing preparation steps first and place supporting inputs beside them.
   for (const nodeId of [
@@ -83,24 +86,17 @@ export function createGraphLayout(
   ]) {
     const item = { nodeId };
     items.set(nodeId, item);
-    (layers[depths[nodeId] ?? 0] ??= []).push(item);
+    (nodeLayers[depths[nodeId] ?? 0] ??= []).push(item);
   }
-  for (let depth = 0; depth < layers.length; depth += 1) layers[depth] ??= [];
+  for (let depth = 0; depth < nodeLayers.length; depth += 1) nodeLayers[depth] ??= [];
 
   const edges: Edge[] = [];
-  const chains: Record<string, LayerItem[]> = {};
+  const links = new Set<string>();
   for (const [source, children] of Object.entries(topology.graph)) {
     for (const target of children.children) {
       const id = `${source}->${target}`;
-      if (Object.hasOwn(chains, id)) continue;
-      const chain = [items.get(source)!];
-      for (let depth = depths[source] + 1; depth < depths[target]; depth += 1) {
-        const waypoint = { nodeId: undefined };
-        layers[depth].push(waypoint);
-        chain.push(waypoint);
-      }
-      chain.push(items.get(target)!);
-      chains[id] = chain;
+      if (links.has(id)) continue;
+      links.add(id);
       edges.push({
         id,
         source,
@@ -113,8 +109,61 @@ export function createGraphLayout(
       });
     }
   }
-  orderLayers(layers, Object.values(chains));
+  // Shared trunks usually remove parallel lanes, but they can force an edge across
+  // another one; keep them only when they add no crossings.
+  const separate = routeEdges(edges, nodeLayers, items, depths, false);
+  const shared = routeEdges(edges, nodeLayers, items, depths, true);
+  const { layers, chains } = shared.crossings <= separate.crossings ? shared : separate;
   return { edges, layers, chains };
+}
+
+function routeEdges(
+  edges: readonly Edge[],
+  nodeLayers: readonly LayerItem[][],
+  items: ReadonlyMap<string, LayerItem>,
+  depths: Readonly<Record<string, number>>,
+  shareTrunks: boolean,
+) {
+  // A source with several long edges sends them along one trunk that branches off
+  // toward each target. Other long edges into one target merge into one trunk when
+  // their sources sit at different depths; sibling sources keep their own lanes so
+  // each can pass on its own side of the cards between them.
+  const long = edges.filter(({ source, target }) => depths[target] > depths[source] + 1);
+  const trunks = new Set(
+    long
+      .map(({ source }) => source)
+      .filter((source, index, sources) => shareTrunks && sources.indexOf(source) !== index),
+  );
+  const mergingDepths = new Map<string, number[]>();
+  for (const { source, target } of long) {
+    if (!shareTrunks || trunks.has(source)) continue;
+    mergingDepths.set(target, [...(mergingDepths.get(target) ?? []), depths[source]]);
+  }
+  const layers = nodeLayers.map((layer) => [...layer]);
+  const waypoints = new Map<string, LayerItem>();
+  const chains: Record<string, LayerItem[]> = {};
+  for (const { id, source, target } of edges) {
+    const lane = trunks.has(source)
+      ? `from:${source}`
+      : mergingDepths.get(target)?.filter((depth) => depth === depths[source]).length === 1
+        ? `into:${target}`
+        : id;
+    const chain = [items.get(source)!];
+    for (let depth = depths[source] + 1; depth < depths[target]; depth += 1) {
+      const key = `${lane}@${depth}`;
+      let waypoint = waypoints.get(key);
+      if (waypoint === undefined) {
+        waypoint = { nodeId: undefined };
+        waypoints.set(key, waypoint);
+        layers[depth].push(waypoint);
+      }
+      chain.push(waypoint);
+    }
+    chain.push(items.get(target)!);
+    chains[id] = chain;
+  }
+  const crossings = orderLayers(layers, Object.values(chains));
+  return { layers, chains, crossings };
 }
 
 function neighborMaps(chains: readonly LayerItem[][]) {
@@ -126,6 +175,8 @@ function neighborMaps(chains: readonly LayerItem[][]) {
       const lower = chain[index];
       if (!above.has(lower)) above.set(lower, []);
       if (!below.has(upper)) below.set(upper, []);
+      // Edges sharing a trunk share its links; count each link once.
+      if (above.get(lower)!.includes(upper)) continue;
       above.get(lower)!.push(upper);
       below.get(upper)!.push(lower);
     }
@@ -156,7 +207,7 @@ function countCrossings(
 
 // Barycenter sweeps: each item moves toward the average slot of its neighbors in
 // the adjacent layer. The ordering with the fewest crossings wins.
-function orderLayers(layers: LayerItem[][], chains: readonly LayerItem[][]) {
+function orderLayers(layers: LayerItem[][], chains: readonly LayerItem[][]): number {
   const { above, below } = neighborMaps(chains);
   const sortLayer = (depth: number, neighbors: ReadonlyMap<LayerItem, LayerItem[]>) => {
     const reference = layers[depth + (neighbors === above ? -1 : 1)];
@@ -188,6 +239,7 @@ function orderLayers(layers: LayerItem[][], chains: readonly LayerItem[][]) {
     }
   }
   best.forEach((layer, depth) => (layers[depth] = layer));
+  return fewest;
 }
 
 // Closest positions to `desired` that keep each neighbor at least `gaps[i]` after
@@ -225,6 +277,56 @@ export function placeInOrder(
     .map((value, index) => Math.min(high, Math.max(low, value)) + offsets[index]);
 }
 
+export interface Pull {
+  value: number;
+  weight: number;
+}
+
+// Positions that keep each neighbor at least `gaps[i]` after the previous one and
+// minimize the weighted distance from every item to each of its pulls. Unlike
+// averaging, the weighted median lets a card sit exactly level with the neighbor
+// that pulls hardest, so a chain stays straight while other edges bend to reach it.
+export function placeAtMedians(
+  pulls: readonly (readonly Pull[])[],
+  gaps: readonly number[],
+): number[] {
+  const offsets = [0];
+  for (const gap of gaps) offsets.push(offsets.at(-1)! + gap);
+  const blocks: { pulls: Pull[]; value: number; count: number }[] = [];
+  pulls.forEach((itemPulls, index) => {
+    const shifted = itemPulls.map(({ value, weight }) => ({
+      value: value - offsets[index],
+      weight,
+    }));
+    blocks.push({ pulls: shifted, value: weightedMedian(shifted), count: 1 });
+    while (blocks.length > 1) {
+      const last = blocks[blocks.length - 1];
+      const previous = blocks[blocks.length - 2];
+      if (previous.value <= last.value) break;
+      previous.pulls.push(...last.pulls);
+      previous.value = weightedMedian(previous.pulls);
+      previous.count += last.count;
+      blocks.pop();
+    }
+  });
+  return blocks
+    .flatMap(({ value, count }) => Array<number>(count).fill(value))
+    .map((value, index) => value + offsets[index]);
+}
+
+// The middle of the range of values that minimize the total weighted distance.
+function weightedMedian(pulls: readonly Pull[]): number {
+  const sorted = [...pulls].sort((left, right) => left.value - right.value);
+  const half = sorted.reduce((sum, { weight }) => sum + weight, 0) / 2;
+  let below = 0;
+  for (const [index, { value, weight }] of sorted.entries()) {
+    below += weight;
+    if (below > half + 1e-9) return value;
+    if (below > half - 1e-9) return (value + sorted[index + 1].value) / 2;
+  }
+  throw new Error("Cannot place an item without pulls");
+}
+
 // Spread ports along one side of a card, as close to their other ends as the card allows.
 function placePorts(desired: readonly number[], low: number, high: number): number[] {
   if (desired.length === 0) return [];
@@ -241,7 +343,8 @@ function placePorts(desired: readonly number[], low: number, high: number): numb
 }
 
 interface Segment {
-  edgeId: string;
+  // One hop between two layer items; edges sharing a trunk share its hops.
+  hop: string;
   from: number;
   to: number;
 }
@@ -319,7 +422,11 @@ export function arrangeGraph(
     layer.forEach((item, index) => across.set(item, packed[index] - middle));
   });
   const linkWeight = (item: LayerItem, other: LayerItem) =>
-    item.nodeId === undefined && other.nodeId === undefined ? WAYPOINT_WEIGHT : 1;
+    item.nodeId === undefined && other.nodeId === undefined
+      ? WAYPOINT_WEIGHT
+      : item.nodeId !== undefined && other.nodeId !== undefined
+        ? CARD_WEIGHT
+        : 1;
   const align = (
     depth: number,
     neighborSets: readonly ReadonlyMap<LayerItem, LayerItem[]>[],
@@ -327,19 +434,13 @@ export function arrangeGraph(
     const layer = layout.layers[depth];
     const pulls = layer.map((item) => {
       const adjacent = neighborSets.flatMap((neighbors) => neighbors.get(item) ?? []);
-      if (adjacent.length === 0) return { desired: across.get(item)!, weight: 1 };
-      const weight = adjacent.reduce((sum, other) => sum + linkWeight(item, other), 0);
-      const total = adjacent.reduce(
-        (sum, other) => sum + linkWeight(item, other) * across.get(other)!,
-        0,
-      );
-      return { desired: total / weight, weight };
+      if (adjacent.length === 0) return [{ value: across.get(item)!, weight: 1 }];
+      return adjacent.map((other) => ({
+        value: across.get(other)!,
+        weight: linkWeight(item, other),
+      }));
     });
-    const placed = placeInOrder(
-      pulls.map(({ desired }) => desired),
-      gaps[depth],
-      pulls.map(({ weight }) => weight),
-    );
+    const placed = placeAtMedians(pulls, gaps[depth]);
     layer.forEach((item, index) => across.set(item, placed[index]));
   };
   for (let sweep = 0; sweep < PLACEMENT_SWEEPS; sweep += 1) {
@@ -351,6 +452,11 @@ export function arrangeGraph(
     for (let depth = layout.layers.length - 2; depth >= 0; depth -= 1) {
       align(depth, settled ? [above, below] : [below]);
     }
+    // Ties between medians let the whole graph slide without changing its shape;
+    // keep it centered so the view does not jump when card sizes are measured.
+    const placed = [...across.values()];
+    const middle = (Math.min(...placed) + Math.max(...placed)) / 2;
+    for (const [item, value] of across) across.set(item, value - middle);
   }
 
   // Run each long edge straight through the layers it skips wherever its lane
@@ -375,72 +481,121 @@ export function arrangeGraph(
   };
   const clampInto = ([low, high]: readonly [number, number], value: number) =>
     Math.min(high, Math.max(low, value));
-  const longChains = Object.values(layout.chains)
-    .filter((chain) => chain.length > 2)
-    .sort((left, right) => right.length - left.length);
-  for (const chain of longChains) {
-    const waypoints = chain.slice(1, -1);
+  // Waypoints linked to each other form one trunk, which runs at a single level.
+  const trunkOf = new Map<LayerItem, LayerItem[]>();
+  for (const chain of Object.values(layout.chains)) {
+    let trunk: LayerItem[] | undefined;
+    for (const item of chain.slice(1, -1)) {
+      const existing = trunkOf.get(item);
+      if (trunk === undefined) {
+        trunk = existing ?? [item];
+      } else if (existing !== undefined && existing !== trunk) {
+        for (const other of existing) trunkOf.set(other, trunk);
+        trunk.push(...existing);
+      } else if (existing === undefined) {
+        trunk.push(item);
+      }
+      trunkOf.set(item, trunk);
+    }
+  }
+  const trunks = [...new Set(trunkOf.values())].sort(
+    (left, right) => right.length - left.length,
+  );
+  for (const waypoints of trunks) {
     const current = waypoints.map((item) => across.get(item)!);
     const mean = current.reduce((sum, value) => sum + value, 0) / current.length;
-    const sourceRange = portRange(chain[0]);
-    const targetRange = portRange(chain.at(-1)!);
+    const ends = [
+      ...new Set(
+        waypoints.flatMap((item) =>
+          [...(above.get(item) ?? []), ...(below.get(item) ?? [])].filter(
+            (other) => other.nodeId !== undefined,
+          ),
+        ),
+      ),
+    ];
     const candidates = [
-      clampInto(sourceRange, clampInto(targetRange, mean)),
-      clampInto(targetRange, clampInto(sourceRange, mean)),
+      ...ends.map((end) => clampInto(portRange(end), mean)),
       ...current.sort((left, right) => Math.abs(left - mean) - Math.abs(right - mean)),
     ];
     const level = candidates.find((value) => waypoints.every((item) => fits(item, value)));
     if (level !== undefined) for (const item of waypoints) across.set(item, level);
   }
 
-  // Each edge leaves and enters through its own port, so arrowheads never stack.
+  // Each link leaves and enters through its own port, so arrowheads never stack.
+  // Edges sharing a trunk share the port where the trunk meets the card.
   const outPorts: Record<string, number> = {};
   const inPorts: Record<string, number> = {};
-  const outgoing = new Map<LayerItem, { edgeId: string; next: LayerItem }[]>();
-  const incoming = new Map<LayerItem, { edgeId: string; previous: LayerItem }[]>();
+  const outgoing = new Map<LayerItem, Map<LayerItem, string[]>>();
+  const incoming = new Map<LayerItem, Map<LayerItem, string[]>>();
+  const link = (
+    links: Map<LayerItem, Map<LayerItem, string[]>>,
+    card: LayerItem,
+    other: LayerItem,
+    edgeId: string,
+  ) => {
+    if (!links.has(card)) links.set(card, new Map());
+    const byOther = links.get(card)!;
+    if (!byOther.has(other)) byOther.set(other, []);
+    byOther.get(other)!.push(edgeId);
+  };
   for (const [edgeId, chain] of Object.entries(layout.chains)) {
-    if (!outgoing.has(chain[0])) outgoing.set(chain[0], []);
-    outgoing.get(chain[0])!.push({ edgeId, next: chain[1] });
-    const last = chain.at(-1)!;
-    if (!incoming.has(last)) incoming.set(last, []);
-    incoming.get(last)!.push({ edgeId, previous: chain.at(-2)! });
+    link(outgoing, chain[0], chain[1], edgeId);
+    link(incoming, chain.at(-1)!, chain.at(-2)!, edgeId);
   }
   for (const [item, links] of outgoing) {
-    links.sort((left, right) => across.get(left.next)! - across.get(right.next)!);
+    const ordered = [...links].sort(
+      ([left], [right]) => across.get(left)! - across.get(right)!,
+    );
     const ports = placePorts(
-      links.map(({ next }) => across.get(next)!),
+      ordered.map(([next]) => across.get(next)!),
       ...portRange(item),
     );
-    links.forEach(({ edgeId }, index) => (outPorts[edgeId] = ports[index]));
+    ordered.forEach(([, edgeIds], index) => {
+      for (const edgeId of edgeIds) outPorts[edgeId] = ports[index];
+    });
   }
   const endAcross = (edgeId: string, item: LayerItem) =>
     item.nodeId === undefined ? across.get(item)! : outPorts[edgeId];
   for (const [item, links] of incoming) {
-    links.sort(
-      (left, right) =>
-        endAcross(left.edgeId, left.previous) - endAcross(right.edgeId, right.previous),
+    const ordered = [...links].sort(
+      ([leftItem, [left]], [rightItem, [right]]) =>
+        endAcross(left, leftItem) - endAcross(right, rightItem),
     );
     const ports = placePorts(
-      links.map(({ edgeId, previous }) => endAcross(edgeId, previous)),
+      ordered.map(([previous, [edgeId]]) => endAcross(edgeId, previous)),
       ...portRange(item),
     );
-    links.forEach(({ edgeId }, index) => (inPorts[edgeId] = ports[index]));
+    ordered.forEach(([, edgeIds], index) => {
+      for (const edgeId of edgeIds) inPorts[edgeId] = ports[index];
+    });
   }
 
-  // Between two layers, every bending edge gets its own vertical channel.
+  // Between two layers, every bending hop gets its own vertical channel.
   const depthOf = new Map<LayerItem, number>();
-  layout.layers.forEach((layer, depth) => layer.forEach((item) => depthOf.set(item, depth)));
+  const itemIndex = new Map<LayerItem, number>();
+  layout.layers.forEach((layer, depth) =>
+    layer.forEach((item) => {
+      depthOf.set(item, depth);
+      itemIndex.set(item, itemIndex.size);
+    }),
+  );
+  const hopId = (chain: LayerItem[], index: number) =>
+    `${itemIndex.get(chain[index])}>${itemIndex.get(chain[index + 1])}`;
   const hopAcross = (edgeId: string, chain: LayerItem[], index: number) => {
     const from = index === 0 ? outPorts[edgeId] : across.get(chain[index])!;
     const to = index + 2 === chain.length ? inPorts[edgeId] : across.get(chain[index + 1])!;
     return { from, to };
   };
   const gapSegments: Segment[][] = layout.layers.map(() => []);
+  const seenHops = new Set<string>();
   for (const [edgeId, chain] of Object.entries(layout.chains)) {
     for (let index = 0; index + 1 < chain.length; index += 1) {
+      const hop = hopId(chain, index);
+      if (seenHops.has(hop)) continue;
+      seenHops.add(hop);
       const { from, to } = hopAcross(edgeId, chain, index);
       if (Math.abs(from - to) >= 0.5) {
-        gapSegments[depthOf.get(chain[index])!].push({ edgeId, from, to });
+        gapSegments[depthOf.get(chain[index])!].push({ hop, from, to });
       }
     }
   }
@@ -464,9 +619,7 @@ export function arrangeGraph(
     const end = layerStarts[depth + 1] ?? start;
     const step = (end - start - 2 * CHANNEL_MARGIN) / Math.max(1, ordered.length - 1);
     const first = ordered.length === 1 ? (start + end) / 2 : start + CHANNEL_MARGIN;
-    return Object.fromEntries(
-      ordered.map(({ edgeId }, index) => [edgeId, first + index * step]),
-    );
+    return Object.fromEntries(ordered.map(({ hop }, index) => [hop, first + index * step]));
   });
 
   const nodeStart = (nodeId: string, depth: number) =>
@@ -498,7 +651,7 @@ export function arrangeGraph(
       ),
     ];
     for (let index = 0; index + 1 < chain.length; index += 1) {
-      const channel = channels[sourceDepth + index][edgeId];
+      const channel = channels[sourceDepth + index][hopId(chain, index)];
       if (channel === undefined) continue;
       const { from, to } = hopAcross(edgeId, chain, index);
       points.push(point(channel, from), point(channel, to));
