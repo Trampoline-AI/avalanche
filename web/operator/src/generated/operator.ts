@@ -819,6 +819,69 @@ export interface NodeSnapshotV2 {
      * @generated from protobuf field: avalanche.operator.ContinuationRefV2 activity_continuation = 11
      */
     activityContinuation?: ContinuationRefV2;
+    /**
+     * Standard steps only: previews of the latest call's arguments and return value.
+     * Unset until the step is called.
+     *
+     * @generated from protobuf field: avalanche.operator.StepIoV2 step_io = 12
+     */
+    stepIo?: StepIoV2;
+}
+/**
+ * A bounded, display-only rendering of one value, never the value itself. Cut
+ * content is replaced by an explicit "…" marker and truncated is set.
+ *
+ * @generated from protobuf message avalanche.operator.StepValuePreviewV2
+ */
+export interface StepValuePreviewV2 {
+    /**
+     * @generated from protobuf field: avalanche.operator.StepValuePreviewKindV2 kind = 1
+     */
+    kind: StepValuePreviewKindV2;
+    /**
+     * The Python type of the value, such as "dict" or "polars.dataframe.frame.DataFrame".
+     *
+     * @generated from protobuf field: string type_name = 2
+     */
+    typeName: string;
+    /**
+     * @generated from protobuf field: string preview_json = 3
+     */
+    previewJson: string;
+    /**
+     * @generated from protobuf field: bool truncated = 4
+     */
+    truncated: boolean;
+}
+/**
+ * @generated from protobuf message avalanche.operator.StepParameterPreviewV2
+ */
+export interface StepParameterPreviewV2 {
+    /**
+     * @generated from protobuf field: string name = 1
+     */
+    name: string;
+    /**
+     * @generated from protobuf field: avalanche.operator.StepValuePreviewV2 value = 2
+     */
+    value?: StepValuePreviewV2;
+}
+/**
+ * @generated from protobuf message avalanche.operator.StepIoV2
+ */
+export interface StepIoV2 {
+    /**
+     * In signature order; injected loggers are omitted.
+     *
+     * @generated from protobuf field: repeated avalanche.operator.StepParameterPreviewV2 inputs = 1
+     */
+    inputs: StepParameterPreviewV2[];
+    /**
+     * Unset until the call returns.
+     *
+     * @generated from protobuf field: avalanche.operator.StepValuePreviewV2 output = 2
+     */
+    output?: StepValuePreviewV2;
 }
 /**
  * Token counts for an agent invocation; absent figures were not reported.
@@ -1679,6 +1742,27 @@ export interface RunStatusEnvelopeV2 {
      * @generated from protobuf field: avalanche.operator.ScopeReferenceV2 scope_ref = 10
      */
     scopeRef?: ScopeReferenceV2;
+}
+/**
+ * @generated from protobuf enum avalanche.operator.StepValuePreviewKindV2
+ */
+export enum StepValuePreviewKindV2 {
+    /**
+     * @generated from protobuf enum value: STEP_VALUE_PREVIEW_KIND_V2_UNSPECIFIED = 0;
+     */
+    UNSPECIFIED = 0,
+    /**
+     * preview_json is a bounded JSON rendering of plain data.
+     *
+     * @generated from protobuf enum value: STEP_VALUE_PREVIEW_KIND_V2_JSON = 1;
+     */
+    JSON = 1,
+    /**
+     * preview_json is a JSON string holding the bounded repr of an opaque object.
+     *
+     * @generated from protobuf enum value: STEP_VALUE_PREVIEW_KIND_V2_REPR = 2;
+     */
+    REPR = 2
 }
 /**
  * @generated from protobuf enum avalanche.operator.AgentTraceStatusV2
@@ -4085,7 +4169,8 @@ class NodeSnapshotV2$Type extends MessageType<NodeSnapshotV2> {
             { no: 8, name: "error", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 9, name: "running_elapsed_seconds", kind: "scalar", opt: true, T: 1 /*ScalarType.DOUBLE*/ },
             { no: 10, name: "trace", kind: "message", T: () => TraceDescriptorV2 },
-            { no: 11, name: "activity_continuation", kind: "message", T: () => ContinuationRefV2 }
+            { no: 11, name: "activity_continuation", kind: "message", T: () => ContinuationRefV2 },
+            { no: 12, name: "step_io", kind: "message", T: () => StepIoV2 }
         ]);
     }
     create(value?: PartialMessage<NodeSnapshotV2>): NodeSnapshotV2 {
@@ -4139,6 +4224,9 @@ class NodeSnapshotV2$Type extends MessageType<NodeSnapshotV2> {
                 case /* avalanche.operator.ContinuationRefV2 activity_continuation */ 11:
                     message.activityContinuation = ContinuationRefV2.internalBinaryRead(reader, reader.uint32(), options, message.activityContinuation);
                     break;
+                case /* avalanche.operator.StepIoV2 step_io */ 12:
+                    message.stepIo = StepIoV2.internalBinaryRead(reader, reader.uint32(), options, message.stepIo);
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -4184,6 +4272,9 @@ class NodeSnapshotV2$Type extends MessageType<NodeSnapshotV2> {
         /* avalanche.operator.ContinuationRefV2 activity_continuation = 11; */
         if (message.activityContinuation)
             ContinuationRefV2.internalBinaryWrite(message.activityContinuation, writer.tag(11, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.StepIoV2 step_io = 12; */
+        if (message.stepIo)
+            StepIoV2.internalBinaryWrite(message.stepIo, writer.tag(12, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -4194,6 +4285,185 @@ class NodeSnapshotV2$Type extends MessageType<NodeSnapshotV2> {
  * @generated MessageType for protobuf message avalanche.operator.NodeSnapshotV2
  */
 export const NodeSnapshotV2 = new NodeSnapshotV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class StepValuePreviewV2$Type extends MessageType<StepValuePreviewV2> {
+    constructor() {
+        super("avalanche.operator.StepValuePreviewV2", [
+            { no: 1, name: "kind", kind: "enum", T: () => ["avalanche.operator.StepValuePreviewKindV2", StepValuePreviewKindV2, "STEP_VALUE_PREVIEW_KIND_V2_"] },
+            { no: 2, name: "type_name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "preview_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "truncated", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+    create(value?: PartialMessage<StepValuePreviewV2>): StepValuePreviewV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.kind = 0;
+        message.typeName = "";
+        message.previewJson = "";
+        message.truncated = false;
+        if (value !== undefined)
+            reflectionMergePartial<StepValuePreviewV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: StepValuePreviewV2): StepValuePreviewV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* avalanche.operator.StepValuePreviewKindV2 kind */ 1:
+                    message.kind = reader.int32();
+                    break;
+                case /* string type_name */ 2:
+                    message.typeName = reader.string();
+                    break;
+                case /* string preview_json */ 3:
+                    message.previewJson = reader.string();
+                    break;
+                case /* bool truncated */ 4:
+                    message.truncated = reader.bool();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: StepValuePreviewV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* avalanche.operator.StepValuePreviewKindV2 kind = 1; */
+        if (message.kind !== 0)
+            writer.tag(1, WireType.Varint).int32(message.kind);
+        /* string type_name = 2; */
+        if (message.typeName !== "")
+            writer.tag(2, WireType.LengthDelimited).string(message.typeName);
+        /* string preview_json = 3; */
+        if (message.previewJson !== "")
+            writer.tag(3, WireType.LengthDelimited).string(message.previewJson);
+        /* bool truncated = 4; */
+        if (message.truncated !== false)
+            writer.tag(4, WireType.Varint).bool(message.truncated);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.StepValuePreviewV2
+ */
+export const StepValuePreviewV2 = new StepValuePreviewV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class StepParameterPreviewV2$Type extends MessageType<StepParameterPreviewV2> {
+    constructor() {
+        super("avalanche.operator.StepParameterPreviewV2", [
+            { no: 1, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "value", kind: "message", T: () => StepValuePreviewV2 }
+        ]);
+    }
+    create(value?: PartialMessage<StepParameterPreviewV2>): StepParameterPreviewV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.name = "";
+        if (value !== undefined)
+            reflectionMergePartial<StepParameterPreviewV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: StepParameterPreviewV2): StepParameterPreviewV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string name */ 1:
+                    message.name = reader.string();
+                    break;
+                case /* avalanche.operator.StepValuePreviewV2 value */ 2:
+                    message.value = StepValuePreviewV2.internalBinaryRead(reader, reader.uint32(), options, message.value);
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: StepParameterPreviewV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string name = 1; */
+        if (message.name !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.name);
+        /* avalanche.operator.StepValuePreviewV2 value = 2; */
+        if (message.value)
+            StepValuePreviewV2.internalBinaryWrite(message.value, writer.tag(2, WireType.LengthDelimited).fork(), options).join();
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.StepParameterPreviewV2
+ */
+export const StepParameterPreviewV2 = new StepParameterPreviewV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class StepIoV2$Type extends MessageType<StepIoV2> {
+    constructor() {
+        super("avalanche.operator.StepIoV2", [
+            { no: 1, name: "inputs", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => StepParameterPreviewV2 },
+            { no: 2, name: "output", kind: "message", T: () => StepValuePreviewV2 }
+        ]);
+    }
+    create(value?: PartialMessage<StepIoV2>): StepIoV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.inputs = [];
+        if (value !== undefined)
+            reflectionMergePartial<StepIoV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: StepIoV2): StepIoV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* repeated avalanche.operator.StepParameterPreviewV2 inputs */ 1:
+                    message.inputs.push(StepParameterPreviewV2.internalBinaryRead(reader, reader.uint32(), options));
+                    break;
+                case /* avalanche.operator.StepValuePreviewV2 output */ 2:
+                    message.output = StepValuePreviewV2.internalBinaryRead(reader, reader.uint32(), options, message.output);
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: StepIoV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* repeated avalanche.operator.StepParameterPreviewV2 inputs = 1; */
+        for (let i = 0; i < message.inputs.length; i++)
+            StepParameterPreviewV2.internalBinaryWrite(message.inputs[i], writer.tag(1, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.StepValuePreviewV2 output = 2; */
+        if (message.output)
+            StepValuePreviewV2.internalBinaryWrite(message.output, writer.tag(2, WireType.LengthDelimited).fork(), options).join();
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.StepIoV2
+ */
+export const StepIoV2 = new StepIoV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class TokenUsageV2$Type extends MessageType<TokenUsageV2> {
     constructor() {

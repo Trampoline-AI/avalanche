@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, ListFilter, X } from "lucide-react";
 
 import type { OperatorApi } from "./api";
 import { ClassifierDefinition, ClassifierInvocationDetails } from "./ClassifierDetails";
+import { StepInterfacePanel } from "./StepInterfacePanel";
 import {
   type ClassifierDeclaration,
   type ClassifierInvocation,
@@ -24,6 +25,7 @@ import {
   type NodeSnapshotMsg,
   type RunSnapshotMsg,
 } from "./model";
+import { OpenDefinitionButton } from "./OpenDefinitionButton";
 import { PythonSource } from "./PythonSource";
 
 const EMPTY_EVENTS: ClassifierEventDescriptorMsg[] = [];
@@ -49,6 +51,8 @@ interface ClassifierInspectorProps {
   liveEvents?: ClassifierEventDescriptorMsg[];
   embedded?: boolean;
   definitionLabel?: string;
+  /** Run views only: shows the same node's current definition. */
+  onOpenDefinition?: () => void;
   onClose: () => void;
 }
 
@@ -701,8 +705,13 @@ function ClassifierHistory({
   );
 }
 
-type ClassifierTab = "definition" | "code";
-const WORKFLOW_TABS: ClassifierTab[] = ["definition", "code"];
+type ClassifierTab = "code" | "definition" | "interface";
+const WORKFLOW_TABS: ClassifierTab[] = ["code", "definition", "interface"];
+const TAB_LABELS: Record<ClassifierTab, string> = {
+  code: "Code",
+  definition: "Definition",
+  interface: "Step interface",
+};
 
 type SourceState = {
   api: OperatorApi;
@@ -782,6 +791,7 @@ export function ClassifierInspector({
   liveEvents = EMPTY_EVENTS,
   embedded = false,
   definitionLabel = "Current definition",
+  onOpenDefinition,
   onClose,
 }: ClassifierInspectorProps) {
   const node = run?.nodes.find((item) => item.nodeId === nodeId);
@@ -790,7 +800,7 @@ export function ClassifierInspector({
   const tabsId = useId();
   const tabScope = `workflow\0${workflow?.name ?? ""}\0${nodeId}`;
   const [selectedTab, setSelectedTab] = useState<{ scope: string; tab: ClassifierTab }>();
-  const tab = selectedTab?.scope === tabScope ? selectedTab.tab : "definition";
+  const tab = selectedTab?.scope === tabScope ? selectedTab.tab : "code";
   const name = run
     ? run.topology?.displayNames[nodeId] || node?.name || nodeId
     : workflow?.displayNames[nodeId] || nodeId;
@@ -816,6 +826,12 @@ export function ClassifierInspector({
             >
               {node.error}
             </p>
+          )}
+          {run && onOpenDefinition && (
+            <OpenDefinitionButton
+              definitionLabel={definitionLabel}
+              onOpenDefinition={onOpenDefinition}
+            />
           )}
         </div>
         <button
@@ -852,12 +868,17 @@ export function ClassifierInspector({
                     ? WORKFLOW_TABS[0]
                     : event.key === "End"
                       ? WORKFLOW_TABS[WORKFLOW_TABS.length - 1]
-                      : WORKFLOW_TABS[(WORKFLOW_TABS.indexOf(item) + 1) % WORKFLOW_TABS.length];
+                      : WORKFLOW_TABS[
+                          (WORKFLOW_TABS.indexOf(item) +
+                            (event.key === "ArrowRight" ? 1 : -1) +
+                            WORKFLOW_TABS.length) %
+                            WORKFLOW_TABS.length
+                        ];
                 setSelectedTab({ scope: tabScope, tab: next });
                 document.getElementById(`${tabsId}-${next}`)?.focus();
               }}
             >
-              {item === "definition" ? "Definition" : "Code"}
+              {TAB_LABELS[item]}
             </button>
           ))}
         </div>
@@ -878,7 +899,7 @@ export function ClassifierInspector({
           role="tabpanel"
           id={`${tabsId}-panel`}
           aria-labelledby={`${tabsId}-${tab}`}
-          className={`inspector-body min-h-0 min-w-0 flex-1 ${tab === "code" ? "overflow-hidden bg-canvas" : "overflow-auto px-3 py-1 [scrollbar-gutter:stable]"}`}
+          className={`inspector-body min-h-0 min-w-0 flex-1 ${tab === "code" ? "overflow-hidden bg-canvas" : tab === "interface" ? "overflow-auto p-5 [scrollbar-gutter:stable]" : "overflow-auto px-3 py-1 [scrollbar-gutter:stable]"}`}
         >
           {tab === "definition" && (
             <section aria-label={definitionLabel} className="min-w-0">
@@ -891,6 +912,14 @@ export function ClassifierInspector({
               )}
             </section>
           )}
+          {tab === "interface" &&
+            (declaration ? (
+              <StepInterfacePanel definition={declaration} />
+            ) : (
+              <p role="alert" className="text-[11px] text-danger [overflow-wrap:anywhere]">
+                Classifier declaration unavailable. {declarationError}
+              </p>
+            ))}
           {tab === "code" && workflow && (
             <ClassifierSource api={api} workflow={workflow} nodeId={nodeId} />
           )}

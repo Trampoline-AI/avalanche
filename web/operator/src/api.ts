@@ -4,6 +4,7 @@ import { AgentEventKindV2, AgentTraceStatusV2, PageOrderV2 } from "./generated/o
 import { DescriptorPageOrder } from "./model";
 import { mapEvaluationRecord, type EvaluationRecord } from "./evaluations";
 import { parseTraceHeaderNative } from "./agentTrace/common";
+import { mapStepIo } from "./stepIo";
 
 import {
   OperatorServiceV2Client,
@@ -852,6 +853,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
     if (node.runningElapsedSeconds !== undefined) {
       mapped.runningElapsedSeconds = node.runningElapsedSeconds;
     }
+    if (node.stepIo) mapped.stepIo = mapStepIo(node.stepIo);
     return mapped;
   }
 
@@ -1087,6 +1089,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
             ...(node?.runningElapsedSeconds !== undefined
               ? { runningElapsedSeconds: node.runningElapsedSeconds }
               : {}),
+            ...(node?.stepIo ? { stepIo: mapStepIo(node.stepIo) } : {}),
           },
         });
       }

@@ -355,10 +355,10 @@ colors:
   agent cards. These describe the workflow step, not each classifier call's state.
   Compact cards hide the field lists when zoomed out. Historical cards use the
   selected run's retained declaration.
-- **Current workflow:** **Definition** opens with default questions first, or
-  an explanation that questions are supplied at runtime when no defaults exist.
-  Questions are grouped with the classifier input beneath them using a cyan accent.
-  A separate **Step interface** panel at the bottom groups the step's inputs
+- **Current workflow:** the sidebar opens on **Code**. **Definition** shows default
+  questions first, or an explanation that questions are supplied at runtime when no
+  defaults exist. Questions are grouped with the classifier input beneath them using
+  a cyan accent. The last tab, **Step interface**, groups the step's inputs
   and output, using the [same panel as other node types](dag-api.md#inspect-step-interfaces).
   Expand a question row to inspect
   Choice options, Noul True/False meanings, or Score levels in an indented group with

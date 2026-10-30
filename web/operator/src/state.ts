@@ -276,6 +276,7 @@ function applyEnvelope(
               endedAt: changed.endedAt,
               revision: changed.revision,
               error: changed.error,
+              stepIo: changed.stepIo,
             }
           : node,
       ),

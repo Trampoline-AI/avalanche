@@ -100,13 +100,18 @@ configuration. Consistent section headings, underline separators, and spacing
 establish hierarchy without boxed groups; inputs/outputs and model roles use quieter
 subheadings. Current regular steps show source code.
 
-Run agent inspectors expose only **Trace** and **Run I/O** tabs. Trace occupies the
+Every inspector ends with a **Step interface** tab. Current regular steps open on
+**Code**; run views never show code, which reflects the current deployment, and
+instead offer **View current definition** to open the same node's current
+definition. Regular steps in run view open on **Run I/O**, showing bounded previews
+of the arguments the step received and the value it returned.
+
+Run agent inspectors expose **Trace**, **Run I/O**, **Evaluations**, and **Step
+interface** tabs. Trace occupies the
 full panel with turn content. Run I/O pairs each historical field definition
 directly with its retained invocation value; missing schemas and values remain
 explicit instead of falling back to current metadata. Run headers retain execution
-status, duration, model usage, and iteration details. Selecting a regular step in
-run view highlights the node and filters its logs without opening a sidebar.
-Regular steps still open their source code in Current view.
+status, duration, model usage, and iteration details.
 Run I/O uses the same section headings and separators as the current definition,
 with unboxed fields and subtly shaded, padded retained-value explorers.
 

@@ -8,6 +8,7 @@
  */
 
 import type { AgentTraceHeader } from "./generated/agentSchemas";
+import type { StepIo } from "./stepIo";
 
 /** Deep partial matching protobuf-ts PartialMessage semantics. */
 export type DeepPartial<T> = T extends Uint8Array
@@ -364,6 +365,8 @@ export interface NodeSnapshotMsg {
    * @generated from protobuf field: optional double running_elapsed_seconds = 11
    */
   runningElapsedSeconds?: number;
+  /** Standard steps only: previews of the latest call's arguments and return value. */
+  stepIo?: StepIo;
 }
 
 export const NodeSnapshotMsg = {
@@ -1028,6 +1031,8 @@ export interface NodeStatusChanged {
    * @generated from protobuf field: optional double running_elapsed_seconds = 8
    */
   runningElapsedSeconds?: number;
+  /** Standard steps only: previews of the latest call's arguments and return value. */
+  stepIo?: StepIo;
 }
 
 export const NodeStatusChanged = {

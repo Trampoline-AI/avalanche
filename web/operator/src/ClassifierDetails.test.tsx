@@ -14,6 +14,7 @@ import {
   ClassifierInvocationDetails,
   ClassifierQuestions,
 } from "./ClassifierDetails";
+import { StepInterfacePanel } from "./StepInterfacePanel";
 
 const declaration: ClassifierDeclaration = {
   runtime: { model: "jev-latest", timeout: 10 },
@@ -128,17 +129,28 @@ it("retains structured instructions and criteria under their independent questio
   expect(urgency.getByText(/Can wait/)).toBeInTheDocument();
 });
 
+function DefinitionWithInterface({ declaration }: { declaration: ClassifierDeclaration }) {
+  return (
+    <>
+      <ClassifierDefinition declaration={declaration} />
+      <StepInterfacePanel definition={declaration} />
+    </>
+  );
+}
+
 it("keeps runtime-only definitions inspectable and distinguishes replaceable defaults", () => {
   const runtimeOnly = decodeClassifierDeclaration(
     JSON.stringify({ ...declaration, questions: null }),
   );
-  const view = render(<ClassifierDefinition declaration={runtimeOnly} />);
+  const view = render(<DefinitionWithInterface declaration={runtimeOnly} />);
   expect(screen.getByRole("region", { name: "Questions" })).toHaveTextContent(
     /supplied at runtime/,
   );
   expect(screen.queryByRole("region", { name: /^Question / })).not.toBeInTheDocument();
   expect(screen.getByRole("region", { name: "Step output" })).toBeVisible();
-  view.rerender(<ClassifierDefinition declaration={declaration} />);
+  // The definition leaves the step interface to its own tab.
+  expect(screen.queryByRole("region", { name: "Step interface" })).not.toBeInTheDocument();
+  view.rerender(<DefinitionWithInterface declaration={declaration} />);
   expect(screen.getByRole("heading", { name: "Default questions" })).toBeVisible();
   expect(screen.getByRole("region", { name: "Question route" })).toBeVisible();
 });
@@ -173,7 +185,7 @@ it("exposes nested serialized fields, nullable variants, constraints, and finite
       },
     },
   });
-  render(<ClassifierDefinition declaration={decoded} />);
+  render(<DefinitionWithInterface declaration={decoded} />);
   const inputs = within(screen.getByRole("region", { name: "Step inputs" }));
   expect(inputs.getByText("batch")).toBeVisible();
   expect(inputs.queryByText("item")).toBeNull();
@@ -203,7 +215,7 @@ it("exposes nested serialized fields, nullable variants, constraints, and finite
 });
 
 it("distinguishes empty signatures, missing annotations, unsupported annotations, and undeclared state models", () => {
-  const view = render(<ClassifierDefinition declaration={declaration} />);
+  const view = render(<DefinitionWithInterface declaration={declaration} />);
   const inputs = screen.getByRole("region", { name: "Step inputs" });
   expect(within(inputs).queryByText("Unspecified")).toBeNull();
   expect(screen.getByRole("region", { name: "Step output" })).toHaveTextContent("Unspecified");
@@ -211,7 +223,7 @@ it("distinguishes empty signatures, missing annotations, unsupported annotations
     within(screen.getByRole("region", { name: "Classifier input" })).queryByRole("button"),
   ).toBeNull();
   view.rerender(
-    <ClassifierDefinition
+    <DefinitionWithInterface
       declaration={{
         ...declaration,
         step_inputs: [

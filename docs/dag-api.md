@@ -84,17 +84,36 @@ Cards align by their vertical centers, keeping same-row arrows straight even whe
 connected cards have different heights. Row spacing follows measured card heights
 to keep siblings separated as zoom changes.
 
-Current source, ordinary, and destination sidebars open on **Definition**, which
-contains the step interface. **Code** is a separate tab that loads the Python source
-only when opened. For agents, **Step definition** contains the interface card;
-**Agent definition** shows the agent call fields. A historical agent's **Run I/O**
+Every sidebar ends with a **Step interface** tab. Current source, ordinary, and
+destination sidebars open on **Code**, which loads the Python source, followed by
+**Step interface**. Classifiers show **Code**, **Definition**, and **Step interface**;
+agents show **Agent definition** (the agent call fields), **Evals**, and **Step
+interface**. A historical agent's **Run I/O**
 shows recorded agent inputs and outputs, not the step interface: the inputs of
 the call's start event and the outputs of its final event, with fields too large
 for the trace named rather than shown. Run interfaces
 for other step types are captured from the prepared workflow and do not change
 when source is edited, reloaded, or removed. Older runs without this metadata show
 it as unavailable; they never substitute the current definition. Historical Python
-source is not retained by this feature.
+source is not retained by this feature, so run views have no **Code** tab. Instead,
+a run sidebar offers **View current definition**, which leaves the run and opens the
+same node's current definition, where **Code** shows what the step does today.
+
+### Step inputs and outputs in a run
+
+In a run, source, ordinary, and destination sidebars open on **Run I/O**: the
+arguments the step received, by parameter name, and the value it returned. Injected
+`ava.Logger()` instances are left out. If the step raised an error, its inputs are
+kept and no output is shown.
+
+These are display-only previews, built where the step ran, so Ray results are
+never fetched to show them. Plain data (numbers, text, lists, dictionaries,
+dataclasses, and Pydantic models) is shown as JSON. Each value shows at most 20
+items per list or dictionary, 6 levels of nesting, 512 characters per string, and
+about 8,000 characters in total; whatever is cut is replaced by a `…` marker and
+the value is labeled **Truncated preview**. Other objects, such as data frames
+or arrays, are shown as their bounded `repr()` text. A step called again, such as
+a retry, replaces the previous preview.
 
 ## Connect nodes
 

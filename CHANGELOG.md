@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Operator web UI: in a run, a standard Python step's sidebar now opens on **Run
+  I/O**, showing what the step received (each argument by parameter name) and what
+  it returned in that run. The values are bounded previews built where the step ran:
+  plain data as JSON with at most 20 items per collection, 6 levels, 512 characters
+  per string and about 8,000 characters in total, other objects (such as data
+  frames) as their bounded `repr()`, and anything cut marked with `…` and labeled
+  **Truncated preview**. Ray results are never fetched to show them. The operator
+  carries them on each node in its gRPC API (`NodeSnapshotV2.step_io`).
+- Operator web UI: run sidebars offer **View current definition**, which opens the
+  same step's current definition, where its code is shown. Run views still hide code,
+  since it reflects the current deployment, not what ran.
+- Operator web UI: **Code** is now the first tab of a standard or classifier step's
+  definition, and every node type ends with a tab named **Step interface** (formerly
+  **Definition** for standard steps and **Step definition** for agents) that no longer
+  repeats that title in a nested box. Agent run views gain the same tab.
+
 ## 0.16.2
 
 - Agents: new runtime `ava.runtimes.OpenAIAgent` runs agent steps with OpenAI models
