@@ -11,8 +11,10 @@ import {
   formatInputValue,
   runInputFields,
   runTriggerLabel,
+  scheduledInputNote,
   workflowInputFields,
   type RunInputField,
+  type RunValueSource,
   type WorkflowInputField,
 } from "./workflowInput";
 
@@ -33,13 +35,26 @@ type InspectedInput =
     }
   | { error: string };
 
-function FieldDefault({ field }: { field: WorkflowInputField }) {
-  return field.required ? (
-    <span className="text-[9px] text-amber uppercase">Required</span>
-  ) : (
-    <code className="font-mono text-[10px] text-muted [overflow-wrap:anywhere]">
-      default {formatInputValue(field.defaultValue)}
-    </code>
+const VALUE_SOURCE_LABELS: Record<RunValueSource, string> = {
+  supplied: "Supplied",
+  default: "Default",
+  unrecorded: "Not recorded",
+};
+
+function FieldDefaultLabel({ field }: { field: WorkflowInputField }) {
+  const fieldDefault = field.default;
+  return (
+    <span data-default-kind={fieldDefault.kind}>
+      {fieldDefault.kind === "required" ? (
+        <span className="text-[9px] text-amber uppercase">Required</span>
+      ) : (
+        <code className="font-mono text-[10px] text-muted [overflow-wrap:anywhere]">
+          {fieldDefault.kind === "value"
+            ? `default ${formatInputValue(fieldDefault.value)}`
+            : "default computed per run"}
+        </code>
+      )}
+    </span>
   );
 }
 
@@ -73,6 +88,7 @@ export function WorkflowInputInspector({
   }, [rawDeclaration, runInput]);
   const triggeredBy = run?.summary?.triggeredBy;
   const cron = run ? "" : (workflow?.cron ?? "");
+  const scheduleNote = run || !workflow ? undefined : scheduledInputNote(workflow);
   const panelLayout = embedded
     ? "relative h-full w-full"
     : "fixed right-0 bottom-0 top-[58px] h-auto w-[min(var(--workspace-inspector-width),100vw)] shadow-[-20px_0_50px_var(--color-shadow-0)] max-[700px]:w-screen min-[1001px]:static min-[1001px]:z-auto min-[1001px]:h-full min-[1001px]:w-auto min-[1001px]:shadow-none";
@@ -91,14 +107,13 @@ export function WorkflowInputInspector({
             {"typeName" in inspected ? inspected.typeName : "Run input"}
           </h2>
           {run && triggeredBy && (
-            <p className="mt-1 mb-0 text-[11px] text-secondary">
+            <p className="mt-1 mb-0 text-[11px] text-secondary" data-run-trigger={triggeredBy}>
               {runTriggerLabel(triggeredBy)}
             </p>
           )}
           {cron && (
-            <p className="mt-1 mb-0 text-[11px] text-secondary">
-              Scheduled runs (<code className="font-mono">{cron}</code>) receive no caller input
-              and use these defaults.
+            <p className="mt-1 mb-0 text-[11px] text-secondary" data-cron={cron}>
+              {scheduleNote}.
             </p>
           )}
         </div>
@@ -123,23 +138,33 @@ export function WorkflowInputInspector({
                 <h3 className="inspector-section-title">Values used by this run</h3>
                 <ul className="m-0 grid list-none gap-3 p-0">
                   {inspected.values.map((field) => (
-                    <li key={field.name} className="min-w-0 text-[11px]">
+                    <li
+                      key={field.name}
+                      className="min-w-0 text-[11px]"
+                      data-value-source={field.source}
+                    >
                       <div className="flex items-baseline gap-2">
                         <strong className="font-semibold">{field.name}</strong>
                         <span
-                          className={`ml-auto shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] uppercase ${field.supplied ? "bg-acid/10 text-acid" : "bg-canvas text-muted"}`}
+                          className={`ml-auto shrink-0 rounded px-1.5 py-0.5 font-mono text-[9px] uppercase ${field.source === "supplied" ? "bg-acid/10 text-acid" : "bg-canvas text-muted"}`}
                         >
-                          {field.supplied ? "Supplied" : "Default"}
+                          {VALUE_SOURCE_LABELS[field.source]}
                         </span>
                       </div>
-                      <ValueView value={field.value} jsonOnly />
+                      {field.source === "unrecorded" ? (
+                        <p className="m-0 text-muted">
+                          Excluded from serialization, so the run did not record it.
+                        </p>
+                      ) : (
+                        <ValueView value={field.value} jsonOnly />
+                      )}
                     </li>
                   ))}
                 </ul>
               </section>
             )}
             {run && !inspected.values && (
-              <p className="m-0 text-[11px] text-muted">
+              <p className="m-0 text-[11px] text-muted" data-run-values="unavailable">
                 Input values are unavailable for this run.
               </p>
             )}
@@ -154,7 +179,7 @@ export function WorkflowInputInspector({
                         {field.typeLabel}
                       </code>
                       <span className="ml-auto">
-                        <FieldDefault field={field} />
+                        <FieldDefaultLabel field={field} />
                       </span>
                     </div>
                     {field.description && (

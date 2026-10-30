@@ -1776,24 +1776,19 @@ def _with_current_run_context(
     return wrapped
 
 
-def _inspect_runtime_params(
-    fn: Callable,
-    args: tuple[Any, ...],
-    kwargs: dict[str, Any],
-    run_input: Any,
-    run_context: Any,
-    system_context: Any,
-    *,
-    defer_input: bool = False,
-) -> dict[str, Any]:
-    import inspect
+def _unbound_annotated_params(
+    fn: Callable, args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> list[tuple[str, Any]]:
+    """Annotated parameters a call leaves open for runtime injection, in order.
 
-    from .runtime import BaseContext, BaseInput
+    A parameter is bound when the call passes it by keyword or fills it positionally.
+    """
+    import inspect
 
     try:
         sig = inspect.signature(fn)
     except (ValueError, TypeError):
-        return {}
+        return []
     try:
         type_hints = get_type_hints(fn)
     except Exception:
@@ -1815,14 +1810,44 @@ def _inspect_runtime_params(
             position_bound_param_names.add(param.name)
             break
 
-    injected: dict[str, Any] = {}
+    unbound: list[tuple[str, Any]] = []
     for param_name, param in sig.parameters.items():
         if param_name in kwargs or param_name in position_bound_param_names:
             continue
         annotation = type_hints.get(param_name, param.annotation)
         if annotation is inspect.Parameter.empty:
             continue
+        unbound.append((param_name, annotation))
+    return unbound
 
+
+def run_input_parameters(
+    fn: Callable, args: tuple[Any, ...], kwargs: dict[str, Any], input_type: type
+) -> tuple[str, ...]:
+    """Parameters that receive a run input of ``input_type`` for this call."""
+    from .runtime import BaseInput
+
+    return tuple(
+        name
+        for name, annotation in _unbound_annotated_params(fn, args, kwargs)
+        if _safe_issubclass(annotation, BaseInput) and _safe_issubclass(input_type, annotation)
+    )
+
+
+def _inspect_runtime_params(
+    fn: Callable,
+    args: tuple[Any, ...],
+    kwargs: dict[str, Any],
+    run_input: Any,
+    run_context: Any,
+    system_context: Any,
+    *,
+    defer_input: bool = False,
+) -> dict[str, Any]:
+    from .runtime import BaseContext, BaseInput
+
+    injected: dict[str, Any] = {}
+    for param_name, annotation in _unbound_annotated_params(fn, args, kwargs):
         if _safe_issubclass(annotation, BaseContext):
             if run_context is not None and isinstance(run_context, annotation):
                 injected[param_name] = run_context

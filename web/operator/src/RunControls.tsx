@@ -114,22 +114,37 @@ export function RunControls({
   const [showSchedule, setShowSchedule] = useState(false);
   // One input for both Run and the cron schedule, starting from the input the
   // schedule already uses or the workflow's declared defaults.
-  const [draft, setDraft] = useState(() => inputText(workflow));
+  const seed = inputText(workflow);
+  const [draft, setDraft] = useState(seed);
+  // Bumped whenever the draft is reseeded, to remount the editor with it.
+  const [draftGeneration, setDraftGeneration] = useState(0);
   const [error, setError] = useState<string>();
   const workflowId = workflow?.workflowId;
   const draftWorkflow = useRef(workflowId);
+  const seededDraft = useRef(seed);
   useLayoutEffect(() => {
     if (!runActionsEnabled) {
       setShowInput(false);
     }
   }, [runActionsEnabled]);
   useLayoutEffect(() => {
-    if (draftWorkflow.current === workflowId) return;
-    draftWorkflow.current = workflowId;
-    setDraft(inputText(workflow));
-    setShowSchedule(false);
-    setError(undefined);
-  }, [workflow, workflowId]);
+    const previousSeed = seededDraft.current;
+    seededDraft.current = seed;
+    if (draftWorkflow.current !== workflowId) {
+      draftWorkflow.current = workflowId;
+      setDraft(seed);
+      setDraftGeneration((generation) => generation + 1);
+      setShowSchedule(false);
+      setError(undefined);
+      return;
+    }
+    // The stored schedule input or the input schema changed elsewhere: follow it
+    // unless the user has edited the draft.
+    if (seed !== previousSeed && draft === previousSeed) {
+      setDraft(seed);
+      setDraftGeneration((generation) => generation + 1);
+    }
+  }, [draft, seed, workflowId]);
 
   const scheduled = Boolean(workflow?.cron) && onSetScheduleEnabled !== undefined;
   const scheduleEnabled = workflow?.scheduleEnabled ?? false;
@@ -285,7 +300,10 @@ export function RunControls({
         (workflow && runActionsEnabled && (showInput || (scheduled && showSchedule)))) && (
         <div className="run-popovers absolute right-0 bottom-[43px] z-20 flex w-[390px] flex-col gap-2 max-[700px]:w-[calc(100vw-32px)]">
           {error && (
-            <div className="action-error rounded border border-error-line bg-error-surface px-[18px] py-2 text-xs text-error-ink">
+            <div
+              role="alert"
+              className="action-error rounded border border-error-line bg-error-surface px-[18px] py-2 text-xs text-error-ink"
+            >
               {error}
             </div>
           )}
@@ -310,7 +328,11 @@ export function RunControls({
                   </button>
                 )}
               </div>
-              <JsonEditor value={draft} onChange={setDraft} key={workflowId} />
+              <JsonEditor
+                value={draft}
+                onChange={setDraft}
+                key={`${workflowId}:${draftGeneration}`}
+              />
               {scheduled && (
                 <p className="m-0 mt-1.5 text-[9px] text-secondary">
                   Run starts with this input. Turning the schedule on saves it for scheduled

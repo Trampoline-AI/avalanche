@@ -1,7 +1,10 @@
+from typing import Annotated
+
 import pytest
 from pydantic import BaseModel
 
 import avalanche as ava
+from avalanche.dag import run_input_parameters
 
 
 class NestedInput(BaseModel):
@@ -55,3 +58,34 @@ def test_missing_input_and_missing_attribute_fail_before_invoking_the_node():
             executor=ava.LocalExecutor(),
             input={"question": "hi", "nested": {"value": "deep"}},
         ).result(timeout=5)
+
+
+class _ReportInput(ava.BaseInput):
+    limit: int = 3
+
+
+class _OtherInput(ava.BaseInput):
+    strict: bool = False
+
+
+def _report(values: list[int], config: _ReportInput) -> int:
+    return len(values) + config.limit
+
+
+def _annotated(config: Annotated[_ReportInput, "meta"]) -> int:
+    return config.limit
+
+
+@pytest.mark.parametrize(
+    ("fn", "args", "kwargs", "input_type", "expected"),
+    [
+        (_report, ([1],), {}, _ReportInput, ("config",)),
+        # Filled positionally or by keyword, the parameter takes no run input.
+        (_report, ([1], _ReportInput()), {}, _ReportInput, ()),
+        (_report, ([1],), {"config": _ReportInput()}, _ReportInput, ()),
+        (_annotated, (), {}, _ReportInput, ("config",)),
+        (_report, ([1],), {}, _OtherInput, ()),
+    ],
+)
+def test_run_input_parameters_follow_the_injection_rule(fn, args, kwargs, input_type, expected):
+    assert run_input_parameters(fn, args, kwargs, input_type) == expected

@@ -13,10 +13,11 @@ import logging
 import threading
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Iterable, Iterator
+from typing import TYPE_CHECKING, Callable, Iterable, Iterator
 
-from croniter import croniter
+from croniter import CroniterBadDateError, croniter
 from pydantic import JsonValue
 
 from .models import TriggerKind, WorkflowDescriptor
@@ -27,16 +28,45 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class ScheduleStatus:
+    """One registered cron schedule as the scheduler currently sees it."""
+
+    flow_name: str
+    workflow_id: str
+    cron: str
+    next_run: datetime | None
+    last_triggered: float | None
+    enabled: bool
+
+
+def _registered_cron(descriptor: WorkflowDescriptor) -> str:
+    # reconcile() registers only workflows that declare a cron.
+    if descriptor.cron is None:
+        raise RuntimeError(f"Schedule {descriptor.workflow_id} was registered without a cron")
+    return descriptor.cron
+
+
 class Scheduler:
     """Run reconciled cron registrations keyed by canonical workflow ID."""
 
-    def __init__(self, operator: Operator, *, enabled_by_default: bool = False) -> None:
+    def __init__(
+        self,
+        operator: Operator,
+        *,
+        enabled_by_default: bool = False,
+        clock: Callable[[], datetime] = datetime.now,
+    ) -> None:
         self._operator = operator
         self._enabled_by_default = enabled_by_default
+        self._clock = clock
         # Explicit enable/disable choices outlive reconciliation so a workflow that
         # disappears during a reload comes back in the state the user chose.
         self._enabled: dict[str, bool] = {}
         self._inputs: dict[str, dict[str, JsonValue]] = {}
+        # Minute in which a schedule was turned on. Its first run is the next cron
+        # occurrence after that minute, matching the next run time it reported.
+        self._enabled_minute: dict[str, float] = {}
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._dispatch_lock = threading.RLock()
@@ -86,8 +116,7 @@ class Scheduler:
             self._check_schedules()
 
     def _check_schedules(self) -> None:
-        now = datetime.now()
-        current_minute = now.replace(second=0, microsecond=0)
+        current_minute = self._current_minute()
         current_ts = current_minute.timestamp()
         with self._lock:
             revision = self._revision
@@ -101,6 +130,11 @@ class Scheduler:
                             if revision != self._revision:
                                 continue
                             if not self._is_enabled_locked(descriptor.workflow_id):
+                                continue
+                            if (
+                                self._enabled_minute.get(descriptor.workflow_id, 0)
+                                >= current_ts
+                            ):
                                 continue
                             last = self._last_triggered.get(descriptor.workflow_id, 0)
                             if last >= current_ts:
@@ -119,6 +153,9 @@ class Scheduler:
                     )
             except Exception as exc:
                 logger.warning("Scheduler error for %s: %s", descriptor.workflow_id, exc)
+
+    def _current_minute(self) -> datetime:
+        return self._clock().replace(second=0, microsecond=0)
 
     def _is_enabled_locked(self, workflow_id: str) -> bool:
         return self._enabled.get(workflow_id, self._enabled_by_default)
@@ -144,21 +181,27 @@ class Scheduler:
         # The dispatch lock orders this change with any due-run claim in progress.
         with self._dispatch_lock:
             with self._lock:
+                if enabled and not self._is_enabled_locked(workflow_id):
+                    self._enabled_minute[workflow_id] = self._current_minute().timestamp()
                 self._enabled[workflow_id] = enabled
                 if run_input is not None:
                     self._inputs[workflow_id] = deepcopy(run_input)
 
     def next_run_time(self, cron_expr: str) -> datetime | None:
+        """The next occurrence of a cron that discovery already validated.
+
+        None when the expression can never occur, such as ``0 0 31 2 *``.
+        """
         try:
-            return croniter(cron_expr, datetime.now()).get_next(datetime)
-        except Exception:
+            return croniter(cron_expr, self._clock()).get_next(datetime)
+        except CroniterBadDateError:
             return None
 
     def last_triggered(self, workflow_id: str) -> float | None:
         with self._lock:
             return self._last_triggered.get(workflow_id)
 
-    def list_schedules(self) -> list[dict]:
+    def list_schedules(self) -> list[ScheduleStatus]:
         with self._lock:
             registrations = tuple(self._registrations.values())
             last_triggered = dict(self._last_triggered)
@@ -167,13 +210,18 @@ class Scheduler:
                 for descriptor in registrations
             }
         return [
-            {
-                "flow_name": descriptor.display_name,
-                "workflow_id": descriptor.workflow_id,
-                "cron": descriptor.cron,
-                "next_run": self.next_run_time(descriptor.cron),
-                "last_triggered": last_triggered.get(descriptor.workflow_id),
-                "enabled": enabled[descriptor.workflow_id],
-            }
+            ScheduleStatus(
+                flow_name=descriptor.display_name,
+                workflow_id=descriptor.workflow_id,
+                cron=_registered_cron(descriptor),
+                # A disabled schedule has no next run, as in the catalog.
+                next_run=(
+                    self.next_run_time(descriptor.cron)
+                    if enabled[descriptor.workflow_id]
+                    else None
+                ),
+                last_triggered=last_triggered.get(descriptor.workflow_id),
+                enabled=enabled[descriptor.workflow_id],
+            )
             for descriptor in registrations
         ]

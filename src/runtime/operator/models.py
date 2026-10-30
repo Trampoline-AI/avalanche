@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import math
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Literal, Mapping
+from typing import TYPE_CHECKING, Annotated, Literal, Mapping
 
-from pydantic import JsonValue
+from pydantic import AfterValidator, JsonValue, TypeAdapter, ValidationError
 
 if TYPE_CHECKING:
     from avalanche.agent.declaration import AgentDeclaration
@@ -45,6 +46,44 @@ class RunStatus(Enum):
     SUCCESS = "success"
     FAILED = "failed"
     CANCELLED = "cancelled"
+
+
+def _require_finite(value: JsonValue) -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError("JSON numbers must be finite, not NaN or Infinity")
+    if isinstance(value, list):
+        for item in value:
+            _require_finite(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _require_finite(item)
+
+
+def _finite_object(value: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    _require_finite(value)
+    return value
+
+
+# Input a schedule's cron runs start with. Python's JSON tools accept NaN and
+# Infinity, which are not JSON and could not be sent back to clients.
+ScheduleInput = Annotated[dict[str, JsonValue], AfterValidator(_finite_object)]
+_SCHEDULE_INPUT = TypeAdapter(ScheduleInput)
+
+
+def schedule_input_from_python(value: JsonValue) -> dict[str, JsonValue]:
+    """Validate decoded schedule input: one JSON object of finite values."""
+    try:
+        return _SCHEDULE_INPUT.validate_python(value)
+    except ValidationError as exc:
+        raise ValueError(f"Schedule input must be a JSON object: {exc}") from exc
+
+
+def schedule_input_from_json(payload: str) -> dict[str, JsonValue]:
+    """Decode a schedule input document: one JSON object of finite values."""
+    try:
+        return _SCHEDULE_INPUT.validate_json(payload)
+    except ValidationError as exc:
+        raise ValueError(f"Schedule input must be a JSON object: {exc}") from exc
 
 
 class TriggerKind(Enum):

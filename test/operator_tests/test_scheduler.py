@@ -1,4 +1,5 @@
 import threading
+from datetime import datetime, timedelta
 
 import pytest
 from croniter import croniter
@@ -38,6 +39,17 @@ class _Operator:
         self.inputs.append(input)
 
 
+class _Clock:
+    def __init__(self) -> None:
+        self.now = datetime(2026, 10, 29, 9, 0, 40)
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def next_minute(self) -> None:
+        self.now += timedelta(minutes=1)
+
+
 def test_reconcile_is_keyed_by_canonical_id_and_fires_id():
     operator = _Operator()
     scheduler = Scheduler(operator, enabled_by_default=True)
@@ -45,7 +57,7 @@ def test_reconcile_is_keyed_by_canonical_id_and_fires_id():
         [_descriptor("left/flow.py::shared"), _descriptor("right/flow.py::shared")]
     )
 
-    assert [item["workflow_id"] for item in scheduler.list_schedules()] == [
+    assert [item.workflow_id for item in scheduler.list_schedules()] == [
         "left/flow.py::shared",
         "right/flow.py::shared",
     ]
@@ -57,7 +69,7 @@ def test_reconcile_is_keyed_by_canonical_id_and_fires_id():
     ]
 
     scheduler.reconcile([_descriptor("right/flow.py::shared")])
-    assert [item["workflow_id"] for item in scheduler.list_schedules()] == [
+    assert [item.workflow_id for item in scheduler.list_schedules()] == [
         "right/flow.py::shared"
     ]
 
@@ -65,26 +77,30 @@ def test_reconcile_is_keyed_by_canonical_id_and_fires_id():
 @pytest.mark.parametrize("enabled_by_default", [False, True])
 def test_disabled_schedule_starts_no_runs_until_enabled(enabled_by_default):
     operator = _Operator()
-    scheduler = Scheduler(operator, enabled_by_default=enabled_by_default)
+    clock = _Clock()
+    scheduler = Scheduler(operator, enabled_by_default=enabled_by_default, clock=clock)
     scheduler.reconcile([_descriptor("flow.py::shared")])
     scheduler.set_enabled("flow.py::shared", False)
 
     scheduler._check_schedules()
     assert operator.started == []
-    assert scheduler.list_schedules()[0]["enabled"] is False
+    assert scheduler.list_schedules()[0].enabled is False
 
     scheduler.set_enabled("flow.py::shared", True)
+    clock.next_minute()
     scheduler._check_schedules()
     assert operator.started == [("flow.py::shared", TriggerKind.SCHEDULED)]
 
 
 def test_due_runs_start_with_the_stored_input():
     operator = _Operator()
-    scheduler = Scheduler(operator)
+    clock = _Clock()
+    scheduler = Scheduler(operator, clock=clock)
     scheduler.reconcile([_descriptor("flow.py::a"), _descriptor("flow.py::b")])
     scheduler.set_enabled("flow.py::a", True, {"region": "eu"})
     scheduler.set_enabled("flow.py::b", True)
 
+    clock.next_minute()
     scheduler._check_schedules()
 
     assert operator.inputs == [{"region": "eu"}, None]
@@ -93,12 +109,14 @@ def test_due_runs_start_with_the_stored_input():
 
 def test_stored_input_is_not_shared_with_callers():
     operator = _Operator()
-    scheduler = Scheduler(operator)
+    clock = _Clock()
+    scheduler = Scheduler(operator, clock=clock)
     scheduler.reconcile([_descriptor("flow.py::a")])
     regions = ["eu"]
     scheduler.set_enabled("flow.py::a", True, {"regions": regions})
     regions.append("us")
 
+    clock.next_minute()
     scheduler._check_schedules()
     started = operator.inputs[0]
     assert started is not None
@@ -110,14 +128,33 @@ def test_stored_input_is_not_shared_with_callers():
     assert scheduler.input_for("flow.py::a") == {"regions": ["eu"]}
 
 
+def test_enabling_during_a_due_minute_waits_for_the_next_occurrence():
+    operator = _Operator()
+    clock = _Clock()
+    scheduler = Scheduler(operator, clock=clock)
+    scheduler.reconcile([_descriptor("flow.py::daily", cron="0 9 * * *")])
+
+    scheduler.set_enabled("flow.py::daily", True)
+    scheduler._check_schedules()
+    assert operator.started == []
+
+    scheduler.set_enabled("flow.py::daily", True, {"region": "eu"})
+    clock.now += timedelta(days=1)
+    scheduler._check_schedules()
+    assert operator.started == [("flow.py::daily", TriggerKind.SCHEDULED)]
+
+
 def test_schedules_start_disabled_until_toggled():
-    scheduler = Scheduler(_Operator())
+    clock = _Clock()
+    scheduler = Scheduler(_Operator(), clock=clock)
     scheduler.reconcile([_descriptor("flow.py::a"), _descriptor("flow.py::b")])
     scheduler.set_enabled("flow.py::b", True)
 
-    assert {item["workflow_id"]: item["enabled"] for item in scheduler.list_schedules()} == {
-        "flow.py::a": False,
-        "flow.py::b": True,
+    assert {
+        item.workflow_id: (item.enabled, item.next_run) for item in scheduler.list_schedules()
+    } == {
+        "flow.py::a": (False, None),
+        "flow.py::b": (True, datetime(2026, 10, 29, 9, 1)),
     }
 
 
@@ -234,3 +271,10 @@ def test_operator_refresh_serializes_catalog_publication_with_schedule_replaceme
     assert not refresher.is_alive()
     assert not checker.is_alive()
     assert started == []
+
+
+def test_next_run_time_is_none_for_a_cron_that_never_occurs():
+    scheduler = Scheduler(_Operator(), clock=_Clock())
+
+    assert scheduler.next_run_time("0 0 31 2 *") is None
+    assert scheduler.next_run_time("0 9 * * *") == datetime(2026, 10, 30, 9, 0)
