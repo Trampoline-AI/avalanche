@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 
 import { FlowInfoMsg } from "./model";
 import { RunControls } from "./RunControls";
+import { useInputDraft } from "./useInputDraft";
 import { workflow } from "./test/fixtures";
 
 const nightly = FlowInfoMsg.create({
@@ -30,16 +31,35 @@ function replaceInput(value: unknown) {
   });
 }
 
+interface HarnessProps {
+  workflow: FlowInfoMsg;
+  onStart: (selector: string, input?: Record<string, unknown>) => Promise<string>;
+  onSetScheduleEnabled: (
+    selector: string,
+    enabled: boolean,
+    input?: Record<string, unknown>,
+  ) => Promise<void>;
+}
+
+/** The workspace owns the input draft; the harness does the same. */
+function Harness({ workflow, onStart, onSetScheduleEnabled }: HarnessProps) {
+  const inputDraft = useInputDraft(workflow);
+  return (
+    <RunControls
+      workflow={workflow}
+      inputDraft={inputDraft}
+      onStart={onStart}
+      onCancel={async () => undefined}
+      onSetScheduleEnabled={onSetScheduleEnabled}
+    />
+  );
+}
+
 function renderControls(flow: FlowInfoMsg) {
   const onStart = vi.fn(async () => "run-1");
   const onSetScheduleEnabled = vi.fn(async () => undefined);
   const view = render(
-    <RunControls
-      workflow={flow}
-      onStart={onStart}
-      onCancel={async () => undefined}
-      onSetScheduleEnabled={onSetScheduleEnabled}
-    />,
+    <Harness workflow={flow} onStart={onStart} onSetScheduleEnabled={onSetScheduleEnabled} />,
   );
   return { onStart, onSetScheduleEnabled, view };
 }
@@ -121,12 +141,7 @@ it("follows input stored elsewhere until the draft is edited", () => {
   const { onStart, onSetScheduleEnabled, view } = renderControls(nightly);
   const rerender = (flow: FlowInfoMsg) =>
     view.rerender(
-      <RunControls
-        workflow={flow}
-        onStart={onStart}
-        onCancel={async () => undefined}
-        onSetScheduleEnabled={onSetScheduleEnabled}
-      />,
+      <Harness workflow={flow} onStart={onStart} onSetScheduleEnabled={onSetScheduleEnabled} />,
     );
 
   fireEvent.click(screen.getByRole("button", { name: "Add JSON input" }));

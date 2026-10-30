@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import type { FlowInfoMsg, RunSnapshotMsg, RunSummaryMsg } from "./model";
 import { ScheduleDetails } from "./ScheduleDetails";
+import type { InputDraft } from "./useInputDraft";
 import { workflowInputDraft } from "./workflowInput";
 import type { OperatorProjection } from "./state";
 import { isUnknownRecord } from "./guards";
@@ -22,6 +23,7 @@ export function JsonEditor({
   label = "Workflow input JSON",
 }: JsonEditorProps) {
   const parent = useRef<HTMLDivElement>(null);
+  const editor = useRef<EditorView>(undefined);
   useEffect(() => {
     if (!parent.current) return;
     const view = new EditorView({
@@ -51,8 +53,18 @@ export function JsonEditor({
         ],
       }),
     });
-    return () => view.destroy();
+    editor.current = view;
+    return () => {
+      editor.current = undefined;
+      view.destroy();
+    };
   }, []);
+  // Follow edits made elsewhere, such as the graph's input popup.
+  useEffect(() => {
+    const view = editor.current;
+    if (!view || view.state.doc.toString() === value) return;
+    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } });
+  }, [value]);
   return (
     <div
       className="json-editor overflow-hidden rounded border border-line text-[10px]"
@@ -76,10 +88,8 @@ interface RunControlsProps {
   ) => Promise<void>;
   onSelectRun?: (runId: string) => void;
   runActionsEnabled?: boolean;
-}
-
-function inputText(workflow: FlowInfoMsg | undefined): string {
-  return JSON.stringify((workflow && workflowInputDraft(workflow)) ?? {}, null, 2);
+  /** The workflow's input draft, shared with the graph's input popup. */
+  inputDraft?: InputDraft;
 }
 
 /** Key-order independent JSON, to tell whether two inputs differ. */
@@ -109,50 +119,33 @@ export function RunControls({
   onSetScheduleEnabled,
   onSelectRun,
   runActionsEnabled = true,
+  inputDraft,
 }: RunControlsProps) {
   const [showInput, setShowInput] = useState(false);
   const [showSchedule, setShowSchedule] = useState(false);
-  // One input for both Run and the cron schedule, starting from the input the
-  // schedule already uses or the workflow's declared defaults.
-  const seed = inputText(workflow);
-  const [draft, setDraft] = useState(seed);
-  // Bumped whenever the draft is reseeded, to remount the editor with it.
-  const [draftGeneration, setDraftGeneration] = useState(0);
+  // One input for both Run and the cron schedule (see useInputDraft).
+  const draft = inputDraft?.text ?? "{}";
+  const setDraft = (text: string) => inputDraft?.setText(text);
+  const draftEdited = inputDraft !== undefined && inputDraft.text !== inputDraft.seed;
   const [error, setError] = useState<string>();
   const workflowId = workflow?.workflowId;
-  const draftWorkflow = useRef(workflowId);
-  const seededDraft = useRef(seed);
   useLayoutEffect(() => {
     if (!runActionsEnabled) {
       setShowInput(false);
     }
   }, [runActionsEnabled]);
   useLayoutEffect(() => {
-    const previousSeed = seededDraft.current;
-    seededDraft.current = seed;
-    if (draftWorkflow.current !== workflowId) {
-      draftWorkflow.current = workflowId;
-      setDraft(seed);
-      setDraftGeneration((generation) => generation + 1);
-      setShowSchedule(false);
-      setError(undefined);
-      return;
-    }
-    // The stored schedule input or the input schema changed elsewhere: follow it
-    // unless the user has edited the draft.
-    if (seed !== previousSeed && draft === previousSeed) {
-      setDraft(seed);
-      setDraftGeneration((generation) => generation + 1);
-    }
-  }, [draft, seed, workflowId]);
+    setShowSchedule(false);
+    setError(undefined);
+  }, [workflowId]);
 
   const scheduled = Boolean(workflow?.cron) && onSetScheduleEnabled !== undefined;
   const scheduleEnabled = workflow?.scheduleEnabled ?? false;
   const scheduleBusy = pending?.kind === "schedule";
 
-  /** The edited input, or undefined when the input editor is closed. */
+  /** The input to send, or undefined to keep the operator's own (defaults or stored). */
   const editedInput = (): Record<string, unknown> | undefined =>
-    showInput ? parseRunInput(draft) : undefined;
+    showInput || draftEdited ? parseRunInput(draft) : undefined;
 
   const setSchedule = async (enabled: boolean, input?: Record<string, unknown>) => {
     if (!workflow || !onSetScheduleEnabled) return;
@@ -181,7 +174,7 @@ export function RunControls({
 
   // Offer to update an enabled schedule when the edited input differs from its input.
   let draftDiffersFromSchedule = false;
-  if (scheduled && scheduleEnabled && showInput && workflow) {
+  if (scheduled && scheduleEnabled && (showInput || draftEdited) && workflow) {
     try {
       draftDiffersFromSchedule =
         canonicalJson(parseRunInput(draft)) !==
@@ -328,11 +321,7 @@ export function RunControls({
                   </button>
                 )}
               </div>
-              <JsonEditor
-                value={draft}
-                onChange={setDraft}
-                key={`${workflowId}:${draftGeneration}`}
-              />
+              <JsonEditor value={draft} onChange={setDraft} key={workflowId} />
               {scheduled && (
                 <p className="m-0 mt-1.5 text-[9px] text-secondary">
                   Run starts with this input. Turning the schedule on saves it for scheduled

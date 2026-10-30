@@ -16,6 +16,7 @@ import { Inspector } from "./Inspector";
 import type { FlowInfoMsg, RunSnapshotMsg } from "./model";
 import { RunLogPane } from "./RunLogPane";
 import { RunControls } from "./RunControls";
+import { useInputDraft } from "./useInputDraft";
 import { compareNewestRun, RunListPanel } from "./RunListPanel";
 import type { OperatorProjection } from "./state";
 import { useOperatorProjection } from "./state";
@@ -324,6 +325,8 @@ export function WorkflowWorkspaceSurface({
   }, [timelineExpanded]);
 
   const historical = selectedRunId !== undefined;
+  // One input draft for Run, the schedule and the graph's input popup.
+  const inputDraft = useInputDraft(!historical ? workflow : undefined);
   const loadedRun =
     historical &&
     state.selectedRunId === selectedRunId &&
@@ -408,6 +411,7 @@ export function WorkflowWorkspaceSurface({
       onSetScheduleEnabled={setScheduleEnabled}
       onSelectRun={openScheduledRun}
       runActionsEnabled={runActionsEnabled}
+      inputDraft={!historical ? inputDraft : undefined}
     />
   ) : undefined;
   const displayedRunId = run?.summary?.runId;
@@ -448,6 +452,8 @@ export function WorkflowWorkspaceSurface({
                     runTopology={previewWorkflow ? undefined : run?.topology}
                     runNodes={requestingRun ? undefined : run?.nodes}
                     runTriggeredBy={previewWorkflow ? undefined : run?.summary?.triggeredBy}
+                    runInput={previewWorkflow ? undefined : run?.input}
+                    inputDraft={!historical && runActionsEnabled ? inputDraft : undefined}
                     inspectionDisabled={requestingRun}
                     evaluations={evaluationState.records}
                     selectedNodeId={inspectedNode}

@@ -60,6 +60,7 @@ import type { OperatorUiSelection } from "./index";
 import type { OperatorApi } from "./api";
 import { Explorer } from "./Explorer";
 import { GraphCanvas } from "./GraphCanvas";
+import { useInputDraft } from "./useInputDraft";
 import { Inspector } from "./Inspector";
 import type { EvaluationRecord } from "./evaluations";
 import {
@@ -2114,7 +2115,7 @@ describe("workflow input node", () => {
     expect(screen.queryByRole("button", { name: /workflow input/i })).toBeNull();
   });
 
-  it("marks the definition's input with a dot that opens the input", () => {
+  it("opens the declared fields over the dot, with defaults and nothing otherwise", () => {
     const open = vi.fn();
     render(<GraphCanvas workflow={declared} onOpenNode={open} />);
     const dot = inputDot();
@@ -2122,20 +2123,69 @@ describe("workflow input node", () => {
     expect(dot).toHaveAttribute("data-node-kind", "input");
     expect(dot).toHaveAttribute("data-cron", declared.cron);
     expect(dot).not.toHaveAttribute("data-run-trigger");
-    // Fields live in the inspector, not on the graph.
-    expect(dot.querySelector("[data-value-source]")).toBeNull();
     fireEvent.click(inspectInput());
-    expect(open).toHaveBeenCalledWith("ava:input");
+    const dialog = screen.getByRole("dialog", { name: /workflow input/i });
+    expect(
+      within(dialog)
+        .getAllByRole("textbox")
+        .map((box) => (box as HTMLInputElement).value),
+    ).toEqual(["", "false", "3"]);
+    // No sidebar: the popup is the only view of the input.
+    expect(open).not.toHaveBeenCalled();
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("marks how a run started on its input dot", () => {
+  it("edits the shared input draft from the popup", () => {
+    const drafts: string[] = [];
+    function Harness() {
+      const inputDraft = useInputDraft(declared);
+      drafts.push(inputDraft.text);
+      return <GraphCanvas workflow={declared} inputDraft={inputDraft} onOpenNode={vi.fn()} />;
+    }
+    render(<Harness />);
+    fireEvent.click(inspectInput());
+    const [repository, , limit] = within(screen.getByRole("dialog")).getAllByRole("textbox");
+    const draft = () => JSON.parse(drafts.at(-1)!);
+
+    fireEvent.change(repository, { target: { value: "acme/web" } });
+    fireEvent.change(limit, { target: { value: "7" } });
+    expect(draft()).toEqual({ repository: "acme/web", limit: 7 });
+
+    fireEvent.change(limit, { target: { value: "[7," } });
+    expect(limit).toHaveAttribute("aria-invalid", "true");
+    expect(draft()).toEqual({ repository: "acme/web", limit: 7 });
+
+    fireEvent.change(limit, { target: { value: "" } });
+    expect(draft()).toEqual({ repository: "acme/web" });
+  });
+
+  it("shows the values a run used and where each came from", () => {
     render(
-      <GraphCanvas runTopology={runTopology} runTriggeredBy="scheduled" onOpenNode={vi.fn()} />,
+      <GraphCanvas
+        runTopology={runTopology}
+        runInput={{
+          // A field excluded from serialization has no recorded value.
+          valuesJson: JSON.stringify({ post_reviews: false, limit: 5 }),
+          suppliedFields: ["limit"],
+        }}
+        runTriggeredBy="scheduled"
+        onOpenNode={vi.fn()}
+      />,
     );
     const dot = inputDot();
-
     expect(dot).toHaveAttribute("data-run-trigger", "scheduled");
     expect(dot).not.toHaveAttribute("data-cron");
+
+    fireEvent.click(inspectInput());
+    const fields = rows(screen.getByRole("dialog"));
+    expect(fields.limit).toMatchObject({
+      source: "supplied",
+      text: expect.stringContaining("5"),
+    });
+    expect(fields.post_reviews.source).toBe("default");
+    expect(fields.repository.source).toBe("unrecorded");
+    expect(within(screen.getByRole("dialog")).queryByRole("textbox")).toBeNull();
   });
 
   it("leads into the workflow's first steps, whichever steps receive the input", () => {
@@ -2202,25 +2252,30 @@ describe("workflow input node", () => {
     ).toHaveAttribute("data-run-trigger", "webhook");
   });
 
-  it("opens the input inspector from the workspace graph", async () => {
+  it("starts a run with input edited in the workspace's input popup", async () => {
+    // Never settles, so the workspace does not go on to follow a run it cannot load.
+    const startRun = vi.fn(
+      (_selector: string, _input?: Record<string, unknown>) =>
+        new Promise<string>(() => undefined),
+    );
     const api = createApi({
       getCatalog: async () => ({ ...baseline.catalog, workflows: [declared] }),
       loadBaseline: async () => ({
         ...baseline,
         catalog: { ...baseline.catalog, workflows: [declared] },
       }),
+      startRun,
     });
-    render(
-      <WorkflowWorkspace
-        api={api}
-        workflowId={workflow.workflowId}
-        runActionsEnabled={false}
-      />,
-    );
+    render(<WorkflowWorkspace api={api} workflowId={workflow.workflowId} />);
 
     fireEvent.click(await screen.findByRole("button", { name: /workflow input/i }));
-    expect(
-      await screen.findByRole("complementary", { name: "Workflow input declaration" }),
-    ).toBeVisible();
+    const [repository] = within(screen.getByRole("dialog")).getAllByRole("textbox");
+    fireEvent.change(repository, { target: { value: "acme/web" } });
+    fireEvent.click(screen.getByRole("button", { name: "Run" }));
+
+    await waitFor(() =>
+      expect(startRun).toHaveBeenCalledWith(declared.workflowId, { repository: "acme/web" }),
+    );
+    expect(screen.queryByRole("complementary", { name: /workflow input/i })).toBeNull();
   });
 });
