@@ -1,23 +1,46 @@
-"""Avalanche Operator — workflow orchestration and execution."""
+"""Avalanche Operator — workflow orchestration and execution.
 
+The public names below load on first use (PEP 562), so importing a light
+submodule such as ``runtime.operator.step_io`` does not load the Operator,
+its gRPC server and its process machinery.
+"""
+
+from __future__ import annotations
+
+import importlib
 import signal
 import sys
 import threading
+from typing import TYPE_CHECKING
 
-from ._signals import request_shutdown, shutdown_cleanup
-from .models import (
-    CatalogView,
-    WorkflowDescriptor,
-    WorkflowDiscoveryDiagnostic,
-    WorkflowLocator,
-)
-from .operator import Operator
-from .registry import (
-    AmbiguousWorkflow,
-    UnknownWorkflow,
-    WorkflowRegistry,
-    workflow_to_info,
-)
+if TYPE_CHECKING:
+    from .models import (
+        CatalogView,
+        WorkflowDescriptor,
+        WorkflowDiscoveryDiagnostic,
+        WorkflowLocator,
+    )
+    from .operator import Operator
+    from .registry import (
+        AmbiguousWorkflow,
+        UnknownWorkflow,
+        WorkflowRegistry,
+        workflow_to_info,
+    )
+
+_LAZY = {
+    "request_shutdown": "._signals",
+    "shutdown_cleanup": "._signals",
+    "CatalogView": ".models",
+    "WorkflowDescriptor": ".models",
+    "WorkflowDiscoveryDiagnostic": ".models",
+    "WorkflowLocator": ".models",
+    "Operator": ".operator",
+    "AmbiguousWorkflow": ".registry",
+    "UnknownWorkflow": ".registry",
+    "WorkflowRegistry": ".registry",
+    "workflow_to_info": ".registry",
+}
 
 __all__ = [
     "Operator",
@@ -30,6 +53,19 @@ __all__ = [
     "WorkflowRegistry",
     "workflow_to_info",
 ]
+
+
+def __getattr__(name: str):
+    module = _LAZY.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(importlib.import_module(module, __name__), name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(_LAZY))
 
 
 def _report_workflow_scan(operator: Operator) -> None:
@@ -62,6 +98,9 @@ def serve(
     **kwargs,
 ) -> None:
     """Serve gRPC, optionally with a loopback browser UI and JSON REST API."""
+    from runtime.operator import Operator
+
+    from ._signals import request_shutdown, shutdown_cleanup
     from .server import _listen_address
     from .server import serve as _serve
 
