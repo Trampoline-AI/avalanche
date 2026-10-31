@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.17.0
+
 - Operator web UI: in a run, a standard Python step's sidebar now opens on **Run
   I/O**, showing what the step received (each argument by parameter name) and what
   it returned in that run. The values are bounded previews built where the step ran:
