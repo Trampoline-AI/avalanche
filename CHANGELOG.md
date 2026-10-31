@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.17.1
+
 - Agents: Avalanche now requires PredictRLM 0.13.2 or later (still below 0.14).
   With `DirectPythonBackend`, the agent's tool calls, such as several `predict()`
   calls in one `asyncio.gather`, now run at the same time instead of one after
