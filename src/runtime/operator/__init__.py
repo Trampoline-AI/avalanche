@@ -11,14 +11,18 @@ import importlib
 import signal
 import sys
 import threading
-from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from contextlib import AbstractContextManager
+    from types import FrameType
+
     from .models import (
         CatalogView,
         WorkflowDescriptor,
         WorkflowDiscoveryDiagnostic,
+        WorkflowInfo,
         WorkflowLocator,
     )
     from .operator import Operator
@@ -27,6 +31,22 @@ if TYPE_CHECKING:
         UnknownWorkflow,
         WorkflowRegistry,
         workflow_to_info,
+    )
+
+    # Exactly the objects the lazy names resolve to; type checkers read the
+    # precise type of each name from the imports above.
+    _PublicName = (
+        type[Operator]
+        | type[CatalogView]
+        | type[WorkflowDescriptor]
+        | type[WorkflowDiscoveryDiagnostic]
+        | type[WorkflowLocator]
+        | type[AmbiguousWorkflow]
+        | type[UnknownWorkflow]
+        | type[WorkflowRegistry]
+        | Callable[..., WorkflowInfo]  # workflow_to_info
+        | Callable[[int, FrameType | None], None]  # request_shutdown
+        | Callable[[], AbstractContextManager[None]]  # shutdown_cleanup
     )
 
 _LAZY = {
@@ -56,7 +76,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str) -> type | Callable[..., object]:
+def __getattr__(name: str) -> _PublicName:
     module = _LAZY.get(name)
     if module is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
