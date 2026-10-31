@@ -45,6 +45,11 @@ from .discovery import (
 )
 from .evaluation_models import EvaluationRecord
 from .evaluation_worker import EvaluationOutcome, EvaluationRequest, EvaluationWorkers
+from .input_files import (
+    InputFileStaging,
+    StagedInputFile,
+    StagedInputFileError,
+)
 from .models import (
     AgentEvent,
     AgentEventAppended,
@@ -66,6 +71,7 @@ from .models import (
     ClassifierScoreSummary,
     DetailUpdate,
     FinalizedTrace,
+    InputFileFields,
     LogAppended,
     LogDetailAppended,
     LogEntry,
@@ -101,6 +107,7 @@ from .models import (
     WorkflowInfo,
     WorkflowReloadStatus,
     WorkflowTopology,
+    input_file_fields,
     missing_required_input,
     schedule_input_from_python,
 )
@@ -452,6 +459,7 @@ class Operator:
         self._result_cleanup_thread: threading.Thread | None = None
         self._closed = False
         self._result_store = ResultStore(result_storage_directory)
+        self._input_files = InputFileStaging()
         self._notification_stop_enqueued = False
         self._notification_shutdown_thread: threading.Thread | None = None
         self._notification_queue: queue.Queue[_RunNotifications | None] = queue.Queue()
@@ -1509,6 +1517,26 @@ class Operator:
                 else:
                     self._result_leases.pop(run_id, None)
 
+    @property
+    def input_files(self) -> InputFileStaging:
+        """Run input files uploaded for StartRun and schedule input."""
+        return self._input_files
+
+    def stage_input_file(
+        self, selector: str, field_name: str, name: str, media_type: str, content: bytes
+    ) -> StagedInputFile:
+        """Stage one upload for a declared input field of a workflow."""
+        descriptor = self._registry.resolve(selector)
+        if field_name not in input_file_fields(descriptor.input_schema_json).declared:
+            raise StagedInputFileError(
+                f"Workflow {descriptor.workflow_id} declares no input field {field_name!r}"
+            )
+        return self._input_files.stage(name, media_type, content)
+
+    def input_file_fields(self, selector: str) -> InputFileFields:
+        """The input fields a workflow declares, and which of them hold a list."""
+        return input_file_fields(self._registry.resolve(selector).input_schema_json)
+
     def set_schedule_enabled(
         self,
         selector: str,
@@ -1934,6 +1962,8 @@ class Operator:
                     self._active_runs.pop(run_id, None)
         if first_close:
             self._begin_notification_shutdown(tuple(delayed_drains))
+            # Runs are stopped, so no coordinator still reads a staged input file.
+            self._input_files.close()
 
     def _result_cleanup_loop(self) -> None:
         retention = self._result_retention_seconds

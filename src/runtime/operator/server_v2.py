@@ -13,12 +13,13 @@ import json
 import queue
 import threading
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
 import grpc
+from pydantic_core import to_jsonable_python
 from ulid import ULID
 
 from avalanche.runtime import File
@@ -38,8 +39,10 @@ from .convert_v2 import (
     update_envelope_to_v2,
     workflow_info_to_v2,
 )
+from .input_files import InputFileClaims, InputFileStorageError, StagedInputFileError
 from .models import (
     CatalogSnapshot,
+    InputFileFields,
     MissingRunInputError,
     RunCreated,
     RunSnapshot,
@@ -954,31 +957,43 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         if request.trigger not in _START_RUN_TRIGGERS:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Unknown start trigger")
         trigger = _START_RUN_TRIGGERS[request.trigger]
-        try:
-            run_input = _decode_input_payload_v2(request)
-            run_context = _decode_json_object(request.context_json, "context_json")
-        except ValueError as exc:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
-        try:
-            run_id = self._op.start_run(
-                request.workflow_selector,
-                trigger,
-                run_id=request.run_id,
-                input=run_input,
-                context=run_context,
-                expected_version=request.expected_version,
-            )
-            return pb.StartRunResponseV2(run_id=run_id)
-        except (InvalidRunIdError, MissingRunInputError) as exc:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
-        except RunAlreadyExistsError as exc:
-            context.abort(grpc.StatusCode.ALREADY_EXISTS, str(exc))
-        except AmbiguousWorkflow as exc:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
-        except UnknownWorkflow as exc:
-            context.abort(grpc.StatusCode.NOT_FOUND, exc.args[0])
-        except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
-            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        # A refused run releases its files, so they expire like unused uploads.
+        with self._op.input_files.claims() as claims:
+            try:
+                run_input = _decode_input_payload_v2(
+                    request,
+                    lambda: self._op.input_file_fields(request.workflow_selector),
+                    claims,
+                )
+                run_context = _decode_json_object(request.context_json, "context_json")
+            except AmbiguousWorkflow as exc:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
+            except UnknownWorkflow as exc:
+                context.abort(grpc.StatusCode.NOT_FOUND, exc.args[0])
+            except ValueError as exc:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+            except InputFileStorageError as exc:
+                context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+            try:
+                run_id = self._op.start_run(
+                    request.workflow_selector,
+                    trigger,
+                    run_id=request.run_id,
+                    input=run_input,
+                    context=run_context,
+                    expected_version=request.expected_version,
+                )
+                return pb.StartRunResponseV2(run_id=run_id)
+            except (InvalidRunIdError, MissingRunInputError) as exc:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+            except RunAlreadyExistsError as exc:
+                context.abort(grpc.StatusCode.ALREADY_EXISTS, str(exc))
+            except AmbiguousWorkflow as exc:
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
+            except UnknownWorkflow as exc:
+                context.abort(grpc.StatusCode.NOT_FOUND, exc.args[0])
+            except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+                context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
 
     def SetScheduleEnabled(self, request, context):  # noqa: N802
         if not request.workflow_selector:
@@ -991,18 +1006,62 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 run_input = json.loads(request.input_json)
                 if run_input is None:
                     raise ValueError("input_json must be a JSON object, not null")
-            info = self._op.set_schedule_enabled(
-                request.workflow_selector, request.enabled, run_input
+            with self._op.input_files.claims() as claims:
+                if request.input_files:
+                    if not isinstance(run_input, dict):
+                        raise ValueError("Schedule input files require an input_json object")
+                    # The schedule keeps JSON, so each file is stored as its reference.
+                    run_input = to_jsonable_python(
+                        _attach_input_files(
+                            run_input,
+                            request.input_files,
+                            self._op.input_file_fields(request.workflow_selector),
+                            claims,
+                        )
+                    )
+                info = self._op.set_schedule_enabled(
+                    request.workflow_selector, request.enabled, run_input
+                )
+        except AmbiguousWorkflow as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
+        except UnknownWorkflow as exc:
+            context.abort(grpc.StatusCode.NOT_FOUND, exc.args[0])
+        except (NoScheduleError, InputFileStorageError) as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        except ValueError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        return workflow_info_to_v2(info)
+
+    def StageInputFile(self, request, context):  # noqa: N802
+        if not request.workflow_selector:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "workflow_selector is required")
+        if not request.field_name:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "field_name is required")
+        try:
+            staged = self._op.stage_input_file(
+                request.workflow_selector,
+                request.field_name,
+                request.name,
+                request.media_type,
+                request.content,
             )
         except AmbiguousWorkflow as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
         except UnknownWorkflow as exc:
             context.abort(grpc.StatusCode.NOT_FOUND, exc.args[0])
-        except NoScheduleError as exc:
-            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
-        except ValueError as exc:
+        except StagedInputFileError as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
-        return workflow_info_to_v2(info)
+        except InputFileStorageError as exc:
+            context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
+        return pb.FileAttachmentV2(
+            attachment_id=staged.object_key,
+            field_name=request.field_name,
+            name=staged.name,
+            media_type=staged.media_type,
+            object_key=staged.object_key,
+            sha256=staged.sha256,
+            size_bytes=staged.size_bytes,
+        )
 
     def CancelRun(self, request, context):  # noqa: N802
         if not request.run_id:
@@ -1478,21 +1537,64 @@ _START_RUN_TRIGGERS: Mapping[int, TriggerKind] = MappingProxyType(
 )
 
 
-def _decode_input_payload_v2(request) -> dict[str, Any] | None:
+def _decode_input_payload_v2(
+    request, fields: Callable[[], InputFileFields], claims: InputFileClaims
+) -> dict[str, Any] | None:
     payload = _decode_json_object(request.input_json, "input_json") or {}
-    for attachment in request.input_files:
-        if not attachment.field_name:
+    if not request.input_files:
+        return payload or None
+    # Only attachments need the input schema, so a run without files never reads it.
+    return _attach_input_files(payload, request.input_files, fields(), claims)
+
+
+def _attach_input_files(
+    payload: dict[str, Any],
+    attachments: Iterable[pb.FileAttachmentV2],
+    fields: InputFileFields,
+    claims: InputFileClaims,
+) -> dict[str, Any]:
+    """Set each attachment's field, as declared by the workflow's input schema.
+
+    A list field gets its attachments in order, after any items the input JSON
+    already lists; any other field takes exactly one attachment.
+    """
+    payload = dict(payload)
+    files: dict[str, list[File]] = {}
+    for attachment in attachments:
+        field = attachment.field_name
+        if not field:
             raise ValueError("input file attachment is missing field_name")
-        if attachment.object_uri or attachment.object_key:
-            raise ValueError(
-                "staged object attachments are not supported by the local loopback operator"
-            )
-        if attachment.field_name in payload:
-            raise ValueError(f"Duplicate input field '{attachment.field_name}'")
-        payload[attachment.field_name] = File(
-            name=attachment.name or None,
-            content=bytes(attachment.inline_bytes),
-            content_type=attachment.media_type or None,
-            sha256=attachment.sha256 or None,
+        if field not in fields.declared:
+            raise ValueError(f"The workflow declares no input field '{field}'")
+        if field not in fields.lists and (field in payload or field in files):
+            raise ValueError(f"Duplicate input field '{field}'")
+        files.setdefault(field, []).append(_attachment_file(attachment, claims))
+    for field, field_files in files.items():
+        if field not in fields.lists:
+            payload[field] = field_files[0]
+            continue
+        listed = payload.get(field, [])
+        if not isinstance(listed, list):
+            raise ValueError(f"Input field '{field}' holds a list; input_json must give one")
+        payload[field] = [*listed, *field_files]
+    return payload
+
+
+def _attachment_file(attachment: pb.FileAttachmentV2, claims: InputFileClaims) -> File:
+    if attachment.object_uri:
+        raise ValueError("object_uri attachments are not supported by the local operator")
+    if attachment.object_key:
+        if attachment.inline_bytes:
+            raise ValueError("an input file attachment cannot have both object_key and a body")
+        return claims.file(
+            attachment.object_key,
+            sha256=attachment.sha256,
+            size_bytes=attachment.size_bytes,
         )
-    return payload or None
+    # A loopback inline body is staged too, so every input file is path-backed.
+    return claims.inline(
+        attachment.name,
+        attachment.media_type,
+        bytes(attachment.inline_bytes),
+        attachment.sha256,
+    )

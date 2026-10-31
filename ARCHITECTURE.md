@@ -356,6 +356,8 @@ operator exposes a single native service, `OperatorServiceV2`:
 
 - `DiscoverFlows` for workflows, topology, scan targets, and diagnostics;
 - `StartRun`, `CancelRun`, and `GetRunResult` for control and terminal output;
+- `StageInputFile` to upload a run input file before `StartRun` or
+  `SetScheduleEnabled` refers to it;
 - `ListRunSummaries` and `GetRunSnapshot` for bounded structural state;
 - `ListRunActivity` and `ReadActivityDetail` for on-demand run detail (logs,
   agent events, and traces share one activity model);
@@ -369,8 +371,15 @@ assumptions and reload a fresh structural baseline (`ResetRequiredV2`). Detail
 pages are continuation-bound and bodies are read through scope-bound object
 references; they are fetched only for the selected run/node rather than
 included in every update. `StartRun` requires a caller-supplied `run_id` as
-its idempotency key; local loopback operators accept inline attachment bodies
-and reject staged object URIs.
+its idempotency key. Input files arrive as `input_files` attachments: a local
+operator accepts inline bodies and `object_key` values that its own
+`StageInputFile` issued, and rejects object URIs and any other key. Each
+attachment names a field the input schema declares; a list field collects its
+attachments in order, and any other field takes exactly one. Staged files
+live in a private folder the operator creates for itself; each run gets an
+`ava.File` built with `File.from_path` over the staged copy. Files no run or
+schedule used expire after 24 hours, and the folder is removed when the operator
+stops.
 
 The default ports are:
 

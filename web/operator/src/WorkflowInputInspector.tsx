@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { SlidersHorizontal, X } from "lucide-react";
+import { LoaderCircle, Paperclip, SlidersHorizontal, X } from "lucide-react";
 
 import type { FlowInfoMsg, RunSnapshotMsg } from "./model";
 import type { InputDraft } from "./useInputDraft";
@@ -12,10 +12,12 @@ import {
   decodeWorkflowInputDeclaration,
   defaultPlaceholder,
   formatInputValue,
+  inputValueFileNames,
   runInputFields,
   runTriggerLabel,
   scheduledInputNote,
   workflowInputFields,
+  type FileFieldKind,
   type RunInputField,
   type WorkflowInputField,
 } from "./workflowInput";
@@ -228,7 +230,10 @@ function FieldList({
                 <FieldDefaultLabel field={field} />
               </span>
             </div>
-            {editor && (
+            {editor && field.file && (
+              <FileFieldInput field={field} kind={field.file} editor={editor} />
+            )}
+            {editor && !field.file && (
               <input
                 type="text"
                 aria-label={`${field.name} value`}
@@ -249,5 +254,118 @@ function FieldList({
         ))}
       </ul>
     </>
+  );
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/**
+ * A native file picker for an `ava.File` or `list[ava.File]` field. Picked files
+ * upload right away; Run and the schedule then refer to the staged copies.
+ */
+function FileFieldInput({
+  field,
+  kind,
+  editor,
+}: {
+  field: WorkflowInputField;
+  kind: FileFieldKind;
+  editor: InputFieldEditor;
+}) {
+  const { pickFiles, clearFiles } = editor.draft;
+  const picked = editor.draft.files[field.name];
+  const list = kind === "list";
+  const editable = pickFiles !== undefined && editor.error === undefined;
+  // Files the draft already refers to, such as the schedule's input.
+  const existing = picked ? undefined : inputValueFileNames(editor.value(field));
+  const rows: { name: string; detail?: string }[] =
+    picked?.status === "staged"
+      ? picked.files.map((file) => ({
+          name: file.name,
+          detail: formatFileSize(file.sizeBytes),
+        }))
+      : (picked?.names ?? existing ?? []).map((name) => ({ name }));
+  return (
+    <div className="mt-1.5 grid gap-1.5" data-file-field={kind}>
+      <div className="flex items-center gap-2">
+        <label
+          className={`inline-flex items-center gap-1.5 rounded border border-line px-2 py-1 text-[10px] text-ink ${editable ? "cursor-pointer hover:border-acid focus-within:outline-2 focus-within:outline-acid" : "cursor-not-allowed opacity-55"}`}
+        >
+          <Paperclip aria-hidden="true" className="size-3" strokeWidth={1.8} />
+          <span aria-hidden="true">{list ? "Choose files" : "Choose file"}</span>
+          <input
+            type="file"
+            className="sr-only"
+            aria-label={`${field.name} ${list ? "files" : "file"}`}
+            multiple={list}
+            disabled={!editable}
+            onChange={(event) => {
+              const chosen = Array.from(event.target.files ?? []);
+              // Let the same file be picked again after Clear.
+              event.target.value = "";
+              if (chosen.length > 0) pickFiles?.(field.name, kind, chosen);
+            }}
+          />
+        </label>
+        {editable && (picked !== undefined || existing !== undefined) && (
+          <button
+            type="button"
+            className="cursor-pointer border-0 bg-transparent p-0 text-[10px] text-secondary underline underline-offset-2 hover:text-ink"
+            aria-label={`Clear ${field.name}`}
+            onClick={() => clearFiles(field.name)}
+          >
+            Clear
+          </button>
+        )}
+        {picked?.status === "staging" && (
+          <span role="status" className="inline-flex items-center gap-1 text-[10px] text-muted">
+            <LoaderCircle
+              aria-hidden="true"
+              className="size-3 animate-spin motion-reduce:animate-none"
+            />
+            Uploading…
+          </span>
+        )}
+      </div>
+      {!pickFiles && (
+        <p className="m-0 text-[10px] text-muted" data-file-input="unavailable">
+          This host cannot upload files, so this field keeps its current value.
+        </p>
+      )}
+      {rows.length > 0 ? (
+        <ul
+          aria-label={`${field.name} ${list ? "files" : "file"} chosen`}
+          className="m-0 grid list-none gap-1 p-0"
+          data-file-status={picked?.status ?? "current"}
+        >
+          {rows.map((row, index) => (
+            <li
+              key={`${row.name}-${index}`}
+              className="flex min-w-0 items-baseline gap-2 rounded bg-canvas px-2 py-1 font-mono text-[10px]"
+            >
+              <span className="min-w-0 flex-1 truncate text-ink" title={row.name}>
+                {row.name}
+              </span>
+              {row.detail && <span className="shrink-0 text-muted">{row.detail}</span>}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="m-0 text-[10px] text-muted">
+          {field.default.kind === "required"
+            ? "No file chosen"
+            : "No file chosen; uses the default"}
+        </p>
+      )}
+      {picked?.status === "failed" && (
+        <p role="alert" className="m-0 text-[10px] text-danger [overflow-wrap:anywhere]">
+          {picked.error}
+        </p>
+      )}
+    </div>
   );
 }

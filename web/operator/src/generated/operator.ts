@@ -508,7 +508,13 @@ export interface ScanTargetV2 {
 /**
  * Attachment metadata is bounded and verified by the server. Remote
  * deployments stage content under object_uri/object_key; local loopback
- * operators may accept an inline body instead.
+ * operators may accept an inline body instead. A local operator accepts only
+ * object_key values its own StageInputFile returned.
+ *
+ * An attachment sets its field_name, which the workflow's input schema must
+ * declare. A field the schema declares as a list (such as list[ava.File])
+ * gets its attachments in order, after any items the input JSON lists for it;
+ * any other field takes exactly one attachment.
  *
  * @generated from protobuf message avalanche.operator.FileAttachmentV2
  */
@@ -616,6 +622,42 @@ export interface SetScheduleEnabledRequestV2 {
      * @generated from protobuf field: optional string input_json = 3
      */
     inputJson?: string;
+    /**
+     * Files for the schedule input, accepted only with input_json. See
+     * FileAttachmentV2 for how they fill the input fields.
+     *
+     * @generated from protobuf field: repeated avalanche.operator.FileAttachmentV2 input_files = 4
+     */
+    inputFiles: FileAttachmentV2[];
+}
+/**
+ * @generated from protobuf message avalanche.operator.StageInputFileRequestV2
+ */
+export interface StageInputFileRequestV2 {
+    /**
+     * The workflow and declared input field the file is for.
+     *
+     * @generated from protobuf field: string workflow_selector = 1
+     */
+    workflowSelector: string;
+    /**
+     * @generated from protobuf field: string field_name = 2
+     */
+    fieldName: string;
+    /**
+     * The file's own name, without any folder.
+     *
+     * @generated from protobuf field: string name = 3
+     */
+    name: string;
+    /**
+     * @generated from protobuf field: string media_type = 4
+     */
+    mediaType: string;
+    /**
+     * @generated from protobuf field: bytes content = 5
+     */
+    content: Uint8Array;
 }
 /**
  * @generated from protobuf message avalanche.operator.StartRunResponseV2
@@ -3634,13 +3676,15 @@ class SetScheduleEnabledRequestV2$Type extends MessageType<SetScheduleEnabledReq
         super("avalanche.operator.SetScheduleEnabledRequestV2", [
             { no: 1, name: "workflow_selector", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 2, name: "enabled", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
-            { no: 3, name: "input_json", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 3, name: "input_json", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "input_files", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => FileAttachmentV2 }
         ]);
     }
     create(value?: PartialMessage<SetScheduleEnabledRequestV2>): SetScheduleEnabledRequestV2 {
         const message = globalThis.Object.create((this.messagePrototype!));
         message.workflowSelector = "";
         message.enabled = false;
+        message.inputFiles = [];
         if (value !== undefined)
             reflectionMergePartial<SetScheduleEnabledRequestV2>(this, message, value);
         return message;
@@ -3658,6 +3702,9 @@ class SetScheduleEnabledRequestV2$Type extends MessageType<SetScheduleEnabledReq
                     break;
                 case /* optional string input_json */ 3:
                     message.inputJson = reader.string();
+                    break;
+                case /* repeated avalanche.operator.FileAttachmentV2 input_files */ 4:
+                    message.inputFiles.push(FileAttachmentV2.internalBinaryRead(reader, reader.uint32(), options));
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -3680,6 +3727,9 @@ class SetScheduleEnabledRequestV2$Type extends MessageType<SetScheduleEnabledReq
         /* optional string input_json = 3; */
         if (message.inputJson !== undefined)
             writer.tag(3, WireType.LengthDelimited).string(message.inputJson);
+        /* repeated avalanche.operator.FileAttachmentV2 input_files = 4; */
+        for (let i = 0; i < message.inputFiles.length; i++)
+            FileAttachmentV2.internalBinaryWrite(message.inputFiles[i], writer.tag(4, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -3690,6 +3740,85 @@ class SetScheduleEnabledRequestV2$Type extends MessageType<SetScheduleEnabledReq
  * @generated MessageType for protobuf message avalanche.operator.SetScheduleEnabledRequestV2
  */
 export const SetScheduleEnabledRequestV2 = new SetScheduleEnabledRequestV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class StageInputFileRequestV2$Type extends MessageType<StageInputFileRequestV2> {
+    constructor() {
+        super("avalanche.operator.StageInputFileRequestV2", [
+            { no: 1, name: "workflow_selector", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "field_name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "media_type", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "content", kind: "scalar", T: 12 /*ScalarType.BYTES*/ }
+        ]);
+    }
+    create(value?: PartialMessage<StageInputFileRequestV2>): StageInputFileRequestV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.workflowSelector = "";
+        message.fieldName = "";
+        message.name = "";
+        message.mediaType = "";
+        message.content = new Uint8Array(0);
+        if (value !== undefined)
+            reflectionMergePartial<StageInputFileRequestV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: StageInputFileRequestV2): StageInputFileRequestV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string workflow_selector */ 1:
+                    message.workflowSelector = reader.string();
+                    break;
+                case /* string field_name */ 2:
+                    message.fieldName = reader.string();
+                    break;
+                case /* string name */ 3:
+                    message.name = reader.string();
+                    break;
+                case /* string media_type */ 4:
+                    message.mediaType = reader.string();
+                    break;
+                case /* bytes content */ 5:
+                    message.content = reader.bytes();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: StageInputFileRequestV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string workflow_selector = 1; */
+        if (message.workflowSelector !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.workflowSelector);
+        /* string field_name = 2; */
+        if (message.fieldName !== "")
+            writer.tag(2, WireType.LengthDelimited).string(message.fieldName);
+        /* string name = 3; */
+        if (message.name !== "")
+            writer.tag(3, WireType.LengthDelimited).string(message.name);
+        /* string media_type = 4; */
+        if (message.mediaType !== "")
+            writer.tag(4, WireType.LengthDelimited).string(message.mediaType);
+        /* bytes content = 5; */
+        if (message.content.length)
+            writer.tag(5, WireType.LengthDelimited).bytes(message.content);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.StageInputFileRequestV2
+ */
+export const StageInputFileRequestV2 = new StageInputFileRequestV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class StartRunResponseV2$Type extends MessageType<StartRunResponseV2> {
     constructor() {
@@ -7132,6 +7261,7 @@ export const OperatorServiceV2 = new ServiceType("avalanche.operator.OperatorSer
     { name: "StartRun", options: {}, I: StartRunRequestV2, O: StartRunResponseV2 },
     { name: "CancelRun", options: {}, I: CancelRunRequestV2, O: CancelRunResponseV2 },
     { name: "SetScheduleEnabled", options: {}, I: SetScheduleEnabledRequestV2, O: FlowInfoV2 },
+    { name: "StageInputFile", options: {}, I: StageInputFileRequestV2, O: FileAttachmentV2 },
     { name: "ListRunSummaries", options: {}, I: ListRunSummariesRequestV2, O: RunSummaryPageV2 },
     { name: "GetRunSnapshot", options: {}, I: GetRunSnapshotRequestV2, O: RunSnapshotV2 },
     { name: "ListRunActivity", options: {}, I: ListRunActivityRequestV2, O: RunActivityPageV2 },

@@ -3,9 +3,11 @@ import { describe, expect, it } from "vitest";
 import { FlowInfoMsg } from "./model";
 import {
   COMPUTED_DEFAULT_PLACEHOLDER,
+  decodeWorkflowInputDeclaration,
   defaultPlaceholder,
   scheduledInputNote,
   workflowInputDraft,
+  workflowInputFields,
   type FieldDefault,
   type WorkflowInputField,
 } from "./workflowInput";
@@ -98,5 +100,39 @@ describe("defaultPlaceholder", () => {
     ["nothing for a required field", field({ kind: "required" }, { type: "string" }), ""],
   ])("shows %s", (_case, input, expected) => {
     expect(defaultPlaceholder(input)).toBe(expected);
+  });
+});
+
+it("marks ava.File and list[ava.File] fields, looking through None", () => {
+  const file = { type: "object", properties: { kind: { const: "file" } } };
+  const notFile = { type: "object", properties: { kind: { const: "other" } } };
+  const declaration = decodeWorkflowInputDeclaration(
+    JSON.stringify({
+      type_name: "Documents",
+      json_schema: {
+        type: "object",
+        $defs: { File: file, Other: notFile },
+        properties: {
+          single: { $ref: "#/$defs/File" },
+          optional: { anyOf: [{ $ref: "#/$defs/File" }, { type: "null" }], default: null },
+          many: { type: "array", items: { $ref: "#/$defs/File" } },
+          other: { $ref: "#/$defs/Other" },
+          mixed: { anyOf: [{ $ref: "#/$defs/File" }, { type: "string" }] },
+        },
+      },
+      consumer_node_ids: [],
+    }),
+  )!;
+
+  expect(
+    Object.fromEntries(
+      workflowInputFields(declaration).map((field) => [field.name, field.file]),
+    ),
+  ).toEqual({
+    single: "single",
+    optional: "single",
+    many: "list",
+    other: undefined,
+    mixed: undefined,
   });
 });

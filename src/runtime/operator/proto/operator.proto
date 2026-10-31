@@ -26,6 +26,10 @@ service OperatorServiceV2 {
   // its runs start with. The state is kept in operator memory only and resets to
   // the startup default (disabled, default input) on restart.
   rpc SetScheduleEnabled(SetScheduleEnabledRequestV2) returns (FlowInfoV2);
+  // Save one file for a workflow input field and return the attachment that
+  // StartRun and SetScheduleEnabled accept in input_files. Staged files live in
+  // the operator's staging folder; ones no run or schedule used expire.
+  rpc StageInputFile(StageInputFileRequestV2) returns (FileAttachmentV2);
   rpc ListRunSummaries(ListRunSummariesRequestV2) returns (RunSummaryPageV2);
   rpc GetRunSnapshot(GetRunSnapshotRequestV2) returns (RunSnapshotV2);
   rpc ListRunActivity(ListRunActivityRequestV2) returns (RunActivityPageV2);
@@ -207,7 +211,13 @@ message ScanTargetV2 {
 
 // Attachment metadata is bounded and verified by the server. Remote
 // deployments stage content under object_uri/object_key; local loopback
-// operators may accept an inline body instead.
+// operators may accept an inline body instead. A local operator accepts only
+// object_key values its own StageInputFile returned.
+//
+// An attachment sets its field_name, which the workflow's input schema must
+// declare. A field the schema declares as a list (such as list[ava.File])
+// gets its attachments in order, after any items the input JSON lists for it;
+// any other field takes exactly one attachment.
 message FileAttachmentV2 {
   string attachment_id = 1;
   string field_name = 2;
@@ -250,6 +260,19 @@ message SetScheduleEnabledRequestV2 {
   // JSON input object for future cron runs, accepted only when enabling. Absent
   // keeps the stored input; the workflow validates it when each run starts.
   optional string input_json = 3;
+  // Files for the schedule input, accepted only with input_json. See
+  // FileAttachmentV2 for how they fill the input fields.
+  repeated FileAttachmentV2 input_files = 4;
+}
+
+message StageInputFileRequestV2 {
+  // The workflow and declared input field the file is for.
+  string workflow_selector = 1;
+  string field_name = 2;
+  // The file's own name, without any folder.
+  string name = 3;
+  string media_type = 4;
+  bytes content = 5;
 }
 
 message StartRunResponseV2 {
