@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.17.2
+
 - Operator: importing a light `runtime.operator` submodule, such as
   `runtime.operator.step_io`, no longer loads the whole Operator (its gRPC server,
   process pool and scheduler). The package's public names (`Operator`,

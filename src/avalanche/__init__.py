@@ -55,7 +55,7 @@ from .storage import Namespace, NamespaceConfig, ScanResult, Table, TableGroup
 from .types import AppendResult, SnapshotMetadata, SnapshotState
 from .webhook import Webhook
 
-__version__ = "0.17.1"
+__version__ = "0.17.2"
 
 from .references import (
     LocalReferenceBinder,
