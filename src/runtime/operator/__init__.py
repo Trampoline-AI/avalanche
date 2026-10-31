@@ -11,6 +11,7 @@ import importlib
 import signal
 import sys
 import threading
+from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -55,7 +56,7 @@ __all__ = [
 ]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> type | Callable[..., object]:
     module = _LAZY.get(name)
     if module is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

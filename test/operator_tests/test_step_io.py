@@ -531,3 +531,13 @@ def test_step_io_imports_without_loading_the_operator() -> None:
         [sys.executable, "-c", probe], check=True, capture_output=True, text=True
     ).stdout.strip()
     assert loaded == "[]"
+
+
+def test_operator_package_resolves_every_public_name_on_first_use() -> None:
+    import runtime.operator as operator_package
+
+    assert set(operator_package.__all__) <= set(dir(operator_package))
+    for name in operator_package.__all__:
+        assert getattr(operator_package, name).__name__ == name
+    with pytest.raises(AttributeError):
+        operator_package.not_a_public_name  # noqa: B018
