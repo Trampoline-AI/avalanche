@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Operator: importing a light `runtime.operator` submodule, such as
+  `runtime.operator.step_io`, no longer loads the whole Operator (its gRPC server,
+  process pool and scheduler). The package's public names (`Operator`,
+  `WorkflowRegistry`, ...) now load on first use. A host that only builds step
+  input/output previews, such as a remote step worker, starts each step about
+  0.06 s faster on a laptop and about 0.4 s faster on a 2 vCPU worker.
+  `from runtime.operator import Operator` and the `ava` CLI behave as before.
+
 ## 0.17.1
 
 - Agents: Avalanche now requires PredictRLM 0.13.2 or later (still below 0.14).

@@ -515,3 +515,19 @@ def test_decorators_accepting_more_than_the_wrapped_function_bind_their_own_call
     assert [item.name for item in inputs.parameters] == ["args", "kwargs"]
     with pytest.raises(TypeError):
         preview_step_inputs(step_signatures(lambda value: value), (1, 2), {})
+
+
+def test_step_io_imports_without_loading_the_operator() -> None:
+    """Hosts that only build previews (a remote step worker) do not pay for the Operator."""
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys, runtime.operator.step_io; "
+        "print(sorted(m for m in ('runtime.operator.operator', 'runtime.operator.server', "
+        "'grpc', 'multiprocessing') if m in sys.modules))"
+    )
+    loaded = subprocess.run(
+        [sys.executable, "-c", probe], check=True, capture_output=True, text=True
+    ).stdout.strip()
+    assert loaded == "[]"
