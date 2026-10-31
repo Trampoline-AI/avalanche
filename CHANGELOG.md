@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Agents: new `ava.runtimes.PydanticAIAgent` runs agent steps through Pydantic AI,
+  on any model it supports, such as
+  `PydanticAIAgent(model="openai:gpt-5.4-nano")` or `"anthropic:claude-haiku-5-5"`.
+  Install the new `pydantic-ai` extra (`avalanche-ai[pydantic-ai]`), which brings
+  the OpenAI, Anthropic, Google, Groq and Mistral clients without Logfire, and set
+  the provider's key, such as `OPENAI_API_KEY`. The model calls the step's tools and
+  answers through Pydantic AI's validated `final_result` tool; a tool that raises is
+  reported to the model instead of failing the step. `ava.File` inputs are attached
+  to the prompt; an `ava.Workspace` gets `list_files`, `read_file` and `write_file`
+  tools that stay inside it; `ava.File` outputs come back as text files written to
+  the run workspace. Step skills become Pydantic AI capabilities the model loads on
+  demand. Any other keyword is a `pydantic_ai.Agent` argument, such as
+  `model_settings`, `toolsets` or `capabilities`; their values are never published.
+  Traces record each model response with its usage, cost when Pydantic AI knows it,
+  finish reason and timing, and the TUI and browser UI show them through their own
+  viewer. Workflows that only declare these steps import and publish without the
+  extra.
+
 ## 0.17.1
 
 - Agents: Avalanche now requires PredictRLM 0.13.2 or later (still below 0.14).

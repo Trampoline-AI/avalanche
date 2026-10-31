@@ -158,8 +158,27 @@ class OpenAIAgentDeclaration(BaseModel):
     builtin_tools: tuple[OpenAIBuiltinTool, ...]
 
 
+class PydanticAIDeclaration(BaseModel):
+    """What a Pydantic AI runtime contributes to a declaration.
+
+    ``model`` is a ``provider:model`` name, ``None`` when no model is set yet.
+    ``agent_options`` names the ``pydantic_ai.Agent`` arguments given; their
+    values are never published.
+    """
+
+    model_config = _STRICT
+
+    kind: Literal["pydantic_ai"] = "pydantic_ai"
+    model: str | None
+    settings: dict[str, JsonValue]
+    agent_options: tuple[str, ...]
+
+
 RuntimeDeclaration = Annotated[
-    PredictRLMDeclaration | ClaudeAgentDeclaration | OpenAIAgentDeclaration,
+    PredictRLMDeclaration
+    | ClaudeAgentDeclaration
+    | OpenAIAgentDeclaration
+    | PydanticAIDeclaration,
     Field(discriminator="kind"),
 ]
 

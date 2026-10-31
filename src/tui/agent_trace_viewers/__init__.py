@@ -98,12 +98,14 @@ def _registry() -> Mapping[str, TraceFormatViewer]:
     from .claude_agent import CLAUDE_AGENT
     from .openai_agent import OPENAI_AGENT
     from .predict_rlm import PREDICT_RLM
+    from .pydantic_ai import PYDANTIC_AI
 
     return MappingProxyType(
         {
             "predict_rlm.run/v1": PREDICT_RLM,
             "claude_agent.messages/v1": CLAUDE_AGENT,
             "openai_agents.responses/v1": OPENAI_AGENT,
+            "pydantic_ai.messages/v1": PYDANTIC_AI,
         }
     )
 

@@ -26,7 +26,7 @@ The example assumes a signature with input `document` and output `summary`. Elli
 | `signature` | Required DSPy signature class | An Avalanche `Signature` subclass, the class returned by `Signature(...)`, or a native DSPy signature class. Must declare at least one output. Bare strings are not accepted. |
 | `runtime` | An agent runtime such as `ava.runtimes.PredictRLM(...)`; default `None` | The runtime that runs the agent and its settings. Omitted uses the workflow's `agent_defaults` runtime, else `ava.runtimes.PredictRLM()`. See [runtimes](#runtimes). Any other value raises `TypeError`. |
 | `tools` | Sequence of callables; default none | Additional tools; every member must be callable. |
-| `skills` | Sequence of `ava.agent.Skill`; default none | [Agent Skills](#skills) the agent may load when it needs them. Names must be distinct (`AgentStepError`); any other member raises `TypeError`. `ClaudeAgent` runs them; PredictRLM does not support them yet. |
+| `skills` | Sequence of `ava.agent.Skill`; default none | [Agent Skills](#skills) the agent may load when it needs them. Names must be distinct (`AgentStepError`); any other member raises `TypeError`. `ClaudeAgent`, `OpenAIAgent` and `PydanticAIAgent` run them; PredictRLM does not support them yet. |
 | `evaluations` | `ava.Evaluations \| None`; default `None` | Observation-only quality judgments of the first successful agent call, run by the operator. See [native evaluations](../agent-steps.md#native-evaluations). Any other value raises `TypeError`. |
 
 Model and other PredictRLM settings, PredictRLM's own skills included, belong to the runtime. Passing `lm=`, `sub_lm=`, `max_iterations=` or another PredictRLM keyword to the step, or a PredictRLM skill in its `skills=`, raises `TypeError` naming the `runtime=ava.runtimes.PredictRLM(...)` replacement.
@@ -81,8 +81,9 @@ A runtime is the agent engine that runs an agent step. The step's signature, too
 | `ava.runtimes.PredictRLM(...)` (default) | Writes and runs Python in a sandbox, with a second model for structured sub-predictions. | Included. |
 | `ava.runtimes.ClaudeAgent(...)` | Runs Claude through the Claude Code CLI, using your step tools and any Claude Code tools you enable. | `uv add 'avalanche-ai[claude]'`; it ships the Claude Code CLI. |
 | `ava.runtimes.OpenAIAgent(...)` | Runs an OpenAI model through the OpenAI Agents SDK, using your step tools; input files are attached to its message. | `uv add 'avalanche-ai[openai]'` |
+| `ava.runtimes.PydanticAIAgent(...)` | Runs any model Pydantic AI supports, such as OpenAI, Anthropic or Google models, calling your step tools. | `uv add 'avalanche-ai[pydantic-ai]'`. |
 
-The data every runtime shares (the request, result, trace and live events) is on [Agent runtimes](../agent-runtime-contract.md). Each runtime's settings, its own trace and event data, and how it fills the shared data are on its page: [PredictRLM](../runtimes/predict-rlm.md), [ClaudeAgent](../runtimes/claude-agent.md) and [OpenAIAgent](../runtimes/openai-agent.md). [Agent runtime models](../agent-runtime-models.md) lists every model of the layer.
+The data every runtime shares (the request, result, trace and live events) is on [Agent runtimes](../agent-runtime-contract.md). Each runtime's settings, its own trace and event data, and how it fills the shared data are on its page: [PredictRLM](../runtimes/predict-rlm.md), [ClaudeAgent](../runtimes/claude-agent.md), [OpenAIAgent](../runtimes/openai-agent.md) and [PydanticAIAgent](../runtimes/pydantic-ai.md). [Agent runtime models](../agent-runtime-models.md) lists every model of the layer.
 
 Choose one per step with `runtime=`, or for every step with the workflow's `agent_defaults` (see [workflow defaults](#workflow-defaults)):
 
@@ -93,7 +94,7 @@ async def summarize(document: str, *, agent: ava.Agent) -> str:
     return result.outputs.summary
 ```
 
-A runtime value only holds settings. Creating one starts nothing and needs nothing optional, so it can be used at workflow definition time and sent to Ray workers. A `ClaudeAgent` given SDK options, or an `OpenAIAgent` given model settings, imports its SDK when it is installed, to check their names.
+A runtime value only holds settings. Creating one starts nothing and needs nothing optional, so it can be used at workflow definition time and sent to Ray workers. A `ClaudeAgent` given SDK options, an `OpenAIAgent` given model settings, or a `PydanticAIAgent` given agent options, imports its library when it is installed, to check their names.
 
 ### PredictRLM
 
@@ -189,6 +190,35 @@ Any other keyword is a field of the SDK's `agents.ModelSettings`, such as `tempe
 `ava.File` inputs are attached to the model's message. By default the agent has no tools besides the step's: `ava.File` outputs are text files the model answers with by name and content, and `ava.Workspace` inputs or outputs raise `AgentStepError`. `builtin_tools=["filesystem", "shell"]` turns on the SDK's sandbox tools: the model then edits files and runs commands in the step's `ava.Workspace` input, in place, writes `ava.File` outputs itself, and can run skill scripts. The local sandbox does not confine commands on Linux. Signature, tool parameter and output types must fit OpenAI strict JSON schemas; one that does not, such as a `dict[str, int]` output, raises `AgentStepError` before the call starts. The full rules are on the [OpenAIAgent runtime](../runtimes/openai-agent.md) page.
 
 **Setup.** Install the `openai` extra on every machine that runs the step, Ray workers included. A workflow that only declares OpenAI steps imports and publishes without it; running a step without the SDK raises `AgentStepExecutionError` naming the extra. Each call creates its own OpenAI client from `OPENAI_API_KEY` and, when set, `OPENAI_BASE_URL`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` in the environment of the process that runs the step.
+
+### PydanticAIAgent
+
+```python
+ava.runtimes.PydanticAIAgent(model="openai:gpt-5.4-nano", max_turns=10)
+```
+
+| Field | Accepted value and default | Meaning |
+| --- | --- | --- |
+| `model` | `str \| None`; default `None` | Pydantic AI model name, `provider:model`, such as `"openai:gpt-5.4-nano"` or `"anthropic:claude-haiku-5-5"`. Required to run, on the step or the workflow default; a step without one raises `AgentStepError`. |
+| `max_turns` | positive `int \| None`; default `None` | Most model requests one call may make. `None` keeps Pydantic AI's limit of 50. Reaching it fails the step. |
+| `instructions_append` | `str \| None`; default `None` | Text added after the signature's instructions. |
+
+Any other keyword is a `pydantic_ai.Agent` argument, passed with Pydantic AI's own types, such as `model_settings`, `retries`, `toolsets` or `capabilities`. Avalanche checks only the name: an unknown one raises `ValueError` when the runtime is built if the `pydantic-ai` extra is installed there, and `AgentStepError` when the step runs otherwise. `tools`, `toolsets` and `capabilities` must be lists and are added after what Avalanche sets for the step. `output_type`, `instructions`, `system_prompt` and `deps_type` raise `ValueError`. A step's options replace the workflow default's option by option. Their values are never published or recorded; the declaration lists their names. The full rules are on the [PydanticAIAgent runtime](../runtimes/pydantic-ai.md#pydantic-ai-agent-options) page.
+
+**Setup.** Install the `pydantic-ai` extra on every machine that runs the step, Ray workers included. It brings the OpenAI, Anthropic, Google, Groq and Mistral clients; add another provider with its `pydantic-ai-slim` extra. It leaves out Logfire, whose Pydantic plugin stops Avalanche values from reaching Ray workers. Each provider reads its credentials from its usual environment variable, such as `OPENAI_API_KEY`. A workflow that only declares these steps imports and publishes without the extra; running a step without it raises `AgentStepExecutionError` naming the extra.
+
+**Inputs and outputs.** The signature's instructions are the agent's instructions, followed by `instructions_append`. Inputs are sent as JSON; the model answers through Pydantic AI's `final_result` tool, which Pydantic AI validates and retries, and the answer is then validated against the signature like every runtime's. A step tool that raises is reported to the model as a failed result rather than failing the step.
+
+**Skills.** Each of a step's `skills=` becomes a Pydantic AI capability loaded on demand: the model sees its name and description and loads its instructions with the `load_capability` tool. Skills with files add a `read_skill_file(skill, path)` tool that reads only those files.
+
+**Files and workspaces.**
+
+| Field type | Input | Output |
+| --- | --- | --- |
+| `ava.File`, `list[ava.File]` | Attached to the prompt, so the model receives the bytes; images, audio, video and documents (PDF, plain text, CSV, HTML, Markdown, Word, Excel) only. Another content type raises `AgentStepError`. | The model answers with each file's name and text; Avalanche writes it into `.outputs/<step>/<attempt>/<invocation>/` inside the run workspace and returns `ava.File` references. A name outside the folder, or given twice, raises `AgentOutputError`. Text files only. |
+| `ava.Workspace` (at most one input) | The folder of the `list_files`, `read_file` and `write_file` tools, which refuse paths outside it. A reference workspace is changed in place. | A snapshot of the folder; without a workspace input, of an empty temporary folder the tools work in. |
+
+Any other shape that holds files or a workspace raises `AgentStepError` before the model is called.
 
 ## Signature declarations
 
