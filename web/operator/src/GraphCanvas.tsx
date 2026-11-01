@@ -192,6 +192,16 @@ export function parseAgentDeclaration(raw: string | undefined): AgentDeclaration
       tools: declaration.tools.map(tool),
     };
   }
+  if (runtime.kind === "pydantic_ai") {
+    return {
+      ...signature,
+      runtimeKind: runtime.kind,
+      model: { main: { source: "step override", identity: runtime.model } },
+      runtime: { ...runtime.settings, agent_options: runtime.agent_options },
+      skills: stepSkills,
+      tools: declaration.tools.map(tool),
+    };
+  }
   return {
     ...signature,
     runtimeKind: runtime.kind,

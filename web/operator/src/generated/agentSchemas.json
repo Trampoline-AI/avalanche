@@ -9,7 +9,8 @@
             "mapping": {
               "claude_agent": "#/$defs/ClaudeAgentDeclaration",
               "openai_agent": "#/$defs/OpenAIAgentDeclaration",
-              "predict_rlm": "#/$defs/PredictRLMDeclaration"
+              "predict_rlm": "#/$defs/PredictRLMDeclaration",
+              "pydantic_ai": "#/$defs/PydanticAIDeclaration"
             },
             "propertyName": "kind"
           },
@@ -22,6 +23,9 @@
             },
             {
               "$ref": "#/$defs/OpenAIAgentDeclaration"
+            },
+            {
+              "$ref": "#/$defs/PydanticAIDeclaration"
             }
           ],
           "title": "Runtime"
@@ -183,6 +187,23 @@
                         "$ref": "#/$defs/RunEnded"
                       }
                     ]
+                  },
+                  "pydantic_ai.messages/v1": {
+                    "discriminator": {
+                      "mapping": {
+                        "run.initialized": "#/$defs/RunInitialized",
+                        "tool.retried": "#/$defs/ToolRetried"
+                      },
+                      "propertyName": "kind"
+                    },
+                    "oneOf": [
+                      {
+                        "$ref": "#/$defs/RunInitialized"
+                      },
+                      {
+                        "$ref": "#/$defs/ToolRetried"
+                      }
+                    ]
                   }
                 },
                 "propertyName": "format"
@@ -263,6 +284,23 @@
                   "oneOf": [
                     {
                       "$ref": "#/$defs/AgentStarted"
+                    }
+                  ]
+                },
+                {
+                  "discriminator": {
+                    "mapping": {
+                      "run.initialized": "#/$defs/RunInitialized",
+                      "tool.retried": "#/$defs/ToolRetried"
+                    },
+                    "propertyName": "kind"
+                  },
+                  "oneOf": [
+                    {
+                      "$ref": "#/$defs/RunInitialized"
+                    },
+                    {
+                      "$ref": "#/$defs/ToolRetried"
                     }
                   ]
                 }
@@ -458,7 +496,8 @@
             "mapping": {
               "claude_agent.messages/v1": "#/$defs/ClaudeAgentTraceHeader",
               "openai_agents.responses/v1": "#/$defs/OpenAIAgentTraceHeader",
-              "predict_rlm.run/v1": "#/$defs/PredictRLMTraceHeader"
+              "predict_rlm.run/v1": "#/$defs/PredictRLMTraceHeader",
+              "pydantic_ai.messages/v1": "#/$defs/PydanticAITraceHeader"
             },
             "propertyName": "format"
           },
@@ -471,6 +510,9 @@
             },
             {
               "$ref": "#/$defs/OpenAIAgentTraceHeader"
+            },
+            {
+              "$ref": "#/$defs/PydanticAITraceHeader"
             }
           ],
           "title": "Native"
@@ -597,7 +639,8 @@
           "enum": [
             "predict_rlm",
             "claude_agent",
-            "openai_agent"
+            "openai_agent",
+            "pydantic_ai"
           ],
           "title": "Runtime Kind",
           "type": "string"
@@ -1677,6 +1720,157 @@
       "title": "PredictStarted",
       "type": "object"
     },
+    "PydanticAIDeclaration": {
+      "additionalProperties": false,
+      "description": "What a Pydantic AI runtime contributes to a declaration.\n\n``model`` is a ``provider:model`` name, ``None`` when no model is set yet.\n``agent_options`` names the ``pydantic_ai.Agent`` arguments given; their\nvalues are never published.",
+      "properties": {
+        "agent_options": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Agent Options",
+          "type": "array"
+        },
+        "kind": {
+          "const": "pydantic_ai",
+          "default": "pydantic_ai",
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "settings": {
+          "additionalProperties": {
+            "$ref": "#/$defs/JsonValue"
+          },
+          "title": "Settings",
+          "type": "object"
+        }
+      },
+      "required": [
+        "kind",
+        "model",
+        "settings",
+        "agent_options"
+      ],
+      "title": "PydanticAIDeclaration",
+      "type": "object"
+    },
+    "PydanticAITraceHeader": {
+      "additionalProperties": false,
+      "description": "Pydantic AI run details that have no common-header equivalent.",
+      "properties": {
+        "error": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Error"
+        },
+        "format": {
+          "const": "pydantic_ai.messages/v1",
+          "default": "pydantic_ai.messages/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "requests": {
+          "minimum": 0,
+          "title": "Requests",
+          "type": "integer"
+        },
+        "retries": {
+          "minimum": 0,
+          "title": "Retries",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "format",
+        "requests",
+        "retries",
+        "error"
+      ],
+      "title": "PydanticAITraceHeader",
+      "type": "object"
+    },
+    "PydanticAITurn": {
+      "additionalProperties": false,
+      "description": "The model response behind one turn, as Pydantic AI reports it.",
+      "properties": {
+        "finish_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Finish Reason"
+        },
+        "format": {
+          "const": "pydantic_ai.messages/v1",
+          "default": "pydantic_ai.messages/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Model"
+        },
+        "provider": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Provider"
+        },
+        "provider_response_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Provider Response Id"
+        }
+      },
+      "required": [
+        "format",
+        "model",
+        "provider",
+        "provider_response_id",
+        "finish_reason"
+      ],
+      "title": "PydanticAITurn",
+      "type": "object"
+    },
     "RateLimited": {
       "additionalProperties": false,
       "properties": {
@@ -1751,6 +1945,61 @@
         "run_error"
       ],
       "title": "RunEnded",
+      "type": "object"
+    },
+    "RunInitialized": {
+      "additionalProperties": false,
+      "description": "The Pydantic AI run as it started: its IDs, model, tools and skills.\n\n``tools`` are the function tools Avalanche offers: the step's tools and its file\ntools; toolsets and capabilities given as agent options add their own.\n``skills`` are the step's Agent Skills, which the model loads by name.",
+      "properties": {
+        "conversation_id": {
+          "title": "Conversation Id",
+          "type": "string"
+        },
+        "format": {
+          "const": "pydantic_ai.messages/v1",
+          "default": "pydantic_ai.messages/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "kind": {
+          "const": "run.initialized",
+          "default": "run.initialized",
+          "title": "Kind",
+          "type": "string"
+        },
+        "model": {
+          "title": "Model",
+          "type": "string"
+        },
+        "run_id": {
+          "title": "Run Id",
+          "type": "string"
+        },
+        "skills": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Skills",
+          "type": "array"
+        },
+        "tools": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tools",
+          "type": "array"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "run_id",
+        "conversation_id",
+        "model",
+        "tools",
+        "skills"
+      ],
+      "title": "RunInitialized",
       "type": "object"
     },
     "RunStarted": {
@@ -2131,6 +2380,47 @@
       "title": "ToolFinished",
       "type": "object"
     },
+    "ToolRetried": {
+      "additionalProperties": false,
+      "description": "Pydantic AI asked the model to make a tool or answer call again.\n\nIt travels with the ``tool.finished`` event of the call that is retried.",
+      "properties": {
+        "attempt": {
+          "exclusiveMinimum": 0,
+          "title": "Attempt",
+          "type": "integer"
+        },
+        "call_id": {
+          "title": "Call Id",
+          "type": "string"
+        },
+        "format": {
+          "const": "pydantic_ai.messages/v1",
+          "default": "pydantic_ai.messages/v1",
+          "title": "Format",
+          "type": "string"
+        },
+        "kind": {
+          "const": "tool.retried",
+          "default": "tool.retried",
+          "title": "Kind",
+          "type": "string"
+        },
+        "max_retries": {
+          "minimum": 0,
+          "title": "Max Retries",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "format",
+        "kind",
+        "call_id",
+        "attempt",
+        "max_retries"
+      ],
+      "title": "ToolRetried",
+      "type": "object"
+    },
     "ToolStarted": {
       "additionalProperties": false,
       "properties": {
@@ -2207,7 +2497,8 @@
             "mapping": {
               "claude_agent.messages/v1": "#/$defs/ClaudeAgentTurn",
               "openai_agents.responses/v1": "#/$defs/OpenAIAgentTurn",
-              "predict_rlm.run/v1": "#/$defs/PredictRLMTurn"
+              "predict_rlm.run/v1": "#/$defs/PredictRLMTurn",
+              "pydantic_ai.messages/v1": "#/$defs/PydanticAITurn"
             },
             "propertyName": "format"
           },
@@ -2220,6 +2511,9 @@
             },
             {
               "$ref": "#/$defs/OpenAIAgentTurn"
+            },
+            {
+              "$ref": "#/$defs/PydanticAITurn"
             }
           ],
           "title": "Native"

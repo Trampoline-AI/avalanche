@@ -464,11 +464,12 @@ probability semantics, and local evidence retention limits.
 | `lance`  | Lance storage backend         |
 | `claude` | `ava.runtimes.ClaudeAgent`, which runs agent steps with Claude through the Claude Agent SDK; also needs the Claude Code CLI |
 | `openai` | `ava.runtimes.OpenAIAgent`, which runs agent steps with OpenAI models through the OpenAI Agents SDK |
+| `pydantic-ai` | `ava.runtimes.PydanticAIAgent`, which runs agent steps through Pydantic AI; includes the OpenAI, Anthropic, Google, Groq and Mistral clients |
 
 The remaining extras can be combined:
 
 ```bash
-uv add "avalanche-ai[ray,lance,claude,openai]"
+uv add "avalanche-ai[ray,lance,claude,openai,pydantic-ai]"
 ```
 
 ## Documentation

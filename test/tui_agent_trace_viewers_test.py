@@ -52,6 +52,88 @@ def test_the_claude_agent_viewer_labels_every_native_kind():
     assert set(_LABELS) == _kinds(native.ClaudeAgentNativeEvent)
 
 
+def test_the_pydantic_ai_viewer_labels_every_native_kind():
+    from avalanche.agent.native import pydantic_ai as native
+    from tui.agent_trace_viewers.pydantic_ai import _LABELS
+
+    assert set(_LABELS) == _kinds(native.PydanticAINativeEvent)
+
+
+def test_a_pydantic_ai_run_renders_through_its_viewer(monkeypatch):
+    import asyncio
+
+    pytest.importorskip("pydantic_ai")
+    from pydantic_ai import Agent
+    from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
+    from pydantic_ai.models.function import FunctionModel
+
+    import avalanche as ava
+    from avalanche._agent_evidence import capture_agent_evidence
+    from avalanche.runtimes import PydanticAIAgent
+    from tui.agent_trace_viewers import InspectionTurn, viewer_for
+
+    sdk = importlib.import_module("avalanche.runtimes.pydantic_ai._sdk")
+
+    class Sum(ava.Signature):
+        """Add a and b."""
+
+        a: int = ava.InputField()
+        b: int = ava.InputField()
+        total: int = ava.OutputField()
+
+    responses = [
+        # A first answer that fails validation is retried.
+        ModelResponse(
+            parts=[ToolCallPart("final_result", {"total": "five"}, tool_call_id="a")]
+        ),
+        ModelResponse(
+            parts=[TextPart("It is 5."), ToolCallPart("final_result", {"total": 5})],
+            finish_reason="error",
+        ),
+    ]
+
+    class Scripted(Agent):
+        def __init__(self, model, **options):
+            super().__init__(FunctionModel(lambda messages, info: responses.pop(0)), **options)
+
+    monkeypatch.setattr(sdk, "Agent", Scripted)
+    sent = []
+    agent = ava.Agent(
+        signature=Sum, step_name="sum", runtime=PydanticAIAgent(model="openai:gpt-5.4-nano")
+    )
+    with capture_agent_evidence(sent.append, errors="raise"):
+        asyncio.run(agent(a=2, b=3))
+
+    *events, final = sent
+    viewer = viewer_for(final.header.trace_format)
+    turns = [event for event in events if event.common and event.common.kind == "turn.finished"]
+    views = [
+        viewer.turn(
+            InspectionTurn(event.invocation_id, event.common, event.native), full_output=False
+        )
+        for event in turns
+    ]
+    assert [item.key for item in views[1].items] == ["message", "tools", "metadata", "response"]
+    # A response that ended in a provider error marks its turn failed.
+    assert [view.failed for view in views] == [False, True]
+    header = [line for line, _ in viewer.header(final.header)]
+    # The run ID is in the shared header; this one adds the conversation.
+    assert final.header.session_id is not None
+    assert any(final.header.session_id in line for line in header)
+    assert not any(final.header.external_run_id in line for line in header)
+    # A retried call adds a header line carrying the count.
+    native = final.header.native
+    assert native.retries == 1
+    unretried = final.header.model_copy(
+        update={"native": native.model_copy(update={"retries": 0})}
+    )
+    (retry_line,) = set(header) - {line for line, _ in viewer.header(unretried)}
+    assert str(native.retries) in retry_line
+    labels = [viewer.live_label(event) for event in events]
+    assert all(labels)
+    assert len(set(labels)) == len({event.kind_label for event in events})
+
+
 def test_a_claude_session_renders_through_its_viewer_and_metadata_sections(monkeypatch):
     import asyncio
 

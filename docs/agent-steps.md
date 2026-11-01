@@ -212,8 +212,9 @@ async def summarize(document: str, *, agent: ava.Agent) -> str:
     return (await agent(document=document)).outputs.summary
 ```
 
-`ava.runtimes.ClaudeAgent` and `ava.runtimes.OpenAIAgent` run these skills;
-OpenAIAgent's model runs their scripts only with its `"shell"` sandbox tool. PredictRLM does not
+`ava.runtimes.ClaudeAgent`, `ava.runtimes.OpenAIAgent` and `ava.runtimes.PydanticAIAgent`
+run these skills; OpenAIAgent's model runs their scripts only with its `"shell"` sandbox
+tool. PredictRLM does not
 support them yet: a PredictRLM step with `skills=` fails before the agent starts. PredictRLM has
 its own skills, which bundle instructions with sandbox packages, modules and
 tools; pass them on its runtime. The built-in ones are
@@ -311,6 +312,27 @@ step's `ava.Workspace` input, in place, through the SDK's local sandbox, which
 does not confine commands on Linux. See [runtimes](api/agents.md#openaiagent) for
 every setting, and the [OpenAIAgent runtime](runtimes/openai-agent.md#sandbox-tools)
 page for the sandbox.
+
+### Pydantic AI agent steps
+
+`ava.runtimes.PydanticAIAgent` runs a step through Pydantic AI, on any model it
+supports. Install the `pydantic-ai` extra, give a `provider:model` name, and set
+the provider's key, such as `OPENAI_API_KEY`, where the step runs:
+
+```python
+@ava.agent_step(
+    Summarize,
+    runtime=ava.runtimes.PydanticAIAgent(model="openai:gpt-5.4-nano", max_turns=8),
+    tools=[lookup_policy],
+)
+async def summarize(document: str, *, agent: ava.Agent) -> str:
+    return (await agent(document=document)).outputs.summary
+```
+
+Other `pydantic_ai.Agent` arguments, such as `model_settings` or `capabilities`,
+are passed through. See [runtimes](api/agents.md#pydanticaiagent) for every
+setting and for files, workspaces and skills, and the
+[PydanticAIAgent page](runtimes/pydantic-ai.md) for its trace.
 
 ## Native evaluations
 

@@ -66,6 +66,28 @@ describe("parseAgentDeclaration", () => {
     expect(declaration?.runtime).toEqual({ max_iterations: 3 });
   });
 
+  it("reads a Pydantic AI declaration", () => {
+    const declaration = parseAgentDeclaration(
+      JSON.stringify({
+        signature: { name: "Sum", instructions: "Add.", inputs: [], outputs: [] },
+        tools: [{ name: "lookup", description: "", source_code: "def lookup(): ..." }],
+        skills: [],
+        runtime: {
+          kind: "pydantic_ai",
+          model: "openai:gpt-5.4-nano",
+          settings: { max_turns: 4 },
+          agent_options: ["retries"],
+        },
+      }),
+    );
+    expect(declaration?.runtimeKind).toBe("pydantic_ai");
+    expect(declaration?.model).toEqual({
+      main: { source: "step override", identity: "openai:gpt-5.4-nano" },
+    });
+    expect(declaration?.runtime).toEqual({ max_turns: 4, agent_options: ["retries"] });
+    expect(declaration?.tools.map((tool) => tool.name)).toEqual(["lookup"]);
+  });
+
   it("reads a Claude Agent SDK declaration", () => {
     const declaration = parseAgentDeclaration(
       JSON.stringify({
