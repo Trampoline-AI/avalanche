@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.17.3
+
 - The Web UI's input panel has a file picker for `ava.File` and `list[ava.File]`
   fields. A picked file uploads right away through the new `StageInputFile` gRPC call,
   and Run and the schedule switch send it as an `input_files` attachment;
