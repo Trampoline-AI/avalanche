@@ -622,7 +622,7 @@ def test_live_classifier_details_advance_python_client_without_agent_traces(tran
         provider.close()
 
 
-def test_expired_classifier_details_preserve_paging_and_replay(transport, monkeypatch):
+def test_evicted_classifier_details_preserve_paging_and_replay(transport):
     operator, service, address = transport
     issued = service.ListRunSummaries(pb.ListRunSummariesRequestV2()).cursor
     run = _seed_run(operator, "expired-run")
@@ -643,14 +643,8 @@ def test_expired_classifier_details_preserve_paging_and_replay(transport, monkey
     )
     terminal = operator.get_run(run.run_id)
     assert terminal is not None and terminal.ended_at is not None
-    assert operator._result_retention_seconds is not None
-    expired_at = terminal.ended_at + operator._result_retention_seconds + 1
-    with monkeypatch.context() as clock:
-        clock.setattr(
-            "runtime.operator.operator.time",
-            SimpleNamespace(monotonic=lambda: expired_at),
-        )
-        operator._expire_results()
+    with operator._lock:
+        operator._evict_classifier_details_locked(terminal)
 
     forward = _page_history(service, run.run_id, continuation, pb.PAGE_ORDER_V2_FORWARD)
     reverse = _page_history(service, run.run_id, continuation, pb.PAGE_ORDER_V2_NEWEST_FIRST)

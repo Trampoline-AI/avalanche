@@ -816,8 +816,6 @@ def ingress():
             operator._webhooks.close()
             if operator._watcher_thread is not None:
                 operator._watcher_thread.join(timeout=2.0)
-            if operator._result_cleanup_thread is not None:
-                operator._result_cleanup_thread.join(timeout=2.0)
             operator._stop_notification_dispatcher()
             operator._close_result_store()
 
