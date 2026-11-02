@@ -75,13 +75,13 @@ def _finite_object(value: dict[str, JsonValue]) -> dict[str, JsonValue]:
 # Input a schedule's cron runs start with. Python's JSON tools accept NaN and
 # Infinity, which are not JSON and could not be sent back to clients.
 ScheduleInput = Annotated[dict[str, JsonValue], AfterValidator(_finite_object)]
-_SCHEDULE_INPUT = TypeAdapter(ScheduleInput)
+ScheduleInputAdapter = TypeAdapter(ScheduleInput)
 
 
 def schedule_input_from_python(value: JsonValue) -> dict[str, JsonValue]:
     """Validate decoded schedule input: one JSON object of finite values."""
     try:
-        return _SCHEDULE_INPUT.validate_python(value)
+        return ScheduleInputAdapter.validate_python(value)
     except ValidationError as exc:
         raise ValueError(f"Schedule input must be a JSON object: {exc}") from exc
 
@@ -89,7 +89,7 @@ def schedule_input_from_python(value: JsonValue) -> dict[str, JsonValue]:
 def schedule_input_from_json(payload: str) -> dict[str, JsonValue]:
     """Decode a schedule input document: one JSON object of finite values."""
     try:
-        return _SCHEDULE_INPUT.validate_json(payload)
+        return ScheduleInputAdapter.validate_json(payload)
     except ValidationError as exc:
         raise ValueError(f"Schedule input must be a JSON object: {exc}") from exc
 

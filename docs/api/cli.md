@@ -33,7 +33,7 @@ default serve the browser UI and REST API.
 | `--ray` | Off | Run workflows through Ray rather than the local executor. Requires the `ray` extra. |
 | `--log-level` | `WARNING` | Terminal log threshold: `DEBUG`, `INFO`, `WARNING`, `ERROR`; input is case-normalized. |
 | `--discovery-timeout SECONDS` | `60.0` | Positive finite maximum duration of a discovery scan. |
-| `--schedules-enabled` | Off | Start with every discovered cron schedule enabled. Schedules otherwise start disabled; the state is in memory only. |
+| `--schedules-enabled` | Off | Start with every discovered cron schedule enabled, for this start only. Otherwise each schedule starts as it was last turned on or off, kept in the state database; a schedule never turned on starts disabled. |
 | `--state-db PATH` | `.avalanche/operator/state.db` | SQLite file that holds the operator's state, relative to the folder the command starts in. `:memory:` uses a throwaway database. Only one operator can use a file at a time; a second one fails at startup. A file written by a newer Avalanche version is refused. |
 
 ### Target configuration
@@ -65,7 +65,7 @@ choice as `operator`.
 | `--ray` | Off | Use Ray execution. |
 | `--log-level` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. |
 | `--discovery-timeout SECONDS` | `60.0` | Positive finite discovery deadline. |
-| `--schedules-enabled` | Off | Start with every cron schedule enabled. |
+| `--schedules-enabled` | Off | Start with every cron schedule enabled, for this start only. |
 | `--state-db PATH` | `.avalanche/operator/state.db` | SQLite file that holds the operator's state, relative to the folder the command starts in. `:memory:` uses a throwaway database. Only one operator can use a file at a time; a second one fails at startup. A file written by a newer Avalanche version is refused. |
 
 Unlike `operator`, `dev` has no `--host`, `--webhook-port`, or `--no-web` options.
@@ -155,8 +155,8 @@ Inspect and control cron schedules on a running operator. Default connection is
 | `ava schedule disable SELECTOR` | Stops that workflow's cron schedule from starting runs; prints its JSON record. |
 
 Schedules start disabled, and a disabled schedule has no next run time. Whether a
-schedule is enabled, and its input, live only in the operator's memory: they
-survive rediscovery and source reload, and reset when the operator restarts. The
+schedule is enabled, and its input, are kept in the operator's state database
+(`--state-db`): they survive rediscovery, source reload, and operator restarts. The
 input is validated against the workflow's input model when each run starts. To run a scheduled
 workflow by hand, use `ava run` as for any other workflow. Targeting a workflow without a cron expression, or an unknown selector,
 prints the operator error to stderr and returns `1`.

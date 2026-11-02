@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 from uuid import uuid4
 
 from avalanche.file import File
@@ -57,7 +58,7 @@ class _Entry:
     claims: int = 0
 
 
-def _is_plain_name(name: str) -> bool:
+def is_plain_file_name(name: str) -> bool:
     return (
         bool(name)
         and name not in {".", ".."}
@@ -99,7 +100,7 @@ class InputFileStaging:
 
     def stage(self, name: str, media_type: str, content: bytes) -> StagedInputFile:
         """Save one upload and return the key that refers to it."""
-        if not _is_plain_name(name):
+        if not is_plain_file_name(name):
             raise StagedInputFileError(
                 f"Input file name {name!r} must be a plain file name of at most "
                 f"{_MAX_NAME_BYTES} bytes"
@@ -199,6 +200,34 @@ class InputFileStaging:
             entry.claims += 1
         return file
 
+    def copy(
+        self, object_key: str, *, sha256: str, size_bytes: int, folder: Path
+    ) -> StagedInputFile:
+        """Copy a staged file into ``folder`` under its uploaded name, for a holder that
+        keeps its own copy, such as a schedule. The staged file itself is left as is.
+        """
+        self._validate_key(object_key)
+        with self._lock:
+            entry = self._entries.get(object_key)
+            if entry is None:
+                raise StagedInputFileError(
+                    f"Input file {object_key!r} was not staged by this operator or has expired"
+                )
+            if (sha256.lower(), size_bytes) != (entry.file.sha256, entry.file.size_bytes):
+                raise StagedInputFileError(
+                    f"Input file {object_key!r} does not match its staged sha256 and size"
+                )
+            # The use keeps the file from expiring while it is copied.
+            entry.claims += 1
+        try:
+            shutil.copyfile(entry.path, folder / entry.file.name)
+        except OSError as exc:
+            failure = InputFileStorageError(f"Could not copy input file {object_key!r}: {exc}")
+            raise failure from exc
+        finally:
+            self.release((object_key,))
+        return entry.file
+
     def release(self, object_keys: Iterable[str]) -> None:
         """Undo one use per key, so a file no request uses expires like an unused one."""
         with self._lock:
@@ -247,7 +276,7 @@ class InputFileStaging:
             not separator
             or len(token) != 32
             or not set(token) <= _TOKEN_CHARS
-            or not _is_plain_name(name)
+            or not is_plain_file_name(name)
         ):
             raise StagedInputFileError(f"Malformed input file key {object_key!r}")
         path = (self._root / token / name).resolve()
@@ -257,8 +286,20 @@ class InputFileStaging:
             )
 
 
+class InputFileSource(Protocol):
+    """Where the files of one run or schedule request come from."""
+
+    def file(self, object_key: str, *, sha256: str, size_bytes: int) -> File:
+        """Build the ``ava.File`` for a staged key; its digest and size must match."""
+        ...
+
+    def inline(self, name: str, media_type: str, content: bytes, sha256: str) -> File:
+        """Build a path-backed ``ava.File`` for an inline body."""
+        ...
+
+
 class InputFileClaims:
-    """The files one run or schedule request refers to; see ``InputFileStaging.claims``."""
+    """The files one run request refers to; see ``InputFileStaging.claims``."""
 
     def __init__(self, staging: InputFileStaging) -> None:
         self._staging = staging
