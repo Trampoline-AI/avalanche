@@ -39,7 +39,12 @@ from .convert_v2 import (
     update_envelope_to_v2,
     workflow_info_to_v2,
 )
-from .input_files import InputFileClaims, InputFileStorageError, StagedInputFileError
+from .input_files import (
+    InputFileClaims,
+    InputFileSource,
+    InputFileStorageError,
+    StagedInputFileError,
+)
 from .models import (
     CatalogSnapshot,
     InputFileFields,
@@ -1006,11 +1011,13 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 run_input = json.loads(request.input_json)
                 if run_input is None:
                     raise ValueError("input_json must be a JSON object, not null")
-            with self._op.input_files.claims() as claims:
+            with self._op.schedule_input_file_claims() as claims:
+                input_files = None
                 if request.input_files:
                     if not isinstance(run_input, dict):
                         raise ValueError("Schedule input files require an input_json object")
-                    # The schedule keeps JSON, so each file is stored as its reference.
+                    # The schedule keeps JSON, so each file is stored as its reference
+                    # to a copy in the schedule input folder.
                     run_input = to_jsonable_python(
                         _attach_input_files(
                             run_input,
@@ -1019,8 +1026,9 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                             claims,
                         )
                     )
+                    input_files = claims
                 info = self._op.set_schedule_enabled(
-                    request.workflow_selector, request.enabled, run_input
+                    request.workflow_selector, request.enabled, run_input, input_files
                 )
         except AmbiguousWorkflow as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
@@ -1551,7 +1559,7 @@ def _attach_input_files(
     payload: dict[str, Any],
     attachments: Iterable[pb.FileAttachmentV2],
     fields: InputFileFields,
-    claims: InputFileClaims,
+    claims: InputFileSource,
 ) -> dict[str, Any]:
     """Set each attachment's field, as declared by the workflow's input schema.
 
@@ -1580,7 +1588,7 @@ def _attach_input_files(
     return payload
 
 
-def _attachment_file(attachment: pb.FileAttachmentV2, claims: InputFileClaims) -> File:
+def _attachment_file(attachment: pb.FileAttachmentV2, claims: InputFileSource) -> File:
     if attachment.object_uri:
         raise ValueError("object_uri attachments are not supported by the local operator")
     if attachment.object_key:

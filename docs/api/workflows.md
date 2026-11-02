@@ -146,12 +146,14 @@ first run is the next cron occurrence after the minute you enabled it, even if t
 current minute matches. A scheduled run that fails, for example because its stored
 input is invalid, shows as a failed run with the Scheduled trigger in the run list;
 enable the schedule again with corrected input to fix it. You can still run
-the workflow by hand like any other. Whether a schedule is enabled, and its input, live only
-in the operator's memory: they are kept across rediscovery and source reload,
-including when the cron expression changes, and reset to disabled with default input
-when the operator restarts.
-`ava operator --schedules-enabled` (or `ava dev --schedules-enabled`) starts with
-every schedule enabled instead.
+the workflow by hand like any other. Whether a schedule is enabled, its input, and
+the last minute it started a run are kept in the operator's state database
+(`--state-db`) by workflow: they survive rediscovery, source reload, a changed cron
+expression, and operator restarts, so a schedule that was on is on again after a
+restart. A workflow that is no longer discovered keeps its schedule state until it
+comes back. `ava operator --schedules-enabled` (or `ava dev --schedules-enabled`)
+starts with every schedule enabled instead, for that start only: choices stored
+earlier apply again the next time the operator starts without it.
 
 Each run records what started it as `triggered_by`: `scheduled`, `manual` (the Web UI
 or the TUI), `webhook`, or `api` (REST, gRPC, and `ava run` callers).

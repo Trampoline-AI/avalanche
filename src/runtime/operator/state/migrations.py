@@ -48,6 +48,26 @@ MIGRATIONS: tuple[Migration, ...] = (
             """,
         ),
     ),
+    Migration(
+        version=2,
+        name="schedules",
+        statements=(
+            # One row per workflow whose schedule has state worth keeping. enabled is
+            # NULL until someone turns the schedule on or off; input_json is NULL while
+            # runs use the workflow's defaults; enabled_minute is the minute it was
+            # last turned on, whose own occurrence it never fires.
+            """
+            CREATE TABLE schedules (
+                workflow_id TEXT PRIMARY KEY,
+                enabled INTEGER CHECK (enabled IN (0, 1)),
+                enabled_minute REAL,
+                input_json TEXT,
+                input_files_json TEXT NOT NULL,
+                last_triggered REAL
+            ) STRICT
+            """,
+        ),
+    ),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version

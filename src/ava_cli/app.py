@@ -141,7 +141,10 @@ def _build_parser() -> argparse.ArgumentParser:
     operator.add_argument(
         "--schedules-enabled",
         action="store_true",
-        help="start with every cron schedule enabled (schedules start disabled otherwise)",
+        help=(
+            "start with every cron schedule enabled, for this start only (otherwise "
+            "schedules start as last turned on or off)"
+        ),
     )
     add_state_db_argument(operator)
     operator.set_defaults(handler=_run_operator)
@@ -160,8 +163,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="inspect and control cron schedules on a running operator",
         description=(
             "List, enable, or disable discovered cron schedules. Schedules start "
-            "disabled; their state lives in the operator's memory and resets when it "
-            "restarts."
+            "disabled; whether each is on, and its input, are kept in the operator's "
+            "state database and apply again after it restarts."
         ),
     )
     schedule_commands = schedule.add_subparsers(
@@ -342,7 +345,10 @@ def _build_parser() -> argparse.ArgumentParser:
     dev.add_argument(
         "--schedules-enabled",
         action="store_true",
-        help="start with every cron schedule enabled (schedules start disabled otherwise)",
+        help=(
+            "start with every cron schedule enabled, for this start only (otherwise "
+            "schedules start as last turned on or off)"
+        ),
     )
     add_state_db_argument(dev)
     dev.set_defaults(handler=_run_dev)

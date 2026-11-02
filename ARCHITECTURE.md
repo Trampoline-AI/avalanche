@@ -296,9 +296,12 @@ metadata.
 The scheduler reconciles discovered `cron` declarations with the catalog. It
 starts runs through the same operator lifecycle as manual requests, but only for
 schedules that are enabled. Schedules start disabled (or all enabled with
-`--schedules-enabled`); enable/disable choices and the input each schedule's runs
-start with are kept in memory by workflow ID across reconciliation and reset on
-restart. The input is validated by the run worker, as for any other run. Workflow
+`--schedules-enabled`, which overrides stored choices for that start only);
+enable/disable choices, the input each schedule's runs start with, and the minute
+each last started a run are kept in the `schedules` table of the state database by
+workflow ID, so they survive reconciliation, cron changes and restarts. The last
+started minute is stored before the run starts, so a crash skips that occurrence
+rather than starting it twice after a restart. The input is validated by the run worker, as for any other run. Workflow
 descriptors can also declare webhook routes. When routes exist, the operator
 starts a loopback HTTP ingress on port `7434` by default; valid JSON POST bodies
 become workflow input and return an accepted run ID.
@@ -379,7 +382,10 @@ attachments in order, and any other field takes exactly one. Staged files
 live in a private folder the operator creates for itself; each run gets an
 `ava.File` built with `File.from_path` over the staged copy. Files no run or
 schedule used expire after 24 hours, and the folder is removed when the operator
-stops.
+stops. Files a schedule input uses are copied into `schedule-inputs/<token>/<name>`
+next to the state database, each with its own host-local workspace reference that
+the operator registers again at startup, and removed once a new schedule input no
+longer refers to them.
 
 The default ports are:
 
