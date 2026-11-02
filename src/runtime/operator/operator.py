@@ -383,75 +383,79 @@ class Operator:
         self._webhooks = WebhookServer(self, webhook_port)
         self._webhook_routes = {}
         self._state_store = OperatorStateStore.open(state_db)
-        initial_view = None
+        # Until the startup block below takes over cleanup through close(), any
+        # failure must release the state database lock itself.
         try:
+            initial_view = None
             if self._workflow_paths:
                 initial_view = self._registry.scan(self._workflow_paths, validate=routes_for)
                 raise_for_discovery_diagnostics(initial_view.diagnostics)
+            self._subscriber_queue_capacity = subscriber_queue_capacity
+            self._mp = multiprocessing.get_context("spawn")
+            self._runs: dict[str, RunState] = {}
+            self._stored_results: dict[str, StoredWorkflowResult] = {}
+            self._result_leases: dict[str, int] = {}
+            self._run_created_sequences: dict[str, int] = {}
+            self._run_revisions: dict[str, int] = {}
+            self._run_activity_sequences: dict[str, int] = {}
+            self._node_revisions: dict[tuple[str, str], int] = {}
+            self._logs: dict[str, list[SequencedLogEntry]] = {}
+            self._log_sequences_by_node: dict[str, dict[str, list[int]]] = {}
+            self._agent_events: dict[tuple[str, str], list[AgentEvent]] = {}
+            self._classifier_events: dict[tuple[str, str], list[ClassifierEvent]] = {}
+            self._classifier_invocations: dict[
+                str, dict[str, _ClassifierInvocationLifecycle]
+            ] = {}
+            self._classifier_detail_runs: set[str] = set()
+            self._evaluations: dict[str, dict[str, EvaluationRecord]] = {}
+            self._trace_descriptors: dict[tuple[str, str], TraceDescriptor] = {}
+            self._trace_bodies: dict[tuple[str, str], dict[int, bytes]] = {}
+            self._trace_errors: dict[tuple[str, str], str | None] = {}
+            self._agent_invocation_sequences: dict[tuple[str, str, str], int] = {}
+            # Each invocation's runtime, fixed by its first evidence, and the digest of
+            # its final body, so a replayed final trace can be told from a different one.
+            self._agent_invocation_runtimes: dict[tuple[str, str, str], str] = {}
+            self._agent_finished_invocations: dict[tuple[str, str, str], bytes] = {}
+            self._run_log_bytes: dict[str, int] = {}
+            self._run_detail_bytes: dict[str, int] = {}
+            self._node_detail_bytes: dict[tuple[str, str], int] = {}
+            self._active_runs: dict[str, _RunHandle] = {}
+            self._run_callbacks: list[Callable[[RunState], None]] = []
+            self._log_callbacks: list[Callable[[LogEntry], None]] = []
+            self._detail_callbacks: list[Callable[[DetailUpdate], None]] = []
+            self._update_subscribers: list[queue.Queue] = []
+            self._operator_instance_id = uuid4().hex
+            self._sequence = 0
+            self._catalog_sequence = 0
+            self._stream_history: deque[OperatorUpdate] = deque(maxlen=stream_history_capacity)
+            self._structural_baseline_capacity = structural_baseline_capacity
+            self._structural_baselines: OrderedDict[int, _StructuralBaseline] = OrderedDict()
+            self._lock = threading.RLock()
+            self._evaluation_workers = EvaluationWorkers(self._complete_evaluation)
+            self._watcher_stop = threading.Event()
+            self._watcher_ready = threading.Event()
+            self._watcher_thread: threading.Thread | None = None
+            self._fatal_error: Exception | None = None
+            self._fatal_error_ready = threading.Event()
+            self._result_cleanup_stop = threading.Event()
+            self._result_cleanup_thread: threading.Thread | None = None
+            self._closed = False
+            self._result_store = ResultStore(result_storage_directory)
+            self._input_files = InputFileStaging()
+            self._notification_stop_enqueued = False
+            self._notification_shutdown_thread: threading.Thread | None = None
+            self._notification_queue: queue.Queue[_RunNotifications | None] = queue.Queue()
+            self._notification_thread: threading.Thread | None = None
+
+            from .scheduler import Scheduler
+
+            self._scheduler = Scheduler(self, enabled_by_default=schedules_enabled)
         except BaseException as failure:
             try:
                 self._state_store.close()
             except Exception as exc:
                 failure.add_note(f"Operator state store close also failed: {exc}")
             raise
-        self._subscriber_queue_capacity = subscriber_queue_capacity
-        self._mp = multiprocessing.get_context("spawn")
-        self._runs: dict[str, RunState] = {}
-        self._stored_results: dict[str, StoredWorkflowResult] = {}
-        self._result_leases: dict[str, int] = {}
-        self._run_created_sequences: dict[str, int] = {}
-        self._run_revisions: dict[str, int] = {}
-        self._run_activity_sequences: dict[str, int] = {}
-        self._node_revisions: dict[tuple[str, str], int] = {}
-        self._logs: dict[str, list[SequencedLogEntry]] = {}
-        self._log_sequences_by_node: dict[str, dict[str, list[int]]] = {}
-        self._agent_events: dict[tuple[str, str], list[AgentEvent]] = {}
-        self._classifier_events: dict[tuple[str, str], list[ClassifierEvent]] = {}
-        self._classifier_invocations: dict[str, dict[str, _ClassifierInvocationLifecycle]] = {}
-        self._classifier_detail_runs: set[str] = set()
-        self._evaluations: dict[str, dict[str, EvaluationRecord]] = {}
-        self._trace_descriptors: dict[tuple[str, str], TraceDescriptor] = {}
-        self._trace_bodies: dict[tuple[str, str], dict[int, bytes]] = {}
-        self._trace_errors: dict[tuple[str, str], str | None] = {}
-        self._agent_invocation_sequences: dict[tuple[str, str, str], int] = {}
-        # Each invocation's runtime, fixed by its first evidence, and the digest of
-        # its final body, so a replayed final trace can be told from a different one.
-        self._agent_invocation_runtimes: dict[tuple[str, str, str], str] = {}
-        self._agent_finished_invocations: dict[tuple[str, str, str], bytes] = {}
-        self._run_log_bytes: dict[str, int] = {}
-        self._run_detail_bytes: dict[str, int] = {}
-        self._node_detail_bytes: dict[tuple[str, str], int] = {}
-        self._active_runs: dict[str, _RunHandle] = {}
-        self._run_callbacks: list[Callable[[RunState], None]] = []
-        self._log_callbacks: list[Callable[[LogEntry], None]] = []
-        self._detail_callbacks: list[Callable[[DetailUpdate], None]] = []
-        self._update_subscribers: list[queue.Queue] = []
-        self._operator_instance_id = uuid4().hex
-        self._sequence = 0
-        self._catalog_sequence = 0
-        self._stream_history: deque[OperatorUpdate] = deque(maxlen=stream_history_capacity)
-        self._structural_baseline_capacity = structural_baseline_capacity
-        self._structural_baselines: OrderedDict[int, _StructuralBaseline] = OrderedDict()
-        self._lock = threading.RLock()
-        self._evaluation_workers = EvaluationWorkers(self._complete_evaluation)
-        self._watcher_stop = threading.Event()
-        self._watcher_ready = threading.Event()
-        self._watcher_thread: threading.Thread | None = None
-        self._fatal_error: Exception | None = None
-        self._fatal_error_ready = threading.Event()
-        self._result_cleanup_stop = threading.Event()
-        self._result_cleanup_thread: threading.Thread | None = None
-        self._closed = False
-        self._result_store = ResultStore(result_storage_directory)
-        self._input_files = InputFileStaging()
-        self._notification_stop_enqueued = False
-        self._notification_shutdown_thread: threading.Thread | None = None
-        self._notification_queue: queue.Queue[_RunNotifications | None] = queue.Queue()
-        self._notification_thread: threading.Thread | None = None
-
-        from .scheduler import Scheduler
-
-        self._scheduler = Scheduler(self, enabled_by_default=schedules_enabled)
         try:
             self._scheduler.reconcile(self._registry.descriptors())
             if initial_view is not None:
