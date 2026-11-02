@@ -43,6 +43,12 @@ export type AgentDeclaration = z.infer<typeof AgentDeclaration>;
 export const RunStarted = z.strictObject({ "inputs": z.record(z.string(), JsonValue), "kind": z.literal("run.started"), "model": z.union([z.string(), z.null()]), "omitted_inputs": z.array(z.string()) });
 export type RunStarted = z.infer<typeof RunStarted>;
 
+export const PromptText = z.strictObject({ "omitted_chars": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "text": z.string().refine((value) => [...value].length <= 262144, "Expected at most 262144 characters") });
+export type PromptText = z.infer<typeof PromptText>;
+
+export const PromptSent = z.strictObject({ "first_message": PromptText, "kind": z.literal("prompt.sent"), "notes": z.array(z.string()), "system_prompt": z.union([PromptText, z.null()]), "verbatim": z.boolean() });
+export type PromptSent = z.infer<typeof PromptSent>;
+
 export const PredictRLMTokenUsage = z.strictObject({ "cache_hits": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "cost": z.number().min(0), "input_tokens": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "output_tokens": z.number().min(0).refine(Number.isInteger, "Expected an integer") });
 export type PredictRLMTokenUsage = z.infer<typeof PredictRLMTokenUsage>;
 
@@ -112,7 +118,7 @@ export type RateLimited = z.infer<typeof RateLimited>;
 export const AgentStarted = z.strictObject({ "agent_name": z.string(), "builtin_tools": z.array(z.string()), "format": z.literal("openai_agents.responses/v1"), "kind": z.literal("agent.started"), "model": z.union([z.string(), z.null()]), "tools": z.array(z.string()) });
 export type AgentStarted = z.infer<typeof AgentStarted>;
 
-export const AgentLiveEvent = z.strictObject({ "common": z.union([z.discriminatedUnion("kind", [RunStarted, TurnFinished, ToolStarted, ToolFinished]), z.null()]), "invocation_id": z.string().min(1), "kind": z.literal("event"), "native": z.union([z.discriminatedUnion("format", [z.discriminatedUnion("kind", [Lifecycle, IterationRecorded, CodeGenerated, PredictStarted, PredictFinished, CodeExecuted, RunEnded]), z.discriminatedUnion("kind", [SessionInitialized, RateLimited]), z.discriminatedUnion("kind", [AgentStarted])]), z.null()]), "schema_version": z.literal(2), "sequence": z.number().gt(0).refine(Number.isInteger, "Expected an integer"), "timestamp_ns": z.number().min(0).refine(Number.isInteger, "Expected an integer") });
+export const AgentLiveEvent = z.strictObject({ "common": z.union([z.discriminatedUnion("kind", [RunStarted, PromptSent, TurnFinished, ToolStarted, ToolFinished]), z.null()]), "invocation_id": z.string().min(1), "kind": z.literal("event"), "native": z.union([z.discriminatedUnion("format", [z.discriminatedUnion("kind", [Lifecycle, IterationRecorded, CodeGenerated, PredictStarted, PredictFinished, CodeExecuted, RunEnded]), z.discriminatedUnion("kind", [SessionInitialized, RateLimited]), z.discriminatedUnion("kind", [AgentStarted])]), z.null()]), "schema_version": z.literal(2), "sequence": z.number().gt(0).refine(Number.isInteger, "Expected an integer"), "timestamp_ns": z.number().min(0).refine(Number.isInteger, "Expected an integer") });
 export type AgentLiveEvent = z.infer<typeof AgentLiveEvent>;
 
 export const PredictRLMTraceHeader = z.strictObject({ "format": z.literal("predict_rlm.run/v1"), "max_iterations": z.number().gt(0).refine(Number.isInteger, "Expected an integer"), "sub_model": z.union([z.string(), z.null()]), "telemetry_ref": z.union([z.record(z.string(), JsonValue), z.null()]), "usage": PredictRLMUsage });

@@ -42,6 +42,7 @@ import { Markdown } from "./Markdown";
 import { PythonSource } from "./PythonSource";
 import { InspectorFields, InspectorResources } from "./InspectorDefinition";
 import { OpenDefinitionButton } from "./OpenDefinitionButton";
+import { InitialPromptDialog } from "./InitialPromptDialog";
 import { RetainedAgentValue } from "./RetainedAgentValue";
 import { isUnknownRecord } from "./guards";
 import { StepInterfacePanel } from "./StepInterfacePanel";
@@ -925,6 +926,20 @@ function AgentAndStepInspector({
                       )}
                     </section>
                   ))}
+                  {runId && (
+                    <div className="flex min-w-0 justify-start border-t border-line pt-4">
+                      <InitialPromptDialog
+                        key={descriptorScope}
+                        api={api}
+                        operatorInstanceId={operatorInstanceId}
+                        asOfEventUlid={asOfEventUlid}
+                        runId={runId}
+                        nodeId={nodeId}
+                        eventPageToken={eventPageToken}
+                        liveEvents={liveEvents}
+                      />
+                    </div>
+                  )}
                 </div>
               ) : node?.trace ? (
                 <AgentTraceExplorer

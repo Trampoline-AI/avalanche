@@ -117,6 +117,33 @@ export function runStartedEvent(
   });
 }
 
+export function promptSentEvent(
+  options: {
+    systemPrompt?: string | null;
+    firstMessage?: string;
+    verbatim?: boolean;
+    notes?: string[];
+    omittedChars?: number;
+  } = {},
+  sequence = 2,
+): AgentLiveEvent {
+  const systemPrompt =
+    options.systemPrompt === undefined ? "Answer the question." : options.systemPrompt;
+  return live(sequence, {
+    common: {
+      kind: "prompt.sent",
+      system_prompt: systemPrompt === null ? null : { text: systemPrompt, omitted_chars: 0 },
+      first_message: {
+        text: options.firstMessage ?? "Complete the task for these inputs.",
+        omitted_chars: options.omittedChars ?? 0,
+      },
+      verbatim: options.verbatim ?? true,
+      notes: options.notes ?? [],
+    },
+    native: null,
+  });
+}
+
 export interface HeaderOptions {
   subModel?: string | null;
   maxIterations?: number;

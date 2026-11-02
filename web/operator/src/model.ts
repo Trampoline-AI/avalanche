@@ -727,7 +727,7 @@ export const LogRecordDescriptorMsg = {
 };
 
 export type AgentEventKind =
-  "native" | "run.started" | "turn.finished" | "tool.started" | "tool.finished";
+  "native" | "run.started" | "prompt.sent" | "turn.finished" | "tool.started" | "tool.finished";
 
 export interface AgentEventDescriptorMsg {
   /**

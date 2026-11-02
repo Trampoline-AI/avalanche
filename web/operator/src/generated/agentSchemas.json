@@ -62,6 +62,7 @@
             {
               "discriminator": {
                 "mapping": {
+                  "prompt.sent": "#/$defs/PromptSent",
                   "run.started": "#/$defs/RunStarted",
                   "tool.finished": "#/$defs/ToolFinished",
                   "tool.started": "#/$defs/ToolStarted",
@@ -72,6 +73,9 @@
               "oneOf": [
                 {
                   "$ref": "#/$defs/RunStarted"
+                },
+                {
+                  "$ref": "#/$defs/PromptSent"
                 },
                 {
                   "$ref": "#/$defs/TurnFinished"
@@ -1675,6 +1679,73 @@
         "model"
       ],
       "title": "PredictStarted",
+      "type": "object"
+    },
+    "PromptSent": {
+      "additionalProperties": false,
+      "description": "The prompt that started the call: the system prompt and the first user message.\n\n``verbatim`` says whether the runtime read the text back as its SDK sent it to the\nmodel. When it did not, the text is what the runtime handed its engine, and\n``notes`` says what the engine adds that the text does not show. The text is kept\nas sent, so it can name input files by their path on the machine that ran the step.",
+      "properties": {
+        "first_message": {
+          "$ref": "#/$defs/PromptText"
+        },
+        "kind": {
+          "const": "prompt.sent",
+          "default": "prompt.sent",
+          "title": "Kind",
+          "type": "string"
+        },
+        "notes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Notes",
+          "type": "array"
+        },
+        "system_prompt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "verbatim": {
+          "title": "Verbatim",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "system_prompt",
+        "first_message",
+        "verbatim",
+        "notes"
+      ],
+      "title": "PromptSent",
+      "type": "object"
+    },
+    "PromptText": {
+      "additionalProperties": false,
+      "description": "One part of a prompt as a trace keeps it; text past the limit is left out.",
+      "properties": {
+        "omitted_chars": {
+          "minimum": 0,
+          "title": "Omitted Chars",
+          "type": "integer"
+        },
+        "text": {
+          "maxLength": 262144,
+          "title": "Text",
+          "type": "string"
+        }
+      },
+      "required": [
+        "text",
+        "omitted_chars"
+      ],
+      "title": "PromptText",
       "type": "object"
     },
     "RateLimited": {

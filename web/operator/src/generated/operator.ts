@@ -1944,7 +1944,13 @@ export enum AgentEventKindV2 {
     /**
      * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_RUN_STARTED = 8;
      */
-    RUN_STARTED = 8
+    RUN_STARTED = 8,
+    /**
+     * The system prompt and first user message the call started with.
+     *
+     * @generated from protobuf enum value: AGENT_EVENT_KIND_V2_PROMPT_SENT = 9;
+     */
+    PROMPT_SENT = 9
 }
 /**
  * @generated from protobuf enum avalanche.operator.PageOrderV2

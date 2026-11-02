@@ -26,6 +26,7 @@ import {
   claudeTurnEvent,
   predictRlmTraceHeader,
   finishedTrace,
+  promptSentEvent,
   runStartedEvent,
   tokenUsage,
   turnEvent,
@@ -118,6 +119,7 @@ const runWithOutputs = RunSnapshotMsg.create({
 });
 const COMMON_EVENT_KINDS: Record<string, AgentEventKind> = {
   "run.started": "run.started",
+  "prompt.sent": "prompt.sent",
   "turn.finished": "turn.finished",
   "tool.started": "tool.started",
   "tool.finished": "tool.finished",
@@ -574,6 +576,88 @@ describe("retained run inspection", () => {
     const outputs = screen.getByRole("region", { name: "Outputs" });
     expect(await within(inputs).findByRole("note")).toHaveTextContent("question");
     expect(await within(outputs).findByRole("note")).toHaveTextContent("answer");
+  });
+
+  it("keeps the initial prompt behind a deliberate action and loads it only when opened", async () => {
+    const readJsonDetail = vi.fn(async (token: string) =>
+      token === "trace-body"
+        ? finishedTrace()
+        : token === "event-2"
+          ? promptSentEvent({
+              systemPrompt: "SYSTEM: answer from the document.",
+              firstMessage: "FIRST: the question is why.",
+              verbatim: false,
+              notes: ["The runtime adds its own preset prompt."],
+            })
+          : runStartedEvent({ question: "why" }),
+    );
+    const api = createApi({
+      listAgentEventPage: async () =>
+        eventPage([event(1, "run.started"), event(2, "prompt.sent"), event(3)]),
+      readJsonDetail,
+    });
+    render(
+      <Inspector
+        api={api}
+        run={runWithOutputs}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    expect(
+      screen.queryByRole("button", { name: "View initial prompt" }),
+    ).not.toBeInTheDocument();
+    openRunIo();
+    const trigger = await screen.findByRole("button", { name: "View initial prompt" });
+    await screen.findByText("why");
+    expect(readJsonDetail).not.toHaveBeenCalledWith("event-2", expect.anything());
+    expect(screen.queryByText("SYSTEM: answer from the document.")).not.toBeInTheDocument();
+
+    fireEvent.click(trigger);
+    const dialog = await screen.findByRole("dialog", { name: "Initial prompt" });
+    const system = await within(dialog).findByRole("region", { name: "System prompt" });
+    const first = within(dialog).getByRole("region", { name: "First message" });
+    expect(system).toHaveTextContent("SYSTEM: answer from the document.");
+    expect(first).toHaveTextContent("FIRST: the question is why.");
+    expect(system).not.toHaveTextContent("FIRST:");
+    expect(within(dialog).getByRole("note")).toHaveTextContent(
+      "The runtime adds its own preset prompt.",
+    );
+    expect(within(system).getByRole("button", { name: /copy/i })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close initial prompt" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("pages to the prompt event and says when a step recorded none", async () => {
+    const listAgentEventPage = vi.fn(async (request: { afterEventSequence: string }) =>
+      request.afterEventSequence === "0"
+        ? eventPage([event(1, "run.started")], "next-page")
+        : eventPage([event(2)]),
+    );
+    const api = createApi({
+      listAgentEventPage,
+      readJsonDetail: async (token) =>
+        token === "trace-body" ? finishedTrace() : runStartedEvent({ question: "why" }),
+    });
+    render(
+      <Inspector
+        api={api}
+        run={runWithOutputs}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    openRunIo();
+    fireEvent.click(await screen.findByRole("button", { name: "View initial prompt" }));
+    const dialog = await screen.findByRole("dialog", { name: "Initial prompt" });
+    expect(
+      await within(dialog).findByText(/No initial prompt is recorded/),
+    ).toBeInTheDocument();
+    expect(listAgentEventPage).toHaveBeenCalledWith(
+      expect.objectContaining({ pageToken: "next-page", afterEventSequence: "1" }),
+      expect.anything(),
+    );
   });
 
   it("keeps run history visible when the current node is absent", async () => {
