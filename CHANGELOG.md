@@ -21,6 +21,16 @@
   can refer only to files attached for the schedule (or kept from its previous
   input); other `ava.File` references are refused. `--schedules-enabled` still
   turns every schedule on, for that start only.
+- Operator: workflow results now survive an operator restart, including `kill -9`.
+  `ava result RUN_ID` and `GetRunResult` keep working: result bundles are kept in
+  `results/` next to the state database (`.avalanche/operator/results/` by
+  default) and indexed in it, instead of in a temporary folder recreated on every
+  start. Results no longer expire after 24 hours and there is no longer a cap on
+  how many are kept; nothing is deleted automatically. At startup the operator
+  logs a warning for a result whose bundle is missing (that result then fails
+  with a clear error) and for a bundle no result refers to (never served). The
+  `Operator(result_storage_directory=..., result_retention_seconds=...)` arguments
+  are removed.
 
 ## 0.17.3
 

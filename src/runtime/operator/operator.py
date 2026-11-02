@@ -122,14 +122,15 @@ from .result_store import (
     PendingResultBundle,
     ResultPublicationCancelledError,
     ResultStore,
-    StoredWorkflowResult,
     duplicate_bundle_descriptor_for_spawn,
+    report_result_index,
     require_worker_descriptor_transfer,
 )
 from .results import EncodedWorkflowResult, decode_workflow_result
 from .run_worker import run_worker
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
 from .state import OperatorStateStore, StateDbPath
+from .state.results import RunResultTable
 from .state.schedule_input_files import ScheduleInputFileClaims, ScheduleInputFileFolder
 from .state.schedules import ScheduleState
 from .step_io import StepInputs, StepIo, StepValuePreview
@@ -155,7 +156,6 @@ logger = logging.getLogger(__name__)
 
 ExecutorBackend: TypeAlias = Literal["local", "ray"]
 STREAM_HISTORY_CAPACITY = 1024
-DEFAULT_RESULT_RETENTION_SECONDS = 24 * 60 * 60
 _PROCESS_GROUP_POLL_INTERVAL_SECONDS = 0.02
 DETAIL_PAGE_SIZE = 100
 MAX_DETAIL_PAGE_SIZE = 500
@@ -330,8 +330,6 @@ class Operator:
         discovery_timeout: float = DEFAULT_DISCOVERY_TIMEOUT,
         cancel_grace: float = 5.0,
         stream_history_capacity: int = STREAM_HISTORY_CAPACITY,
-        result_storage_directory: str | os.PathLike[str] | None = None,
-        result_retention_seconds: float | None = DEFAULT_RESULT_RETENTION_SECONDS,
         webhook_port: int = DEFAULT_WEBHOOK_PORT,
         structural_baseline_capacity: int = STRUCTURAL_BASELINE_CAPACITY,
         subscriber_queue_capacity: int = SUBSCRIBER_QUEUE_CAPACITY,
@@ -370,13 +368,6 @@ class Operator:
             raise ValueError("Cancellation grace must be non-negative")
         if stream_history_capacity <= 0:
             raise ValueError("Stream history capacity must be positive")
-        if result_retention_seconds is not None:
-            if isinstance(result_retention_seconds, bool) or not isinstance(
-                result_retention_seconds, (int, float)
-            ):
-                raise TypeError("Result retention must be a real number or None")
-            if not math.isfinite(result_retention_seconds) or result_retention_seconds <= 0:
-                raise ValueError("Result retention must be positive and finite")
         if structural_baseline_capacity <= 0:
             raise ValueError("Structural baseline capacity must be positive")
         if subscriber_queue_capacity <= 0:
@@ -408,9 +399,6 @@ class Operator:
         self._max_run_log_entries = max_run_log_entries
         self._max_run_detail_bytes = max_run_detail_bytes
         self._cancel_grace = cancel_grace
-        self._result_retention_seconds = (
-            None if result_retention_seconds is None else float(result_retention_seconds)
-        )
         self._prepare_timeout = prepare_timeout
         self._registry = WorkflowRegistry(discovery_timeout=discovery_timeout)
         self._workflow_paths = workflow_paths or []
@@ -427,8 +415,6 @@ class Operator:
             self._subscriber_queue_capacity = subscriber_queue_capacity
             self._mp = multiprocessing.get_context("spawn")
             self._runs: dict[str, RunState] = {}
-            self._stored_results: dict[str, StoredWorkflowResult] = {}
-            self._result_leases: dict[str, int] = {}
             self._run_created_sequences: dict[str, int] = {}
             self._run_revisions: dict[str, int] = {}
             self._run_activity_sequences: dict[str, int] = {}
@@ -471,10 +457,11 @@ class Operator:
             self._watcher_thread: threading.Thread | None = None
             self._fatal_error: Exception | None = None
             self._fatal_error_ready = threading.Event()
-            self._result_cleanup_stop = threading.Event()
-            self._result_cleanup_thread: threading.Thread | None = None
+            # Set at close so result loads still reading a bundle stop early.
+            self._result_load_stop = threading.Event()
             self._closed = False
-            self._result_store = ResultStore(result_storage_directory)
+            self._result_store = ResultStore(self._state_store)
+            report_result_index(self._result_store)
             self._input_files = InputFileStaging()
             self._notification_stop_enqueued = False
             self._notification_shutdown_thread: threading.Thread | None = None
@@ -508,13 +495,6 @@ class Operator:
             self._start_notification_dispatcher()
             if schedule and self._workflow_paths:
                 self._scheduler.start()
-            if self._result_retention_seconds is not None:
-                self._result_cleanup_thread = threading.Thread(
-                    target=self._result_cleanup_loop,
-                    name="avalanche-result-cleanup",
-                    daemon=True,
-                )
-                self._result_cleanup_thread.start()
         except BaseException as failure:
             with shutdown_cleanup():
                 try:
@@ -1517,36 +1497,29 @@ class Operator:
         return decode_workflow_result(self._get_run_result_payload(run_id))
 
     def _get_run_result_payload(self, run_id: str) -> EncodedWorkflowResult:
-        """Load one validated result payload from private storage."""
+        """Load one validated result payload from the persisted result store.
+
+        A result is indexed only once its run has ended in success, so an indexed
+        result is served even when the run itself is not known in memory, such as
+        after an operator restart.
+        """
         with self._lock:
             run = self._runs.get(run_id)
-            stored = self._stored_results.get(run_id)
-            if run is None:
-                raise KeyError(run_id)
-            status = run.status
-            if status in {RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING}:
-                raise RunResultNotReadyError(f"Run {run_id} is not terminal")
-            if status != RunStatus.SUCCESS:
-                raise RunResultUnavailableError(
-                    f"Run {run_id} ended with status {status.value}"
-                )
+            if run is not None:
+                status = run.status
+                if status in {RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING}:
+                    raise RunResultNotReadyError(f"Run {run_id} is not terminal")
+                if status != RunStatus.SUCCESS:
+                    raise RunResultUnavailableError(
+                        f"Run {run_id} ended with status {status.value}"
+                    )
+            with self._state_store.transaction() as connection:
+                stored = RunResultTable.get(connection, run_id)
             if stored is None:
-                raise RunResultUnavailableError(
-                    f"Run {run_id} result is unavailable or expired"
-                )
-            self._result_leases[run_id] = self._result_leases.get(run_id, 0) + 1
-        try:
-            return self._result_store.load(
-                stored,
-                cancel_signal=self._result_cleanup_stop,
-            )
-        finally:
-            with self._lock:
-                remaining = self._result_leases.get(run_id, 1) - 1
-                if remaining:
-                    self._result_leases[run_id] = remaining
-                else:
-                    self._result_leases.pop(run_id, None)
+                if run is None:
+                    raise KeyError(run_id)
+                raise RunResultUnavailableError(f"Run {run_id} result is unavailable")
+        return self._result_store.load(stored, cancel_signal=self._result_load_stop)
 
     @property
     def input_files(self) -> InputFileStaging:
@@ -1778,7 +1751,6 @@ class Operator:
                     self._evict_classifier_details_locked(run, remove_descriptors=True)
                 self._runs.pop(run_id, None)
                 self._log_sequences_by_node.pop(run_id, None)
-                self._stored_results.pop(run_id, None)
                 self._active_runs.pop(run_id, None)
             self._result_store.discard(result_bundle)
             _close_event_queue(event_queue)
@@ -1977,13 +1949,11 @@ class Operator:
             handles = list(self._active_runs.items())
         if first_close:
             self._watcher_stop.set()
-            self._result_cleanup_stop.set()
+            self._result_load_stop.set()
             self._scheduler.stop()
             self._webhooks.close()
             if self._watcher_thread is not None:
                 self._watcher_thread.join(timeout=2.0)
-            if self._result_cleanup_thread is not None:
-                self._result_cleanup_thread.join(timeout=2.0)
             self._evaluation_workers.close()
 
         for _, handle in handles:
@@ -2017,49 +1987,6 @@ class Operator:
             # Runs are stopped, so no coordinator still reads a staged input file.
             self._input_files.close()
             self._schedule_input_files.close()
-
-    def _result_cleanup_loop(self) -> None:
-        retention = self._result_retention_seconds
-        if retention is None:
-            return
-        interval = min(60.0, max(0.1, retention / 10))
-        while not self._result_cleanup_stop.wait(interval):
-            self._expire_results()
-
-    def _expire_results(self) -> None:
-        retention = self._result_retention_seconds
-        if retention is None:
-            return
-        cutoff = time.monotonic() - retention
-        expired: list[tuple[str, StoredWorkflowResult]] = []
-        with self._lock:
-            for run_id, stored in list(self._stored_results.items()):
-                if stored.published_at <= cutoff and self._result_leases.get(run_id, 0) == 0:
-                    expired.append((run_id, self._stored_results.pop(run_id)))
-            for run_id in tuple(self._classifier_detail_runs):
-                run = self._runs[run_id]
-                if (
-                    run.ended_at is not None
-                    and run.ended_at <= cutoff
-                    and run.status
-                    in {
-                        RunStatus.SUCCESS,
-                        RunStatus.FAILED,
-                        RunStatus.CANCELLED,
-                    }
-                ):
-                    self._evict_classifier_details_locked(run)
-        for run_id, stored in expired:
-            try:
-                self._result_store.discard(stored)
-            except (OSError, ValueError):
-                logging.getLogger(__name__).exception(
-                    "Could not remove expired workflow result %s",
-                    run_id,
-                )
-                with self._lock:
-                    if not self._closed and run_id not in self._stored_results:
-                        self._stored_results[run_id] = stored
 
     def _evict_classifier_details_locked(
         self, run: RunState, *, remove_descriptors: bool = False
@@ -2134,8 +2061,6 @@ class Operator:
 
     def _close_result_store(self) -> None:
         with self._lock:
-            self._stored_results.clear()
-            self._result_leases.clear()
             for run_id in tuple(self._classifier_detail_runs):
                 self._evict_classifier_details_locked(self._runs[run_id])
         self._result_store.close()
@@ -2497,6 +2422,7 @@ class Operator:
             self._result_store.discard(handle.result_bundle)
 
         discard_stored_result = False
+        recorded_result = False
         try:
             with self._lock:
                 run = self._runs.get(run_id)
@@ -2642,7 +2568,9 @@ class Operator:
                                 "cancelled": RunStatus.CANCELLED,
                             }[effective_status]
                             if stored_result is not None and effective_status == "success":
-                                self._stored_results[run_id] = stored_result
+                                with self._state_store.transaction() as connection:
+                                    RunResultTable.insert(connection, run_id, stored_result)
+                                recorded_result = True
                             elif stored_result is not None:
                                 discard_stored_result = True
                         elif stored_result is not None:
@@ -2669,9 +2597,9 @@ class Operator:
         except BaseException as error:
             if stored_result is not None:
                 try:
-                    with self._lock:
-                        if self._stored_results.get(run_id) is stored_result:
-                            self._stored_results.pop(run_id)
+                    if recorded_result:
+                        with self._state_store.transaction() as connection:
+                            RunResultTable.delete(connection, run_id)
                     self._result_store.discard(stored_result)
                 except Exception as cleanup_error:
                     error.add_note(f"Rejected workflow result cleanup failed: {cleanup_error}")
@@ -3107,7 +3035,6 @@ class Operator:
                 run.status = (
                     RunStatus.CANCELLED if handle.cancel_event.is_set() else RunStatus.FAILED
                 )
-                self._stored_results.pop(run_id, None)
                 run.ended_at = time.monotonic()
                 log_entry = None
                 try:
@@ -3146,7 +3073,6 @@ class Operator:
             if run is None:
                 return
             run.status = RunStatus.CANCELLED if cancelled else RunStatus.FAILED
-            self._stored_results.pop(run_id, None)
             run.ended_at = time.monotonic()
             log_entry = None
             if not cancelled:

@@ -19,6 +19,7 @@ from runtime.operator.proto import operator_pb2_grpc as pb_grpc
 from runtime.operator.result_store import publish_workflow_result
 from runtime.operator.results import EncodedWorkflowResult, ResultFileAttachment
 from runtime.operator.server import serve
+from runtime.operator.state.results import RunResultTable
 
 
 def _unused_port():
@@ -99,8 +100,8 @@ def _seed_result_file(operator: Operator, run_id: str) -> None:
     except (OSError, RuntimeError, TypeError, ValueError):
         operator._result_store.discard(pending)
         raise
-    with operator._lock:
-        operator._stored_results[run_id] = stored
+    with operator._lock, operator._state_store.transaction() as connection:
+        RunResultTable.insert(connection, run_id, stored)
 
 
 def test_catalog_and_run_pagination_keep_their_original_snapshot(transport):
