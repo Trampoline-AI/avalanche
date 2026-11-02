@@ -113,6 +113,7 @@ async def test_agent_rejects_bad_inputs_before_invocation_and_preserves_service_
         await agent(extra="not in signature")
     assert calls == []
     person = Person(id=1, name="Ada")
+    agent = ava.Agent(signature=SummarySignature, step_name="summarize")
     with pytest.raises(AgentStepExecutionError) as raised:
         await agent(person=person)
     assert raised.value.__cause__ is failure
@@ -169,7 +170,7 @@ async def test_tools_without_a_name_reach_the_predictor(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_invalid_tool_fails_every_call_instead_of_being_dropped(monkeypatch):
+async def test_invalid_tool_fails_the_call_instead_of_being_dropped(monkeypatch):
     _use_predictor(monkeypatch, object())
     agent = ava.Agent(
         signature=SummarySignature,
@@ -177,9 +178,8 @@ async def test_invalid_tool_fails_every_call_instead_of_being_dropped(monkeypatc
         tools=["not callable"],
     )
 
-    for _ in range(2):
-        with pytest.raises(ValidationError):
-            await agent(person=Person(id=1, name="Ada"))
+    with pytest.raises(ValidationError):
+        await agent(person=Person(id=1, name="Ada"))
 
 
 def _use_predictor(monkeypatch, predictor):
@@ -328,13 +328,16 @@ async def test_concurrent_agent_invocations_keep_evidence_and_traces_correlated(
                 evidence=RunEvidence(run_id=name, complete=True, terminal_outcome="completed"),
             )
 
-    agent = ava.Agent(signature=SummarySignature, step_name="summarize")
+    # Two agent steps running at once in one process, each with its own agent.
+    left_agent, right_agent = (
+        ava.Agent(signature=SummarySignature, step_name=name) for name in ("left", "right")
+    )
     _use_predictor(monkeypatch, Predictor())
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
         left, right = await asyncio.gather(
-            agent(person=Person(id=1, name="left")),
-            agent(person=Person(id=2, name="right")),
+            left_agent(person=Person(id=1, name="left")),
+            right_agent(person=Person(id=2, name="right")),
         )
     assert (left.outputs.note, right.outputs.note) == ("left", "right")
     grouped = {}
@@ -392,6 +395,7 @@ async def test_real_recorder_propagates_strict_observer_failures(monkeypatch, fa
     if failure_kind == "persistence":
         assert isinstance(raised.value.__cause__, EvidenceIncompleteError)
         assert raised.value.__cause__.__cause__ is failure
+        agent = ava.Agent(signature=SummarySignature, step_name="summarize")
         with capture_agent_evidence(broken_listener, errors="ignore"):
             assert (await agent(person=Person(id=1, name="Ada"))).outputs.note == "recorded"
     else:

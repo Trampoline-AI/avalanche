@@ -27,7 +27,7 @@ The example assumes a signature with input `document` and output `summary`. Elli
 | `runtime` | An agent runtime such as `ava.runtimes.PredictRLM(...)`; default `None` | The runtime that runs the agent and its settings. Omitted uses the workflow's `agent_defaults` runtime, else `ava.runtimes.PredictRLM()`. See [runtimes](#runtimes). Any other value raises `TypeError`. |
 | `tools` | Sequence of callables; default none | Additional tools; every member must be callable. |
 | `skills` | Sequence of `ava.agent.Skill`; default none | [Agent Skills](#skills) the agent may load when it needs them. Names must be distinct (`AgentStepError`); any other member raises `TypeError`. `ClaudeAgent` runs them; PredictRLM does not support them yet. |
-| `evaluations` | `ava.Evaluations \| None`; default `None` | Observation-only quality judgments of the first successful agent call, run by the operator. See [native evaluations](../agent-steps.md#native-evaluations). Any other value raises `TypeError`. |
+| `evaluations` | `ava.Evaluations \| None`; default `None` | Observation-only quality judgments of the step's successful agent call, run by the operator. See [native evaluations](../agent-steps.md#native-evaluations). Any other value raises `TypeError`. |
 
 Model and other PredictRLM settings, PredictRLM's own skills included, belong to the runtime. Passing `lm=`, `sub_lm=`, `max_iterations=` or another PredictRLM keyword to the step, or a PredictRLM skill in its `skills=`, raises `TypeError` naming the `runtime=ava.runtimes.PredictRLM(...)` replacement.
 
@@ -249,7 +249,7 @@ Outputs that are missing or do not match their declared types raise `AgentOutput
 
 Run views (`ava tui`, the web UI) receive the same trace while the call runs: an event when it starts, with its inputs and model, events for each tool call and finished turn, and a final event with the header and the outputs. Files and workspaces appear by their workspace reference, never their host path; an input or output too large for the trace is named rather than shown.
 
-Each step-body execution receives a fresh injected agent. Its first call constructs the predictor lazily; subsequent calls in that body reuse it. The body can make zero, one, or multiple calls. Calling a decorated step during workflow construction follows [node semantics](workflows.md), not this model-call interface.
+Each step-body execution receives a fresh injected agent, which it may call **once**; the call builds the runtime's predictor or client lazily. A second call in the same execution, sequential, in a loop, concurrent, or from another thread, raises `ava.agent.AgentStepCallError` before any model work and fails the step; a failed call still counts. Split work that needs several model runs into separate agent steps. A body that returns without calling its agent logs a warning on the step. See [one agent call per step](../agent-steps.md#one-agent-call-per-step). Calling a decorated step during workflow construction follows [node semantics](workflows.md), not this model-call interface.
 
 ## Skills
 
@@ -319,11 +319,12 @@ With PredictRLM, `ava.File` and `ava.Workspace` inputs are mounted in the agent 
 
 ## Errors
 
-Import agent errors from `avalanche.agent`. `AgentStepError` and `AgentStepExecutionError` are separate direct `RuntimeError` subclasses; `AgentOutputError` subclasses `AgentStepExecutionError`.
+Import agent errors from `avalanche.agent`. `AgentStepError` and `AgentStepExecutionError` are separate direct `RuntimeError` subclasses; `AgentStepCallError` subclasses `AgentStepError`, and `AgentOutputError` subclasses `AgentStepExecutionError`.
 
 | Error | Caller-visible condition |
 | --- | --- |
 | `AgentStepError` | Invalid injected `agent` parameter, invalid resolved input-field mapping, missing/extra model-call input names, two step skills with one name, or step skills on a runtime that does not support them. |
+| `AgentStepCallError` | The step called its agent a second time in one execution, sequentially, in a loop, concurrently, or from another thread. Raised when the second call is made, before any model work; names the step. Split the work into separate agent steps or give the single call all its instructions. |
 | `TypeError` | Missing/invalid signature, outputless signature, invalid skills/tools declaration, or forbidden workflow-default keys. Signature validation may occur during workflow metadata resolution or the first agent call rather than decoration. |
 | Dependency construction errors | Invalid upstream options or incompatible skill/tool configuration. Predictor construction occurs before the call's execution-error wrapper, so these propagate directly. |
 | `AgentOutputError` | The runtime's outputs do not match the signature: a field is missing or has the wrong type, or a PredictRLM `ava.File` output cannot be read back. Raised after the invocation's trace is recorded; no evaluation is submitted. Signature mismatches chain the Pydantic `ValidationError` as their cause. |

@@ -81,6 +81,11 @@ The examples below all come from this step, called with
 The runtime never decides whether outputs are valid. Avalanche does, the same way
 for every runtime.
 
+A step execution makes at most one call. Avalanche rejects a second call with
+`ava.agent.AgentStepCallError` before it builds a request, so a runtime never
+sees two invocations from one step execution and needs no check of its own.
+Traces, live events, evaluations, and run views rely on that.
+
 ## `AgentResult`
 
 What `await agent(...)` returns.

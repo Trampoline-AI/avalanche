@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import inspect
+import logging
+import threading
 import time
 import types
 import uuid
@@ -11,6 +13,7 @@ from functools import update_wrapper
 from typing import (
     Any,
     Callable,
+    Coroutine,
     DefaultDict,
     Generic,
     Mapping,
@@ -72,6 +75,13 @@ class AgentStepExecutionError(RuntimeError):
 
 class AgentOutputError(AgentStepExecutionError):
     """An agent's outputs do not match its step's signature."""
+
+
+class AgentStepCallError(AgentStepError):
+    """An agent step called its injected agent more than once in one execution."""
+
+
+_logger = logging.getLogger(__name__)
 
 
 class _InvocationEvents:
@@ -192,9 +202,36 @@ class Agent:
         self._skills = _step_skills("ava.Agent", skills)
         self._signature: SignatureSpec | None = None
         self._tools: tuple[ToolSpec, ...] = ()
+        # Trace capture, live events, evaluations and run views all assume one
+        # invocation per step execution; this flag is the single owner of that rule.
+        self._call_lock = threading.Lock()
+        self._called = False
 
-    async def __call__(self, **inputs: Any) -> AgentResult:
-        """Run the agent and return its validated outputs with the invocation's trace."""
+    @property
+    def called(self) -> bool:
+        """Whether this step execution has already called its agent."""
+        return self._called
+
+    def __call__(self, **inputs: Any) -> Coroutine[None, None, AgentResult]:
+        """Run the agent and return its validated outputs with the invocation's trace.
+
+        Each step execution may call its agent once. The call is claimed here,
+        when the coroutine is created and before any model work, so a second call
+        raises ``AgentStepCallError`` whether it is sequential, in a loop,
+        concurrent, or from another thread.
+        """
+        with self._call_lock:
+            if self._called:
+                raise AgentStepCallError(
+                    f"agent step {self._step_name!r} called its agent more than once. "
+                    "An agent step may call its agent only once per execution: give that "
+                    "single call all the instructions it needs, or split the work into "
+                    "separate agent steps."
+                )
+            self._called = True
+        return self._invoke(**inputs)
+
+    async def _invoke(self, **inputs: Any) -> AgentResult:
         signature = self._resolve_signature()
         self._validate_input_names(signature.dspy_signature, inputs)
         try:
@@ -531,8 +568,17 @@ def agent_step(
             from avalanche.evaluation_capture import capture_step_evaluations
 
             with capture_step_evaluations(spec.evaluations, step_name=spec.step_name):
-                result = user_fn(*args, **kwargs, agent=spec.make_agent())
-                return await result if inspect.isawaitable(result) else result
+                agent = spec.make_agent()
+                result = user_fn(*args, **kwargs, agent=agent)
+                value = await result if inspect.isawaitable(result) else result
+            if not agent.called:
+                _logger.warning(
+                    "agent step %r finished without calling its agent: no model ran, so "
+                    "no trace or evaluation was recorded. Call the agent once, or make "
+                    "this a plain ava.step.",
+                    spec.step_name,
+                )
+            return value
 
         update_wrapper(wrapper, user_fn)
         wrapper.__signature__ = spec.public_signature  # type: ignore[attr-defined]
