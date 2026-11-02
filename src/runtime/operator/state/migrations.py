@@ -68,6 +68,21 @@ MIGRATIONS: tuple[Migration, ...] = (
             """,
         ),
     ),
+    Migration(
+        version=3,
+        name="run results",
+        statements=(
+            """
+            CREATE TABLE run_results (
+                run_id TEXT PRIMARY KEY,
+                bundle_name TEXT NOT NULL UNIQUE,
+                manifest_sha256 TEXT NOT NULL,
+                byte_size INTEGER NOT NULL CHECK (byte_size >= 0),
+                published_at REAL NOT NULL
+            ) STRICT
+            """,
+        ),
+    ),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version

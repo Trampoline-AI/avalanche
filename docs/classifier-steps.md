@@ -404,8 +404,7 @@ colors:
 
 These views are local-development inspection, not a durable execution journal.
 The entire invocation detail body, including input and results, shares the
-operator's result retention window (24 hours after a terminal run by default)
-and event/node/run size limits. Bodies are released when the operator closes.
+operator's event/node/run size limits. Bodies are released when the operator closes.
 Historical descriptors retain call numbers and compact answers after full bodies
 expire; a retained run does not guarantee that its full evidence is still available.
 Expired or size-limited bodies are unavailable, not empty input or empty answers. Browser

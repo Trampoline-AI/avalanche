@@ -1,4 +1,22 @@
-"""Private, atomic local storage for operator-managed workflow results."""
+"""Private, atomic local storage for operator-managed workflow results.
+
+Accepted result bundles live under one result-storage root next to the operator
+state database (``results/`` beside ``state.db``), indexed by the
+``run_results`` table, so they survive operator restarts. A ``:memory:``
+database gets a private temporary root that is removed when the store closes.
+
+Layout of the root, which is owner-only (``0700``)::
+
+    .avalanche-result-store.lock   owner marker, locked while a store is open
+    pending/bundle_<hex>/          bundles being written by run workers
+    bundle_<hex>/                  accepted bundles, one per indexed result
+
+A worker publishes into a ``pending`` bundle through a descriptor it received
+from the operator. On acceptance the operator validates that bundle, deletes
+it, and writes the validated bytes into a new bundle the worker never had a
+descriptor for, which it then moves into the root. Nothing is ever deleted by
+time; :meth:`ResultStore.delete_run_result` removes one run's result.
+"""
 
 from __future__ import annotations
 
@@ -31,36 +49,80 @@ from .results import (
     strict_json_loads,
     validate_workflow_result_document,
 )
+from .state import OperatorStateStore
+from .state.results import RunResultRow, RunResultTable, StoredWorkflowResult
 
 _MANIFEST_VERSION = 1
 _BUNDLE_NAME = re.compile(r"bundle_[0-9a-f]{32}")
-_ROOT_NAME = re.compile(r"operator-results-[A-Za-z0-9_-]+")
 _STORAGE_NAME = re.compile(r"attachment_[0-9]{8}\.bin")
 _ATTACHMENT_ID = re.compile(r"file_(0|[1-9][0-9]{0,3})")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _READ_CHUNK_SIZE = 1024 * 1024
 MAX_RESULT_MANIFEST_BYTES = 1024 * 1024
-MAX_RETAINED_RESULTS = 1024
-MAX_RETAINED_RESULT_BYTES = 256 * 1024 * 1024
+RESULTS_DIRECTORY = "results"
+PENDING_DIRECTORY = "pending"
 _OWNER_MARKER = ".avalanche-result-store.lock"
 _OWNER_MARKER_BYTES = b"avalanche-result-store-v1\n"
+_DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 _SECURE_ANCHORED_ERROR = (
     "Secure workflow result publication is unavailable: this platform does not "
     "support directory-anchored file operations"
 )
 _SECURE_STORE_ERROR = (
     "Secure workflow result storage is unavailable: this platform does not "
-    "support directory-anchored file operations"
+    "support directory-anchored file operations and file locks"
 )
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "MAX_RESULT_MANIFEST_BYTES",
+    "PENDING_DIRECTORY",
+    "RESULTS_DIRECTORY",
+    "CancellationSignal",
+    "PendingResultBundle",
+    "ResultBundleMissingError",
+    "ResultIndexReport",
+    "ResultPublicationCancelledError",
+    "ResultStore",
+    "ResultStoreLockedError",
+    "StoredWorkflowResult",
+    "detach_transferred_bundle_descriptor",
+    "duplicate_bundle_descriptor_for_spawn",
+    "publish_workflow_result",
+    "report_result_index",
+    "require_worker_descriptor_transfer",
+    "result_root_for",
+]
 
 
 class CancellationSignal(Protocol):
     def is_set(self) -> bool: ...
 
 
+class _NeverCancelled:
+    @staticmethod
+    def is_set() -> bool:
+        return False
+
+
 class ResultPublicationCancelledError(RuntimeError):
     """Raised when cancellation interrupts result publication."""
+
+
+class ResultBundleMissingError(RuntimeError):
+    """An indexed result's bundle directory is no longer in the result root."""
+
+
+class ResultStoreLockedError(RuntimeError):
+    """Another open result store already owns this result-storage root."""
+
+    def __init__(self, root: Path) -> None:
+        self.root = root
+        super().__init__(
+            f"Result storage {root} is already in use by another operator. Each "
+            "operator state database needs its own folder; pass a --state-db in "
+            "another folder."
+        )
 
 
 @dataclass(frozen=True)
@@ -75,19 +137,19 @@ class PendingResultBundle:
 
 
 @dataclass(frozen=True)
-class StoredWorkflowResult:
-    """Opaque handle for immutable result bytes owned by ``ResultStore``."""
+class ResultIndexReport:
+    """Where the result index and the bundles on disk disagree."""
 
-    storage_key: str
-    manifest_sha256: str
-    published_at: float
-    byte_size: int
+    missing_bundles: tuple[RunResultRow, ...]
+    """Indexed results whose bundle directory is gone; loading them fails."""
+    unindexed_bundles: tuple[str, ...]
+    """Accepted bundle directories that no index row names; never served."""
+    unexpected_entries: tuple[str, ...]
+    """Root entries that are neither bundles nor the store's own files."""
 
-
-@dataclass(frozen=True)
-class _AcceptedWorkflowResult:
-    handle: StoredWorkflowResult
-    payload: EncodedWorkflowResult
+    @property
+    def consistent(self) -> bool:
+        return not (self.missing_bundles or self.unindexed_bundles or self.unexpected_entries)
 
 
 @dataclass(frozen=True)
@@ -115,45 +177,52 @@ class _OpenedBundle:
         os.close(self.descriptor)
 
 
-class ResultStore:
-    """Own private result bundles and validate every storage boundary."""
+def result_root_for(state_store: OperatorStateStore) -> Path | None:
+    """The result-storage root beside a database file, or ``None`` for ``:memory:``."""
+    path = state_store.path
+    return None if path is None else path.parent / RESULTS_DIRECTORY
 
-    def __init__(self, base_directory: str | os.PathLike[str] | None = None) -> None:
-        base = None if base_directory is None else os.fspath(base_directory)
-        use_dir_fd = all(
-            function in os.supports_dir_fd
-            for function in (
-                os.open,
-                os.mkdir,
-                os.unlink,
-                os.rmdir,
-                os.link,
-            )
-        ) and bool(getattr(os, "O_DIRECTORY", 0) and getattr(os, "O_NOFOLLOW", 0))
-        if not use_dir_fd:
+
+class ResultStore:
+    """Own the result bundles of one operator state database.
+
+    Lock order: callers may hold the operator lock; the store takes its own lock
+    and then, for index reads and writes, the state store's lock. It never calls
+    back into the operator.
+    """
+
+    def __init__(self, state_store: OperatorStateStore) -> None:
+        if not _supports_secure_store():
             raise RuntimeError(_SECURE_STORE_ERROR)
-        if base is not None:
-            Path(base).mkdir(parents=True, exist_ok=True)
-            _recover_stale_result_roots(Path(base))
-        self._root = Path(tempfile.mkdtemp(prefix="operator-results-", dir=base))
+        self._state_store = state_store
+        stable_root = result_root_for(state_store)
+        self._temporary = stable_root is None
+        if stable_root is None:
+            self._root = Path(tempfile.mkdtemp(prefix="operator-results-"))
+        else:
+            self._root = stable_root
+            _make_private_directory(self._root)
         self._root_fd: int | None = None
         self._owner_fd: int | None = None
+        self._pending_fd: int | None = None
         try:
-            os.chmod(self._root, 0o700)
-            self._root_fd = os.open(
-                self._root,
-                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
-            )
-            self._owner_fd = _create_and_lock_owner_marker(self._root_fd)
-        except BaseException:
-            if self._root_fd is not None:
-                os.close(self._root_fd)
-            shutil.rmtree(self._root, ignore_errors=True)
+            self._root_fd = os.open(self._root, _DIRECTORY_FLAGS)
+            _validate_result_root_metadata(os.fstat(self._root_fd), self._root)
+            self._owner_fd = _open_and_lock_owner_marker(self._root_fd, self._root)
+            self._pending_fd = _open_private_subdirectory(self._root_fd, PENDING_DIRECTORY)
+            self.recovered_pending_bundles = _remove_bundles_in(self._pending_fd)
+            if self.recovered_pending_bundles:
+                os.fsync(self._pending_fd)
+        except BaseException as failure:
+            try:
+                self._close_descriptors()
+                if self._temporary:
+                    shutil.rmtree(self._root)
+            except Exception as exc:
+                failure.add_note(f"Result storage cleanup also failed: {exc}")
             raise
         self._lock = threading.RLock()
         self._bundle_descriptors: set[int] = set()
-        self._accepted_results: dict[str, _AcceptedWorkflowResult] = {}
-        self._retained_result_bytes = 0
         self._closed = False
 
     @property
@@ -162,15 +231,15 @@ class ResultStore:
 
     def prepare(self) -> PendingResultBundle:
         with self._lock:
-            self._ensure_open()
+            pending_fd = self._require_open(self._pending_fd)
             name = f"bundle_{uuid4().hex}"
-            os.mkdir(name, mode=0o700, dir_fd=self._root_fd)
-            bundle = self._open_bundle(name)
+            os.mkdir(name, mode=0o700, dir_fd=pending_fd)
+            bundle = _open_bundle_at(pending_fd, name)
             metadata = os.fstat(bundle.descriptor)
             self._bundle_descriptors.add(bundle.descriptor)
             return PendingResultBundle(
                 name=name,
-                path=str(self._root / name),
+                path=str(self._root / PENDING_DIRECTORY / name),
                 device=metadata.st_dev,
                 inode=metadata.st_ino,
                 descriptor=bundle.descriptor,
@@ -182,6 +251,11 @@ class ResultStore:
         manifest_sha256: str,
         cancel_signal: CancellationSignal | None = None,
     ) -> StoredWorkflowResult:
+        """Validate a worker's bundle and store its bytes as a new accepted bundle.
+
+        The accepted bundle is not indexed yet: the operator records it with
+        :class:`RunResultTable` once the run has ended in success, or discards it.
+        """
         _validate_sha256(manifest_sha256, "manifest sha256")
         with self._lock:
             self._ensure_open()
@@ -190,231 +264,185 @@ class ResultStore:
                 expected_identity=(pending.device, pending.inode),
             )
             try:
-                manifest_bytes = _read_regular_file(
-                    pending_bundle,
-                    "manifest.json",
-                    cancel_signal,
-                    maximum_bytes=MAX_RESULT_MANIFEST_BYTES,
-                )
-                if hashlib.sha256(manifest_bytes).hexdigest() != manifest_sha256:
-                    raise ValueError("Result manifest sha256 does not match")
-                manifest = _decode_manifest(manifest_bytes)
-                payload = self._materialize_bundle(
-                    pending_bundle,
-                    manifest,
-                    cancel_signal,
-                )
+                payload = _read_bundle(pending_bundle, manifest_sha256, cancel_signal)
             finally:
                 pending_bundle.close()
-            byte_size = _encoded_result_byte_size(payload)
-            if len(self._accepted_results) >= MAX_RETAINED_RESULTS:
-                raise RuntimeError(
-                    f"Result store retains at most {MAX_RETAINED_RESULTS} results"
-                )
-            if self._retained_result_bytes + byte_size > MAX_RETAINED_RESULT_BYTES:
-                raise RuntimeError(
-                    "Result store retained bytes would exceed " f"{MAX_RETAINED_RESULT_BYTES}"
-                )
-            storage_key = uuid4().hex
-            stored = StoredWorkflowResult(
-                storage_key=storage_key,
-                manifest_sha256=manifest_sha256,
-                published_at=time.monotonic(),
-                byte_size=byte_size,
-            )
-            self._discard_bundle(
-                pending.name,
-                descriptor=pending.descriptor,
-                expected_identity=(pending.device, pending.inode),
-            )
-            self._accepted_results[storage_key] = _AcceptedWorkflowResult(
-                handle=stored,
-                payload=payload,
-            )
-            self._retained_result_bytes += byte_size
-            return stored
+            self._discard_pending(pending)
+            return self._write_accepted_bundle(payload, cancel_signal)
 
     def load(
         self,
         stored: StoredWorkflowResult,
         cancel_signal: CancellationSignal | None = None,
     ) -> EncodedWorkflowResult:
+        """Read and fully re-validate one accepted bundle against its index entry."""
         with self._lock:
-            self._ensure_open()
-            accepted = self._accepted_results.get(stored.storage_key)
-            if accepted is None or accepted.handle != stored:
-                raise ValueError("Stored result handle is unavailable")
-            _check_optional_cancelled(cancel_signal)
-            return accepted.payload
+            root_fd = self._require_open(self._root_fd)
+            try:
+                bundle = _open_bundle_at(root_fd, stored.bundle_name)
+            except FileNotFoundError as exc:
+                raise ResultBundleMissingError(
+                    f"Result bundle {stored.bundle_name} is missing from {self._root}"
+                ) from exc
+            try:
+                return _read_bundle(bundle, stored.manifest_sha256, cancel_signal)
+            finally:
+                bundle.close()
 
     def discard(self, bundle: PendingResultBundle | StoredWorkflowResult) -> None:
+        """Remove a pending bundle, or an accepted bundle that was never indexed."""
         with self._lock:
             if self._closed:
                 return
             if isinstance(bundle, StoredWorkflowResult):
-                accepted = self._accepted_results.get(bundle.storage_key)
-                if accepted is None or accepted.handle != bundle:
-                    return
-                del self._accepted_results[bundle.storage_key]
-                self._retained_result_bytes -= bundle.byte_size
+                _remove_bundle_at(self._require_open(self._root_fd), bundle.bundle_name)
                 return
             if bundle.descriptor not in self._bundle_descriptors:
                 return
-            self._discard_bundle(
-                bundle.name,
-                descriptor=bundle.descriptor,
-                expected_identity=(bundle.device, bundle.inode),
+            self._discard_pending(bundle)
+
+    def delete_run_result(self, run_id: str) -> RunResultRow | None:
+        """Delete one run's index row and then its bundle; return the deleted row.
+
+        Returns ``None`` when the run has no stored result. The row is committed
+        as deleted before the bundle is removed, so a failure in between leaves
+        an unindexed bundle (reported by :meth:`check_index`), never an index row
+        that serves a half-deleted bundle. A row whose bundle is already missing
+        is deleted all the same.
+        """
+        with self._lock:
+            root_fd = self._require_open(self._root_fd)
+            with self._state_store.transaction() as connection:
+                row = RunResultTable.delete(connection, run_id)
+            if row is None:
+                return None
+            try:
+                _remove_bundle_at(root_fd, row.bundle_name)
+            except FileNotFoundError:
+                pass
+            return row
+
+    def check_index(self) -> ResultIndexReport:
+        """Compare the ``run_results`` index with the bundles in the root."""
+        with self._lock:
+            root_fd = self._require_open(self._root_fd)
+            with self._state_store.transaction() as connection:
+                rows = RunResultTable.list_all(connection)
+            bundles: set[str] = set()
+            unexpected: list[str] = []
+            with os.scandir(root_fd) as entries:
+                for entry in entries:
+                    if entry.name in (_OWNER_MARKER, PENDING_DIRECTORY):
+                        continue
+                    if _BUNDLE_NAME.fullmatch(entry.name) and entry.is_dir(
+                        follow_symlinks=False
+                    ):
+                        bundles.add(entry.name)
+                    else:
+                        unexpected.append(entry.name)
+            indexed = {row.bundle_name for row in rows}
+            return ResultIndexReport(
+                missing_bundles=tuple(row for row in rows if row.bundle_name not in bundles),
+                unindexed_bundles=tuple(sorted(bundles - indexed)),
+                unexpected_entries=tuple(sorted(unexpected)),
             )
 
     def close(self) -> None:
+        """Release the root; a temporary root is removed with everything in it."""
         with self._lock:
             if self._closed:
                 return
             self._closed = True
-            self._accepted_results.clear()
-            self._retained_result_bytes = 0
-            if self._root_fd is None:
-                raise RuntimeError("Result-storage root descriptor is unavailable")
-            _remove_open_result_root(
-                self._root,
-                self._root_fd,
-                self._owner_fd,
-            )
-            for descriptor in self._bundle_descriptors:
-                try:
-                    os.close(descriptor)
-                except OSError:
-                    pass
-            self._bundle_descriptors.clear()
-            self._root_fd = None
-            self._owner_fd = None
+            try:
+                if self._temporary:
+                    self._remove_temporary_root()
+            finally:
+                for descriptor in self._bundle_descriptors:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+                self._bundle_descriptors.clear()
+                self._close_descriptors()
 
-    def _materialize_bundle(
+    def _write_accepted_bundle(
         self,
-        bundle: _OpenedBundle,
-        manifest: _Manifest,
+        payload: EncodedWorkflowResult,
         cancel_signal: CancellationSignal | None,
-    ) -> EncodedWorkflowResult:
-        expected_names = {"manifest.json", "value.json"}
-        value_bytes = _read_regular_file(
-            bundle,
-            "value.json",
-            cancel_signal,
-            maximum_bytes=manifest.value_size,
-        )
+    ) -> StoredWorkflowResult:
+        root_fd = self._require_open(self._root_fd)
+        pending_fd = self._require_open(self._pending_fd)
+        name = f"bundle_{uuid4().hex}"
+        os.mkdir(name, mode=0o700, dir_fd=pending_fd)
         try:
-            value_json = value_bytes.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            raise ValueError("Result value JSON is not UTF-8") from exc
-        _validate_file_bytes(
-            value_bytes,
-            manifest.value_size,
-            manifest.value_sha256,
-            "result value",
-        )
-
-        attachment_ids: set[str] = set()
-        storage_names: set[str] = set()
-        files: list[ResultFileAttachment] = []
-        for item in manifest.files:
-            if item.attachment_id in attachment_ids:
-                raise ValueError(f"Duplicate result file attachment {item.attachment_id!r}")
-            if item.storage_name in storage_names:
-                raise ValueError("Duplicate result attachment storage name")
-            attachment_ids.add(item.attachment_id)
-            storage_names.add(item.storage_name)
-            expected_names.add(item.storage_name)
-            files.append(
-                ResultFileAttachment(
-                    attachment_id=item.attachment_id,
-                    content=_load_attachment(bundle, item, cancel_signal),
-                    name=item.name,
-                    media_type=item.media_type,
-                    sha256=item.sha256,
+            bundle = _open_bundle_at(pending_fd, name)
+            try:
+                metadata = os.fstat(bundle.descriptor)
+                manifest_sha256 = publish_workflow_result(
+                    payload,
+                    bundle.descriptor,
+                    (metadata.st_dev, metadata.st_ino),
+                    cancel_signal or _NeverCancelled(),
                 )
-            )
-
-        actual_names = set(_bounded_bundle_names(bundle.descriptor))
-        if actual_names != expected_names:
-            raise ValueError("Result bundle contains missing or unexpected files")
-        validate_workflow_result_document(value_json, attachment_ids)
-        _check_optional_cancelled(cancel_signal)
-        return EncodedWorkflowResult(value_json=value_json, files=tuple(files))
-
-    def _open_bundle(
-        self,
-        bundle_name: str,
-        expected_identity: tuple[int, int] | None = None,
-    ) -> _OpenedBundle:
-        self._ensure_open()
-        if type(bundle_name) is not str or _BUNDLE_NAME.fullmatch(bundle_name) is None:
-            raise ValueError("Result bundle descriptor is malformed")
-        if self._root_fd is None:
-            raise RuntimeError("Result-storage root descriptor is unavailable")
-        descriptor = os.open(
-            bundle_name,
-            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
-            dir_fd=self._root_fd,
-        )
-        try:
-            _validate_bundle_metadata(os.fstat(descriptor), expected_identity)
-        except BaseException:
-            os.close(descriptor)
+            finally:
+                bundle.close()
+            os.rename(name, name, src_dir_fd=pending_fd, dst_dir_fd=root_fd)
+        except BaseException as failure:
+            try:
+                _remove_bundle_at(pending_fd, name)
+            except Exception as exc:
+                failure.add_note(f"Removing the unaccepted result bundle also failed: {exc}")
             raise
-        return _OpenedBundle(descriptor=descriptor)
+        os.fsync(pending_fd)
+        os.fsync(root_fd)
+        return StoredWorkflowResult(
+            bundle_name=name,
+            manifest_sha256=manifest_sha256,
+            byte_size=_encoded_result_byte_size(payload),
+            published_at=time.time(),
+        )
 
-    def _discard_bundle(
-        self,
-        bundle_name: str,
-        descriptor: int,
-        expected_identity: tuple[int, int] | None = None,
-    ) -> None:
-        if type(bundle_name) is not str or _BUNDLE_NAME.fullmatch(bundle_name) is None:
+    def _discard_pending(self, bundle: PendingResultBundle) -> None:
+        if type(bundle.name) is not str or _BUNDLE_NAME.fullmatch(bundle.name) is None:
             raise ValueError("Result bundle descriptor is malformed")
         try:
-            self._remove_bundle_directory(
-                bundle_name,
-                descriptor,
-                expected_identity,
+            pending_fd = self._require_open(self._pending_fd)
+            retained = self._open_retained_bundle(
+                bundle.descriptor, (bundle.device, bundle.inode)
             )
+            try:
+                _empty_bundle(retained.descriptor)
+            finally:
+                retained.close()
+            _remove_bundle_at(pending_fd, bundle.name, (bundle.device, bundle.inode))
         finally:
-            if descriptor in self._bundle_descriptors:
-                self._bundle_descriptors.remove(descriptor)
-                os.close(descriptor)
+            if bundle.descriptor in self._bundle_descriptors:
+                self._bundle_descriptors.remove(bundle.descriptor)
+                os.close(bundle.descriptor)
 
-    def _remove_bundle_directory(
-        self,
-        bundle_name: str,
-        descriptor: int,
-        expected_identity: tuple[int, int] | None,
-    ) -> None:
-        if self._root_fd is None:
-            raise RuntimeError("Result-storage root descriptor is unavailable")
-        bundle = self._open_retained_bundle(descriptor, expected_identity)
+    def _remove_temporary_root(self) -> None:
+        root_fd = self._require_descriptor(self._root_fd)
+        pending_fd = self._require_descriptor(self._pending_fd)
+        _remove_bundles_in(pending_fd)
+        os.rmdir(PENDING_DIRECTORY, dir_fd=root_fd)
+        _remove_bundles_in(root_fd, keep=frozenset({_OWNER_MARKER}))
+        os.unlink(_OWNER_MARKER, dir_fd=root_fd)
+        parent_fd = os.open(self._root.parent, _DIRECTORY_FLAGS)
         try:
-            os.fchmod(bundle.descriptor, 0o700)
-            entries = _bounded_bundle_names(bundle.descriptor)
-            for entry_name in entries:
-                if _is_directory_at(bundle.descriptor, entry_name):
-                    raise ValueError("Result bundle unexpectedly contains a directory")
-                os.unlink(entry_name, dir_fd=bundle.descriptor)
-            os.fsync(bundle.descriptor)
+            current = os.stat(self._root.name, dir_fd=parent_fd, follow_symlinks=False)
+            opened = os.fstat(root_fd)
+            if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+                raise ValueError("Result-storage root identity changed")
+            os.rmdir(self._root.name, dir_fd=parent_fd)
         finally:
-            bundle.close()
-        on_root_descriptor = os.open(
-            bundle_name,
-            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
-            dir_fd=self._root_fd,
-        )
-        try:
-            _validate_bundle_metadata(
-                os.fstat(on_root_descriptor),
-                expected_identity,
-            )
-        finally:
-            os.close(on_root_descriptor)
-        os.rmdir(bundle_name, dir_fd=self._root_fd)
-        os.fsync(self._root_fd)
+            os.close(parent_fd)
+
+    def _close_descriptors(self) -> None:
+        descriptors = (self._pending_fd, self._owner_fd, self._root_fd)
+        self._pending_fd = self._owner_fd = self._root_fd = None
+        for descriptor in descriptors:
+            if descriptor is not None:
+                os.close(descriptor)
 
     @staticmethod
     def _open_retained_bundle(
@@ -429,9 +457,160 @@ class ResultStore:
             raise
         return _OpenedBundle(descriptor=duplicate)
 
+    def _require_open(self, descriptor: int | None) -> int:
+        self._ensure_open()
+        return self._require_descriptor(descriptor)
+
+    @staticmethod
+    def _require_descriptor(descriptor: int | None) -> int:
+        if descriptor is None:
+            raise RuntimeError("Result-storage root descriptor is unavailable")
+        return descriptor
+
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("Result store is closed")
+
+
+def _read_bundle(
+    bundle: _OpenedBundle,
+    manifest_sha256: str,
+    cancel_signal: CancellationSignal | None,
+) -> EncodedWorkflowResult:
+    manifest_bytes = _read_regular_file(
+        bundle,
+        "manifest.json",
+        cancel_signal,
+        maximum_bytes=MAX_RESULT_MANIFEST_BYTES,
+    )
+    if hashlib.sha256(manifest_bytes).hexdigest() != manifest_sha256:
+        raise ValueError("Result manifest sha256 does not match")
+    return _materialize_bundle(bundle, _decode_manifest(manifest_bytes), cancel_signal)
+
+
+def _materialize_bundle(
+    bundle: _OpenedBundle,
+    manifest: _Manifest,
+    cancel_signal: CancellationSignal | None,
+) -> EncodedWorkflowResult:
+    expected_names = {"manifest.json", "value.json"}
+    value_bytes = _read_regular_file(
+        bundle,
+        "value.json",
+        cancel_signal,
+        maximum_bytes=manifest.value_size,
+    )
+    try:
+        value_json = value_bytes.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Result value JSON is not UTF-8") from exc
+    _validate_file_bytes(
+        value_bytes,
+        manifest.value_size,
+        manifest.value_sha256,
+        "result value",
+    )
+
+    attachment_ids: set[str] = set()
+    storage_names: set[str] = set()
+    files: list[ResultFileAttachment] = []
+    for item in manifest.files:
+        if item.attachment_id in attachment_ids:
+            raise ValueError(f"Duplicate result file attachment {item.attachment_id!r}")
+        if item.storage_name in storage_names:
+            raise ValueError("Duplicate result attachment storage name")
+        attachment_ids.add(item.attachment_id)
+        storage_names.add(item.storage_name)
+        expected_names.add(item.storage_name)
+        files.append(
+            ResultFileAttachment(
+                attachment_id=item.attachment_id,
+                content=_load_attachment(bundle, item, cancel_signal),
+                name=item.name,
+                media_type=item.media_type,
+                sha256=item.sha256,
+            )
+        )
+
+    actual_names = set(_bounded_bundle_names(bundle.descriptor))
+    if actual_names != expected_names:
+        raise ValueError("Result bundle contains missing or unexpected files")
+    validate_workflow_result_document(value_json, attachment_ids)
+    _check_optional_cancelled(cancel_signal)
+    return EncodedWorkflowResult(value_json=value_json, files=tuple(files))
+
+
+def _open_bundle_at(
+    parent_fd: int,
+    bundle_name: str,
+    expected_identity: tuple[int, int] | None = None,
+) -> _OpenedBundle:
+    if type(bundle_name) is not str or _BUNDLE_NAME.fullmatch(bundle_name) is None:
+        raise ValueError("Result bundle descriptor is malformed")
+    descriptor = os.open(bundle_name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+    try:
+        _validate_bundle_metadata(os.fstat(descriptor), expected_identity)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return _OpenedBundle(descriptor=descriptor)
+
+
+def _empty_bundle(bundle_fd: int) -> None:
+    os.fchmod(bundle_fd, 0o700)
+    for entry_name in _bounded_bundle_names(bundle_fd):
+        if _is_directory_at(bundle_fd, entry_name):
+            raise ValueError("Result bundle unexpectedly contains a directory")
+        os.unlink(entry_name, dir_fd=bundle_fd)
+    os.fsync(bundle_fd)
+
+
+def _remove_bundle_at(
+    parent_fd: int,
+    bundle_name: str,
+    expected_identity: tuple[int, int] | None = None,
+) -> None:
+    """Empty and remove one bundle directory, never following a link."""
+    bundle = _open_bundle_at(parent_fd, bundle_name, expected_identity)
+    try:
+        _empty_bundle(bundle.descriptor)
+    finally:
+        bundle.close()
+    os.rmdir(bundle_name, dir_fd=parent_fd)
+    os.fsync(parent_fd)
+
+
+def _remove_bundles_in(directory_fd: int, *, keep: frozenset[str] = frozenset()) -> int:
+    """Remove every bundle in a directory that may hold only bundles and ``keep``."""
+    names = [entry.name for entry in os.scandir(directory_fd) if entry.name not in keep]
+    for name in names:
+        if _BUNDLE_NAME.fullmatch(name) is None or not _is_directory_at(directory_fd, name):
+            raise ValueError(f"Result storage contains an unexpected entry {name!r}")
+        _remove_bundle_at(directory_fd, name)
+    return len(names)
+
+
+def _make_private_directory(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.mkdir(path, mode=0o700)
+    except FileExistsError:
+        return
+    os.chmod(path, 0o700)
+
+
+def _open_private_subdirectory(parent_fd: int, name: str) -> int:
+    try:
+        os.mkdir(name, mode=0o700, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+    try:
+        _validate_bundle_metadata(os.fstat(descriptor))
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
 
 
 def publish_workflow_result(
@@ -927,87 +1106,50 @@ def _validate_publication_metadata(
     validate_workflow_result_document(encoded.value_json, attachment_ids)
 
 
-def _create_and_lock_owner_marker(root_fd: int) -> int:
-    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(_OWNER_MARKER, flags, 0o600, dir_fd=root_fd)
+def _supports_secure_store() -> bool:
     try:
-        os.write(descriptor, _OWNER_MARKER_BYTES)
-        os.fsync(descriptor)
-        _lock_owner_marker(descriptor, blocking=True)
+        import fcntl  # noqa: F401
+    except ImportError:
+        return False
+    return all(
+        function in os.supports_dir_fd
+        for function in (os.open, os.mkdir, os.unlink, os.rmdir, os.link, os.rename, os.stat)
+    ) and bool(getattr(os, "O_DIRECTORY", 0) and getattr(os, "O_NOFOLLOW", 0))
+
+
+def _open_and_lock_owner_marker(root_fd: int, root: Path) -> int:
+    """Open (creating once) and exclusively lock the root's ownership marker."""
+    import fcntl
+
+    flags = os.O_RDWR | os.O_NOFOLLOW
+    descriptor = os.open(_OWNER_MARKER, flags | os.O_CREAT, 0o600, dir_fd=root_fd)
+    try:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ResultStoreLockedError(root) from exc
+        if os.fstat(descriptor).st_size == 0:
+            # Created now, or by a store that stopped before writing it.
+            os.write(descriptor, _OWNER_MARKER_BYTES)
+            os.fsync(descriptor)
+            os.fsync(root_fd)
+        _validate_owner_marker(descriptor)
     except BaseException:
         os.close(descriptor)
         raise
     return descriptor
 
 
-def _lock_owner_marker(descriptor: int, *, blocking: bool) -> bool:
-    try:
-        import fcntl
-    except ImportError:
-        return False
-    operation = fcntl.LOCK_EX
-    if not blocking:
-        operation |= fcntl.LOCK_NB
-    try:
-        fcntl.flock(descriptor, operation)
-    except BlockingIOError:
-        return False
-    return True
-
-
-def _recover_stale_result_roots(base: Path) -> None:
-    try:
-        import fcntl  # noqa: F401
-    except ImportError:
-        return
-    base_fd = os.open(base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    try:
-        for entry in os.scandir(base_fd):
-            if _ROOT_NAME.fullmatch(entry.name) is None:
-                continue
-            try:
-                _recover_stale_result_root(base_fd, entry.name)
-            except (OSError, ValueError):
-                logger.warning(
-                    "Leaving unverified stale result-storage root %s in place",
-                    entry.name,
-                )
-    finally:
-        os.close(base_fd)
-
-
-def _recover_stale_result_root(base_fd: int, root_name: str) -> None:
-    root_fd = os.open(
-        root_name,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-        dir_fd=base_fd,
-    )
-    owner_fd: int | None = None
-    try:
-        _validate_result_root_metadata(os.fstat(root_fd))
-        owner_fd = os.open(
-            _OWNER_MARKER,
-            os.O_RDWR | os.O_NOFOLLOW,
-            dir_fd=root_fd,
-        )
-        _validate_owner_marker(owner_fd)
-        if not _lock_owner_marker(owner_fd, blocking=False):
-            return
-        _remove_result_root_at(base_fd, root_name, root_fd, owner_fd)
-    finally:
-        if owner_fd is not None:
-            os.close(owner_fd)
-        if root_fd >= 0:
-            os.close(root_fd)
-
-
-def _validate_result_root_metadata(metadata: os.stat_result) -> None:
+def _validate_result_root_metadata(metadata: os.stat_result, root: Path) -> None:
     if not stat.S_ISDIR(metadata.st_mode):
-        raise ValueError("Result-storage root is not a directory")
+        raise ValueError(f"Result-storage root {root} is not a directory")
     if stat.S_IMODE(metadata.st_mode) != 0o700:
-        raise ValueError("Result-storage root permissions are not private")
-    if hasattr(os, "getuid") and metadata.st_uid != os.getuid():
-        raise ValueError("Result-storage root has a different owner")
+        raise ValueError(
+            f"Result-storage root {root} must be private to its owner (mode 0700), "
+            f"found {stat.S_IMODE(metadata.st_mode):04o}"
+        )
+    if metadata.st_uid != os.getuid():
+        raise ValueError(f"Result-storage root {root} is owned by another user")
 
 
 def _validate_owner_marker(descriptor: int) -> None:
@@ -1016,7 +1158,7 @@ def _validate_owner_marker(descriptor: int) -> None:
         raise ValueError("Result-storage ownership marker is not a private file")
     if stat.S_IMODE(metadata.st_mode) != 0o600:
         raise ValueError("Result-storage ownership marker permissions are not private")
-    if hasattr(os, "getuid") and metadata.st_uid != os.getuid():
+    if metadata.st_uid != os.getuid():
         raise ValueError("Result-storage ownership marker has a different owner")
     if metadata.st_size != len(_OWNER_MARKER_BYTES):
         raise ValueError("Result-storage ownership marker is malformed")
@@ -1025,68 +1167,38 @@ def _validate_owner_marker(descriptor: int) -> None:
         raise ValueError("Result-storage ownership marker is malformed")
 
 
-def _remove_open_result_root(
-    root: Path,
-    root_fd: int,
-    owner_fd: int | None,
-) -> None:
-    if owner_fd is None:
-        raise RuntimeError("Result-storage ownership marker is unavailable")
-    parent_fd = os.open(
-        root.parent,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-    )
-    try:
-        _remove_result_root_at(parent_fd, root.name, root_fd, owner_fd)
-    finally:
-        os.close(owner_fd)
-        os.close(root_fd)
-        os.close(parent_fd)
+def report_result_index(store: ResultStore) -> ResultIndexReport:
+    """Warn about every disagreement between the result index and the bundles on disk.
 
-
-def _remove_result_root_at(
-    parent_fd: int,
-    root_name: str,
-    root_fd: int,
-    owner_fd: int,
-) -> None:
-    opened_identity = os.fstat(root_fd)
-    current_fd = os.open(
-        root_name,
-        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-        dir_fd=parent_fd,
-    )
-    try:
-        current_identity = os.fstat(current_fd)
-        if (current_identity.st_dev, current_identity.st_ino) != (
-            opened_identity.st_dev,
-            opened_identity.st_ino,
-        ):
-            raise ValueError("Result-storage root identity changed")
-    finally:
-        os.close(current_fd)
-    for entry in os.scandir(root_fd):
-        if entry.name == _OWNER_MARKER:
-            continue
-        if _BUNDLE_NAME.fullmatch(entry.name) is None or not entry.is_dir(
-            follow_symlinks=False
-        ):
-            raise ValueError("Result-storage root contains an unexpected entry")
-        bundle_fd = os.open(
-            entry.name,
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
-            dir_fd=root_fd,
+    The operator still starts: a missing bundle fails only that run's result, and
+    an unindexed bundle is never served. Nothing is deleted or repaired here.
+    """
+    if store.recovered_pending_bundles:
+        logger.warning(
+            "Removed %d unfinished result bundle(s) left in %s by runs that never " "completed",
+            store.recovered_pending_bundles,
+            store.root / PENDING_DIRECTORY,
         )
-        try:
-            _validate_bundle_metadata(os.fstat(bundle_fd))
-            os.fchmod(bundle_fd, 0o700)
-            for child in os.scandir(bundle_fd):
-                if child.is_dir(follow_symlinks=False):
-                    raise ValueError("Result bundle unexpectedly contains a directory")
-                os.unlink(child.name, dir_fd=bundle_fd)
-        finally:
-            os.close(bundle_fd)
-        os.rmdir(entry.name, dir_fd=root_fd)
-    os.unlink(_OWNER_MARKER, dir_fd=root_fd)
-    os.fsync(root_fd)
-    os.rmdir(root_name, dir_fd=parent_fd)
+    report = store.check_index()
+    for row in report.missing_bundles:
+        logger.warning(
+            "Stored result for run %s is unavailable: its bundle %s is missing from %s",
+            row.run_id,
+            row.bundle_name,
+            store.root,
+        )
+    if report.unindexed_bundles:
+        logger.warning(
+            "Result storage %s holds %d bundle(s) no stored result refers to; they are "
+            "never served: %s",
+            store.root,
+            len(report.unindexed_bundles),
+            ", ".join(report.unindexed_bundles),
+        )
+    if report.unexpected_entries:
+        logger.warning(
+            "Result storage %s contains unexpected entries: %s",
+            store.root,
+            ", ".join(report.unexpected_entries),
+        )
+    return report

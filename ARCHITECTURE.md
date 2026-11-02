@@ -318,7 +318,7 @@ each run using the `spawn` multiprocessing context.
 6. Coordinator runs Workflow.run(...).result() with lifecycle hooks.
 7. Queue events update parent-side node/run state, logs, agent events, and traces.
 8. Coordinator publishes an encoded terminal result into the private bundle.
-9. Parent validates, retains, and serves that result until expiry or cleanup.
+9. Parent validates the bundle, stores a copy it owns, indexes it, and serves it.
 ```
 
 Preparation, runtime, and terminal events are serializable queue messages. The
@@ -333,17 +333,23 @@ Cancellation sets the child cancellation event and eventually tears down the
 owned process group. It remains cooperative at the workflow-node level, while
 the operator owns final process cleanup.
 
-### Results and retention
+### Results
 
 A successful coordinator result is encoded into JSON plus separate `File`
-attachments. The parent-owned `ResultStore` stores it in a private local result
-bundle, validates the manifest and attachment limits, and exposes it through
-`GetRunResult`. `ava result RUN_ID --output-dir PATH` retrieves the result into
-a new caller-owned directory.
+attachments. The parent-owned `ResultStore` validates the worker's bundle
+(manifest, digests and per-result size limits), writes a copy into a new
+owner-only bundle under `results/` next to the operator state database
+(`.avalanche/operator/results/` by default), and records it in the database's
+`run_results` table once the run has succeeded. `GetRunResult` and
+`ava result RUN_ID --output-dir PATH` serve it from there, re-validating it on
+every read, so results survive an operator restart. Nothing expires by time.
+With `--state-db :memory:` the bundles live in a private temporary folder that
+is removed when the operator stops.
 
-This store is local, bounded, and retention-limited. It is not durable workflow
-state or crash recovery. Application-owned tables and output destinations remain
-outside it.
+At startup the operator warns about bundles without an index row and index rows
+without their bundle, and serves neither. The result folder is local and
+unencrypted and can hold any value a workflow returns. Application-owned tables
+and output destinations remain outside it.
 
 ## Transport and clients
 
