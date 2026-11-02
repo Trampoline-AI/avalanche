@@ -47,6 +47,15 @@
   Avalanche version is refused rather than guessed at. Nothing is stored in it yet;
   run history still lives in memory and is lost on restart. `Operator(...)` now
   requires a keyword-only `state_db` argument (a path or `":memory:"`).
+- Operator: schedules survive restarts. Whether each cron schedule is on, the input
+  its runs start with, and the minute it last started a run are kept in the state
+  database by workflow, so a schedule that was on is on again after a restart (or a
+  crash) and fires without anyone turning it back on; one that was off stays off.
+  The state also survives a changed cron expression, and a workflow that disappears
+  from discovery gets its schedule state back when it returns. Files a schedule's
+  input uses are copied to `schedule-inputs/` next to the database and kept until
+  the schedule's input stops using them. `--schedules-enabled` still turns every
+  schedule on, for that start only.
 
 ## 0.17.3
 

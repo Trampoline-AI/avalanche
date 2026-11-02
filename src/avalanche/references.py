@@ -52,17 +52,48 @@ def local_workspace(path: Path) -> Workspace:
     return Workspace.from_directory(path.resolve(strict=True), reference=reference)
 
 
+def restore_local_workspace(reference: str, path: Path) -> Workspace:
+    """Register ``path`` again under a reference ``local_workspace`` issued earlier.
+
+    The registry lives in the system temporary folder, which a reboot may clear,
+    while a folder kept elsewhere outlives it. An entry that still exists must
+    already name the same folder.
+    """
+    token = _local_workspace_token(reference)
+    root = path.resolve(strict=True)
+    target = _registry() / token
+    try:
+        with target.open("x") as handle:
+            os.chmod(target, 0o600)
+            json.dump(str(root), handle)
+    except FileExistsError:
+        with target.open() as handle:
+            registered = Path(json.load(handle))
+        if registered != root:
+            raise ValueError(
+                f"Local workspace reference {reference} is registered for {registered}, "
+                f"not {root}"
+            ) from None
+    return Workspace.from_directory(root, reference=reference)
+
+
+def _local_workspace_token(identifier: str) -> str:
+    if not identifier.startswith("local-ws:v1:"):
+        raise RuntimeError("workspace reference is not bound; supply a ReferenceBinder")
+    token = identifier.removeprefix("local-ws:v1:")
+    if len(token) != 32 or any(c not in "0123456789abcdef" for c in token):
+        raise ValueError("Malformed local workspace reference")
+    return token
+
+
 class LocalReferenceBinder:
     """Resolve only locally registered capabilities; remote refs require a host binder."""
 
     def bind_workspace(self, reference: Workspace) -> Path:
         identifier = reference.reference
-        if identifier is None or not identifier.startswith("local-ws:v1:"):
+        if identifier is None:
             raise RuntimeError("workspace reference is not bound; supply a ReferenceBinder")
-        token = identifier.removeprefix("local-ws:v1:")
-        if len(token) != 32 or any(c not in "0123456789abcdef" for c in token):
-            raise ValueError("Malformed local workspace reference")
-        target = _registry() / token
+        target = _registry() / _local_workspace_token(identifier)
         with target.open() as handle:
             root = Path(json.load(handle)).resolve(strict=True)
         if not root.is_dir():

@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 import warnings
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -658,6 +659,156 @@ def test_scheduled_runs_read_the_staged_schedule_files(operator, stub):
     assert operator.get_run_result(run.run_id) == ["main.txt=main", "extra.txt=extra"]
 
 
+@contextmanager
+def _served(operator: Operator):
+    port = _free_port()
+    server = serve_operator(operator, port=port, block=False)
+    channel = grpc.insecure_channel(f"127.0.0.1:{port}")
+    try:
+        yield pb_grpc.OperatorServiceV2Stub(channel)
+    finally:
+        channel.close()
+        server.stop(grace=0).wait()
+
+
+def _file_operator(flows: Path, state_db: Path) -> Operator:
+    return Operator(
+        [str(flows)], watch=False, schedule=False, webhook_port=0, state_db=state_db
+    )
+
+
+def _schedule_files(state_db: Path) -> set[str]:
+    root = state_db.parent / "schedule-inputs"
+    return {path.relative_to(root).as_posix() for path in root.glob("*/*")}
+
+
+def test_schedule_files_survive_a_restart_and_a_cleared_reference_registry(tmp_path):
+    flows = tmp_path / "flows.py"
+    flows.write_text(_FLOWS)
+    state_db = tmp_path / "state" / "state.db"
+    operator = _file_operator(flows, state_db)
+    try:
+        with _served(operator) as stub:
+            selector = _flow(operator).selector
+            document = _stage(stub, selector, "document", "main.txt", b"main")
+            extra = _stage(stub, selector, "attachments", "extra.txt", b"extra")
+            stub.SetScheduleEnabled(
+                pb.SetScheduleEnabledRequestV2(
+                    workflow_selector=selector,
+                    enabled=True,
+                    input_json=json.dumps({"attachments": []}),
+                    input_files=[document, extra],
+                )
+            )
+        stored_input = _flow(operator).schedule_input
+    finally:
+        operator.close()
+    # A reboot clears the temporary folder that registers local workspaces.
+    for item in [stored_input["document"], *stored_input["attachments"]]:
+        token = item["ref"]["workspace"].removeprefix("local-ws:v1:")
+        (Path(tempfile.gettempdir()) / f"avalanche-local-refs-{os.getuid()}" / token).unlink()
+
+    operator = _file_operator(flows, state_db)
+    try:
+        flow = _flow(operator)
+        assert (flow.schedule_enabled, flow.schedule_input) == (True, stored_input)
+        # The first run is the occurrence after the minute it was enabled in.
+        due = datetime.fromtimestamp(flow.next_run_at)
+        operator._scheduler._clock = lambda: due
+        operator._scheduler._check_schedules()
+        (started,) = operator.list_runs(flow.selector)
+        run = _wait_terminal(operator, started.run_id)
+        assert run.status is RunStatus.SUCCESS
+        assert operator.get_run_result(run.run_id) == ["main.txt=main", "extra.txt=extra"]
+    finally:
+        operator.close()
+
+
+def test_new_schedule_input_removes_only_the_files_it_no_longer_uses(tmp_path):
+    flows = tmp_path / "flows.py"
+    flows.write_text(_FLOWS)
+    state_db = tmp_path / "state" / "state.db"
+    operator = _file_operator(flows, state_db)
+    try:
+        with _served(operator) as stub:
+            selector = _flow(operator).selector
+            document = _stage(stub, selector, "document", "main.txt", b"main")
+            extra = _stage(stub, selector, "attachments", "old.txt", b"old")
+            first = json.loads(
+                stub.SetScheduleEnabled(
+                    pb.SetScheduleEnabledRequestV2(
+                        workflow_selector=selector,
+                        enabled=True,
+                        input_json=json.dumps({"attachments": []}),
+                        input_files=[document, extra],
+                    )
+                ).schedule_input_json
+            )
+            assert {name.split("/")[1] for name in _schedule_files(state_db)} == {
+                "main.txt",
+                "old.txt",
+            }
+            kept = {name for name in _schedule_files(state_db) if "main.txt" in name}
+            replacement = _stage(stub, selector, "attachments", "new.txt", b"new")
+
+            # A client sends the stored input back, with only the list field replaced.
+            stub.SetScheduleEnabled(
+                pb.SetScheduleEnabledRequestV2(
+                    workflow_selector=selector,
+                    enabled=True,
+                    input_json=json.dumps({**first, "attachments": []}),
+                    input_files=[replacement],
+                )
+            )
+            files = _schedule_files(state_db)
+            assert kept <= files
+            assert {name.split("/")[1] for name in files} == {"main.txt", "new.txt"}
+
+            # Disabling keeps the input, and with it the files.
+            stub.SetScheduleEnabled(
+                pb.SetScheduleEnabledRequestV2(workflow_selector=selector, enabled=False)
+            )
+            assert _schedule_files(state_db) == files
+
+            other = _stage(stub, selector, "document", "other.txt", b"other")
+            stub.SetScheduleEnabled(
+                pb.SetScheduleEnabledRequestV2(
+                    workflow_selector=selector,
+                    enabled=True,
+                    input_json="{}",
+                    input_files=[other],
+                )
+            )
+            assert {name.split("/")[1] for name in _schedule_files(state_db)} == {"other.txt"}
+    finally:
+        operator.close()
+
+
+def test_a_refused_schedule_request_keeps_no_schedule_files(tmp_path):
+    flows = tmp_path / "flows.py"
+    flows.write_text(_FLOWS)
+    state_db = tmp_path / "state" / "state.db"
+    operator = _file_operator(flows, state_db)
+    try:
+        with _served(operator) as stub:
+            selector = _flow(operator).selector
+            extra = _stage(stub, selector, "attachments", "extra.txt", b"extra")
+            with pytest.raises(grpc.RpcError) as error:
+                # The required document field is missing.
+                stub.SetScheduleEnabled(
+                    pb.SetScheduleEnabledRequestV2(
+                        workflow_selector=selector,
+                        enabled=True,
+                        input_json=json.dumps({"attachments": []}),
+                        input_files=[extra],
+                    )
+                )
+        assert error.value.code() is grpc.StatusCode.INVALID_ARGUMENT
+        assert _schedule_files(state_db) == set()
+    finally:
+        operator.close()
+
+
 def test_schedule_files_require_input_json(operator, stub):
     selector = _flow(operator).selector
     document = _stage(stub, selector, "document", "main.txt", b"main")
@@ -735,11 +886,14 @@ def test_closing_the_operator_removes_staged_files(tmp_path):
         _flow(operator).selector, "document", "notes.txt", "", b"x"
     )
     root = operator.input_files.root
+    schedule_root = operator._schedule_input_files.root
     assert (root / staged.object_key).exists()
 
     operator.close()
 
     assert not root.exists()
+    # Without a state database file, schedule input files are throwaway too.
+    assert not schedule_root.exists()
 
 
 def _grpc_web_post(server, method: str, request) -> bytes:

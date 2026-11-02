@@ -50,7 +50,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--schedules-enabled",
         action="store_true",
-        help="start with every cron schedule enabled (schedules start disabled otherwise)",
+        help=(
+            "start with every cron schedule enabled, for this start only (otherwise "
+            "schedules start as last turned on or off)"
+        ),
     )
     parser.add_argument(
         "--discovery-timeout",

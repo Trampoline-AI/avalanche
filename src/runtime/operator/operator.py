@@ -16,7 +16,8 @@ import threading
 import time
 from bisect import bisect_right
 from collections import OrderedDict, deque
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -126,6 +127,8 @@ from .results import EncodedWorkflowResult, decode_workflow_result
 from .run_worker import run_worker
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
 from .state import OperatorStateStore, StateDbPath
+from .state.schedule_input_files import ScheduleInputFileClaims, ScheduleInputFileFolder
+from .state.schedules import ScheduleState
 from .step_io import StepInputs, StepIo, StepValuePreview
 from .webhooks import DEFAULT_WEBHOOK_PORT, WebhookServer, routes_for
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
@@ -327,8 +330,8 @@ class Operator:
         here with ``StateStoreLockedError``.
 
         Discovered cron schedules start disabled; ``schedules_enabled`` starts
-        them all enabled instead. Enable and disable choices are kept in memory
-        only and reset on restart.
+        them all enabled instead, for this process. Enable and disable choices and
+        schedule input are kept in ``state_db`` and apply again after a restart.
         """
         if not 0 <= webhook_port <= 65535:
             raise ValueError("Webhook port must be between 0 and 65535")
@@ -449,7 +452,16 @@ class Operator:
 
             from .scheduler import Scheduler
 
-            self._scheduler = Scheduler(self, enabled_by_default=schedules_enabled)
+            self._schedule_input_files = ScheduleInputFileFolder.for_store(self._state_store)
+            try:
+                self._scheduler = Scheduler(
+                    self,
+                    state=ScheduleState(self._state_store, self._schedule_input_files),
+                    enabled_by_default=schedules_enabled,
+                )
+            except BaseException:
+                self._schedule_input_files.close()
+                raise
         except BaseException as failure:
             try:
                 self._state_store.close()
@@ -1525,23 +1537,37 @@ class Operator:
         """The input fields a workflow declares, and which of them hold a list."""
         return input_file_fields(self._registry.resolve(selector).input_schema_json)
 
+    @contextmanager
+    def schedule_input_file_claims(self) -> Iterator[ScheduleInputFileClaims]:
+        """Copy the files of one schedule request into the schedule input folder.
+
+        Pass the claims to ``set_schedule_enabled``; files it does not keep are
+        removed when the block ends.
+        """
+        with self._schedule_input_files.claims(self._input_files) as claims:
+            yield claims
+
     def set_schedule_enabled(
         self,
         selector: str,
         enabled: bool,
         run_input: dict[str, JsonValue] | None = None,
+        input_files: ScheduleInputFileClaims | None = None,
     ) -> WorkflowInfo:
         """Enable or disable one workflow's cron schedule and publish the change.
 
         ``run_input`` sets the input cron runs start with and is accepted only when
         enabling; without it the stored input is kept (initially the workflow's
-        defaults). The input is validated against the workflow's input model when
-        each run starts, as for any other run. The choice lives in operator memory:
-        it survives rediscovery and source reload, and resets to the startup default
-        when the operator restarts.
+        defaults). ``input_files`` holds the files ``run_input`` refers to, copied
+        through ``schedule_input_file_claims``. The input is validated against the
+        workflow's input model when each run starts, as for any other run. The
+        choice is kept in the state database: it survives rediscovery, source
+        reload and restarts.
         """
         if run_input is not None and not enabled:
             raise ValueError("Schedule input can only be set when enabling the schedule")
+        if input_files is not None and run_input is None:
+            raise ValueError("Schedule input files require schedule input")
         if run_input is not None:
             # The one check for every caller: input that is not finite JSON could
             # never be sent back to clients.
@@ -1561,7 +1587,14 @@ class Operator:
                 )
                 if missing:
                     raise MissingRunInputError(missing)
-            self._scheduler.set_enabled(descriptor.workflow_id, enabled, run_input)
+            self._scheduler.set_enabled(
+                descriptor.workflow_id,
+                enabled,
+                run_input,
+                () if input_files is None else input_files.files,
+            )
+            if input_files is not None:
+                input_files.keep()
             catalog = self._publish_catalog(self._registry.view)
         return next(
             info for info in catalog.workflows if info.workflow_id == descriptor.workflow_id
@@ -1951,6 +1984,7 @@ class Operator:
             self._begin_notification_shutdown(tuple(delayed_drains))
             # Runs are stopped, so no coordinator still reads a staged input file.
             self._input_files.close()
+            self._schedule_input_files.close()
 
     def _result_cleanup_loop(self) -> None:
         retention = self._result_retention_seconds
