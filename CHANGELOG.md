@@ -2,17 +2,18 @@
 
 ## Unreleased
 
-- Agents: each agent call now records the prompt it started with, as a new common
-  live event, `prompt.sent`: the system prompt and the first user message, plus
-  notes naming anything the model also received that the text does not show.
-  OpenAIAgent records the system prompt exactly as the SDK sent it, sandbox
-  instructions included. ClaudeAgent records what Avalanche gives the Claude CLI and
-  marks it as not verbatim: with `system_prompt_preset="claude_code"`, Claude Code's
-  own prompt is built by the CLI and is not shown. PredictRLM does not record it yet.
-  The operator API carries the new `AGENT_EVENT_KIND_V2_PROMPT_SENT` event kind.
-- Web UI: an agent step's **Run I/O** tab has a **View initial prompt** button. It
-  opens a dialog with the system prompt and first message in separate, scrollable
-  sections, each with a copy button; nothing loads until it is opened.
+- Agents: each agent call now records everything the model is given before its
+  first turn, as a new common live event, `prompt.sent`: the system prompt, the
+  messages, every tool with its input schema, and the answer's schema. ClaudeAgent
+  reads it from the Claude CLI's session transcript, so it includes Claude Code's own
+  system prompt and the context the CLI adds to the first message. OpenAIAgent reads
+  the system prompt and input from the SDK and the tools and answer format from the
+  first response. PredictRLM does not record it yet. The operator API carries the new
+  `AGENT_EVENT_KIND_V2_PROMPT_SENT` event kind.
+- Web UI: an agent step's **Trace** tab has a **View initial prompt** button. It
+  opens a dialog with the system prompt, messages, tools and output schema in
+  separate, scrollable sections, each with a copy button; nothing loads until it is
+  opened.
 
 ## 0.17.3
 

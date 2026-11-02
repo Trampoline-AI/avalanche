@@ -45,6 +45,8 @@ interface AgentTraceExplorerProps {
   onLoadMore: () => void;
   onTurnDetailOpenChange: (event: AgentEventDescriptorMsg, open: boolean) => void;
   onScroll: (element: HTMLDivElement) => void;
+  /** Secondary actions shown quietly above the turns, such as opening the prompt. */
+  actions?: ReactNode;
 }
 
 const NUMBER_FORMAT = new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 });
@@ -368,6 +370,7 @@ export function AgentTraceExplorer({
   onTurnDetailOpenChange,
   onLoadMore,
   onScroll,
+  actions,
 }: AgentTraceExplorerProps) {
   const [fullOutputTurns, setFullOutputTurns] = useState<Set<string>>(() => new Set());
 
@@ -415,6 +418,7 @@ export function AgentTraceExplorer({
         onScroll={(event) => onScroll(event.currentTarget)}
       >
         <div className="flex min-h-full min-w-0 flex-col gap-3 px-5 pt-[18px] pb-[30px]">
+          {actions && <div className="trace-actions flex min-w-0 justify-end">{actions}</div>}
           {running && currentActivity && (
             <div
               className="trace-current-activity flex items-center gap-2 rounded border border-agent-line bg-agent-surface px-2.5 py-2 text-[9px] text-secondary"

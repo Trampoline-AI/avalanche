@@ -43,10 +43,22 @@ export type AgentDeclaration = z.infer<typeof AgentDeclaration>;
 export const RunStarted = z.strictObject({ "inputs": z.record(z.string(), JsonValue), "kind": z.literal("run.started"), "model": z.union([z.string(), z.null()]), "omitted_inputs": z.array(z.string()) });
 export type RunStarted = z.infer<typeof RunStarted>;
 
-export const PromptText = z.strictObject({ "omitted_chars": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "text": z.string().refine((value) => [...value].length <= 262144, "Expected at most 262144 characters") });
+export const PromptText = z.strictObject({ "omitted_chars": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "text": z.string().refine((value) => [...value].length <= 65536, "Expected at most 65536 characters") });
 export type PromptText = z.infer<typeof PromptText>;
 
-export const PromptSent = z.strictObject({ "first_message": PromptText, "kind": z.literal("prompt.sent"), "notes": z.array(z.string()), "system_prompt": z.union([PromptText, z.null()]), "verbatim": z.boolean() });
+export const PromptTextPart = z.strictObject({ "kind": z.literal("text"), "text": PromptText });
+export type PromptTextPart = z.infer<typeof PromptTextPart>;
+
+export const PromptFilePart = z.strictObject({ "content_type": z.union([z.string(), z.null()]), "kind": z.literal("file"), "name": z.union([z.string(), z.null()]) });
+export type PromptFilePart = z.infer<typeof PromptFilePart>;
+
+export const PromptMessage = z.strictObject({ "parts": z.array(z.discriminatedUnion("kind", [PromptTextPart, PromptFilePart])), "role": z.string() });
+export type PromptMessage = z.infer<typeof PromptMessage>;
+
+export const PromptTool = z.strictObject({ "description": z.union([PromptText, z.null()]), "input_schema": JsonValue, "name": z.string() });
+export type PromptTool = z.infer<typeof PromptTool>;
+
+export const PromptSent = z.strictObject({ "kind": z.literal("prompt.sent"), "messages": z.array(PromptMessage), "output_schema": z.union([JsonValue, z.null()]), "system": z.array(PromptText), "tools": z.array(PromptTool) });
 export type PromptSent = z.infer<typeof PromptSent>;
 
 export const PredictRLMTokenUsage = z.strictObject({ "cache_hits": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "cost": z.number().min(0), "input_tokens": z.number().min(0).refine(Number.isInteger, "Expected an integer"), "output_tokens": z.number().min(0).refine(Number.isInteger, "Expected an integer") });

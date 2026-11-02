@@ -365,15 +365,15 @@ result, and the trace records it in the call's `error`.
 | `common.kind` | Claude |
 | --- | --- |
 | `run.started` | Sent before the CLI starts. `model` is the `model` setting, `None` when the CLI chooses; `inputs` are the step's inputs, files and workspaces by reference. |
-| `prompt.sent` | Sent before the CLI starts: the system prompt and first message Avalanche gives the CLI. `verbatim` is `False`, because the CLI builds the request itself and does not report it. With `system_prompt_preset="claude_code"`, `system_prompt` is the step's part only and a note says Claude Code's own prompt comes first and is not shown. |
+| `prompt.sent` | Sent after the session ends, read from the Claude CLI's session transcript, where the CLI records each model request it makes. It holds the whole system prompt, Claude Code's own included with `system_prompt_preset="claude_code"`; the first message with the context the CLI adds to it, such as its environment notes and the signed-in account's email; and every tool with its input schema (the step's answer is the `StructuredOutput` tool). The CLI names the transcript to a `UserPromptSubmit` hook. A CLI that records no requests sends no `prompt.sent`; one that records the first request in a form Avalanche does not know fails the step. |
 | `tool.started` | Claude asked for a tool. `turn` is the turn that asked. |
 | `tool.finished` | The tool's result reached Claude. `turn` is the turn that asked; `error` is set when the tool failed. |
 | `turn.finished` | Claude finished a response. |
 
-The `Summarize` call above sends, in order: `run.started`, `prompt.sent`,
+The `Summarize` call above sends, in order: `run.started`,
 `session.initialized`, then `tool.started`, `tool.finished` and `turn.finished`
-for each of its two turns (the second for `StructuredOutput`), then the final
-event.
+for each of its two turns (the second for `StructuredOutput`), then `prompt.sent`
+and the final event.
 
 Subagents' own messages are not recorded; their work shows as the result of the
 tool call that started them.

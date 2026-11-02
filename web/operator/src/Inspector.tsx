@@ -926,20 +926,6 @@ function AgentAndStepInspector({
                       )}
                     </section>
                   ))}
-                  {runId && (
-                    <div className="flex min-w-0 justify-start border-t border-line pt-4">
-                      <InitialPromptDialog
-                        key={descriptorScope}
-                        api={api}
-                        operatorInstanceId={operatorInstanceId}
-                        asOfEventUlid={asOfEventUlid}
-                        runId={runId}
-                        nodeId={nodeId}
-                        eventPageToken={eventPageToken}
-                        liveEvents={liveEvents}
-                      />
-                    </div>
-                  )}
                 </div>
               ) : node?.trace ? (
                 <AgentTraceExplorer
@@ -955,6 +941,19 @@ function AgentAndStepInspector({
                   onLoadTurn={hydrateTraceTurn}
                   onTurnDetailOpenChange={setTurnDetailOpen}
                   onLoadMore={loadMoreEvents}
+                  actions={
+                    runId ? (
+                      <InitialPromptDialog
+                        api={api}
+                        operatorInstanceId={operatorInstanceId}
+                        asOfEventUlid={asOfEventUlid}
+                        runId={runId}
+                        nodeId={nodeId}
+                        eventPageToken={eventPageToken}
+                        liveEvents={liveEvents}
+                      />
+                    ) : undefined
+                  }
                   onScroll={(element) => {
                     const distanceFromBottom =
                       element.scrollHeight - element.scrollTop - element.clientHeight;

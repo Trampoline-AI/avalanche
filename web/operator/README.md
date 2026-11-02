@@ -133,7 +133,10 @@ directly with its retained invocation value; missing schemas and values remain
 explicit instead of falling back to current metadata. Run headers retain execution
 status, duration, model usage, and iteration details.
 Run I/O uses the same section headings and separators as the current definition,
-with unboxed fields and subtly shaded, padded retained-value explorers.
+with unboxed fields and subtly shaded, padded retained-value explorers. Above the
+turns, the Trace tab's **View initial prompt** opens a dialog with everything the
+model was given before its first turn (system prompt, messages, tools and output
+schema) from the step's `prompt.sent` event; it loads only when opened.
 
 Open trace details take priority over background summary loading within the
 eight-entry, 8 MiB detail cache. If open turns alone exceed that budget, an evicted

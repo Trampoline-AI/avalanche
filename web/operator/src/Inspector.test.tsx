@@ -578,16 +578,22 @@ describe("retained run inspection", () => {
     expect(await within(outputs).findByRole("note")).toHaveTextContent("answer");
   });
 
-  it("keeps the initial prompt behind a deliberate action and loads it only when opened", async () => {
+  it("keeps the initial prompt behind a deliberate action in the trace and loads it only when opened", async () => {
     const readJsonDetail = vi.fn(async (token: string) =>
       token === "trace-body"
         ? finishedTrace()
         : token === "event-2"
           ? promptSentEvent({
-              systemPrompt: "SYSTEM: answer from the document.",
-              firstMessage: "FIRST: the question is why.",
-              verbatim: false,
-              notes: ["The runtime adds its own preset prompt."],
+              system: ["SYSTEM: you are Claude Code.", "SYSTEM: answer from the document."],
+              message: "FIRST: the question is why.",
+              tools: [
+                {
+                  name: "StructuredOutput",
+                  description: "Return the answer.",
+                  input_schema: { type: "object", title: "AnswerSchema" },
+                },
+              ],
+              outputSchema: { type: "object", title: "OutputSchema" },
             })
           : runStartedEvent({ question: "why" }),
     );
@@ -604,25 +610,36 @@ describe("retained run inspection", () => {
         onClose={() => undefined}
       />,
     );
+    const trace = await screen.findByRole("region", { name: "Agent trace" });
+    expect(
+      within(trace).getByRole("button", { name: "View initial prompt" }),
+    ).toBeInTheDocument();
+    openRunIo();
+    await screen.findByText("why");
     expect(
       screen.queryByRole("button", { name: "View initial prompt" }),
     ).not.toBeInTheDocument();
-    openRunIo();
-    const trigger = await screen.findByRole("button", { name: "View initial prompt" });
-    await screen.findByText("why");
     expect(readJsonDetail).not.toHaveBeenCalledWith("event-2", expect.anything());
-    expect(screen.queryByText("SYSTEM: answer from the document.")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("tab", { name: "Trace" }));
 
-    fireEvent.click(trigger);
+    fireEvent.click(
+      within(await screen.findByRole("region", { name: "Agent trace" })).getByRole("button", {
+        name: "View initial prompt",
+      }),
+    );
     const dialog = await screen.findByRole("dialog", { name: "Initial prompt" });
     const system = await within(dialog).findByRole("region", { name: "System prompt" });
-    const first = within(dialog).getByRole("region", { name: "First message" });
+    const message = within(dialog).getByRole("region", { name: "user message" });
+    const tools = within(dialog).getByRole("region", { name: "Tools (1)" });
+    const output = within(dialog).getByRole("region", { name: "Output schema" });
+    expect(system).toHaveTextContent("SYSTEM: you are Claude Code.");
     expect(system).toHaveTextContent("SYSTEM: answer from the document.");
-    expect(first).toHaveTextContent("FIRST: the question is why.");
     expect(system).not.toHaveTextContent("FIRST:");
-    expect(within(dialog).getByRole("note")).toHaveTextContent(
-      "The runtime adds its own preset prompt.",
-    );
+    expect(message).toHaveTextContent("FIRST: the question is why.");
+    expect(message).toHaveTextContent("report.pdf");
+    expect(tools).toHaveTextContent("StructuredOutput");
+    expect(tools).toHaveTextContent("AnswerSchema");
+    expect(output).toHaveTextContent("OutputSchema");
     expect(within(system).getByRole("button", { name: /copy/i })).toBeInTheDocument();
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Close initial prompt" }));
@@ -648,7 +665,6 @@ describe("retained run inspection", () => {
         onClose={() => undefined}
       />,
     );
-    openRunIo();
     fireEvent.click(await screen.findByRole("button", { name: "View initial prompt" }));
     const dialog = await screen.findByRole("dialog", { name: "Initial prompt" });
     expect(

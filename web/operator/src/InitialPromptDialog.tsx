@@ -1,10 +1,10 @@
 import { Check, Copy, X } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 
 import { parseAgentLiveEvent } from "./agentTrace/common";
 import type { OperatorApi } from "./api";
 import { DESCRIPTOR_PAGE_SIZE } from "./detailProjection";
-import type { PromptSent } from "./generated/agentSchemas";
+import type { PromptMessage, PromptSent, PromptText } from "./generated/agentSchemas";
 import { DescriptorPageOrder, type AgentEventDescriptorMsg } from "./model";
 
 interface EventScope {
@@ -100,34 +100,133 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
+const PRE_CLASS =
+  "initial-prompt-text m-0 max-h-[50dvh] min-w-0 overflow-auto rounded border border-line bg-canvas p-3 font-mono text-[11px] leading-[1.55] whitespace-pre-wrap text-ink [overflow-wrap:anywhere]";
+
+function json(value: unknown) {
+  return JSON.stringify(value, null, 2);
+}
+
+function OmittedNote({ chars }: { chars: number }) {
+  if (chars <= 0) return null;
+  return (
+    <p className="m-0 text-[11px] text-muted" role="note">
+      {chars.toLocaleString()} more characters were given to the model but are too large to keep
+      in the trace.
+    </p>
+  );
+}
+
+function PromptTextView({ text }: { text: PromptText }) {
+  return (
+    <>
+      <pre className={PRE_CLASS}>{text.text}</pre>
+      <OmittedNote chars={text.omitted_chars} />
+    </>
+  );
+}
+
 function PromptSection({
   title,
-  text,
-  omittedChars,
+  copyText,
+  children,
 }: {
   title: string;
-  text: string;
-  omittedChars: number;
+  copyText: string;
+  children: ReactNode;
 }) {
   const headingId = useId();
   return (
     <section aria-labelledby={headingId} className="grid min-w-0 gap-2">
       <div className="flex items-center justify-between gap-3">
-        <h3 id={headingId} className="inspector-section-title m-0">
+        <h3
+          id={headingId}
+          className="m-0 font-mono text-[10px] tracking-[.08em] text-secondary uppercase"
+        >
           {title}
         </h3>
-        <CopyButton text={text} label={`Copy ${title.toLowerCase()}`} />
+        <CopyButton text={copyText} label={`Copy ${title.toLowerCase()}`} />
       </div>
-      <pre className="initial-prompt-text m-0 max-h-[50dvh] min-w-0 overflow-auto rounded border border-line bg-canvas p-3 font-mono text-[11px] leading-[1.55] whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">
-        {text}
-      </pre>
-      {omittedChars > 0 && (
-        <p className="m-0 text-[11px] text-muted" role="note">
-          {omittedChars.toLocaleString()} more characters were sent but are too large to keep in
-          the trace.
-        </p>
-      )}
+      {children}
     </section>
+  );
+}
+
+function messageText(message: PromptMessage) {
+  return message.parts
+    .map((part) =>
+      part.kind === "text"
+        ? part.text.text
+        : `[file: ${part.name ?? "unnamed"}${part.content_type ? `, ${part.content_type}` : ""}]`,
+    )
+    .join("\n\n");
+}
+
+function PromptBody({ prompt }: { prompt: PromptSent }) {
+  return (
+    <>
+      <PromptSection
+        title="System prompt"
+        copyText={prompt.system.map((block) => block.text).join("\n\n")}
+      >
+        {prompt.system.length === 0 ? (
+          <p className="m-0 text-[11px] text-muted">The model was given no system prompt.</p>
+        ) : (
+          prompt.system.map((block, index) => <PromptTextView key={index} text={block} />)
+        )}
+      </PromptSection>
+      {prompt.messages.map((message, index) => (
+        <PromptSection
+          key={index}
+          title={`${message.role} message${prompt.messages.length > 1 ? ` ${index + 1}` : ""}`}
+          copyText={messageText(message)}
+        >
+          {message.parts.map((part, partIndex) =>
+            part.kind === "text" ? (
+              <PromptTextView key={partIndex} text={part.text} />
+            ) : (
+              <p
+                key={partIndex}
+                className="m-0 rounded border border-line px-3 py-2 font-mono text-[11px] text-secondary"
+              >
+                File {part.name ?? "without a name"}
+                {part.content_type ? ` · ${part.content_type}` : ""}
+                <span className="text-muted"> · its contents are not kept in the trace</span>
+              </p>
+            ),
+          )}
+        </PromptSection>
+      ))}
+      <PromptSection title={`Tools (${prompt.tools.length})`} copyText={json(prompt.tools)}>
+        {prompt.tools.length === 0 ? (
+          <p className="m-0 text-[11px] text-muted">The model was given no tools.</p>
+        ) : (
+          <div className="grid min-w-0 gap-1.5">
+            {prompt.tools.map((tool, index) => (
+              <details
+                key={index}
+                className="initial-prompt-tool min-w-0 rounded border border-line"
+              >
+                <summary className="cursor-pointer px-3 py-2 font-mono text-[11px] text-ink focus-visible:outline-2 focus-visible:outline-acid">
+                  {tool.name}
+                </summary>
+                <div className="grid min-w-0 gap-2 border-t border-line p-3">
+                  {tool.description && <PromptTextView text={tool.description} />}
+                  <pre className={PRE_CLASS} aria-label={`${tool.name} input schema`}>
+                    {json(tool.input_schema)}
+                  </pre>
+                </div>
+              </details>
+            ))}
+          </div>
+        )}
+      </PromptSection>
+      {prompt.output_schema !== null && (
+        <PromptSection title="Output schema" copyText={json(prompt.output_schema)}>
+          <pre className={PRE_CLASS}>{json(prompt.output_schema)}</pre>
+        </PromptSection>
+      )}
+    </>
   );
 }
 
@@ -225,7 +324,7 @@ export function InitialPromptDialog({
                   Initial prompt
                 </h2>
                 <p className="m-0 mt-1 text-[11px] text-muted">
-                  What the agent received before its first turn.
+                  Everything the model was given before its first turn.
                 </p>
               </div>
               <button
@@ -251,42 +350,7 @@ export function InitialPromptDialog({
                 the step has not reached its first model call.
               </p>
             ) : (
-              <>
-                {(!state.prompt.verbatim || state.prompt.notes.length > 0) && (
-                  <div
-                    className="initial-prompt-notes grid gap-1 rounded border border-line bg-canvas px-3 py-2 text-[11px] text-secondary"
-                    role="note"
-                  >
-                    {!state.prompt.verbatim && (
-                      <p className="m-0 font-medium text-ink">
-                        This is what Avalanche gave the runtime, not necessarily the exact text
-                        the model received.
-                      </p>
-                    )}
-                    {state.prompt.notes.map((note, index) => (
-                      <p key={index} className="m-0">
-                        {note}
-                      </p>
-                    ))}
-                  </div>
-                )}
-                {state.prompt.system_prompt ? (
-                  <PromptSection
-                    title="System prompt"
-                    text={state.prompt.system_prompt.text}
-                    omittedChars={state.prompt.system_prompt.omitted_chars}
-                  />
-                ) : (
-                  <p className="m-0 text-[11px] text-muted">
-                    The runtime sent no system prompt.
-                  </p>
-                )}
-                <PromptSection
-                  title="First message"
-                  text={state.prompt.first_message.text}
-                  omittedChars={state.prompt.first_message.omitted_chars}
-                />
-              </>
+              <PromptBody prompt={state.prompt} />
             )}
           </div>
         </div>

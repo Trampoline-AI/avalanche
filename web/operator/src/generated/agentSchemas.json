@@ -1681,54 +1681,138 @@
       "title": "PredictStarted",
       "type": "object"
     },
+    "PromptFilePart": {
+      "additionalProperties": false,
+      "description": "A file sent with a message; the model reads its contents, the trace never keeps them.",
+      "properties": {
+        "content_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Content Type"
+        },
+        "kind": {
+          "const": "file",
+          "default": "file",
+          "title": "Kind",
+          "type": "string"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "title": "Name"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "content_type"
+      ],
+      "title": "PromptFilePart",
+      "type": "object"
+    },
+    "PromptMessage": {
+      "additionalProperties": false,
+      "properties": {
+        "parts": {
+          "items": {
+            "discriminator": {
+              "mapping": {
+                "file": "#/$defs/PromptFilePart",
+                "text": "#/$defs/PromptTextPart"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/$defs/PromptTextPart"
+              },
+              {
+                "$ref": "#/$defs/PromptFilePart"
+              }
+            ]
+          },
+          "title": "Parts",
+          "type": "array"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        }
+      },
+      "required": [
+        "role",
+        "parts"
+      ],
+      "title": "PromptMessage",
+      "type": "object"
+    },
     "PromptSent": {
       "additionalProperties": false,
-      "description": "The prompt that started the call: the system prompt and the first user message.\n\n``verbatim`` says whether the runtime read the text back as its SDK sent it to the\nmodel. When it did not, the text is what the runtime handed its engine, and\n``notes`` says what the engine adds that the text does not show. The text is kept\nas sent, so it can name input files by their path on the machine that ran the step.",
+      "description": "Everything the model is given before its first turn.\n\nThe runtime reads it from its engine's own record of the first model request: the\nsystem prompt, including any text the engine adds, the messages, every tool, and the\nanswer's schema when it is not a tool. Files appear by name; their contents are never\nkept. The text is kept as the model got it, so it can name input files by their path\non the machine that ran the step.",
       "properties": {
-        "first_message": {
-          "$ref": "#/$defs/PromptText"
-        },
         "kind": {
           "const": "prompt.sent",
           "default": "prompt.sent",
           "title": "Kind",
           "type": "string"
         },
-        "notes": {
+        "messages": {
           "items": {
-            "type": "string"
+            "$ref": "#/$defs/PromptMessage"
           },
-          "title": "Notes",
+          "title": "Messages",
           "type": "array"
         },
-        "system_prompt": {
+        "output_schema": {
           "anyOf": [
             {
-              "$ref": "#/$defs/PromptText"
+              "$ref": "#/$defs/JsonValue"
             },
             {
               "type": "null"
             }
           ]
         },
-        "verbatim": {
-          "title": "Verbatim",
-          "type": "boolean"
+        "system": {
+          "items": {
+            "$ref": "#/$defs/PromptText"
+          },
+          "title": "System",
+          "type": "array"
+        },
+        "tools": {
+          "items": {
+            "$ref": "#/$defs/PromptTool"
+          },
+          "title": "Tools",
+          "type": "array"
         }
       },
       "required": [
         "kind",
-        "system_prompt",
-        "first_message",
-        "verbatim",
-        "notes"
+        "system",
+        "messages",
+        "tools",
+        "output_schema"
       ],
       "title": "PromptSent",
       "type": "object"
     },
     "PromptText": {
       "additionalProperties": false,
-      "description": "One part of a prompt as a trace keeps it; text past the limit is left out.",
+      "description": "One text of a prompt as a trace keeps it; text past the limit is left out.",
       "properties": {
         "omitted_chars": {
           "minimum": 0,
@@ -1736,7 +1820,7 @@
           "type": "integer"
         },
         "text": {
-          "maxLength": 262144,
+          "maxLength": 65536,
           "title": "Text",
           "type": "string"
         }
@@ -1746,6 +1830,56 @@
         "omitted_chars"
       ],
       "title": "PromptText",
+      "type": "object"
+    },
+    "PromptTextPart": {
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "const": "text",
+          "default": "text",
+          "title": "Kind",
+          "type": "string"
+        },
+        "text": {
+          "$ref": "#/$defs/PromptText"
+        }
+      },
+      "required": [
+        "kind",
+        "text"
+      ],
+      "title": "PromptTextPart",
+      "type": "object"
+    },
+    "PromptTool": {
+      "additionalProperties": false,
+      "description": "A tool as the model is shown it: its name, description and input schema.",
+      "properties": {
+        "description": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PromptText"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "input_schema": {
+          "$ref": "#/$defs/JsonValue"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "description",
+        "input_schema"
+      ],
+      "title": "PromptTool",
       "type": "object"
     },
     "RateLimited": {

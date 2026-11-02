@@ -18,7 +18,7 @@ import types
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Union, get_args, get_origin
 
 from agents import (
     Agent,
@@ -53,11 +53,13 @@ from agents.strict_schema import ensure_strict_json_schema
 from agents.tool_context import ToolContext
 from openai import AsyncOpenAI, OpenAIError
 from openai.types.responses import (
+    CustomTool,
     EasyInputMessageParam,
     Response,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
     ResponseCustomToolCall,
+    ResponseFormatTextJSONSchemaConfig,
     ResponseFunctionToolCall,
     ResponseInputFileParam,
     ResponseInputImageParam,
@@ -68,7 +70,9 @@ from openai.types.responses import (
     ResponseOutputText,
     ResponseReasoningItem,
     ResponseUsage,
+    Tool,
 )
+from openai.types.responses import FunctionTool as ResponsesFunctionTool
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 from pydantic_core import to_json, to_jsonable_python
 
@@ -83,12 +87,17 @@ from ...agent.contract import (
 )
 from ...agent.declaration import OpenAIBuiltinTool
 from ...agent.live import (
+    PromptFilePart,
+    PromptMessage,
     PromptSent,
     PromptText,
+    PromptTextPart,
+    PromptTool,
     RunStarted,
     ToolFinished,
     ToolStarted,
     TurnFinished,
+    prompt_schema,
 )
 from ...agent.native import openai_agent as native
 from ...agent.skills import SKILL_FILE, Skill
@@ -294,9 +303,11 @@ async def run(
         await events.emit(
             None, RunStarted(model=runtime.model, inputs=inputs, omitted_inputs=omitted_inputs)
         )
+        first_request = _FirstRequest()
         transcript = _Transcript(
             events,
             tool_errors,
+            first_request,
             model=runtime.model,
             builtin_tools=builtin_tools,
             max_turns=max_turns,
@@ -305,10 +316,10 @@ async def run(
         started = time.monotonic()
         streamed = Runner.run_streamed(
             agent,
-            input=model_input.items,
+            input=model_input,
             max_turns=max_turns,
             run_config=run_config,
-            hooks=_PromptHooks(events, model_input),
+            hooks=first_request,
         )
         stream = streamed.stream_events()
         try:
@@ -603,27 +614,17 @@ def _instructions(
     return "\n\n".join(parts)
 
 
-@dataclass(frozen=True)
-class _ModelInput:
-    """The call's first user message, and the same message as its prompt event shows it."""
+class _FirstRequest(RunHooks[None]):
+    """What the SDK sends in its first model request, for the call's prompt event.
 
-    items: list[ResponseInputItemParam]
-    # The message's text parts in order, each attachment by its name: the file's
-    # contents travel with the message but are never kept in a trace.
-    text: str
-    attachments: int
-
-
-class _PromptHooks(RunHooks[None]):
-    """Sends the call's prompt event as the SDK starts its first model request.
-
-    The SDK hands the hook the system prompt it built, sandbox instructions included.
+    The SDK hands the hook the system prompt it built, sandbox instructions included,
+    and the input it sends. The tools and the answer's schema come from the first
+    response, which echoes them as the API received them.
     """
 
-    def __init__(self, events: AgentEventSink, model_input: _ModelInput) -> None:
-        self._events = events
-        self._model_input = model_input
-        self._sent = False
+    def __init__(self) -> None:
+        self._system_prompt: str | None = None
+        self._messages: tuple[PromptMessage, ...] | None = None
 
     async def on_llm_start(
         self,
@@ -632,33 +633,110 @@ class _PromptHooks(RunHooks[None]):
         system_prompt: str | None,
         input_items: list[TResponseInputItem],
     ) -> None:
-        if self._sent:
+        if self._messages is not None:
             return
-        self._sent = True
-        notes = [_TOOLS_NOTE]
-        if self._model_input.attachments:
-            notes.append(_ATTACHMENTS_NOTE)
-        await self._events.emit(
-            None,
-            PromptSent(
-                system_prompt=None if system_prompt is None else PromptText.of(system_prompt),
-                first_message=PromptText.of(self._model_input.text),
-                verbatim=True,
-                notes=tuple(notes),
-            ),
+        self._system_prompt = system_prompt
+        self._messages = tuple(
+            _prompt_message(message) for message in _INPUT_MESSAGES.validate_python(input_items)
+        )
+
+    def prompt(self, response: Response) -> PromptSent:
+        if self._messages is None:
+            raise AgentStepExecutionError(
+                "the OpenAI Agents SDK streamed a response before starting its request"
+            )
+        text_format = None if response.text is None else response.text.format
+        return PromptSent(
+            system=() if self._system_prompt is None else (PromptText.of(self._system_prompt),),
+            messages=self._messages,
+            tools=tuple(_prompt_tool(tool) for tool in response.tools),
+            output_schema=prompt_schema(text_format.schema_)
+            if isinstance(text_format, ResponseFormatTextJSONSchemaConfig)
+            else None,
         )
 
 
-_TOOLS_NOTE = (
-    "The step's tools and output schema are sent with the request, outside the prompt; "
-    "they are not shown."
-)
-_ATTACHMENTS_NOTE = "Attached files are sent with the message; their contents are not shown."
+# The input the SDK sends, as the call builds it: one user message of text, file and
+# image parts. A file's data is never kept.
+class _InputText(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    type: Literal["input_text"]
+    text: str
+
+
+class _InputFile(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    type: Literal["input_file"]
+    filename: str | None = None
+    file_data: str | None = None
+
+
+class _InputImage(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    type: Literal["input_image"]
+    image_url: str | None = None
+
+
+class _InputMessage(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    role: str
+    content: (
+        str
+        | list[Annotated[_InputText | _InputFile | _InputImage, Field(discriminator="type")]]
+    )
+
+
+_INPUT_MESSAGES = TypeAdapter(list[_InputMessage])
+
+
+def _media_type(data_url: str | None) -> str | None:
+    """The media type a ``data:`` URL names."""
+    if data_url is None or not data_url.startswith("data:"):
+        return None
+    return data_url.removeprefix("data:").split(";", 1)[0] or None
+
+
+def _prompt_message(message: _InputMessage) -> PromptMessage:
+    if isinstance(message.content, str):
+        return PromptMessage(
+            role=message.role, parts=(PromptTextPart(text=PromptText.of(message.content)),)
+        )
+    parts: list[PromptTextPart | PromptFilePart] = []
+    for part in message.content:
+        match part:
+            case _InputText(text=text):
+                parts.append(PromptTextPart(text=PromptText.of(text)))
+            case _InputFile(filename=name, file_data=data):
+                parts.append(PromptFilePart(name=name, content_type=_media_type(data)))
+            case _InputImage(image_url=url):
+                parts.append(PromptFilePart(name=None, content_type=_media_type(url)))
+    return PromptMessage(role=message.role, parts=tuple(parts))
+
+
+def _prompt_tool(tool: Tool) -> PromptTool:
+    match tool:
+        case ResponsesFunctionTool(name=name, description=description, parameters=schema):
+            pass
+        case CustomTool(name=name, description=description, format=text_format):
+            schema = None if text_format is None else text_format.model_dump(mode="json")
+        case _:
+            # A tool the API defines, such as its shell, is shown by its settings.
+            name, description = tool.type, None
+            schema = tool.model_dump(mode="json", exclude_none=True)
+    return PromptTool(
+        name=name,
+        description=None if description is None else PromptText.of(description),
+        input_schema=prompt_schema(_JSON.validate_python(schema)),
+    )
 
 
 def _model_input(
     request: AgentRequest, *, directory: Path | None, output_folder: AgentOutputFolder | None
-) -> _ModelInput:
+) -> list[ResponseInputItemParam]:
     """One user message: the instruction and the inputs as JSON, then each input file.
 
     In a sandbox, rooted at ``directory``, input files are also named by their path,
@@ -699,17 +777,14 @@ def _model_input(
     content: list[ResponseInputTextParam | ResponseInputImageParam | ResponseInputFileParam] = [
         ResponseInputTextParam(type="input_text", text=prompt)
     ]
-    texts = [prompt]
     for number, file in enumerate(attachments, start=1):
-        label = f"Attachment {number}: {_file_name(file)}"
-        content.append(ResponseInputTextParam(type="input_text", text=label))
+        content.append(
+            ResponseInputTextParam(
+                type="input_text", text=f"Attachment {number}: {_file_name(file)}"
+            )
+        )
         content.append(_file_part(file))
-        texts.append(f"{label}\n[file contents not shown]")
-    return _ModelInput(
-        items=[EasyInputMessageParam(role="user", content=content)],
-        text="\n\n".join(texts),
-        attachments=len(attachments),
-    )
+    return [EasyInputMessageParam(role="user", content=content)]
 
 
 def _prompt_path(path: Path, directory: Path) -> str:
@@ -1049,6 +1124,7 @@ class _Transcript:
         self,
         events: AgentEventSink,
         tool_errors: ToolErrors,
+        first_request: _FirstRequest,
         *,
         model: str | None,
         builtin_tools: tuple[OpenAIBuiltinTool, ...],
@@ -1057,6 +1133,8 @@ class _Transcript:
     ) -> None:
         self._events = events
         self._tool_errors = tool_errors
+        # Sends the prompt event on the first response, then is done.
+        self._first_request: _FirstRequest | None = first_request
         self._configured_model = model
         self._builtin_tools = builtin_tools
         self._max_turns = max_turns
@@ -1079,7 +1157,10 @@ class _Transcript:
                     ),
                     None,
                 )
-            case RawResponsesStreamEvent(data=ResponseCreatedEvent()):
+            case RawResponsesStreamEvent(data=ResponseCreatedEvent(response=response)):
+                if self._first_request is not None:
+                    await self._events.emit(None, self._first_request.prompt(response))
+                    self._first_request = None
                 # A new response means the previous one's tool calls are done.
                 await self.finish_turn()
                 self._response_started = time.monotonic()

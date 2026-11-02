@@ -400,17 +400,39 @@ class RunStarted:                 # the first event of every call
     omitted_inputs: tuple[str, ...]  # inputs left out because they are too large
 
 
-class PromptSent:                 # the prompt the call started with, once per call
+class PromptSent:                 # everything the model is given before its first turn
     kind: Literal["prompt.sent"]
-    system_prompt: PromptText | None  # None when the runtime sent no system prompt
-    first_message: PromptText     # the first user message: the task and its inputs
-    verbatim: bool                # True: read back as the SDK sent it to the model
-    notes: tuple[str, ...]        # what the model also got that the text does not show
+    system: tuple[PromptText, ...]  # the system prompt's blocks in order; empty: none
+    messages: tuple[PromptMessage, ...]  # the messages before the first turn
+    tools: tuple[PromptTool, ...]  # every tool the model is offered
+    output_schema: JsonValue | None  # the answer's schema when it is not a tool
 
 
 class PromptText:
-    text: str                     # at most 262,144 characters
+    text: str                     # at most 65,536 characters
     omitted_chars: int            # characters left out at the end for size
+
+
+class PromptMessage:
+    role: str                     # "user" for the first message
+    parts: tuple[PromptTextPart | PromptFilePart, ...]
+
+
+class PromptTextPart:
+    kind: Literal["text"]
+    text: PromptText
+
+
+class PromptFilePart:             # a file sent with the message; its contents are not kept
+    kind: Literal["file"]
+    name: str | None
+    content_type: str | None
+
+
+class PromptTool:
+    name: str
+    description: PromptText | None
+    input_schema: JsonValue       # its input's JSON Schema, or a built-in tool's settings
 
 
 class TurnFinished:
@@ -437,14 +459,17 @@ class ToolFinished:
 The inputs together are kept up to 4 MiB as JSON. Past that, the largest are left
 out, one by one, and named in `omitted_inputs`.
 
-`prompt.sent` records the prompt that starts the call: the system prompt and the
-first user message, as the runtime sent them. A runtime sends it when it can; a
-viewer that finds none says so. When the runtime's engine builds the final request
-itself and does not report it, `verbatim` is `False`: the text is what the runtime
-gave its engine, and `notes` names what the engine adds that is not shown, rather
-than guessing at it. The text is kept as sent, so it can name input files by their
-path on the machine that ran the step; attached file contents are never kept. Each
-text is kept up to 262,144 characters, and `omitted_chars` counts the rest.
+`prompt.sent` records everything the model is given before its first turn: the
+system prompt, the messages, every tool with its input schema, and the answer's
+schema when the model gets it apart from the tools. The runtime reads it from its
+engine's own record of the first model request, so it includes what the engine adds
+itself, such as Claude Code's system prompt and the context the Claude CLI puts in
+the first message. A runtime sends it once per call, when it can; a viewer that
+finds none says so. The text is kept as the model got it, so it can name input files
+by their path on the machine that ran the step, or account details an engine adds;
+attached file contents are never kept. Each text is kept up to 65,536 characters,
+and `omitted_chars` counts the rest; a schema over 64 KiB of JSON is replaced by an
+`unavailable` marker.
 
 The call starting, as sent:
 
@@ -465,7 +490,7 @@ The call starting, as sent:
 }
 ```
 
-The prompt that started it, as sent:
+Everything the model was given before its first turn:
 
 ```json
 {
@@ -476,15 +501,31 @@ The prompt that started it, as sent:
   "timestamp_ns": 1761480000002000000,
   "common": {
     "kind": "prompt.sent",
-    "system_prompt": {"text": "Summarize the document in one sentence.", "omitted_chars": 0},
-    "first_message": {
-      "text": "Complete the task for these inputs. ...\n\n{\n  \"document\": \"Avalanche runs DAGs.\"\n}",
-      "omitted_chars": 0
-    },
-    "verbatim": false,
-    "notes": [
-      "The Claude CLI sends the step's tools and output schema separately and may add its own context, such as the list of skills; that is not shown."
-    ]
+    "system": [
+      {"text": "Summarize the document in one sentence.", "omitted_chars": 0}
+    ],
+    "messages": [
+      {
+        "role": "user",
+        "parts": [
+          {
+            "kind": "text",
+            "text": {
+              "text": "Complete the task for these inputs. ...\n\n{\n  \"document\": \"Avalanche runs DAGs.\"\n}",
+              "omitted_chars": 0
+            }
+          }
+        ]
+      }
+    ],
+    "tools": [
+      {
+        "name": "StructuredOutput",
+        "description": {"text": "Use this tool to return your final response ...", "omitted_chars": 0},
+        "input_schema": {"type": "object", "properties": {"summary": {"type": "string"}}}
+      }
+    ],
+    "output_schema": null
   },
   "native": null
 }

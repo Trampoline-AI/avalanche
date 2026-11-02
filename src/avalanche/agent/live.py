@@ -24,6 +24,7 @@ from pydantic import (
     TypeAdapter,
     model_validator,
 )
+from pydantic_core import to_json
 
 from .kinds import RuntimeKind
 from .native import NativeEvent
@@ -54,13 +55,16 @@ class RunStarted(BaseModel):
     omitted_inputs: tuple[str, ...]
 
 
-# Each part of a prompt is kept up to this many characters, so a prompt event stays
-# within the operator's body limits whatever the text's encoded size.
-PROMPT_TEXT_LIMIT_CHARS = 256 * 1024
+# Each text of a prompt is kept up to this many characters, and each tool's schema up
+# to this many bytes of JSON. Every agent call sends a prompt event, and the operator
+# counts it against each node's and run's detail budget; the step's inputs, which the
+# first message repeats, are kept whole in ``run.started``.
+PROMPT_TEXT_LIMIT_CHARS = 64 * 1024
+PROMPT_SCHEMA_LIMIT_BYTES = 64 * 1024
 
 
 class PromptText(BaseModel):
-    """One part of a prompt as a trace keeps it; text past the limit is left out."""
+    """One text of a prompt as a trace keeps it; text past the limit is left out."""
 
     model_config = _STRICT
 
@@ -76,24 +80,71 @@ class PromptText(BaseModel):
         )
 
 
-class PromptSent(BaseModel):
-    """The prompt that started the call: the system prompt and the first user message.
+def prompt_schema(schema: JsonValue) -> JsonValue:
+    """A schema as a prompt event keeps it, or a marker when it is too large to keep."""
+    if len(to_json(schema)) > PROMPT_SCHEMA_LIMIT_BYTES:
+        return {"kind": "unavailable", "reason": "schema too large to keep in the trace"}
+    return schema
 
-    ``verbatim`` says whether the runtime read the text back as its SDK sent it to the
-    model. When it did not, the text is what the runtime handed its engine, and
-    ``notes`` says what the engine adds that the text does not show. The text is kept
-    as sent, so it can name input files by their path on the machine that ran the step.
+
+class PromptTextPart(BaseModel):
+    model_config = _STRICT
+
+    kind: Literal["text"] = "text"
+    text: PromptText
+
+
+class PromptFilePart(BaseModel):
+    """A file sent with a message; the model reads its contents, the trace never keeps them."""
+
+    model_config = _STRICT
+
+    kind: Literal["file"] = "file"
+    name: str | None
+    content_type: str | None
+
+
+PromptPart = Annotated[PromptTextPart | PromptFilePart, Field(discriminator="kind")]
+
+
+class PromptMessage(BaseModel):
+    model_config = _STRICT
+
+    role: str
+    parts: tuple[PromptPart, ...]
+
+
+class PromptTool(BaseModel):
+    """A tool as the model is shown it: its name, description and input schema."""
+
+    model_config = _STRICT
+
+    name: str
+    description: PromptText | None
+    # The JSON Schema of the tool's input, or the runtime's own definition of a tool
+    # that takes free text, such as a grammar.
+    input_schema: JsonValue
+
+
+class PromptSent(BaseModel):
+    """Everything the model is given before its first turn.
+
+    The runtime reads it from its engine's own record of the first model request: the
+    system prompt, including any text the engine adds, the messages, every tool, and the
+    answer's schema when it is not a tool. Files appear by name; their contents are never
+    kept. The text is kept as the model got it, so it can name input files by their path
+    on the machine that ran the step.
     """
 
     model_config = _STRICT
 
     kind: Literal["prompt.sent"] = "prompt.sent"
-    # ``None`` when the runtime sent no system prompt of its own.
-    system_prompt: PromptText | None
-    first_message: PromptText
-    verbatim: bool
-    # What the model also received that the text does not show, in plain sentences.
-    notes: tuple[str, ...]
+    # The system prompt's blocks in order; empty when there is none.
+    system: tuple[PromptText, ...]
+    messages: tuple[PromptMessage, ...]
+    tools: tuple[PromptTool, ...]
+    # The answer's JSON Schema when the model is given it apart from the tools.
+    output_schema: JsonValue | None
 
 
 class TurnFinished(BaseModel):

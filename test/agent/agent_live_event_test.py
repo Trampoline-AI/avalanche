@@ -12,13 +12,19 @@ from avalanche.agent import AgentStepError
 from avalanche.agent.contract import PythonOutputs
 from avalanche.agent.live import (
     AGENT_EVIDENCE,
+    PROMPT_SCHEMA_LIMIT_BYTES,
     PROMPT_TEXT_LIMIT_CHARS,
     AgentLiveEvent,
     AgentTraceFinished,
+    PromptFilePart,
+    PromptMessage,
     PromptSent,
     PromptText,
+    PromptTextPart,
+    PromptTool,
     RunStarted,
     ToolStarted,
+    prompt_schema,
 )
 from avalanche.agent.native.claude_agent import SessionInitialized
 from avalanche.agent.native.predict_rlm import CodeGenerated
@@ -159,10 +165,32 @@ def test_a_prompt_keeps_its_text_up_to_the_limit_and_counts_the_rest(length, omi
         invocation_id="call",
         sequence=2,
         timestamp_ns=1,
-        common=PromptSent(system_prompt=None, first_message=text, verbatim=False, notes=()),
+        common=PromptSent(
+            system=(text,),
+            messages=(
+                PromptMessage(
+                    role="user",
+                    parts=(
+                        PromptTextPart(text=text),
+                        PromptFilePart(name="a.pdf", content_type="application/pdf"),
+                    ),
+                ),
+            ),
+            tools=(
+                PromptTool(name="lookup", description=text, input_schema={"type": "object"}),
+            ),
+            output_schema=None,
+        ),
         native=None,
     )
     assert AGENT_EVIDENCE.validate_json(event.model_dump_json()) == event
+
+
+def test_a_schema_too_large_to_keep_is_replaced_by_a_marker():
+    small = {"type": "string"}
+    large = {"enum": ["x" * PROMPT_SCHEMA_LIMIT_BYTES]}
+    assert prompt_schema(small) == small
+    assert prompt_schema(large)["kind"] == "unavailable"
 
 
 def test_a_prompt_text_over_the_limit_is_rejected():

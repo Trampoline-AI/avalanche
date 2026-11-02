@@ -119,26 +119,42 @@ export function runStartedEvent(
 
 export function promptSentEvent(
   options: {
-    systemPrompt?: string | null;
-    firstMessage?: string;
-    verbatim?: boolean;
-    notes?: string[];
+    system?: string[];
+    message?: string;
+    tools?: { name: string; description: string | null; input_schema: JsonValue }[];
+    outputSchema?: JsonValue;
     omittedChars?: number;
   } = {},
   sequence = 2,
 ): AgentLiveEvent {
-  const systemPrompt =
-    options.systemPrompt === undefined ? "Answer the question." : options.systemPrompt;
   return live(sequence, {
     common: {
       kind: "prompt.sent",
-      system_prompt: systemPrompt === null ? null : { text: systemPrompt, omitted_chars: 0 },
-      first_message: {
-        text: options.firstMessage ?? "Complete the task for these inputs.",
-        omitted_chars: options.omittedChars ?? 0,
-      },
-      verbatim: options.verbatim ?? true,
-      notes: options.notes ?? [],
+      system: (options.system ?? ["Answer the question."]).map((text) => ({
+        text,
+        omitted_chars: 0,
+      })),
+      messages: [
+        {
+          role: "user",
+          parts: [
+            {
+              kind: "text",
+              text: {
+                text: options.message ?? "Complete the task for these inputs.",
+                omitted_chars: options.omittedChars ?? 0,
+              },
+            },
+            { kind: "file", name: "report.pdf", content_type: "application/pdf" },
+          ],
+        },
+      ],
+      tools: (options.tools ?? []).map((tool) => ({
+        ...tool,
+        description:
+          tool.description === null ? null : { text: tool.description, omitted_chars: 0 },
+      })),
+      output_schema: options.outputSchema ?? null,
     },
     native: null,
   });
