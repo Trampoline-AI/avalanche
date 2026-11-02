@@ -31,7 +31,8 @@ from runtime.operator.discovery import (
     WorkflowDiscoveryError,
     validate_discovery_timeout,
 )
-from runtime.operator.state import DEFAULT_STATE_DB, StateStoreError
+from runtime.operator.state import StateStoreError
+from runtime.operator.state.cli import add_state_db_argument
 from runtime.operator.workspace_config import format_scan_targets, select_workflow_targets
 
 if TYPE_CHECKING:
@@ -142,15 +143,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="start with every cron schedule enabled (schedules start disabled otherwise)",
     )
-    operator.add_argument(
-        "--state-db",
-        default=str(DEFAULT_STATE_DB),
-        metavar="PATH",
-        help=(
-            "SQLite file that keeps operator state, or :memory: for a throwaway one "
-            "(default: .avalanche/operator/state.db under the current folder)"
-        ),
-    )
+    add_state_db_argument(operator)
     operator.set_defaults(handler=_run_operator)
 
     webhooks = subcommands.add_parser("webhooks", help="inspect local webhook routes")
@@ -351,15 +344,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="start with every cron schedule enabled (schedules start disabled otherwise)",
     )
-    dev.add_argument(
-        "--state-db",
-        default=str(DEFAULT_STATE_DB),
-        metavar="PATH",
-        help=(
-            "SQLite file that keeps operator state, or :memory: for a throwaway one "
-            "(default: .avalanche/operator/state.db under the current folder)"
-        ),
-    )
+    add_state_db_argument(dev)
     dev.set_defaults(handler=_run_dev)
 
     return parser

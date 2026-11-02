@@ -12,7 +12,8 @@ from .discovery import (
     WorkflowDiscoveryError,
     validate_discovery_timeout,
 )
-from .state import DEFAULT_STATE_DB, StateStoreError
+from .state import StateStoreError
+from .state.cli import add_state_db_argument
 from .workspace_config import format_scan_targets, select_workflow_targets
 
 
@@ -59,15 +60,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="SECONDS",
         help=f"maximum seconds for one discovery scan (default: {DEFAULT_DISCOVERY_TIMEOUT:g})",
     )
-    parser.add_argument(
-        "--state-db",
-        default=str(DEFAULT_STATE_DB),
-        metavar="PATH",
-        help=(
-            "SQLite file that keeps operator state, or :memory: for a throwaway one "
-            "(default: .avalanche/operator/state.db under the current folder)"
-        ),
-    )
+    add_state_db_argument(parser)
     parser.add_argument(
         "--log-level",
         type=str.upper,
