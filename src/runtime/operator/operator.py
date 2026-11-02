@@ -11,6 +11,7 @@ import multiprocessing
 import os
 import queue
 import signal
+import sqlite3
 import subprocess
 import threading
 import time
@@ -126,7 +127,7 @@ from .result_store import (
 from .results import EncodedWorkflowResult, decode_workflow_result
 from .run_worker import run_worker
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
-from .state import OperatorStateStore, StateDbPath
+from .state import OperatorStateStore, StateDbPath, StateStoreError
 from .state.results import RunResultTable
 from .state.schedule_input_files import ScheduleInputFileClaims, ScheduleInputFileFolder
 from .state.schedules import ScheduleState
@@ -374,6 +375,7 @@ class Operator:
         self._webhooks = WebhookServer(self, webhook_port)
         self._webhook_routes = {}
         self._state_store = OperatorStateStore.open(state_db)
+        result_store: ResultStore | None = None
         # Until the startup block below takes over cleanup through close(), any
         # failure must release the state database lock itself.
         try:
@@ -429,8 +431,9 @@ class Operator:
             # Set at close so result loads still reading a bundle stop early.
             self._result_load_stop = threading.Event()
             self._closed = False
-            self._result_store = ResultStore(self._state_store)
-            report_result_index(self._result_store)
+            result_store = ResultStore(self._state_store)
+            self._result_store = result_store
+            report_result_index(result_store)
             self._input_files = InputFileStaging()
             self._notification_stop_enqueued = False
             self._notification_shutdown_thread: threading.Thread | None = None
@@ -450,6 +453,11 @@ class Operator:
                 self._schedule_input_files.close()
                 raise
         except BaseException as failure:
+            if result_store is not None:
+                try:
+                    result_store.close()
+                except Exception as exc:
+                    failure.add_note(f"Operator result store close also failed: {exc}")
             try:
                 self._state_store.close()
             except Exception as exc:
@@ -1615,6 +1623,10 @@ class Operator:
             run_id = run_id or f"run_{str(uuid4())[:8]}"
             if run_id in self._runs or run_id in self._active_runs:
                 raise RunAlreadyExistsError(f"Run {run_id} already exists")
+            # A result stored before a restart still owns its run ID.
+            with self._state_store.transaction() as connection:
+                if RunResultTable.get(connection, run_id) is not None:
+                    raise RunAlreadyExistsError(f"Run {run_id} already exists")
             # Callers learn about a missing required field now, not from a run that
             # fails while it is prepared. Cron and webhook runs report it as a failed
             # run. A reused run ID still reports the existing run first.
@@ -2530,17 +2542,41 @@ class Operator:
                                 raise _CoordinatorProtocolError(
                                     "workflow success has unfinished classifier invocations"
                                 )
+                            # Index the result before the run is marked successful. If
+                            # it cannot be recorded, the run fails with the reason in
+                            # its log instead of succeeding without a result.
+                            record_failure: LogEntry | None = None
+                            if stored_result is not None and effective_status == "success":
+                                try:
+                                    with self._state_store.transaction() as connection:
+                                        RunResultTable.insert(connection, run_id, stored_result)
+                                    recorded_result = True
+                                except (sqlite3.Error, StateStoreError) as exc:
+                                    effective_status = "failed"
+                                    discard_stored_result = True
+                                    record_failure = LogEntry(
+                                        timestamp=datetime.now(),
+                                        level=LogLevel.ERROR,
+                                        node_id="operator",
+                                        message=(
+                                            "Could not record the workflow result in the "
+                                            f"operator state database: {exc}"
+                                        ),
+                                    )
+                            elif stored_result is not None:
+                                discard_stored_result = True
                             run.status = {
                                 "success": RunStatus.SUCCESS,
                                 "failed": RunStatus.FAILED,
                                 "cancelled": RunStatus.CANCELLED,
                             }[effective_status]
-                            if stored_result is not None and effective_status == "success":
-                                with self._state_store.transaction() as connection:
-                                    RunResultTable.insert(connection, run_id, stored_result)
-                                recorded_result = True
-                            elif stored_result is not None:
-                                discard_stored_result = True
+                            if record_failure is not None:
+                                try:
+                                    self._append_log_locked(run, record_failure)
+                                    log_entry = record_failure
+                                except _CoordinatorProtocolError:
+                                    # A full detail budget must not hide the failure.
+                                    logger.error("%s", record_failure.message)
                         elif stored_result is not None:
                             discard_stored_result = True
                         run.ended_at = time.monotonic()

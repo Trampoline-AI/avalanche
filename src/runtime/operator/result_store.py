@@ -63,7 +63,6 @@ RESULTS_DIRECTORY = "results"
 PENDING_DIRECTORY = "pending"
 _OWNER_MARKER = ".avalanche-result-store.lock"
 _OWNER_MARKER_BYTES = b"avalanche-result-store-v1\n"
-_DIRECTORY_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 _SECURE_ANCHORED_ERROR = (
     "Secure workflow result publication is unavailable: this platform does not "
     "support directory-anchored file operations"
@@ -206,7 +205,7 @@ class ResultStore:
         self._owner_fd: int | None = None
         self._pending_fd: int | None = None
         try:
-            self._root_fd = os.open(self._root, _DIRECTORY_FLAGS)
+            self._root_fd = os.open(self._root, _directory_flags())
             _validate_result_root_metadata(os.fstat(self._root_fd), self._root)
             self._owner_fd = _open_and_lock_owner_marker(self._root_fd, self._root)
             self._pending_fd = _open_private_subdirectory(self._root_fd, PENDING_DIRECTORY)
@@ -214,15 +213,16 @@ class ResultStore:
             if self.recovered_pending_bundles:
                 os.fsync(self._pending_fd)
         except BaseException as failure:
-            try:
-                self._close_descriptors()
-                if self._temporary:
+            _close_all(self._take_root_descriptors(), failure)
+            if self._temporary:
+                try:
                     shutil.rmtree(self._root)
-            except Exception as exc:
-                failure.add_note(f"Result storage cleanup also failed: {exc}")
+                except OSError as exc:
+                    failure.add_note(f"Result storage cleanup also failed: {exc}")
             raise
         self._lock = threading.RLock()
-        self._bundle_descriptors: set[int] = set()
+        # Open pending bundles by their unique name, never by a reusable fd number.
+        self._pending_bundles: dict[str, int] = {}
         self._closed = False
 
     @property
@@ -236,7 +236,7 @@ class ResultStore:
             os.mkdir(name, mode=0o700, dir_fd=pending_fd)
             bundle = _open_bundle_at(pending_fd, name)
             metadata = os.fstat(bundle.descriptor)
-            self._bundle_descriptors.add(bundle.descriptor)
+            self._pending_bundles[name] = bundle.descriptor
             return PendingResultBundle(
                 name=name,
                 path=str(self._root / PENDING_DIRECTORY / name),
@@ -259,6 +259,8 @@ class ResultStore:
         _validate_sha256(manifest_sha256, "manifest sha256")
         with self._lock:
             self._ensure_open()
+            if self._pending_bundles.get(pending.name) != pending.descriptor:
+                raise ValueError("Result bundle is not pending in this result store")
             pending_bundle = self._open_retained_bundle(
                 pending.descriptor,
                 expected_identity=(pending.device, pending.inode),
@@ -297,7 +299,8 @@ class ResultStore:
             if isinstance(bundle, StoredWorkflowResult):
                 _remove_bundle_at(self._require_open(self._root_fd), bundle.bundle_name)
                 return
-            if bundle.descriptor not in self._bundle_descriptors:
+            if self._pending_bundles.get(bundle.name) != bundle.descriptor:
+                # Already accepted or discarded; its fd number may belong to another run.
                 return
             self._discard_pending(bundle)
 
@@ -356,14 +359,10 @@ class ResultStore:
             try:
                 if self._temporary:
                     self._remove_temporary_root()
-            finally:
-                for descriptor in self._bundle_descriptors:
-                    try:
-                        os.close(descriptor)
-                    except OSError:
-                        pass
-                self._bundle_descriptors.clear()
-                self._close_descriptors()
+            except BaseException as failure:
+                _close_all(self._take_all_descriptors(), failure)
+                raise
+            _close_all(self._take_all_descriptors(), None)
 
     def _write_accepted_bundle(
         self,
@@ -416,9 +415,7 @@ class ResultStore:
                 retained.close()
             _remove_bundle_at(pending_fd, bundle.name, (bundle.device, bundle.inode))
         finally:
-            if bundle.descriptor in self._bundle_descriptors:
-                self._bundle_descriptors.remove(bundle.descriptor)
-                os.close(bundle.descriptor)
+            os.close(self._pending_bundles.pop(bundle.name))
 
     def _remove_temporary_root(self) -> None:
         root_fd = self._require_descriptor(self._root_fd)
@@ -427,7 +424,7 @@ class ResultStore:
         os.rmdir(PENDING_DIRECTORY, dir_fd=root_fd)
         _remove_bundles_in(root_fd, keep=frozenset({_OWNER_MARKER}))
         os.unlink(_OWNER_MARKER, dir_fd=root_fd)
-        parent_fd = os.open(self._root.parent, _DIRECTORY_FLAGS)
+        parent_fd = os.open(self._root.parent, _directory_flags())
         try:
             current = os.stat(self._root.name, dir_fd=parent_fd, follow_symlinks=False)
             opened = os.fstat(root_fd)
@@ -437,12 +434,19 @@ class ResultStore:
         finally:
             os.close(parent_fd)
 
-    def _close_descriptors(self) -> None:
-        descriptors = (self._pending_fd, self._owner_fd, self._root_fd)
+    def _take_root_descriptors(self) -> tuple[int, ...]:
+        descriptors = tuple(
+            descriptor
+            for descriptor in (self._pending_fd, self._owner_fd, self._root_fd)
+            if descriptor is not None
+        )
         self._pending_fd = self._owner_fd = self._root_fd = None
-        for descriptor in descriptors:
-            if descriptor is not None:
-                os.close(descriptor)
+        return descriptors
+
+    def _take_all_descriptors(self) -> tuple[int, ...]:
+        bundle_descriptors = tuple(self._pending_bundles.values())
+        self._pending_bundles.clear()
+        return (*bundle_descriptors, *self._take_root_descriptors())
 
     @staticmethod
     def _open_retained_bundle(
@@ -470,6 +474,29 @@ class ResultStore:
     def _ensure_open(self) -> None:
         if self._closed:
             raise RuntimeError("Result store is closed")
+
+
+def _close_all(descriptors: tuple[int, ...], primary: BaseException | None) -> None:
+    """Close every descriptor, even after one fails, without hiding a primary failure.
+
+    A close failure is attached to ``primary`` when there is one. Otherwise the
+    first close failure is raised once all descriptors were tried, with any later
+    ones attached to it.
+    """
+    first: OSError | None = None
+    for descriptor in descriptors:
+        try:
+            os.close(descriptor)
+        except OSError as exc:
+            note = f"Closing result storage descriptor {descriptor} also failed: {exc}"
+            if primary is not None:
+                primary.add_note(note)
+            elif first is None:
+                first = exc
+            else:
+                first.add_note(note)
+    if first is not None:
+        raise first
 
 
 def _read_bundle(
@@ -547,7 +574,7 @@ def _open_bundle_at(
 ) -> _OpenedBundle:
     if type(bundle_name) is not str or _BUNDLE_NAME.fullmatch(bundle_name) is None:
         raise ValueError("Result bundle descriptor is malformed")
-    descriptor = os.open(bundle_name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+    descriptor = os.open(bundle_name, _directory_flags(), dir_fd=parent_fd)
     try:
         _validate_bundle_metadata(os.fstat(descriptor), expected_identity)
     except BaseException:
@@ -604,7 +631,7 @@ def _open_private_subdirectory(parent_fd: int, name: str) -> int:
         os.mkdir(name, mode=0o700, dir_fd=parent_fd)
     except FileExistsError:
         pass
-    descriptor = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+    descriptor = os.open(name, _directory_flags(), dir_fd=parent_fd)
     try:
         _validate_bundle_metadata(os.fstat(descriptor))
     except BaseException:
@@ -690,7 +717,7 @@ def _write_private_file(
     cancel_signal: CancellationSignal,
 ) -> str:
     temporary_name = f".tmp-{uuid4().hex}"
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     descriptor = os.open(
         temporary_name,
         flags,
@@ -892,7 +919,7 @@ def _hash_regular_file(
 def _open_regular_file(bundle: _OpenedBundle, name: str) -> int:
     descriptor = os.open(
         name,
-        os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+        os.O_RDONLY | os.O_NOFOLLOW,
         dir_fd=bundle.descriptor,
     )
     metadata = os.fstat(descriptor)
@@ -983,8 +1010,8 @@ def _check_optional_cancelled(
 def _supports_secure_worker_publication() -> bool:
     return (
         all(function in os.supports_dir_fd for function in (os.open, os.unlink, os.link))
-        and bool(getattr(os, "O_DIRECTORY", 0))
-        and bool(getattr(os, "O_NOFOLLOW", 0))
+        and hasattr(os, "O_DIRECTORY")
+        and hasattr(os, "O_NOFOLLOW")
         and hasattr(os, "fchmod")
     )
 
@@ -1106,6 +1133,11 @@ def _validate_publication_metadata(
     validate_workflow_result_document(encoded.value_json, attachment_ids)
 
 
+def _directory_flags() -> int:
+    """Open a directory read-only, never through a symlink; supported platforms only."""
+    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
 def _supports_secure_store() -> bool:
     try:
         import fcntl  # noqa: F401
@@ -1114,7 +1146,7 @@ def _supports_secure_store() -> bool:
     return all(
         function in os.supports_dir_fd
         for function in (os.open, os.mkdir, os.unlink, os.rmdir, os.link, os.rename, os.stat)
-    ) and bool(getattr(os, "O_DIRECTORY", 0) and getattr(os, "O_NOFOLLOW", 0))
+    ) and (hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW"))
 
 
 def _open_and_lock_owner_marker(root_fd: int, root: Path) -> int:
@@ -1175,7 +1207,7 @@ def report_result_index(store: ResultStore) -> ResultIndexReport:
     """
     if store.recovered_pending_bundles:
         logger.warning(
-            "Removed %d unfinished result bundle(s) left in %s by runs that never " "completed",
+            "Removed %d unfinished result bundle(s) left in %s by runs that never completed",
             store.recovered_pending_bundles,
             store.root / PENDING_DIRECTORY,
         )
