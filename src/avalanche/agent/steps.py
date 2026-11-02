@@ -209,8 +209,9 @@ class Agent:
 
     @property
     def called(self) -> bool:
-        """Whether this step execution has already called its agent."""
-        return self._called
+        """Whether this step execution has already used its one agent call."""
+        with self._call_lock:
+            return self._called
 
     def __call__(self, **inputs: Any) -> Coroutine[None, None, AgentResult]:
         """Run the agent and return its validated outputs with the invocation's trace.

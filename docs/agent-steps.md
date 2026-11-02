@@ -199,7 +199,8 @@ instructions. A rerun of the step, such as a new workflow run, is a new
 execution with a fresh agent, so it may call the agent again.
 
 A step body that returns without calling its agent logs a warning on the step,
-because no model ran and no trace or evaluation was recorded. If the step never
+because no model ran and no trace or evaluation was recorded. The warning never
+fails the step, and a body that raises before calling its agent logs none. If the step never
 needs a model, make it a plain `@ava.step`.
 
 ## Skills and tools

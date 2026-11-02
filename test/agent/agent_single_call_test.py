@@ -178,14 +178,55 @@ def test_inline_agent_calls_its_agent_once():
     assert INVOCATIONS == ["inline"]
 
 
-def test_step_that_never_calls_its_agent_warns(caplog):
+def test_step_that_never_calls_its_agent_returns_its_value_without_a_model_run(caplog):
     @ava.agent_step(Echo, runtime=_EchoRuntime())
     async def skip(*, agent: ava.Agent) -> str:
         return "skipped"
 
+    @ava.workflow
+    def flow():
+        return skip()
+
     with caplog.at_level(logging.WARNING, logger="avalanche.agent.steps"):
-        assert asyncio.run(skip.fn()) == "skipped"
-    warnings = [r for r in caplog.records if r.name == "avalanche.agent.steps"]
-    assert [r.levelno for r in warnings] == [logging.WARNING]
-    assert "'skip'" in warnings[0].getMessage()
+        assert flow().run(executor=ava.LocalExecutor()).result(timeout=10) == "skipped"
     assert INVOCATIONS == []
+    assert any(
+        record.name == "avalanche.agent.steps" and record.levelno == logging.WARNING
+        for record in caplog.records
+    )
+
+
+def test_step_that_raises_before_calling_its_agent_fails_without_the_no_call_warning(caplog):
+    @ava.agent_step(Echo, runtime=_EchoRuntime())
+    async def broken(*, agent: ava.Agent) -> str:
+        raise ValueError("body failed")
+
+    @ava.workflow
+    def flow():
+        return broken()
+
+    with caplog.at_level(logging.WARNING, logger="avalanche.agent.steps"):
+        with pytest.raises(ValueError, match="body failed"):
+            flow().run(executor=ava.LocalExecutor()).result(timeout=10)
+    assert INVOCATIONS == []
+    assert not any(
+        record.name == "avalanche.agent.steps" and record.levelno == logging.WARNING
+        for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize("inputs", [{"text": "hi"}, {"unknown": "field"}], ids=["ok", "failed"])
+def test_called_reports_whether_the_one_call_was_used(inputs):
+    seen: list[bool] = []
+
+    @ava.agent_step(Echo, runtime=_EchoRuntime())
+    async def answer(*, agent: ava.Agent) -> list[bool]:
+        seen.append(agent.called)
+        try:
+            await agent(**inputs)
+        except AgentStepError:
+            pass
+        seen.append(agent.called)
+        return seen
+
+    assert asyncio.run(answer.fn()) == [False, True]
