@@ -76,7 +76,9 @@ def _free_port() -> int:
 def operator(tmp_path):
     flows = tmp_path / "flows.py"
     flows.write_text(_FLOWS)
-    instance = Operator([str(flows)], watch=False, schedule=False, webhook_port=0)
+    instance = Operator(
+        [str(flows)], watch=False, schedule=False, webhook_port=0, state_db=":memory:"
+    )
     try:
         yield instance
     finally:
@@ -587,7 +589,9 @@ def test_start_run_with_files_reports_ambiguous_and_unknown_workflows(tmp_path, 
     for root in roots:
         root.mkdir()
         (root / "flows.py").write_text(_FLOWS)
-    operator = Operator([str(root) for root in roots], watch=False, schedule=False)
+    operator = Operator(
+        [str(root) for root in roots], watch=False, schedule=False, state_db=":memory:"
+    )
     port = _free_port()
     server = serve_operator(operator, port=port, block=False)
     channel = grpc.insecure_channel(f"127.0.0.1:{port}")
@@ -724,7 +728,9 @@ def test_a_staged_file_removed_from_disk_refuses_runs_and_schedules(operator, st
 def test_closing_the_operator_removes_staged_files(tmp_path):
     flows = tmp_path / "flows.py"
     flows.write_text(_FLOWS)
-    operator = Operator([str(flows)], watch=False, schedule=False, webhook_port=0)
+    operator = Operator(
+        [str(flows)], watch=False, schedule=False, webhook_port=0, state_db=":memory:"
+    )
     staged = operator.stage_input_file(
         _flow(operator).selector, "document", "notes.txt", "", b"x"
     )

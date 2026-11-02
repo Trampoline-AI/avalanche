@@ -278,7 +278,9 @@ def test_mutating_callbacks_cannot_corrupt_other_consumers_or_retained_state():
 
 
 def test_slow_consumer_gets_reset_instead_of_silently_losing_terminal_status():
-    operator = Operator([], watch=False, schedule=False, subscriber_queue_capacity=2)
+    operator = Operator(
+        [], watch=False, schedule=False, subscriber_queue_capacity=2, state_db=":memory:"
+    )
     run = RunState(run_id="run-1", flow_name="flow")
     operator._runs[run.run_id] = run
     try:

@@ -128,6 +128,7 @@ from .result_store import (
 from .results import EncodedWorkflowResult, decode_workflow_result
 from .run_worker import run_worker
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
+from .state import OperatorStateStore, StateDbPath
 from .step_io import StepInputs, StepIo, StepValuePreview
 from .webhooks import DEFAULT_WEBHOOK_PORT, WebhookServer, routes_for
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
@@ -315,6 +316,7 @@ class Operator:
         watch: bool = True,
         schedule: bool = True,
         *,
+        state_db: StateDbPath,
         schedules_enabled: bool = False,
         executor_backend: ExecutorBackend | _ExecutorBackendOmitted = (
             _EXECUTOR_BACKEND_OMITTED
@@ -343,6 +345,11 @@ class Operator:
         ``LocalExecutor`` or ``RayExecutor`` classes, or a keyword-only
         ``functools.partial(RayExecutor, ...)``. Use ``executor_backend`` and
         the Ray configuration mappings for new code.
+
+        ``state_db`` is the SQLite state database file, or ``":memory:"`` for a
+        throwaway one. The operator opens and locks it before discovery and
+        releases it when it closes, so a second operator on the same file fails
+        here with ``StateStoreLockedError``.
 
         Discovered cron schedules start disabled; ``schedules_enabled`` starts
         them all enabled instead. Enable and disable choices are kept in memory
@@ -406,10 +413,18 @@ class Operator:
         self._workflow_paths = workflow_paths or []
         self._webhooks = WebhookServer(self, webhook_port)
         self._webhook_routes = {}
+        self._state_store = OperatorStateStore.open(state_db)
         initial_view = None
-        if self._workflow_paths:
-            initial_view = self._registry.scan(self._workflow_paths, validate=routes_for)
-            raise_for_discovery_diagnostics(initial_view.diagnostics)
+        try:
+            if self._workflow_paths:
+                initial_view = self._registry.scan(self._workflow_paths, validate=routes_for)
+                raise_for_discovery_diagnostics(initial_view.diagnostics)
+        except BaseException as failure:
+            try:
+                self._state_store.close()
+            except Exception as exc:
+                failure.add_note(f"Operator state store close also failed: {exc}")
+            raise
         self._subscriber_queue_capacity = subscriber_queue_capacity
         self._mp = multiprocessing.get_context("spawn")
         self._runs: dict[str, RunState] = {}
@@ -2041,7 +2056,7 @@ class Operator:
     ) -> None:
         if not delayed_drains:
             self._stop_notification_dispatcher()
-            self._close_result_store()
+            self._release_storage()
             return
         shutdown_thread = threading.Thread(
             target=self._finish_notification_shutdown,
@@ -2065,7 +2080,19 @@ class Operator:
                 if self._active_runs.get(run_id) is handle:
                     self._active_runs.pop(run_id, None)
         self._stop_notification_dispatcher()
-        self._close_result_store()
+        self._release_storage()
+
+    def _release_storage(self) -> None:
+        # Runs after the last drain thread, so no writer outlives the state lock.
+        try:
+            self._close_result_store()
+        except BaseException as failure:
+            try:
+                self._state_store.close()
+            except Exception as exc:
+                failure.add_note(f"Operator state store close also failed: {exc}")
+            raise
+        self._state_store.close()
 
     def _close_result_store(self) -> None:
         with self._lock:

@@ -31,6 +31,7 @@ from runtime.operator.discovery import (
     WorkflowDiscoveryError,
     validate_discovery_timeout,
 )
+from runtime.operator.state import DEFAULT_STATE_DB, StateStoreError
 from runtime.operator.workspace_config import format_scan_targets, select_workflow_targets
 
 if TYPE_CHECKING:
@@ -140,6 +141,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--schedules-enabled",
         action="store_true",
         help="start with every cron schedule enabled (schedules start disabled otherwise)",
+    )
+    operator.add_argument(
+        "--state-db",
+        default=str(DEFAULT_STATE_DB),
+        metavar="PATH",
+        help=(
+            "SQLite file that keeps operator state, or :memory: for a throwaway one "
+            "(default: .avalanche/operator/state.db under the current folder)"
+        ),
     )
     operator.set_defaults(handler=_run_operator)
 
@@ -341,6 +351,15 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="start with every cron schedule enabled (schedules start disabled otherwise)",
     )
+    dev.add_argument(
+        "--state-db",
+        default=str(DEFAULT_STATE_DB),
+        metavar="PATH",
+        help=(
+            "SQLite file that keeps operator state, or :memory: for a throwaway one "
+            "(default: .avalanche/operator/state.db under the current folder)"
+        ),
+    )
     dev.set_defaults(handler=_run_dev)
 
     return parser
@@ -373,6 +392,8 @@ def _run_operator(args: argparse.Namespace) -> int:
         args.log_level,
         "--discovery-timeout",
         str(args.discovery_timeout),
+        "--state-db",
+        args.state_db,
     ]
     if args.ray:
         runtime_args.append("--ray")
@@ -1625,12 +1646,14 @@ def _run_dev(args: argparse.Namespace) -> int:
         print("Avalanche dev")
         for line in format_scan_targets(args.flow_target_selection):
             print(line)
+        print(f"  State: {args.state_db}")
         print("  Discovering workflows...")
         operator = Operator(
             args.flows,
             discovery_timeout=args.discovery_timeout,
             executor_backend="ray" if args.ray else "local",
             schedules_enabled=args.schedules_enabled,
+            state_db=args.state_db,
         )
         workflow_count = len(operator.get_catalog().workflows)
         print(
@@ -1663,6 +1686,9 @@ def _run_dev(args: argparse.Namespace) -> int:
                 raise failure
     except KeyboardInterrupt:
         print("Stopping Avalanche dev...")
+    except StateStoreError as exc:
+        _report_dev_failure("state database startup", exc)
+        exit_code = 1
     except WorkflowDiscoveryError as exc:
         _report_dev_failure(stage, exc)
         exit_code = 1

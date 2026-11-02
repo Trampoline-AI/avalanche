@@ -29,7 +29,9 @@ def _unused_port():
 
 @pytest.fixture
 def transport():
-    operator = Operator([], schedule=False, watch=False, stream_history_capacity=2)
+    operator = Operator(
+        [], schedule=False, watch=False, stream_history_capacity=2, state_db=":memory:"
+    )
     port = _unused_port()
     server = serve(operator, port=port, block=False)
     channel = grpc.insecure_channel(f"localhost:{port}")
