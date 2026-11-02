@@ -24,7 +24,15 @@ from pydantic import (
 from pydantic.fields import FieldInfo
 
 from .declaration import RuntimeDeclaration
-from .live import AgentEvent, RunStarted, ToolFinished, ToolStarted, TurnFinished
+from .live import (
+    AgentEvent,
+    PromptSent,
+    PromptText,
+    RunStarted,
+    ToolFinished,
+    ToolStarted,
+    TurnFinished,
+)
 from .native import NativeEvent
 from .skills import Skill
 from .trace import AgentTrace, AgentTraceHeader, AgentTraceStatus, RuntimeKind
@@ -295,6 +303,8 @@ __all__ = [
     "AgentRuntime",
     "FieldSpec",
     "JsonOutputs",
+    "PromptSent",
+    "PromptText",
     "PythonOutputs",
     "RunStarted",
     "SignatureSpec",

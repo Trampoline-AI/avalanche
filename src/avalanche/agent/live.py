@@ -54,6 +54,48 @@ class RunStarted(BaseModel):
     omitted_inputs: tuple[str, ...]
 
 
+# Each part of a prompt is kept up to this many characters, so a prompt event stays
+# within the operator's body limits whatever the text's encoded size.
+PROMPT_TEXT_LIMIT_CHARS = 256 * 1024
+
+
+class PromptText(BaseModel):
+    """One part of a prompt as a trace keeps it; text past the limit is left out."""
+
+    model_config = _STRICT
+
+    text: str = Field(max_length=PROMPT_TEXT_LIMIT_CHARS)
+    # Characters left out at the end of the text because it is too large to keep.
+    omitted_chars: NonNegativeInt
+
+    @classmethod
+    def of(cls, text: str) -> Self:
+        return cls(
+            text=text[:PROMPT_TEXT_LIMIT_CHARS],
+            omitted_chars=max(0, len(text) - PROMPT_TEXT_LIMIT_CHARS),
+        )
+
+
+class PromptSent(BaseModel):
+    """The prompt that started the call: the system prompt and the first user message.
+
+    ``verbatim`` says whether the runtime read the text back as its SDK sent it to the
+    model. When it did not, the text is what the runtime handed its engine, and
+    ``notes`` says what the engine adds that the text does not show. The text is kept
+    as sent, so it can name input files by their path on the machine that ran the step.
+    """
+
+    model_config = _STRICT
+
+    kind: Literal["prompt.sent"] = "prompt.sent"
+    # ``None`` when the runtime sent no system prompt of its own.
+    system_prompt: PromptText | None
+    first_message: PromptText
+    verbatim: bool
+    # What the model also received that the text does not show, in plain sentences.
+    notes: tuple[str, ...]
+
+
 class TurnFinished(BaseModel):
     """A finished turn.
 
@@ -93,7 +135,7 @@ class ToolFinished(BaseModel):
 
 
 AgentEvent = Annotated[
-    RunStarted | TurnFinished | ToolStarted | ToolFinished,
+    RunStarted | PromptSent | TurnFinished | ToolStarted | ToolFinished,
     Field(discriminator="kind"),
 ]
 

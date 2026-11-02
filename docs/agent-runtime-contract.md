@@ -364,8 +364,8 @@ class AgentLiveEvent:
 
 At least one of `common` and `native` is set. `runtime_kind` is read from the
 native part, or from the turn of a `turn.finished` event, so it is not in the
-JSON; it is `None` for an event with only a `run.started`, `tool.started` or
-`tool.finished` part.
+JSON; it is `None` for an event with only a `run.started`, `prompt.sent`,
+`tool.started` or `tool.finished` part.
 
 ```json
 {
@@ -390,7 +390,7 @@ The shared events. Events only one runtime has, such as PredictRLM's
 `predict()` calls, have `common: None` and are on the runtime's page.
 
 ```python
-AgentEvent = RunStarted | TurnFinished | ToolStarted | ToolFinished
+AgentEvent = RunStarted | PromptSent | TurnFinished | ToolStarted | ToolFinished
 
 
 class RunStarted:                 # the first event of every call
@@ -398,6 +398,19 @@ class RunStarted:                 # the first event of every call
     model: str | None             # the model the runtime asked for; None: the engine's default
     inputs: dict[str, JsonValue]  # the step's inputs, files and workspaces by reference
     omitted_inputs: tuple[str, ...]  # inputs left out because they are too large
+
+
+class PromptSent:                 # the prompt the call started with, once per call
+    kind: Literal["prompt.sent"]
+    system_prompt: PromptText | None  # None when the runtime sent no system prompt
+    first_message: PromptText     # the first user message: the task and its inputs
+    verbatim: bool                # True: read back as the SDK sent it to the model
+    notes: tuple[str, ...]        # what the model also got that the text does not show
+
+
+class PromptText:
+    text: str                     # at most 262,144 characters
+    omitted_chars: int            # characters left out at the end for size
 
 
 class TurnFinished:
@@ -424,6 +437,15 @@ class ToolFinished:
 The inputs together are kept up to 4 MiB as JSON. Past that, the largest are left
 out, one by one, and named in `omitted_inputs`.
 
+`prompt.sent` records the prompt that starts the call: the system prompt and the
+first user message, as the runtime sent them. A runtime sends it when it can; a
+viewer that finds none says so. When the runtime's engine builds the final request
+itself and does not report it, `verbatim` is `False`: the text is what the runtime
+gave its engine, and `notes` names what the engine adds that is not shown, rather
+than guessing at it. The text is kept as sent, so it can name input files by their
+path on the machine that ran the step; attached file contents are never kept. Each
+text is kept up to 262,144 characters, and `omitted_chars` counts the rest.
+
 The call starting, as sent:
 
 ```json
@@ -438,6 +460,31 @@ The call starting, as sent:
     "model": "claude-haiku-5-5",
     "inputs": {"document": "Avalanche runs DAGs."},
     "omitted_inputs": []
+  },
+  "native": null
+}
+```
+
+The prompt that started it, as sent:
+
+```json
+{
+  "kind": "event",
+  "schema_version": 2,
+  "invocation_id": "3f9a0c7e",
+  "sequence": 2,
+  "timestamp_ns": 1761480000002000000,
+  "common": {
+    "kind": "prompt.sent",
+    "system_prompt": {"text": "Summarize the document in one sentence.", "omitted_chars": 0},
+    "first_message": {
+      "text": "Complete the task for these inputs. ...\n\n{\n  \"document\": \"Avalanche runs DAGs.\"\n}",
+      "omitted_chars": 0
+    },
+    "verbatim": false,
+    "notes": [
+      "The Claude CLI sends the step's tools and output schema separately and may add its own context, such as the list of skills; that is not shown."
+    ]
   },
   "native": null
 }

@@ -12,8 +12,11 @@ from avalanche.agent import AgentStepError
 from avalanche.agent.contract import PythonOutputs
 from avalanche.agent.live import (
     AGENT_EVIDENCE,
+    PROMPT_TEXT_LIMIT_CHARS,
     AgentLiveEvent,
     AgentTraceFinished,
+    PromptSent,
+    PromptText,
     RunStarted,
     ToolStarted,
 )
@@ -143,6 +146,28 @@ def test_the_final_event_keeps_outputs_within_the_size_limit():
     (final,) = observed
     assert final.outputs == {"small": 1}
     assert final.omitted_outputs == ("big",)
+
+
+@pytest.mark.parametrize(
+    ("length", "omitted"),
+    [(10, 0), (PROMPT_TEXT_LIMIT_CHARS, 0), (PROMPT_TEXT_LIMIT_CHARS + 7, 7)],
+)
+def test_a_prompt_keeps_its_text_up_to_the_limit_and_counts_the_rest(length, omitted):
+    text = PromptText.of("é" * length)
+    assert (len(text.text), text.omitted_chars) == (length - omitted, omitted)
+    event = AgentLiveEvent(
+        invocation_id="call",
+        sequence=2,
+        timestamp_ns=1,
+        common=PromptSent(system_prompt=None, first_message=text, verbatim=False, notes=()),
+        native=None,
+    )
+    assert AGENT_EVIDENCE.validate_json(event.model_dump_json()) == event
+
+
+def test_a_prompt_text_over_the_limit_is_rejected():
+    with pytest.raises(ValidationError):
+        PromptText(text="x" * (PROMPT_TEXT_LIMIT_CHARS + 1), omitted_chars=0)
 
 
 @pytest.mark.parametrize(

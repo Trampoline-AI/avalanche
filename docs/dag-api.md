@@ -91,7 +91,11 @@ agents show **Agent definition** (the agent call fields), **Evals**, and **Step
 interface**. A historical agent's **Run I/O**
 shows recorded agent inputs and outputs, not the step interface: the inputs of
 the call's start event and the outputs of its final event, with fields too large
-for the trace named rather than shown. Run interfaces
+for the trace named rather than shown. Below them, **View initial prompt** opens a
+dialog with the system prompt and first message the agent started with, each with
+a copy button. It loads only when opened. When the runtime cannot report the exact
+text the model received, as with ClaudeAgent, the dialog says so and names what is
+not shown. Run interfaces
 for other step types are captured from the prepared workflow and do not change
 when source is edited, reloaded, or removed. Older runs without this metadata show
 it as unavailable; they never substitute the current definition. Historical Python

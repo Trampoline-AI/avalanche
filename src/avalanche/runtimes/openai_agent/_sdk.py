@@ -30,12 +30,14 @@ from agents import (
     RawResponsesStreamEvent,
     RunConfig,
     RunContextWrapper,
+    RunHooks,
     RunItemStreamEvent,
     Runner,
     RunResultStreaming,
     StreamEvent,
     ToolCallItem,
     ToolCallOutputItem,
+    TResponseInputItem,
     Usage,
     UserError,
     function_tool,
@@ -80,7 +82,14 @@ from ...agent.contract import (
     ToolSpec,
 )
 from ...agent.declaration import OpenAIBuiltinTool
-from ...agent.live import RunStarted, ToolFinished, ToolStarted, TurnFinished
+from ...agent.live import (
+    PromptSent,
+    PromptText,
+    RunStarted,
+    ToolFinished,
+    ToolStarted,
+    TurnFinished,
+)
 from ...agent.native import openai_agent as native
 from ...agent.skills import SKILL_FILE, Skill
 from ...agent.steps import AgentOutputError, AgentStepError, AgentStepExecutionError
@@ -295,7 +304,11 @@ async def run(
         )
         started = time.monotonic()
         streamed = Runner.run_streamed(
-            agent, input=model_input, max_turns=max_turns, run_config=run_config
+            agent,
+            input=model_input.items,
+            max_turns=max_turns,
+            run_config=run_config,
+            hooks=_PromptHooks(events, model_input),
         )
         stream = streamed.stream_events()
         try:
@@ -590,9 +603,62 @@ def _instructions(
     return "\n\n".join(parts)
 
 
+@dataclass(frozen=True)
+class _ModelInput:
+    """The call's first user message, and the same message as its prompt event shows it."""
+
+    items: list[ResponseInputItemParam]
+    # The message's text parts in order, each attachment by its name: the file's
+    # contents travel with the message but are never kept in a trace.
+    text: str
+    attachments: int
+
+
+class _PromptHooks(RunHooks[None]):
+    """Sends the call's prompt event as the SDK starts its first model request.
+
+    The SDK hands the hook the system prompt it built, sandbox instructions included.
+    """
+
+    def __init__(self, events: AgentEventSink, model_input: _ModelInput) -> None:
+        self._events = events
+        self._model_input = model_input
+        self._sent = False
+
+    async def on_llm_start(
+        self,
+        context: RunContextWrapper[None],
+        agent: Agent[None],
+        system_prompt: str | None,
+        input_items: list[TResponseInputItem],
+    ) -> None:
+        if self._sent:
+            return
+        self._sent = True
+        notes = [_TOOLS_NOTE]
+        if self._model_input.attachments:
+            notes.append(_ATTACHMENTS_NOTE)
+        await self._events.emit(
+            None,
+            PromptSent(
+                system_prompt=None if system_prompt is None else PromptText.of(system_prompt),
+                first_message=PromptText.of(self._model_input.text),
+                verbatim=True,
+                notes=tuple(notes),
+            ),
+        )
+
+
+_TOOLS_NOTE = (
+    "The step's tools and output schema are sent with the request, outside the prompt; "
+    "they are not shown."
+)
+_ATTACHMENTS_NOTE = "Attached files are sent with the message; their contents are not shown."
+
+
 def _model_input(
     request: AgentRequest, *, directory: Path | None, output_folder: AgentOutputFolder | None
-) -> list[ResponseInputItemParam]:
+) -> _ModelInput:
     """One user message: the instruction and the inputs as JSON, then each input file.
 
     In a sandbox, rooted at ``directory``, input files are also named by their path,
@@ -633,14 +699,17 @@ def _model_input(
     content: list[ResponseInputTextParam | ResponseInputImageParam | ResponseInputFileParam] = [
         ResponseInputTextParam(type="input_text", text=prompt)
     ]
+    texts = [prompt]
     for number, file in enumerate(attachments, start=1):
-        content.append(
-            ResponseInputTextParam(
-                type="input_text", text=f"Attachment {number}: {_file_name(file)}"
-            )
-        )
+        label = f"Attachment {number}: {_file_name(file)}"
+        content.append(ResponseInputTextParam(type="input_text", text=label))
         content.append(_file_part(file))
-    return [EasyInputMessageParam(role="user", content=content)]
+        texts.append(f"{label}\n[file contents not shown]")
+    return _ModelInput(
+        items=[EasyInputMessageParam(role="user", content=content)],
+        text="\n\n".join(texts),
+        attachments=len(attachments),
+    )
 
 
 def _prompt_path(path: Path, directory: Path) -> str:

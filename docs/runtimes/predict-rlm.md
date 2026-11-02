@@ -377,7 +377,8 @@ The code's output:
 | `None` | `predict.started`, `predict.finished`, `code.generated`, `code.executed`, `run.failed`, `run.cancelled` and the sandbox events |
 
 PredictRLM's `run.succeeded` is not sent: the final event says the run succeeded
-and carries its outputs.
+and carries its outputs. PredictRLM does not send `prompt.sent` yet: DSPy builds
+each iteration's prompt inside PredictRLM, which does not report it.
 
 ### Final event
 

@@ -39,7 +39,7 @@ from avalanche.agent import (  # noqa: E402
 from avalanche.agent import trace as trace_module  # noqa: E402
 from avalanche.agent.contract import ToolSpec  # noqa: E402
 from avalanche.agent.declaration import ClaudeAgentDeclaration  # noqa: E402
-from avalanche.agent.live import RunStarted, TurnFinished  # noqa: E402
+from avalanche.agent.live import PromptSent, RunStarted, TurnFinished  # noqa: E402
 from avalanche.agent.native.claude_agent import ClaudeAgentTurn  # noqa: E402
 from avalanche.agent.trace import TokenUsage, ToolCall  # noqa: E402
 from avalanche.runtimes import ClaudeAgent  # noqa: E402
@@ -265,6 +265,7 @@ async def test_a_session_maps_onto_outputs_turns_and_live_events(replay):
         for event in observed
     ] == [
         ("event", None, "run.started"),
+        ("event", None, "prompt.sent"),
         ("event", "session.initialized", None),
         ("event", None, "tool.started"),
         ("event", None, "tool.finished"),
@@ -274,7 +275,7 @@ async def test_a_session_maps_onto_outputs_turns_and_live_events(replay):
         ("event", None, "turn.finished"),
         ("trace_finished", None, None),
     ]
-    assert [event.turn for event in observed[2:8]] == [1, 1, 1, 2, 2, 2]
+    assert [event.turn for event in observed[3:9]] == [1, 1, 1, 2, 2, 2]
     assert observed[0].common.inputs == {"a": 2, "b": 3}
     assert observed[0].common.model == MODEL
     assert observed[-1].outputs == {"total": 15}
@@ -338,6 +339,45 @@ async def test_the_claude_code_preset_carries_the_step_prompt_as_its_append(repl
     assert preset.strict_mcp_config is True
     assert preset.tools == plain.tools
     assert preset.allowed_tools == plain.allowed_tools
+
+
+async def _prompt_sent(agent: ava.Agent) -> PromptSent:
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        await agent(a=2, b=3)
+    (prompt,) = [
+        event.common
+        for event in observed
+        if event.kind == "event" and isinstance(event.common, PromptSent)
+    ]
+    return prompt
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_event_holds_what_avalanche_gave_the_cli(replay):
+    seen = replay(_success_stream())
+    prompt = await _prompt_sent(_agent(system_prompt_append="Be terse."))
+
+    assert prompt.system_prompt is not None
+    assert prompt.system_prompt.text == seen["options"].system_prompt
+    assert prompt.first_message.text == seen["prompt"]
+    # The CLI builds the request itself, so the text is not what the model received.
+    assert not prompt.verbatim
+    assert len(prompt.notes) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_event_says_the_claude_code_preset_is_not_shown(replay):
+    seen = replay(_success_stream())
+    prompt = await _prompt_sent(
+        _agent(system_prompt_preset="claude_code", system_prompt_append="Be terse.")
+    )
+
+    # Only the step's part is shown; nothing stands in for the preset's text.
+    assert prompt.system_prompt is not None
+    assert prompt.system_prompt.text == seen["options"].system_prompt["append"]
+    assert not prompt.verbatim
+    assert len(prompt.notes) == 2
 
 
 @pytest.mark.asyncio

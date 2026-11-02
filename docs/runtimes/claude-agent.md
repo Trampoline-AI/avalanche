@@ -365,11 +365,12 @@ result, and the trace records it in the call's `error`.
 | `common.kind` | Claude |
 | --- | --- |
 | `run.started` | Sent before the CLI starts. `model` is the `model` setting, `None` when the CLI chooses; `inputs` are the step's inputs, files and workspaces by reference. |
+| `prompt.sent` | Sent before the CLI starts: the system prompt and first message Avalanche gives the CLI. `verbatim` is `False`, because the CLI builds the request itself and does not report it. With `system_prompt_preset="claude_code"`, `system_prompt` is the step's part only and a note says Claude Code's own prompt comes first and is not shown. |
 | `tool.started` | Claude asked for a tool. `turn` is the turn that asked. |
 | `tool.finished` | The tool's result reached Claude. `turn` is the turn that asked; `error` is set when the tool failed. |
 | `turn.finished` | Claude finished a response. |
 
-The `Summarize` call above sends, in order: `run.started`,
+The `Summarize` call above sends, in order: `run.started`, `prompt.sent`,
 `session.initialized`, then `tool.started`, `tool.finished` and `turn.finished`
 for each of its two turns (the second for `StructuredOutput`), then the final
 event.

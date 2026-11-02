@@ -67,7 +67,14 @@ from ...agent.contract import (
     PythonOutputs,
     ToolSpec,
 )
-from ...agent.live import RunStarted, ToolFinished, ToolStarted, TurnFinished
+from ...agent.live import (
+    PromptSent,
+    PromptText,
+    RunStarted,
+    ToolFinished,
+    ToolStarted,
+    TurnFinished,
+)
 from ...agent.native import claude_agent as native
 from ...agent.skills import SKILL_FILE, Skill
 from ...agent.steps import AgentOutputError, AgentStepError, AgentStepExecutionError
@@ -203,6 +210,9 @@ async def run(
         # A Read the user enables through the SDK ``tools`` option keeps its usual
         # scope, as one in builtin_tools does.
         read_guard = "Read" in skill_tools and not _lists_read(runtime.sdk_options)
+        step_prompt = _system_prompt(
+            signature.instructions, runtime.system_prompt_append, narrate=runtime.narrate
+        )
         options = ClaudeAgentOptions(
             model=runtime.model,
             max_turns=runtime.max_turns,
@@ -233,11 +243,11 @@ async def run(
                 if read_guard
                 else None
             ),
-            system_prompt=_system_prompt(
-                signature.instructions,
-                runtime.system_prompt_append,
-                narrate=runtime.narrate,
-                preset=runtime.system_prompt_preset,
+            system_prompt=step_prompt
+            if runtime.system_prompt_preset is None
+            # Claude Code's own system prompt comes first; the step's follows it.
+            else SystemPromptPreset(
+                type="preset", preset=runtime.system_prompt_preset, append=step_prompt
             ),
             output_format={
                 "type": "json_schema",
@@ -263,13 +273,16 @@ async def run(
             None,
             RunStarted(model=runtime.model, inputs=inputs, omitted_inputs=omitted_inputs),
         )
+        prompt = _prompt(prompt_inputs, output_folder, directory)
+        await events.emit(
+            None,
+            _prompt_sent(step_prompt, prompt, preset=runtime.system_prompt_preset is not None),
+        )
         try:
             # Closing the stream waits for the CLI to stop, even when handling a message
             # raises, so the working folder outlives it.
             async with contextlib.aclosing(
-                _session(
-                    prompt=_prompt(prompt_inputs, output_folder, directory), options=options
-                )
+                _session(prompt=prompt, options=options)
             ) as messages:
                 async for message in messages:
                     await transcript.add(message)
@@ -652,23 +665,35 @@ _NARRATION = (
 )
 
 
-def _system_prompt(
-    instructions: str,
-    append: str | None,
-    *,
-    narrate: bool,
-    preset: Literal["claude_code"] | None,
-) -> str | SystemPromptPreset:
+def _system_prompt(instructions: str, append: str | None, *, narrate: bool) -> str:
+    """The step's system prompt: alone, or after Claude Code's own with the preset."""
     parts = [instructions.strip()]
     if narrate:
         parts.append(_NARRATION)
     if append:
         parts.append(append.strip())
-    prompt = "\n\n".join(parts)
-    if preset is None:
-        return prompt
-    # Claude Code's own system prompt comes first; the step's follows it.
-    return SystemPromptPreset(type="preset", preset=preset, append=prompt)
+    return "\n\n".join(parts)
+
+
+# The Claude CLI builds the request to the model itself and does not report it, so
+# the prompt event shows what Avalanche gave the CLI and says what the CLI adds.
+_PRESET_NOTE = (
+    "Claude Code's own system prompt (the claude_code preset) comes before this text. "
+    "The Claude CLI builds it and does not report it, so it is not shown."
+)
+_CLI_NOTE = (
+    "The Claude CLI sends the step's tools and output schema separately and may add "
+    "its own context, such as the list of skills; that is not shown."
+)
+
+
+def _prompt_sent(system_prompt: str, first_message: str, *, preset: bool) -> PromptSent:
+    return PromptSent(
+        system_prompt=PromptText.of(system_prompt),
+        first_message=PromptText.of(first_message),
+        verbatim=False,
+        notes=(_PRESET_NOTE, _CLI_NOTE) if preset else (_CLI_NOTE,),
+    )
 
 
 def _mentions(annotation: object, target: type, seen: frozenset[type] = frozenset()) -> bool:

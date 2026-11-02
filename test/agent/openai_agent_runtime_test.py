@@ -53,6 +53,7 @@ from avalanche.agent.live import (  # noqa: E402
     AgentLiveEvent,
     AgentTraceFinished,
     AgentTraceUnavailable,
+    PromptSent,
     RunStarted,
     ToolFinished,
     ToolStarted,
@@ -232,6 +233,7 @@ async def test_a_run_maps_onto_outputs_turns_and_live_events(scripted):
     assert kinds == [
         "RunStarted",
         "AgentStarted",
+        "PromptSent",
         "ToolStarted",
         "ToolFinished",
         "TurnFinished",
@@ -270,6 +272,57 @@ async def test_the_agent_gets_the_instructions_inputs_answer_schema_and_settings
     assert call.model_settings.temperature == 0.25
     assert [tool.name for tool in call.tools] == ["lookup_bonus"]
     assert scripted.names == [MODEL]
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_event_holds_the_system_prompt_and_first_message_as_sent(scripted):
+    model = scripted(_lookup(), _answer(total=15))
+    _, observed = await _observed(_agent(system_prompt_append="Be brief."), a=2, b=3)
+
+    (prompt,) = [e.common for e in _live(observed) if isinstance(e.common, PromptSent)]
+    call = model.first_call
+    (message,) = call.input
+    (text,) = message["content"]
+    assert prompt.system_prompt is not None
+    assert prompt.system_prompt.text == call.system_instructions
+    assert prompt.first_message.text == text["text"]
+    assert prompt.verbatim
+    assert (prompt.system_prompt.omitted_chars, prompt.first_message.omitted_chars) == (0, 0)
+    # Tools travel outside the prompt, and the event says so.
+    assert len(prompt.notes) == 1
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_event_shows_sandbox_instructions_and_names_attachments(
+    scripted, tmp_path
+):
+    class Describe(ava.Signature):
+        """Describe the file."""
+
+        document: ava.File = ava.InputField()
+        description: str = ava.OutputField()
+
+    (tmp_path / "note.txt").write_text("quiet words")
+    model = scripted(_answer(description="a note"))
+    _, observed = await _observed(
+        ava.Agent(
+            signature=Describe,
+            step_name="describe",
+            runtime=OpenAIAgent(builtin_tools=["filesystem"]),
+        ),
+        document=ava.File.from_path(tmp_path / "note.txt"),
+    )
+
+    (prompt,) = [e.common for e in _live(observed) if isinstance(e.common, PromptSent)]
+    instructions = model.first_call.system_instructions
+    # The SDK's sandbox instructions are part of the system prompt the model got.
+    assert prompt.system_prompt is not None and prompt.system_prompt.text == instructions
+    assert "Describe the file." in instructions and len(instructions) > len(
+        "Describe the file."
+    ) + len(sdk_module._NARRATION)
+    assert "Attachment 1: note.txt" in prompt.first_message.text
+    assert "quiet words" not in prompt.first_message.text
+    assert len(prompt.notes) == 2
 
 
 @pytest.mark.asyncio

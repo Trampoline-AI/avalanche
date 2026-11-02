@@ -541,6 +541,8 @@ enum AgentEventKindV2 {
   AGENT_EVENT_KIND_V2_TOOL_STARTED = 5;
   AGENT_EVENT_KIND_V2_TOOL_FINISHED = 6;
   AGENT_EVENT_KIND_V2_RUN_STARTED = 8;
+  // The system prompt and first user message the call started with.
+  AGENT_EVENT_KIND_V2_PROMPT_SENT = 9;
 }
 
 message ClassifierInvocationSummaryV2 {

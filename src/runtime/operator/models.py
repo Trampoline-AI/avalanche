@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 AgentEventKind = Literal[
     "native",
     "run.started",
+    "prompt.sent",
     "turn.finished",
     "tool.started",
     "tool.finished",

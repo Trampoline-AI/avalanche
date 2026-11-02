@@ -312,7 +312,7 @@ class AgentLiveEvent:
 
 
 AgentEvent = Annotated[
-    RunStarted | TurnFinished | ToolStarted | ToolFinished,
+    RunStarted | PromptSent | TurnFinished | ToolStarted | ToolFinished,
     Field(discriminator="kind"),
 ]
 
@@ -322,6 +322,22 @@ class RunStarted:
     model: str | None
     inputs: dict[str, JsonValue]
     omitted_inputs: tuple[str, ...]
+
+
+class PromptText:
+    text: str                            # max_length=PROMPT_TEXT_LIMIT_CHARS (262,144)
+    omitted_chars: NonNegativeInt
+
+    @classmethod
+    def of(cls, text: str) -> Self: ...  # keeps the start, counts the rest
+
+
+class PromptSent:
+    kind: Literal["prompt.sent"] = "prompt.sent"
+    system_prompt: PromptText | None
+    first_message: PromptText
+    verbatim: bool
+    notes: tuple[str, ...]
 
 
 class TurnFinished:
