@@ -135,7 +135,7 @@ def slow():
     return wait()
 """
     )
-    operator = Operator([str(workflow_path)], schedule=False, watch=False)
+    operator = Operator([str(workflow_path)], schedule=False, watch=False, state_db=":memory:")
     server = serve(operator, port=(port := _unused_port()), block=False)
     provider = GrpcStateProvider(f"localhost:{port}")
     try:
@@ -243,7 +243,10 @@ def test_canonical_and_ambiguous_grpc_selection(tmp_path):
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
     operator = Operator(
-        workflow_paths=[str(root) for root in roots], schedule=False, watch=False
+        workflow_paths=[str(root) for root in roots],
+        schedule=False,
+        watch=False,
+        state_db=":memory:",
     )
     server = serve(operator, port=port, block=False)
     provider = GrpcStateProvider(f"localhost:{port}")
@@ -329,7 +332,7 @@ def test_paged_details_and_chunked_trace_materialize_without_cross_run_invalidat
     monkeypatch.setattr("runtime.operator.client.DETAIL_HYDRATION_PAGE_SIZE", 2)
     # Small chunks make the final body cross several transport chunks.
     monkeypatch.setattr("runtime.operator.server_v2.TRACE_CHUNK_BYTES", 128)
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run = _seed_hydration_run(operator, "run-target", agent_trace, iteration_step)
     unrelated = RunState(run_id="run-unrelated", flow_name="flow")
     operator._runs[unrelated.run_id] = unrelated
@@ -384,7 +387,7 @@ def test_grpc_terminal_hydration_selects_body_invocation_across_event_pages(
     monkeypatch, agent_trace, iteration_step
 ):
     monkeypatch.setattr("runtime.operator.client.DETAIL_HYDRATION_PAGE_SIZE", 1)
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run = RunState(run_id="run-multiple-invocations", flow_name="flow")
     run.nodes["agent-1"] = NodeState("agent-1", "Agent", "step")
     operator._runs[run.run_id] = run
@@ -452,7 +455,7 @@ def test_grpc_discards_hydration_after_epoch_reset(monkeypatch, agent_trace, ite
         "runtime.operator.client.DETAIL_HYDRATION_PAGE_SIZE",
         2,
     )
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     server = None
     provider = None
     release = threading.Event()
@@ -650,7 +653,7 @@ def test_concurrent_close_and_stream_start_leave_no_live_thread_or_calls():
 def test_grpc_hydrates_pre_trace_terminal_evidence(status, complete):
     from avalanche.agent.live import AgentTraceUnavailable
 
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run = RunState(run_id="run-pre-trace", flow_name="flow")
     run.nodes["agent-1"] = NodeState("agent-1", "Agent", "step")
     operator._runs[run.run_id] = run
@@ -698,7 +701,7 @@ def test_grpc_hydrates_pre_trace_terminal_evidence(status, complete):
 def test_corrupt_terminal_body_is_not_treated_as_a_hydration_race(
     body, agent_trace, iteration_step
 ):
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run = _seed_hydration_run(operator, "run-corrupt", agent_trace, iteration_step)
     server = serve(operator, port=(port := _unused_port()), block=False)
     provider = GrpcStateProvider(f"localhost:{port}")

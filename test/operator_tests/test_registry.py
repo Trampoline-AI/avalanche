@@ -34,7 +34,7 @@ def test_same_named_packages_and_workflows_execute_in_their_own_roots(tmp_path):
         for name, module in sys.modules.items()
         if name == "shared" or name.startswith("shared.")
     }
-    operator = Operator(roots, watch=False, schedule=False)
+    operator = Operator(roots, watch=False, schedule=False, state_db=":memory:")
     try:
         workflow_ids = [item.workflow_id for item in operator.list_workflows()]
         assert workflow_ids == ["left/shared/flow.py::build", "right/shared/flow.py::build"]

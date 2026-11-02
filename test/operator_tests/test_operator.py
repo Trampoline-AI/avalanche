@@ -19,7 +19,7 @@ from runtime.operator.webhooks import WebhookRoute
 @pytest.fixture
 def operator():
     fixtures = Path(__file__).parents[1] / "fixtures" / "sample_workflows.py"
-    instance = Operator([str(fixtures)], watch=False, schedule=False)
+    instance = Operator([str(fixtures)], watch=False, schedule=False, state_db=":memory:")
     try:
         yield instance
     finally:
@@ -139,6 +139,7 @@ def test_refresh_reconciliation_failure_rolls_back_and_can_retry(
         webhook_port=0,
         schedule=False,
         watch=False,
+        state_db=":memory:",
     )
     previous = operator._registry.view
     real_reconcile = operator._webhooks.reconcile
@@ -189,7 +190,7 @@ def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
     )
     from runtime.operator.proto import operator_pb2 as pb
 
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run = RunState(run_id="run-agent", flow_name="agent-flow", status=RunStatus.RUNNING)
     run.nodes["agent_1"] = NodeState("agent_1", "agent", "step", status=NodeStatus.RUNNING)
     operator._runs[run.run_id] = run
@@ -356,7 +357,7 @@ def test_trace_header_from_protobuf_rejects_unknown_status_and_missing_runtime(f
 def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
     agent_trace, iteration_step, agent_evidence
 ):
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run = RunState(run_id="run-agent", flow_name="agent-flow", status=RunStatus.RUNNING)
     run.nodes["agent_1"] = NodeState("agent_1", "agent", "step", status=NodeStatus.RUNNING)
     operator._runs[run.run_id] = run

@@ -29,7 +29,7 @@ from runtime.operator.web import start_browser_server
 
 @pytest.fixture
 def transport(tmp_path):
-    operator = Operator([], schedule=False, watch=False)
+    operator = Operator([], schedule=False, watch=False, state_db=":memory:")
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]

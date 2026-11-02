@@ -39,6 +39,14 @@
   without calling its agent logs a warning. Native evaluations now evaluate the
   step's one successful call. Steps that called their agent several times must be
   split into separate agent steps.
+- Operator: `ava operator` and `ava dev` now open a local SQLite state database
+  when they start, `.avalanche/operator/state.db` under the folder they start in
+  by default. Pass `--state-db PATH` to choose another file, or `--state-db :memory:`
+  for a throwaway one. Only one operator can use a file at a time: a second one
+  fails at startup with an error naming the file. A file written by a newer
+  Avalanche version is refused rather than guessed at. Nothing is stored in it yet;
+  run history still lives in memory and is lost on restart. `Operator(...)` now
+  requires a keyword-only `state_db` argument (a path or `":memory:"`).
 
 ## 0.17.3
 

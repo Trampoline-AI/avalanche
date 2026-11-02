@@ -34,6 +34,7 @@ default serve the browser UI and REST API.
 | `--log-level` | `WARNING` | Terminal log threshold: `DEBUG`, `INFO`, `WARNING`, `ERROR`; input is case-normalized. |
 | `--discovery-timeout SECONDS` | `60.0` | Positive finite maximum duration of a discovery scan. |
 | `--schedules-enabled` | Off | Start with every discovered cron schedule enabled. Schedules otherwise start disabled; the state is in memory only. |
+| `--state-db PATH` | `.avalanche/operator/state.db` | SQLite file that holds the operator's state, relative to the folder the command starts in. `:memory:` uses a throwaway database. Only one operator can use a file at a time; a second one fails at startup. A file written by a newer Avalanche version is refused. |
 
 ### Target configuration
 
@@ -64,6 +65,7 @@ execution as `operator`.
 | `--log-level` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. |
 | `--discovery-timeout SECONDS` | `60.0` | Positive finite discovery deadline. |
 | `--schedules-enabled` | Off | Start with every cron schedule enabled. |
+| `--state-db PATH` | `.avalanche/operator/state.db` | SQLite file that holds the operator's state, relative to the folder the command starts in. `:memory:` uses a throwaway database. Only one operator can use a file at a time; a second one fails at startup. A file written by a newer Avalanche version is refused. |
 
 Unlike `operator`, `dev` has no `--host`, `--webhook-port`, or `--no-web` options.
 Its local webhook port is `7434`. Startup reports discovery, gRPC readiness, and

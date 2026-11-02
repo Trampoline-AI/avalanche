@@ -265,7 +265,9 @@ def result_client(tmp_path):
         "@ava.source\ndef slow():\n    time.sleep(10)\n    return 'finished'\n"
         "@ava.workflow\ndef slow_result():\n    return slow()\n"
     )
-    operator = Operator([str(workflow)], watch=False, schedule=False, cancel_grace=0.1)
+    operator = Operator(
+        [str(workflow)], watch=False, schedule=False, cancel_grace=0.1, state_db=":memory:"
+    )
     port = _unused_port()
     server = serve(operator, port=port, block=False)
     client = GrpcStateProvider(f"localhost:{port}")
@@ -598,7 +600,7 @@ def test_result_publication_cancellation_never_publishes_partial_manifest(tmp_pa
 
 
 def test_parent_cancellation_wins_after_success_bundle_validation(tmp_path, monkeypatch):
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run_id = "run_cancel_during_result_accept"
     pending = operator._result_store.prepare()
     digest = publish_workflow_result(
@@ -645,7 +647,7 @@ def test_parent_cancellation_wins_after_success_bundle_validation(tmp_path, monk
 
 @pytest.mark.parametrize("rejection", ["unfinished-invocation", "publication-error"])
 def test_rejected_success_publications_release_result_quota(monkeypatch, rejection):
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     monkeypatch.setattr(result_store_module, "MAX_RETAINED_RESULTS", 1)
     monkeypatch.setattr(operator_module, "_teardown_process_group", lambda *_a, **_k: True)
     publish = operator._publish_run_locked
@@ -689,7 +691,7 @@ def test_rejected_success_publications_release_result_quota(monkeypatch, rejecti
 
 
 def test_provisional_success_waits_for_delayed_exit_before_notification(monkeypatch):
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run_id = "run_delayed_exit"
     _, handle, event = _provisional_success_run(operator, run_id)
     entered = threading.Event()
@@ -746,6 +748,7 @@ def retained():
         watch=False,
         schedule=False,
         result_retention_seconds=0.1,
+        state_db=":memory:",
     )
     root = operator._result_store.root
     try:
@@ -838,7 +841,7 @@ def test_configured_result_storage_never_follows_tampered_root_symlink(tmp_path)
     "outcome", ["mutation", "cancel", "unreaped", "late-event", "failed-exit"]
 )
 def test_provisional_success_is_not_authority_to_publish(monkeypatch, outcome):
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run_id = "run-untrusted-success"
     pending, handle, event = _provisional_success_run(operator, run_id)
 

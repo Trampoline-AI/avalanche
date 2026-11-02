@@ -68,7 +68,9 @@ def _serve(operator: Operator):
 
 @pytest.fixture
 def transport():
-    operator = Operator([], schedule=False, watch=False, stream_history_capacity=100)
+    operator = Operator(
+        [], schedule=False, watch=False, stream_history_capacity=100, state_db=":memory:"
+    )
     try:
         with _serve(operator) as (service, address):
             yield operator, service, address
@@ -394,7 +396,9 @@ def test_unresolved_classifier_questions_cannot_become_successful(transport):
 
 @pytest.mark.parametrize("order", [pb.PAGE_ORDER_V2_FORWARD, pb.PAGE_ORDER_V2_NEWEST_FIRST])
 def test_classifier_snapshot_cursor_survives_retention_floor_advancement(order):
-    operator = Operator([], schedule=False, watch=False, stream_history_capacity=4)
+    operator = Operator(
+        [], schedule=False, watch=False, stream_history_capacity=4, state_db=":memory:"
+    )
     try:
         with _serve(operator) as (service, _):
             run = _seed_run(operator, "retained-cursor")

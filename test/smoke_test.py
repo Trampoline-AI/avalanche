@@ -86,7 +86,7 @@ def echo():
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
-    operator = Operator([str(workflow_file)], watch=False, schedule=False)
+    operator = Operator([str(workflow_file)], watch=False, schedule=False, state_db=":memory:")
     server = serve(operator, port=port, block=False)
     address = f"localhost:{port}"
     command = [sys.executable, "-m", "ava_cli"]
