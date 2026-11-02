@@ -341,3 +341,65 @@ def test_operator_releases_the_database_when_discovery_fails(tmp_path):
     with pytest.raises(Exception, match="missing_module_for_state_store_test"):
         Operator([str(broken)], watch=False, schedule=False, webhook_port=0, state_db=path)
     OperatorStateStore.open(path).close()
+
+
+def test_error_after_sqlite_rolled_back_by_itself_keeps_the_original_error():
+    store = OperatorStateStore.open(":memory:")
+    try:
+        with store.transaction() as connection:
+            connection.execute(
+                "CREATE TABLE pairs (id INTEGER PRIMARY KEY ON CONFLICT ROLLBACK)"
+            )
+        with pytest.raises(sqlite3.IntegrityError), store.transaction() as connection:
+            connection.execute("INSERT INTO pairs (id) VALUES (1)")
+            connection.execute("INSERT INTO pairs (id) VALUES (1)")
+        with store.transaction() as connection:
+            assert connection.execute("SELECT count(*) FROM pairs").fetchone()[0] == 0
+    finally:
+        store.close()
+
+
+def test_failed_commit_rolls_back_and_the_store_stays_usable():
+    store = OperatorStateStore.open(":memory:")
+    try:
+        with store.transaction() as connection:
+            connection.execute("CREATE TABLE parent (id INTEGER PRIMARY KEY)")
+            connection.execute(
+                "CREATE TABLE child (parent_id INTEGER REFERENCES parent (id) "
+                "DEFERRABLE INITIALLY DEFERRED)"
+            )
+        # A deferred foreign key is checked at COMMIT, so the commit itself fails.
+        with pytest.raises(sqlite3.IntegrityError), store.transaction() as connection:
+            connection.execute("INSERT INTO child (parent_id) VALUES (42)")
+        with store.transaction() as connection:
+            assert connection.execute("SELECT count(*) FROM child").fetchone()[0] == 0
+    finally:
+        store.close()
+
+
+@pytest.mark.parametrize("problem", ["not a database", "directory", "parent is a file"])
+def test_unusable_paths_fail_with_a_state_store_error(tmp_path, problem):
+    path = tmp_path / "state.db"
+    if problem == "not a database":
+        path.write_bytes(b"this is not an SQLite database, just some text" * 4)
+    elif problem == "directory":
+        path.mkdir()
+    else:
+        (tmp_path / "blocker").write_text("")
+        path = tmp_path / "blocker" / "state.db"
+    with pytest.raises(StateStoreError) as caught:
+        OperatorStateStore.open(path)
+    assert str(path.resolve()) in str(caught.value)
+
+
+def test_operator_releases_the_database_when_later_startup_fails(tmp_path, monkeypatch):
+    from runtime.operator import operator as operator_module
+
+    def failing_result_store(*_args, **_kwargs):
+        raise OSError("result folder unavailable")
+
+    monkeypatch.setattr(operator_module, "ResultStore", failing_result_store)
+    path = tmp_path / "state.db"
+    with pytest.raises(OSError, match="result folder unavailable"):
+        Operator([], watch=False, schedule=False, webhook_port=0, state_db=path)
+    OperatorStateStore.open(path).close()

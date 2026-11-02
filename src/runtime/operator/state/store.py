@@ -55,31 +55,15 @@ class OperatorStateStore:
             return cls(connection, None)
 
         resolved = Path(path).expanduser().resolve()
-        resolved.parent.mkdir(parents=True, exist_ok=True)
-        connection = _connect(str(resolved))
         try:
-            try:
-                # The lock is taken by the first statement that touches the file and,
-                # in EXCLUSIVE locking mode, is never released until close. WAL in
-                # exclusive mode keeps its index in heap memory, not a -shm file.
-                connection.execute("PRAGMA locking_mode = EXCLUSIVE")
-                mode = connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
-                connection.execute("BEGIN EXCLUSIVE")
-                connection.execute("COMMIT")
-            except sqlite3.OperationalError as exc:
-                if exc.sqlite_errorcode in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
-                    raise StateStoreLockedError(resolved) from exc
-                raise
-            if mode != "wal":
-                raise StateStoreError(
-                    f"Operator state database {resolved} could not use WAL journaling "
-                    f"(SQLite chose {mode!r}). Put it on a local filesystem."
-                )
-            _configure(connection)
-            migrate(connection, str(resolved))
-        except BaseException:
-            connection.close()
+            connection = _open_locked_file(resolved)
+        except StateStoreError:
             raise
+        except (sqlite3.DatabaseError, OSError) as exc:
+            # A file that is not a database, a directory, or an unwritable folder.
+            raise StateStoreError(
+                f"Could not open operator state database {resolved}: {exc}"
+            ) from exc
         return cls(connection, resolved)
 
     @property
@@ -110,6 +94,35 @@ class OperatorStateStore:
                 return
             self._closed = True
             self._connection.close()
+
+
+def _open_locked_file(path: Path) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = _connect(str(path))
+    try:
+        try:
+            # The lock is taken by the first statement that touches the file and, in
+            # EXCLUSIVE locking mode, is never released until close. WAL in exclusive
+            # mode keeps its index in heap memory, not in a -shm file.
+            connection.execute("PRAGMA locking_mode = EXCLUSIVE")
+            mode = connection.execute("PRAGMA journal_mode = WAL").fetchone()[0]
+            connection.execute("BEGIN EXCLUSIVE")
+            connection.execute("COMMIT")
+        except sqlite3.OperationalError as exc:
+            if exc.sqlite_errorcode in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED):
+                raise StateStoreLockedError(path) from exc
+            raise
+        if mode != "wal":
+            raise StateStoreError(
+                f"Operator state database {path} could not use WAL journaling "
+                f"(SQLite chose {mode!r}). Put it on a local filesystem."
+            )
+        _configure(connection)
+        migrate(connection, str(path))
+    except BaseException:
+        connection.close()
+        raise
+    return connection
 
 
 def _connect(database: str) -> sqlite3.Connection:

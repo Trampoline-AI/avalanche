@@ -326,7 +326,7 @@ def test_summary_pages_and_snapshots_remain_exact_during_continuous_updates():
 
 
 def test_agent_detail_and_watermarks_become_visible_in_one_transaction():
-    operator = _BarrierOperator(watch=False, schedule=False)
+    operator = _BarrierOperator(watch=False, schedule=False, state_db=":memory:")
     run = _add_run(operator, "run-atomic")
     apply_errors = []
     reader_done = threading.Event()
@@ -389,7 +389,7 @@ def test_agent_detail_and_watermarks_become_visible_in_one_transaction():
 
 
 def test_concurrent_publishers_dispatch_detail_callbacks_and_updates_in_order():
-    operator = _OrderedDeliveryOperator(watch=False, schedule=False)
+    operator = _OrderedDeliveryOperator(watch=False, schedule=False, state_db=":memory:")
     run = _add_run(operator, "run-ordered")
     subscription = operator.subscribe_operator_updates(
         operator.operator_instance_id, operator.current_sequence
