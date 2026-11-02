@@ -8,6 +8,7 @@ import os
 import queue
 import shutil
 import socket
+import sqlite3
 import sys
 import threading
 import time
@@ -24,8 +25,8 @@ from runtime.operator import Operator
 from runtime.operator import operator as operator_module
 from runtime.operator import result_store as result_store_module
 from runtime.operator.client import GrpcStateProvider
-from runtime.operator.models import RunState, RunStatus
-from runtime.operator.operator import RunResultUnavailableError
+from runtime.operator.models import LogLevel, RunState, RunStatus
+from runtime.operator.operator import RunAlreadyExistsError, RunResultUnavailableError
 from runtime.operator.result_store import (
     MAX_RESULT_MANIFEST_BYTES,
     ResultBundleMissingError,
@@ -44,7 +45,7 @@ from runtime.operator.results import (
     encode_workflow_result,
 )
 from runtime.operator.server import serve
-from runtime.operator.state import OperatorStateStore
+from runtime.operator.state import OperatorStateStore, StateRowError
 from runtime.operator.state.results import RunResultTable
 
 
@@ -678,6 +679,31 @@ def test_rejected_success_publications_leave_no_stored_result(monkeypatch, rejec
         operator.close()
 
 
+def test_failed_result_index_write_fails_the_run_with_a_reason(monkeypatch):
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
+    monkeypatch.setattr(operator_module, "_teardown_process_group", lambda *_a, **_k: True)
+
+    def failing_insert(*_args, **_kwargs):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(operator_module.RunResultTable, "insert", failing_insert)
+    run_id = "run_index_write_fails"
+    _, handle, event = _provisional_success_run(operator, run_id)
+    try:
+        operator._drain_run_events(run_id, handle, [event])
+        assert operator.get_run(run_id).status == RunStatus.FAILED
+        assert any(
+            item.entry.node_id == "operator" and item.entry.level == LogLevel.ERROR
+            for item in operator._logs[run_id]
+        )
+        with pytest.raises(RunResultUnavailableError):
+            operator.get_run_result(run_id)
+        assert not _indexed(operator, run_id)
+        assert operator._result_store.check_index().consistent
+    finally:
+        operator.close()
+
+
 def test_provisional_success_waits_for_delayed_exit_before_notification(monkeypatch):
     operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run_id = "run_delayed_exit"
@@ -787,6 +813,9 @@ def test_results_survive_an_operator_restart_on_the_same_database(tmp_path):
         assert result["file"].name == "kept.bin"
         with pytest.raises(KeyError):
             second.get_run_result("run_unknown")
+        # The stored result keeps its run ID taken after the restart.
+        with pytest.raises(RunAlreadyExistsError):
+            second.start_run("kept", run_id=run_id)
     finally:
         second.close()
 
@@ -822,6 +851,107 @@ def test_result_root_survives_reopen_and_clears_unfinished_pending_bundles(tmp_p
         assert reopened.check_index().consistent
 
 
+def test_stale_pending_handle_never_touches_a_bundle_that_reused_its_fd(result_store):
+    first = result_store.prepare()
+    digest = publish_workflow_result(
+        _attachment_payload(b"first", "first.bin"),
+        first.descriptor,
+        (first.device, first.inode),
+        _NeverCancelled(),
+    )
+    stored = result_store.accept(first, digest)
+    second = result_store.prepare()
+    assert second.descriptor == first.descriptor  # the fd number was reused
+
+    result_store.discard(first)  # stale handle from a cleanup path
+    with pytest.raises(ValueError):
+        result_store.accept(first, digest)
+
+    assert Path(second.path).is_dir()
+    os.fstat(second.descriptor)
+    assert result_store.load(stored).files[0].content == b"first"
+    result_store.discard(second)
+    assert not Path(second.path).exists()
+
+
+def test_result_store_close_releases_every_descriptor_when_one_close_fails(tmp_path):
+    state_store = OperatorStateStore.open(tmp_path / "operator" / "state.db")
+    try:
+        store = ResultStore(state_store)
+        broken = store.prepare()
+        healthy = store.prepare()
+        os.close(broken.descriptor)  # the store's own close of it now fails
+        with pytest.raises(OSError):
+            store.close()
+        with pytest.raises(OSError):
+            os.fstat(healthy.descriptor)
+        # The root lock was released too, so the folder can be opened again.
+        reopened = ResultStore(state_store)
+        assert reopened.recovered_pending_bundles == 2
+        reopened.close()
+    finally:
+        state_store.close()
+
+
+def test_failed_temporary_root_removal_still_closes_every_descriptor(monkeypatch):
+    state_store = OperatorStateStore.open(":memory:")
+    store = ResultStore(state_store)
+    root = store.root
+    try:
+        pending = store.prepare()
+        root_descriptors = (store._root_fd, store._owner_fd, store._pending_fd)
+        removal_failure = OSError("injected removal failure")
+
+        def failing_removal():
+            raise removal_failure
+
+        monkeypatch.setattr(store, "_remove_temporary_root", failing_removal)
+        with pytest.raises(OSError) as raised:
+            store.close()
+        assert raised.value is removal_failure
+        for descriptor in (pending.descriptor, *root_descriptors):
+            with pytest.raises(OSError):
+                os.fstat(descriptor)
+    finally:
+        shutil.rmtree(root)
+        state_store.close()
+
+
+@pytest.mark.parametrize("database", ["file", "memory"])
+def test_failed_store_startup_releases_the_root_and_its_lock(tmp_path, monkeypatch, database):
+    state_store = OperatorStateStore.open(
+        tmp_path / "operator" / "state.db" if database == "file" else ":memory:"
+    )
+    created_roots: list[str] = []
+    make_temporary_root = result_store_module.tempfile.mkdtemp
+
+    def recording_mkdtemp(*args, **kwargs):
+        created_roots.append(make_temporary_root(*args, **kwargs))
+        return created_roots[-1]
+
+    try:
+        startup_failure = OSError("injected startup failure")
+
+        def failing_cleanup(*_args, **_kwargs):
+            raise startup_failure
+
+        with monkeypatch.context() as patched:
+            patched.setattr(result_store_module, "_remove_bundles_in", failing_cleanup)
+            patched.setattr(result_store_module.tempfile, "mkdtemp", recording_mkdtemp)
+            with pytest.raises(OSError) as raised:
+                ResultStore(state_store)
+        assert raised.value is startup_failure
+        if database == "memory":
+            # The private temporary root is removed with the failed store.
+            assert len(created_roots) == 1 and not Path(created_roots[0]).exists()
+        else:
+            # The failed store released its folder lock, so a new store opens it.
+            ResultStore(state_store).close()
+    finally:
+        state_store.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions and symlinks")
 def test_result_root_rejects_shared_broad_or_linked_roots(tmp_path):
     with _open_store(tmp_path):
         # Another database in the same folder would share results/.
@@ -840,13 +970,14 @@ def test_result_root_rejects_shared_broad_or_linked_roots(tmp_path):
     external = tmp_path / "external"
     external.mkdir(mode=0o700)
     (linked / "results").symlink_to(external, target_is_directory=True)
-    for folder in (broad, linked):
+    for folder, refusal in ((broad, ValueError), (linked, OSError)):
         state_store = OperatorStateStore.open(folder / "state.db")
         try:
-            with pytest.raises((OSError, ValueError)):
+            with pytest.raises(refusal):
                 ResultStore(state_store)
         finally:
             state_store.close()
+    assert os.stat(broad / "results").st_mode & 0o777 == 0o755
     assert list(external.iterdir()) == []
 
 
@@ -859,22 +990,46 @@ def test_inconsistent_result_index_is_reported_at_startup_and_never_served(tmp_p
         orphan = _accept(store, b"orphan")
         root = store.root
     shutil.rmtree(root / lost.bundle_name)
+    (root / "stray.txt").write_bytes(b"stray")
 
     with caplog.at_level("WARNING", logger=result_store_module.__name__):
         operator = Operator(
             [], watch=False, schedule=False, state_db=tmp_path / "operator" / "state.db"
         )
     try:
-        assert len(caplog.records) >= 2
+        assert caplog.records
         report = operator._result_store.check_index()
+        assert not report.consistent
         assert [row.run_id for row in report.missing_bundles] == ["run_lost"]
         assert report.unindexed_bundles == (orphan.bundle_name,)
+        assert report.unexpected_entries == ("stray.txt",)
         assert operator.get_run_result("run_kept").content == b"kept"
         with pytest.raises(ResultBundleMissingError):
             operator.get_run_result("run_lost")
         assert (root / orphan.bundle_name).is_dir()
     finally:
         operator.close()
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [("bundle_name", "../escape"), ("manifest_sha256", "not-a-digest"), ("byte_size", -1)],
+)
+def test_malformed_result_rows_fail_loudly_instead_of_being_skipped(tmp_path, column, value):
+    with _open_store(tmp_path) as store:
+        stored = _accept(store, b"kept")
+        _index(store, "run_bad", stored)
+        connection = store._state_store._connection
+        # Bypass the table's CHECK only for the column it guards, as a corrupt file would.
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(
+            f"UPDATE run_results SET {column} = ? WHERE run_id = ?", (value, "run_bad")
+        )
+        connection.execute("PRAGMA ignore_check_constraints = OFF")
+        with pytest.raises(StateRowError):
+            store.check_index()
+        with store._state_store.transaction() as transaction, pytest.raises(StateRowError):
+            RunResultTable.get(transaction, "run_bad")
 
 
 def test_delete_run_result_removes_the_index_row_and_its_bundle(tmp_path):
@@ -910,6 +1065,16 @@ def test_forged_or_deleted_result_handles_are_rejected(result_client):
 
     with pytest.raises(ValueError, match="sha256 does not match"):
         operator._result_store.load(forged)
+
+    # A stored file changed on disk after acceptance is refused, never served.
+    value_path = operator._result_store.root / stored.bundle_name / "value.json"
+    original = value_path.read_bytes()
+    value_path.write_bytes(original.replace(b"weekly", b"WEEKLY"))
+    with pytest.raises(grpc.RpcError) as tampered:
+        client.get_run_result(run_id)
+    assert tampered.value.code() == grpc.StatusCode.DATA_LOSS
+    value_path.write_bytes(original)
+    assert client.get_run_result(run_id)["report"]["title"] == "weekly"
 
     operator._result_store.delete_run_result(run_id)
     with pytest.raises(ResultBundleMissingError):
