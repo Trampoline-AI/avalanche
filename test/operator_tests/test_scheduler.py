@@ -251,7 +251,9 @@ def test_reconcile_waits_for_claimed_dispatch_to_start_before_replacing_registra
 
 
 def test_operator_refresh_serializes_catalog_publication_with_schedule_replacement():
-    operator = Operator([], watch=False, schedule=False, schedules_enabled=True)
+    operator = Operator(
+        [], watch=False, schedule=False, schedules_enabled=True, state_db=":memory:"
+    )
     operator._scheduler.reconcile([_descriptor("flow.py::shared")])
     catalog_published = threading.Event()
     finish_rescan = threading.Event()

@@ -214,7 +214,13 @@ def test_historical_evaluations_use_prepared_source_and_survive_reload_and_remov
 ):
     monkeypatch.delenv("TYPESAFE_API_KEY", raising=False)
     workflow = _write_workflow(tmp_path)
-    operator = Operator([str(workflow)], executor_backend="local", watch=False, schedule=False)
+    operator = Operator(
+        [str(workflow)],
+        executor_backend="local",
+        watch=False,
+        schedule=False,
+        state_db=":memory:",
+    )
     try:
         original = wait_terminal(operator, operator.start_run("flow"))
         assert original.status == RunStatus.SUCCESS

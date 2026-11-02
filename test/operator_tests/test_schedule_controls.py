@@ -80,7 +80,9 @@ def flows(tmp_path):
 
 @pytest.fixture
 def operator(flows):
-    instance = Operator([str(flows)], watch=False, schedule=False, webhook_port=0)
+    instance = Operator(
+        [str(flows)], watch=False, schedule=False, webhook_port=0, state_db=":memory:"
+    )
     try:
         yield instance
     finally:
@@ -125,6 +127,7 @@ def test_schedule_choice_survives_source_reload(flows, enabled):
         schedule=False,
         webhook_port=0,
         schedules_enabled=not enabled,
+        state_db=":memory:",
     )
     try:
         selector = _flow(operator, "scheduled").selector
@@ -153,7 +156,12 @@ def test_toggling_does_not_change_the_workflow_version(operator):
 
 def test_operator_can_start_with_every_schedule_enabled(flows):
     operator = Operator(
-        [str(flows)], watch=False, schedule=False, webhook_port=0, schedules_enabled=True
+        [str(flows)],
+        watch=False,
+        schedule=False,
+        webhook_port=0,
+        schedules_enabled=True,
+        state_db=":memory:",
     )
     try:
         flow = _flow(operator, "scheduled")
@@ -173,7 +181,9 @@ def test_schedule_control_rejects_workflows_without_cron(operator):
 
 def test_scheduled_runs_start_with_the_schedule_input(flows):
     _write_flows(flows, cron="* * * * *")
-    operator = Operator([str(flows)], watch=False, schedule=False, webhook_port=0)
+    operator = Operator(
+        [str(flows)], watch=False, schedule=False, webhook_port=0, state_db=":memory:"
+    )
     try:
         selector = _flow(operator, "greeting").selector
         now = datetime(2026, 10, 29, 9, 0, 40)

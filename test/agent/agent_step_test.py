@@ -622,7 +622,7 @@ def _retain_iteration(step):
     from runtime.operator import Operator
     from runtime.operator.models import AgentEventAppended, NodeState, NodeStatus, RunState
 
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run = RunState(run_id="bounded-detail-run", flow_name="agent-flow")
     run.nodes["agent"] = NodeState("agent", "agent", "step", status=NodeStatus.RUNNING)
     operator._runs[run.run_id] = run
@@ -888,7 +888,7 @@ def test_live_execution_output_is_bounded_before_operator_retention(output, omit
         data["error"] = error
     event = RunEvent("sdk-run", 1, RunEventKind.CODE_EXECUTED, 1, data)
     projected = _live_json(event)
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run = RunState(run_id="live-output-run", flow_name="agent-flow", status=RunStatus.RUNNING)
     run.nodes["agent"] = NodeState("agent", "agent", "step", status=NodeStatus.RUNNING)
     operator._runs[run.run_id] = run
@@ -957,7 +957,7 @@ def _retain_live_event(projected):
     from runtime.operator import Operator
     from runtime.operator.models import NodeState, NodeStatus, RunState, RunStatus
 
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run = RunState(run_id="contract-run", flow_name="agent-flow", status=RunStatus.RUNNING)
     run.nodes["agent"] = NodeState("agent", "agent", "step", status=NodeStatus.RUNNING)
     operator._runs[run.run_id] = run

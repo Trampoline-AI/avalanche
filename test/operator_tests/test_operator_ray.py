@@ -58,6 +58,7 @@ def test_ray_operator_uses_live_source_for_imports_logs_and_later_runs(tmp_path)
         watch=False,
         schedule=False,
         prepare_timeout=30.0,
+        state_db=":memory:",
     )
     try:
         first_id = operator.start_run("flow")

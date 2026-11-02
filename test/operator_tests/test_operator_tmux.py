@@ -55,7 +55,18 @@ def test_terminal_runs_discovered_workflow(tmp_path):
             "-y",
             "50",
             shlex.join(
-                ["uv", "run", "ava", "operator", str(workflow), "--port", str(port), "--no-web"]
+                [
+                    "uv",
+                    "run",
+                    "ava",
+                    "operator",
+                    str(workflow),
+                    "--port",
+                    str(port),
+                    "--no-web",
+                    "--state-db",
+                    str(tmp_path / "state.db"),
+                ]
             ),
         )
         deadline = time.monotonic() + 20
@@ -236,6 +247,8 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
         "--webhook-port",
         "0",
         "--no-web",
+        "--state-db",
+        str(tmp_path / "state.db"),
     ]
 
     def launch():

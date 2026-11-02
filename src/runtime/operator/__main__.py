@@ -12,6 +12,7 @@ from .discovery import (
     WorkflowDiscoveryError,
     validate_discovery_timeout,
 )
+from .state import DEFAULT_STATE_DB, StateStoreError
 from .workspace_config import format_scan_targets, select_workflow_targets
 
 
@@ -59,6 +60,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         help=f"maximum seconds for one discovery scan (default: {DEFAULT_DISCOVERY_TIMEOUT:g})",
     )
     parser.add_argument(
+        "--state-db",
+        default=str(DEFAULT_STATE_DB),
+        metavar="PATH",
+        help=(
+            "SQLite file that keeps operator state, or :memory: for a throwaway one "
+            "(default: .avalanche/operator/state.db under the current folder)"
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         type=str.upper,
         choices=("DEBUG", "INFO", "WARNING", "ERROR"),
@@ -87,6 +97,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for line in format_scan_targets(selection):
         print(line)
     print(f"  Executor: {'Ray' if args.ray else 'Local'}")
+    print(f"  State: {args.state_db}")
     print("  Discovering workflows...")
 
     from . import serve
@@ -101,7 +112,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             discovery_timeout=args.discovery_timeout,
             executor_backend="ray" if args.ray else "local",
             schedules_enabled=args.schedules_enabled,
+            state_db=args.state_db,
         )
+    except StateStoreError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     except WorkflowDiscoveryError as exc:
         print("error: Avalanche operator discovery failed", file=sys.stderr)
         for diagnostic in exc.diagnostics:
