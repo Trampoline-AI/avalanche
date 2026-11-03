@@ -180,12 +180,12 @@ dependency order. Only terminal-node receipts are fetched and exposed through
 ### Native agent-step evaluations
 
 Evaluation observation is separate from the execution-service lifecycle and its
-commit receipts. In operator-managed Local and Ray execution, the first successful
-agent invocation to return in each step submits its actual call arguments, validated
+commit receipts. In operator-managed Local and Ray execution, each agent step's one
+agent call, when it succeeds, submits its actual call arguments, validated
 outputs, and full trace for background evaluation. The step's own return value
 remains separate. Evidence is snapshotted before the result returns to the step body, so later mutations cannot change the observed execution.
-Later agent calls do not replace or resubmit it; step postprocessing failure does
-not cancel an already-submitted evaluation.
+A step may call its agent only once, so there is at most one evaluation per step
+execution; step postprocessing failure does not cancel an already-submitted evaluation.
 
 Selectors, Jev calls, and composites run independently of workflow scheduling.
 Their pending/results/errors neither gate downstream work nor change workflow

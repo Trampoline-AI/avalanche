@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Agent steps: an agent step may call its agent only once per execution. A second
+  call, whether sequential, in a loop, concurrent (`asyncio.gather`) or from another
+  thread, now raises the new `ava.agent.AgentStepCallError` naming the step, before
+  any model work, and fails the step in embedded and operator runs. A failed call
+  still counts as the one call; a rerun is a new execution. A step that returns
+  without calling its agent logs a warning. Native evaluations now evaluate the
+  step's one successful call. Steps that called their agent several times must be
+  split into separate agent steps.
+
 ## 0.17.3
 
 - The Web UI's input panel has a file picker for `ava.File` and `list[ava.File]`

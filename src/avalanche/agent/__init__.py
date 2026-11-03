@@ -27,6 +27,7 @@ if TYPE_CHECKING:
     from .steps import (
         Agent,
         AgentOutputError,
+        AgentStepCallError,
         AgentStepError,
         AgentStepExecutionError,
         agent_step,
@@ -41,6 +42,7 @@ _EXPORTS = {
     "AgentOutputError": ".steps",
     "AgentResult": ".contract",
     "AgentTrace": ".trace",
+    "AgentStepCallError": ".steps",
     "AgentStepError": ".steps",
     "AgentStepExecutionError": ".steps",
     "agent_step": ".steps",
@@ -70,6 +72,7 @@ __all__ = [
     "AgentInvocationId",
     "AgentOutputError",
     "AgentResult",
+    "AgentStepCallError",
     "AgentStepError",
     "AgentStepExecutionError",
     "AgentTrace",

@@ -1,4 +1,4 @@
-"""Evaluation capture owns the first successful agent return, not the step result."""
+"""Evaluation capture owns the step's single successful agent return, not the step result."""
 
 from __future__ import annotations
 
@@ -15,9 +15,8 @@ from pydantic import BaseModel
 from ray import cloudpickle
 
 import avalanche as ava
-from avalanche._agent_evidence import capture_agent_evidence, emit_agent_evidence
+from avalanche._agent_evidence import capture_agent_evidence
 from avalanche.agent import AgentStepExecutionError
-from avalanche.agent.live import AgentTraceUnavailable
 from avalanche.agent.trace import Turn
 from avalanche.evaluation_capture import capture_evaluations
 
@@ -310,63 +309,8 @@ def test_inline_agent_rejects_non_evaluations_declaration():
 
 
 @pytest.mark.asyncio
-async def test_first_successful_completion_wins_without_gating_later_calls(
-    evaluations,
-    monkeypatch,
-):
-    slow_started = asyncio.Event()
-    release_slow = asyncio.Event()
-    finished = []
-
-    class Predictor:
-        async def acall(self, *, text):
-            if text == "slow":
-                slow_started.set()
-                await release_slow.wait()
-            else:
-                await slow_started.wait()
-            finished.append(text)
-            return Prediction(
-                answer=text.upper(),
-                handoff=Report(summary=text),
-                trace=_trace(text),
-                evidence=RunEvidence(run_id=text, complete=True, terminal_outcome="completed"),
-            )
-
-    monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", lambda *a, **kw: Predictor())
-    submissions = []
-
-    @ava.agent_step(EchoSignature, evaluations=evaluations)
-    async def echo(*, agent: ava.Agent) -> list[str]:
-        slow = asyncio.create_task(agent(text="slow"))
-        fast = await agent(text="fast")
-        assert len(submissions) == 1
-        assert submissions[0].context.output.answer == "FAST"
-        release_slow.set()
-        later = await slow
-        return [later.outputs.answer, fast.outputs.answer]
-
-    observed = []
-    with capture_agent_evidence(observed.append, errors="raise"):
-        with capture_evaluations(submissions.append) as errors:
-            result = await echo.fn()
-
-    assert result == ["SLOW", "FAST"]
-    assert finished == ["fast", "slow"]
-    assert errors == []
-    assert len(submissions) == 1
-    context = submissions[0].context
-    assert context.inputs.text == "fast"
-    assert context.output.handoff.summary == "fast"
-    terminals = [event for event in observed if event.kind != "event"]
-    assert len(terminals) == 2
-    assert context.trace.header.external_run_id == terminals[0].header.external_run_id
-    assert context.trace.turns == (_turn("fast"),)
-
-
-@pytest.mark.asyncio
 @pytest.mark.parametrize("exportable_failure_trace", [False, True])
-async def test_failed_earlier_call_does_not_claim_capture_and_observers_keep_all_calls(
+async def test_failed_call_submits_no_evaluation_and_observers_keep_its_trace(
     evaluations,
     monkeypatch,
     exportable_failure_trace,
@@ -377,62 +321,34 @@ async def test_failed_earlier_call_does_not_claim_capture_and_observers_keep_all
             await sink.emit(
                 RunEvent(text, 1, RunEventKind.RUN_STARTED, 1, {"inputs": {"text": text}})
             )
-            if text == "failed":
-                failure = ValueError("provider failed")
-                failure.evidence = RunEvidence(
-                    run_id=text, complete=True, terminal_outcome="error"
-                )
-                if exportable_failure_trace:
-                    failure.trace = _trace(text, status="error")
-                raise failure
-            return Prediction(
-                answer=text,
-                handoff=Report(summary=text),
-                trace=_trace(text),
-                evidence=RunEvidence(run_id=text, complete=True, terminal_outcome="completed"),
-            )
+            failure = ValueError("provider failed")
+            failure.evidence = RunEvidence(run_id=text, complete=True, terminal_outcome="error")
+            if exportable_failure_trace:
+                failure.trace = _trace(text, status="error")
+            raise failure
 
     monkeypatch.setattr(predict_rlm_runtime, "_build_predictor", lambda *a, **kw: Predictor())
 
     @ava.agent_step(EchoSignature, evaluations=evaluations)
-    async def echo(*, agent: ava.Agent) -> list[str]:
-        with pytest.raises(AgentStepExecutionError):
-            await agent(text="failed")
-        first = await agent(text="first")
-        later = await agent(text="later")
-        return [first.outputs.answer, later.outputs.answer]
+    async def echo(*, agent: ava.Agent) -> str:
+        return (await agent(text="failed")).outputs.answer
 
     observed = []
     submissions = []
     with capture_agent_evidence(observed.append, errors="raise"):
         with capture_evaluations(submissions.append):
-            assert await echo.fn() == ["first", "later"]
-        emit_agent_evidence(
-            AgentTraceUnavailable(
-                invocation_id="outside",
-                runtime_kind="predict_rlm",
-                status="failed",
-                error="outside",
-                external_run_id="outside",
-                complete=True,
-            )
-        )
+            with pytest.raises(AgentStepExecutionError):
+                await echo.fn()
 
-    assert observed[-1].invocation_id == "outside"
-    terminal = [event for event in observed[:-1] if event.kind != "event"]
-    assert len(terminal) == 3
+    terminal = [event for event in observed if event.kind != "event"]
+    assert len(terminal) == 1
     assert terminal[0].complete is True
     if exportable_failure_trace:
         assert terminal[0].header.status == "failed"
     else:
         assert terminal[0].kind == "trace_unavailable"
-    assert len([event for event in observed if event.kind == "event"]) == 3
-    assert len(submissions) == 1
-    context = submissions[0].context
-    assert context.inputs.text == "first"
-    assert context.output.answer == "first"
-    assert context.trace.header.external_run_id == terminal[1].header.external_run_id
-    assert context.trace.turns == (_turn("first"),)
+    assert len([event for event in observed if event.kind == "event"]) == 1
+    assert submissions == []
 
 
 @pytest.mark.asyncio
@@ -535,10 +451,8 @@ async def test_submission_failure_is_reported_without_changing_agent_or_step_ret
     failure_type,
 ):
     @ava.agent_step(EchoSignature, evaluations=evaluations)
-    async def echo(*, agent: ava.Agent) -> list[str]:
-        first = await agent(text="first")
-        later = await agent(text="later")
-        return [first.outputs.answer, later.outputs.answer]
+    async def echo(*, agent: ava.Agent) -> str:
+        return (await agent(text="first")).outputs.answer
 
     attempts = []
 
@@ -547,7 +461,7 @@ async def test_submission_failure_is_reported_without_changing_agent_or_step_ret
         raise failure_type("handoff failed")
 
     with capture_evaluations(reject) as errors:
-        assert await echo.fn() == ["FIRST", "LATER"]
+        assert await echo.fn() == "FIRST"
     assert len(attempts) == 1
     assert len(errors) == 1
     assert "handoff failed" in errors[0].error
@@ -603,12 +517,12 @@ async def test_warning_and_diagnostic_failures_are_isolated(
 
 
 @pytest.mark.asyncio
-async def test_context_capture_failure_is_reported_once_without_retry(
+async def test_context_capture_failure_is_reported_in_the_submission(
     evaluations, predictor, monkeypatch
 ):
     @ava.agent_step(EchoSignature, evaluations=evaluations)
-    async def echo(*, agent: ava.Agent) -> list[str]:
-        return [(await agent(text=text)).outputs.answer for text in ("first", "later")]
+    async def echo(*, agent: ava.Agent) -> str:
+        return (await agent(text="first")).outputs.answer
 
     def fail_context(**kwargs):
         raise ValueError("context unavailable")
@@ -616,7 +530,7 @@ async def test_context_capture_failure_is_reported_once_without_retry(
     monkeypatch.setattr(capture_module, "EvalContext", fail_context)
     submissions = []
     with capture_evaluations(submissions.append):
-        assert await echo.fn() == ["FIRST", "LATER"]
+        assert await echo.fn() == "FIRST"
 
     assert len(submissions) == 1
     assert submissions[0].context is None
