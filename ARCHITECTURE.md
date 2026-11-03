@@ -384,8 +384,9 @@ live in a private folder the operator creates for itself; each run gets an
 schedule used expire after 24 hours, and the folder is removed when the operator
 stops. Files a schedule input uses are copied into `schedule-inputs/<token>/<name>`
 next to the state database, each with its own host-local workspace reference that
-the operator registers again at startup, and removed once a new schedule input no
-longer refers to them.
+the operator registers again at startup. Once a new schedule input no longer refers
+to a copy, it is removed when the operator closes, after its runs have stopped.
+Schedule input that refers to any other `ava.File` is refused.
 
 The default ports are:
 

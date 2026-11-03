@@ -16,9 +16,11 @@
   crash) and fires without anyone turning it back on; one that was off stays off.
   The state also survives a changed cron expression, and a workflow that disappears
   from discovery gets its schedule state back when it returns. Files a schedule's
-  input uses are copied to `schedule-inputs/` next to the database and kept until
-  the schedule's input stops using them. `--schedules-enabled` still turns every
-  schedule on, for that start only.
+  input uses are copied to `schedule-inputs/` next to the database; once a new
+  input no longer uses one, it is removed when the operator stops. Schedule input
+  can refer only to files attached for the schedule (or kept from its previous
+  input); other `ava.File` references are refused. `--schedules-enabled` still
+  turns every schedule on, for that start only.
 
 ## 0.17.3
 

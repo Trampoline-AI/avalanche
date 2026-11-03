@@ -13,7 +13,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
-from avalanche.file import WorkspaceFileRef
+from avalanche.file import File
 
 from ..models import ScheduleInputAdapter
 from .errors import StateRowError
@@ -204,16 +204,25 @@ class ScheduleState:
         run_input: dict[str, JsonValue],
         input_files: tuple[ScheduleInputFile, ...],
     ) -> None:
-        """Replace the schedule's input; files the new input no longer uses are removed.
+        """Replace the schedule's input; files the new input no longer uses are retired.
 
         ``input_files`` are the files just copied for this input. Files the previous
         input owned stay when the new input still refers to them, as when a client
-        sends the stored input back with one field changed.
+        sends the stored input back with one field changed. Any other file the input
+        refers to would not outlive its owner, so it is refused with
+        :class:`ScheduleInputFileError`.
         """
         referenced = _file_workspaces(run_input)
         with self._store.transaction() as connection:
             previous = SchedulesTable.read(connection, workflow_id)
             previous_files = () if previous is None else previous.input_files
+            owned = {item.workspace_reference for item in (*previous_files, *input_files)}
+            foreign = referenced - owned
+            if foreign:
+                raise ScheduleInputFileError(
+                    "Schedule input refers to files this schedule does not keep: "
+                    f"{', '.join(sorted(foreign))}. Attach them as input_files instead."
+                )
             kept = tuple(
                 item for item in previous_files if item.workspace_reference in referenced
             )
@@ -225,8 +234,9 @@ class ScheduleState:
                 run_input=run_input,
                 input_files=(*kept, *input_files),
             )
-        # The new input is committed; files only the old input used are garbage now.
-        self._files.remove(item for item in previous_files if item not in kept)
+        # A run started with the old input may still read these files, so they are
+        # removed only once the operator has stopped its runs.
+        self._files.retire(item for item in previous_files if item not in kept)
 
     def save_last_triggered(self, workflow_id: str, last_triggered: float) -> None:
         """Store the minute a schedule last started a run."""
@@ -234,25 +244,25 @@ class ScheduleState:
             SchedulesTable.write_last_triggered(connection, workflow_id, last_triggered)
 
 
-class _FileReference(BaseModel):
-    """The part of an ``ava.File`` wire value that names its workspace."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    kind: Literal["file"]
-    ref: WorkspaceFileRef
+class ScheduleInputFileError(ValueError):
+    """Schedule input refers to a file the schedule cannot keep."""
 
 
 def _file_workspaces(value: JsonValue) -> set[str]:
-    """Workspace references of every ``ava.File`` wire value inside schedule input."""
+    """Workspace references of every ``ava.File`` wire value inside schedule input.
+
+    ``kind: "file"`` is the ``ava.File`` wire tag, so an object carrying it must be a
+    valid file reference.
+    """
     if isinstance(value, list):
         return {reference for item in value for reference in _file_workspaces(item)}
     if not isinstance(value, dict):
         return set()
     if value.get("kind") == "file":
         try:
-            return {_FileReference.model_validate(value).ref.workspace}
-        except ValidationError:
-            # Input data that merely has a "kind" key, not a file reference.
-            pass
+            return {File.model_validate(value).ref.workspace}
+        except ValidationError as exc:
+            raise ScheduleInputFileError(
+                f"Schedule input holds an invalid ava.File value: {exc}"
+            ) from exc
     return {reference for item in value.values() for reference in _file_workspaces(item)}
