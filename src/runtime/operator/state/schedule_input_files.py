@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
+import threading
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -69,6 +70,9 @@ class ScheduleInputFileFolder:
     def __init__(self, root: Path, *, temporary: bool) -> None:
         self._root = root.resolve(strict=True)
         self._temporary = temporary
+        self._lock = threading.Lock()
+        # Files a replaced schedule input used, removed once runs have stopped.
+        self._retired: list[ScheduleInputFile] = []
 
     @classmethod
     def for_store(cls, store: OperatorStateStore) -> ScheduleInputFileFolder:
@@ -114,11 +118,16 @@ class ScheduleInputFileFolder:
                 f"workflow {workflow_id}: {exc}"
             ) from exc
 
-    def remove(self, input_files: Iterable[ScheduleInputFile]) -> None:
-        """Remove files no stored schedule input uses any more.
+    def retire(self, input_files: Iterable[ScheduleInputFile]) -> None:
+        """Remove files of a replaced input at ``close``, once no run can still read them."""
+        with self._lock:
+            self._retired.extend(input_files)
 
-        Their input is already replaced, so this is housekeeping: a folder that
-        cannot be removed is logged and left behind rather than failing the change.
+    def remove(self, input_files: Iterable[ScheduleInputFile]) -> None:
+        """Remove files no stored schedule input and no run uses.
+
+        Their input is already replaced or refused, so this is housekeeping: a folder
+        that cannot be removed is logged and left behind rather than failing.
         """
         for input_file in input_files:
             folder = self._root / input_file.folder
@@ -132,9 +141,16 @@ class ScheduleInputFileFolder:
                 )
 
     def close(self) -> None:
-        """Remove a throwaway folder; a folder next to a database file stays."""
+        """Remove retired files, and a throwaway folder; a folder next to a database stays.
+
+        Call it only after the operator stopped its runs.
+        """
+        with self._lock:
+            retired, self._retired = self._retired, []
         if self._temporary:
             shutil.rmtree(self._root)
+        else:
+            self.remove(retired)
 
     def new_folder(self) -> tuple[str, Path]:
         """Create an empty ``<token>`` folder for one file and return both."""

@@ -153,12 +153,13 @@ def test_enabling_every_schedule_for_one_start_keeps_the_stored_choices(flows, s
 
 def test_a_schedule_whose_cron_changes_keeps_its_state(flows, state_db):
     _enable_with_input(flows, state_db, "Ada")
-    _write(flows, cron="0 0 1 1 *")
+    # A different length, so the rewritten file never looks unchanged to discovery.
+    _write(flows, cron="0 0 1 1 */2")
 
     operator = _open(flows, state_db)
     try:
         flow = _greeting(operator)
-        assert flow.cron == "0 0 1 1 *"
+        assert flow.cron == "0 0 1 1 */2"
         assert (flow.schedule_enabled, flow.schedule_input) == (True, {"name": "Ada"})
     finally:
         operator.close()
