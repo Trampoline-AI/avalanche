@@ -724,7 +724,7 @@ def test_schedule_files_survive_a_restart_and_a_cleared_reference_registry(tmp_p
         operator.close()
 
 
-def test_new_schedule_input_removes_only_the_files_it_no_longer_uses(tmp_path):
+def test_files_a_new_schedule_input_no_longer_uses_are_removed_when_runs_stop(tmp_path):
     flows = tmp_path / "flows.py"
     flows.write_text(_FLOWS)
     state_db = tmp_path / "state" / "state.db"
@@ -762,7 +762,8 @@ def test_new_schedule_input_removes_only_the_files_it_no_longer_uses(tmp_path):
             )
             files = _schedule_files(state_db)
             assert kept <= files
-            assert {name.split("/")[1] for name in files} == {"main.txt", "new.txt"}
+            # A run started with the old input may still read old.txt.
+            assert {name.split("/")[1] for name in files} == {"main.txt", "old.txt", "new.txt"}
 
             # Disabling keeps the input, and with it the files.
             stub.SetScheduleEnabled(
@@ -779,9 +780,36 @@ def test_new_schedule_input_removes_only_the_files_it_no_longer_uses(tmp_path):
                     input_files=[other],
                 )
             )
-            assert {name.split("/")[1] for name in _schedule_files(state_db)} == {"other.txt"}
     finally:
         operator.close()
+
+    assert {name.split("/")[1] for name in _schedule_files(state_db)} == {"other.txt"}
+
+
+@pytest.mark.parametrize("kind", ["foreign", "invalid"])
+def test_schedule_input_refers_only_to_files_the_schedule_keeps(operator, stub, tmp_path, kind):
+    selector = _flow(operator).selector
+    if kind == "foreign":
+        # A file the schedule did not copy would not outlive the folder it lives in.
+        (tmp_path / "elsewhere").mkdir()
+        (tmp_path / "elsewhere" / "main.txt").write_bytes(b"main")
+        document = json.loads(
+            ava.File.from_path(tmp_path / "elsewhere" / "main.txt").model_dump_json()
+        )
+    else:
+        document = {"kind": "file", "version": 1}
+
+    with pytest.raises(grpc.RpcError) as error:
+        stub.SetScheduleEnabled(
+            pb.SetScheduleEnabledRequestV2(
+                workflow_selector=selector,
+                enabled=True,
+                input_json=json.dumps({"document": document}),
+            )
+        )
+
+    assert error.value.code() is grpc.StatusCode.INVALID_ARGUMENT
+    assert _flow(operator).schedule_enabled is False
 
 
 def test_a_refused_schedule_request_keeps_no_schedule_files(tmp_path):

@@ -12,7 +12,7 @@ from runtime.operator.models import (
 )
 from runtime.operator.operator import Operator
 from runtime.operator.scheduler import Scheduler
-from runtime.operator.state import OperatorStateStore
+from runtime.operator.state import OperatorStateStore, StateStoreError
 from runtime.operator.state.schedule_input_files import ScheduleInputFileFolder
 from runtime.operator.state.schedules import ScheduleState
 
@@ -318,3 +318,44 @@ def test_next_run_time_is_none_for_a_cron_that_never_occurs(schedule_state):
 
     assert scheduler.next_run_time("0 0 31 2 *") is None
     assert scheduler.next_run_time("0 9 * * *") == datetime(2026, 10, 30, 9, 0)
+
+
+def test_a_failed_state_write_leaves_the_schedule_unchanged(schedule_state, monkeypatch):
+    operator = _Operator()
+    clock = _Clock()
+    scheduler = Scheduler(operator, state=schedule_state, clock=clock)
+    scheduler.reconcile([_descriptor("root/a.py::shared")])
+    scheduler.set_enabled("root/a.py::shared", True, {"name": "first"})
+
+    def fail(*args, **kwargs):
+        raise StateStoreError("disk full")
+
+    monkeypatch.setattr(schedule_state, "save_input", fail)
+    monkeypatch.setattr(schedule_state, "save_enabled", fail)
+    with pytest.raises(StateStoreError):
+        scheduler.set_enabled("root/a.py::shared", True, {"name": "second"})
+    with pytest.raises(StateStoreError):
+        scheduler.set_enabled("root/a.py::shared", False)
+
+    assert scheduler.is_enabled("root/a.py::shared") is True
+    assert scheduler.input_for("root/a.py::shared") == {"name": "first"}
+
+
+def test_a_due_run_whose_last_start_cannot_be_stored_does_not_start(
+    schedule_state, monkeypatch
+):
+    operator = _Operator()
+    clock = _Clock()
+    scheduler = Scheduler(operator, state=schedule_state, clock=clock)
+    scheduler.reconcile([_descriptor("root/a.py::shared")])
+    scheduler.set_enabled("root/a.py::shared", True)
+    clock.next_minute()
+
+    def fail(*args, **kwargs):
+        raise StateStoreError("disk full")
+
+    monkeypatch.setattr(schedule_state, "save_last_triggered", fail)
+    scheduler._check_schedules()
+
+    assert operator.started == []
+    assert scheduler.last_triggered("root/a.py::shared") is None
