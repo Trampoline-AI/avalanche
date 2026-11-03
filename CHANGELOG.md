@@ -79,6 +79,9 @@
   files now live in `.avalanche/operator/input-files/` next to the database; files
   a run used are kept when the operator stops, unused uploads are removed. Logs,
   agent events, traces and evaluations are not stored yet.
+- Web UI: after the operator restarts, an open browser tab reconnects and shows the
+  stored runs. It used to keep retrying with "Response does not belong to the
+  connected operator scope" until the page was reloaded.
 
 ## 0.17.3
 
