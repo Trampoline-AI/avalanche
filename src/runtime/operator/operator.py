@@ -519,6 +519,9 @@ class Operator:
             self._notification_queue: queue.Queue[_RunNotifications | None] = queue.Queue()
             self._notification_thread: threading.Thread | None = None
             interrupted_runs = self._load_runs()
+            # Before webhooks, the watcher or the scheduler can start a run whose
+            # own evaluations would otherwise look like leftovers.
+            self._fail_pending_evaluations()
 
             from .scheduler import Scheduler
 
@@ -551,7 +554,6 @@ class Operator:
                 self._start_watcher()
             self._start_notification_dispatcher()
             self._fail_interrupted_runs(interrupted_runs)
-            self._fail_pending_evaluations()
             if schedule and self._workflow_paths:
                 self._scheduler.start()
         except BaseException as failure:
@@ -627,6 +629,7 @@ class Operator:
                 now = time.monotonic()
                 run.ended_at = now if run.started_at is None else max(now, run.started_at)
                 changed_node_ids = []
+                trace_node_ids = []
                 for node in run.nodes.values():
                     if node.status in (NodeStatus.PENDING, NodeStatus.RUNNING):
                         node.status = NodeStatus.FAILED
@@ -635,9 +638,17 @@ class Operator:
                         )
                         node.error = OPERATOR_RESTARTED_REASON
                         changed_node_ids.append(node.node_id)
+                        # An agent trace that was still being recorded ends with the run.
+                        key = (run_id, node.node_id)
+                        descriptor = self._trace_descriptors.get(key)
+                        if descriptor is not None and descriptor.status == "in_progress":
+                            self._trace_descriptors[key] = replace(descriptor, status="error")
+                            self._trace_errors[key] = OPERATOR_RESTARTED_REASON
+                            trace_node_ids.append(node.node_id)
                 notifications = self._publish_run_locked(
                     run,
                     changed_node_ids=tuple(changed_node_ids),
+                    trace_node_ids=tuple(trace_node_ids),
                     terminal_reason=OPERATOR_RESTARTED_REASON,
                 )
             self._wait_for_notifications(notifications)
