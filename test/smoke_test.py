@@ -239,10 +239,15 @@ def _start_operator(flow: Path, state_db: Path, port: int) -> subprocess.Popen[s
     )
     deadline = time.monotonic() + 120
     connect = ("--connect", f"localhost:{port}")
-    while _ava("schedule", "list", *connect, cwd=flow.parent).returncode:
-        assert operator.poll() is None, "operator exited during startup"
-        assert time.monotonic() < deadline, "operator did not start"
-        time.sleep(0.5)
+    try:
+        while _ava("schedule", "list", *connect, cwd=flow.parent).returncode:
+            assert operator.poll() is None, "operator exited during startup"
+            assert time.monotonic() < deadline, "operator did not start"
+            time.sleep(0.5)
+    except BaseException:
+        operator.kill()
+        operator.wait(timeout=10)
+        raise
     return operator
 
 
@@ -262,11 +267,14 @@ def _wait_for_run(port: int, run_id: str, done: Callable[[RunState], bool]) -> R
 
 
 def _process_group_alive(group: int) -> bool:
-    try:
-        os.killpg(group, 0)
-    except ProcessLookupError:
-        return False
-    return True
+    """Whether the group has a member that is not a zombie waiting to be reaped."""
+    listed = subprocess.run(
+        ["ps", "-e", "-o", "pgid=,stat="], capture_output=True, text=True, check=True
+    )
+    return any(
+        int(member_group) == group and not state.startswith("Z")
+        for member_group, state in (line.split() for line in listed.stdout.splitlines())
+    )
 
 
 def _only_run_process_group(operator_pid: int) -> int:
