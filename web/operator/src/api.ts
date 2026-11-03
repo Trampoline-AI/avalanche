@@ -315,6 +315,10 @@ export class GrpcWebOperatorApi implements OperatorApi {
 
   async loadBaseline(signal?: AbortSignal): Promise<StructuralBaseline> {
     const options = signal ? { abort: signal } : undefined;
+    // A new baseline is how the browser follows a restarted operator, which
+    // serves the same stored runs under a new scope. Every page of this
+    // baseline must still share one scope, and other calls stay pinned to it.
+    this.scopeReference = "";
     const catalog = await this.getCatalog(signal);
     const runs: RunSummaryMsg[] = [];
     const seenContinuations = new Set<string>();
