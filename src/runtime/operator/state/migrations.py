@@ -83,6 +83,75 @@ MIGRATIONS: tuple[Migration, ...] = (
             """,
         ),
     ),
+    Migration(
+        version=4,
+        name="runs",
+        statements=(
+            # Structural run state; logs, events, traces and results live elsewhere.
+            # process_group/process_started identify the run's coordinator process
+            # group, so a restarted operator can stop it without hitting a reused id.
+            """
+            CREATE TABLE runs (
+                run_id TEXT PRIMARY KEY,
+                flow_name TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN ('requesting', 'pending', 'running', 'success', 'failed',
+                               'cancelled')
+                ),
+                triggered_at REAL,
+                started_at REAL,
+                ended_at REAL,
+                triggered_by TEXT NOT NULL,
+                workflow_id TEXT NOT NULL,
+                workflow_display_name TEXT NOT NULL,
+                topology_json TEXT NOT NULL,
+                input_json TEXT,
+                terminal_seal_json TEXT,
+                created_sequence INTEGER NOT NULL CHECK (created_sequence > 0),
+                revision INTEGER NOT NULL CHECK (revision > 0),
+                activity_sequence INTEGER NOT NULL CHECK (activity_sequence >= 0),
+                request_json TEXT NOT NULL,
+                process_group INTEGER,
+                process_started TEXT,
+                CHECK ((process_group IS NULL) = (process_started IS NULL))
+            ) STRICT
+            """,
+            "CREATE INDEX runs_by_created_sequence ON runs (created_sequence)",
+            """
+            CREATE TABLE run_nodes (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                node_id TEXT NOT NULL,
+                position INTEGER NOT NULL CHECK (position >= 0),
+                name TEXT NOT NULL,
+                node_type TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (
+                    status IN ('pending', 'running', 'success', 'failed', 'skipped')
+                ),
+                started_at REAL,
+                ended_at REAL,
+                error TEXT,
+                step_io_json TEXT,
+                revision INTEGER NOT NULL CHECK (revision > 0),
+                PRIMARY KEY (run_id, node_id),
+                UNIQUE (run_id, position)
+            ) STRICT
+            """,
+            # The staged files a run's input used, in attachment order.
+            """
+            CREATE TABLE run_input_files (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                position INTEGER NOT NULL CHECK (position >= 0),
+                object_key TEXT NOT NULL,
+                name TEXT NOT NULL,
+                media_type TEXT NOT NULL,
+                sha256 TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+                PRIMARY KEY (run_id, position)
+            ) STRICT
+            """,
+            "CREATE INDEX run_input_files_by_object_key ON run_input_files (object_key)",
+        ),
+    ),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version

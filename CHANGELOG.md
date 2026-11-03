@@ -44,8 +44,7 @@
   by default. Pass `--state-db PATH` to choose another file, or `--state-db :memory:`
   for a throwaway one. Only one operator can use a file at a time: a second one
   fails at startup with an error naming the file. A file written by a newer
-  Avalanche version is refused rather than guessed at. Nothing is stored in it yet;
-  run history still lives in memory and is lost on restart. `Operator(...)` now
+  Avalanche version is refused rather than guessed at. `Operator(...)` now
   requires a keyword-only `state_db` argument (a path or `":memory:"`).
 - Operator: schedules survive restarts. Whether each cron schedule is on, the input
   its runs start with, and the minute it last started a run are kept in the state
@@ -68,6 +67,18 @@
   with a clear error) and for a bundle no result refers to (never served). The
   `Operator(result_storage_directory=..., result_retention_seconds=...)` arguments
   are removed.
+- Operator: runs now survive an operator restart. Each run, its steps, their
+  statuses and revisions, and what it was started with (input, context and the
+  uploaded input files it used) are stored in the state database, so the run list
+  and run snapshots in the Web UI, TUI and API show earlier runs after a restart
+  or crash. Update sequence numbers keep increasing across restarts, and each start
+  still gets a new operator instance ID, so connected clients reload cleanly.
+  Runs that were unfinished when the operator stopped are not resumed: on startup
+  the operator stops their leftover run processes, then marks the run and its
+  unfinished steps failed with an "operator restarted" reason. Uploaded input
+  files now live in `.avalanche/operator/input-files/` next to the database; files
+  a run used are kept when the operator stops, unused uploads are removed. Logs,
+  agent events, traces and evaluations are not stored yet.
 
 ## 0.17.3
 
