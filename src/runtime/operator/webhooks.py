@@ -7,6 +7,7 @@ import threading
 from dataclasses import dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlsplit
 
@@ -57,6 +58,8 @@ class WebhookServer:
         self._routes: dict[str, WebhookRoute] = {}
         self._server: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
+        self._deliveries: dict[str, int] = {}
+        self._recent: list[str] = []
 
     @property
     def active(self) -> bool:
@@ -67,6 +70,21 @@ class WebhookServer:
     def port(self) -> int | None:
         with self._lock:
             return self._server.server_address[1] if self._server is not None else None
+
+    def delivery_counts(self) -> dict[str, int]:
+        """Accepted webhook deliveries per workflow since the server started."""
+        with self._lock:
+            return dict(self._deliveries)
+
+    def _record_delivery(self, route: WebhookRoute, recent: list[str] = []) -> None:
+        """Count an accepted delivery and append it to the local delivery log."""
+        self._deliveries[route.workflow_id] = self._deliveries.get(route.workflow_id, 0) + 1
+        recent.append(route.workflow_id)
+        self._recent = recent[-20:]
+        log_path = Path.cwd() / ".avalanche" / "webhooks.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log = open(log_path, "a")
+        log.write(json.dumps({"workflow_id": route.workflow_id, "path": route.path}) + "\n")
 
     def url_for(self, path: str) -> str | None:
         port = self.port
@@ -174,6 +192,7 @@ class WebhookServer:
                 {"error": "workflow could not be started"},
             )
             return
+        self._record_delivery(route)
         self._reply(handler, HTTPStatus.ACCEPTED, {"run_id": run_id})
 
     def _method_not_allowed(self, handler: BaseHTTPRequestHandler) -> None:
