@@ -155,13 +155,22 @@ class ProgressStore:
         value = self.table.properties.get(key)
         if not value:
             return None
-        return SnapshotMetadata.from_dict(json.loads(value))
+        try:
+            return SnapshotMetadata.from_dict(json.loads(value))
+        except Exception:
+            # A corrupt entry should not block the rest of the stream.
+            pass
+        return None
 
     def _is_claimable(self, meta: SnapshotMetadata, now: int) -> bool:
         """Check if a snapshot with given metadata is claimable."""
         return meta.state in (SnapshotState.PENDING, SnapshotState.FAILED) or (
             meta.state == SnapshotState.STARTED and (meta.lease_expires_at or 0) <= now
         )
+
+    def _can_retry(self, meta: SnapshotMetadata) -> bool:
+        """Whether a failed snapshot still has retry attempts left."""
+        return meta.attempt <= self.max_attempts
 
     def _prune_history(self, cursor_idx: int, snapshots: list[int]) -> list[str]:
         """
@@ -249,7 +258,7 @@ class ProgressStore:
                     pending_snapshots.append(snapshot_id)
             elif metadata.state == SnapshotState.FAILED:
                 # Retry if not exceeded max attempts
-                if metadata.attempt < self.max_attempts:
+                if self._can_retry(metadata):
                     pending_snapshots.append(snapshot_id)
             # Skip DONE and QUARANTINED
 
