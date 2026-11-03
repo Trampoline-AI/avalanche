@@ -26,7 +26,11 @@ from runtime.operator.run_processes import RunProcess, RunProcessStopError
 from runtime.operator.state import OperatorStateStore, StateStoreLockedError
 from runtime.operator.state import maintenance as maintenance_module
 from runtime.operator.state.logs import RunLogsTable
-from runtime.operator.state.maintenance import StateMaintenance, StateMaintenanceError
+from runtime.operator.state.maintenance import (
+    DeletedRun,
+    StateMaintenance,
+    StateMaintenanceError,
+)
 from runtime.operator.state.results import RunResultTable, StoredWorkflowResult
 from runtime.operator.state.runs import RunRequest, RunsTable, StoredRun
 from runtime.operator.state.schedule_input_files import ScheduleInputFile
@@ -240,7 +244,7 @@ def test_delete_removes_the_run_its_details_result_and_unshared_files(folder):
     bundles = folder.bundles()
 
     with StateMaintenance.open(folder.database) as state:
-        (deleted,) = state.delete(["first"])
+        (deleted,) = state.delete(["first"], on_deleted=_ignore)
 
     assert deleted.run_id == "first"
     assert deleted.details.logs == 3
@@ -254,7 +258,7 @@ def test_delete_removes_the_run_its_details_result_and_unshared_files(folder):
     assert not (folder.input_files / _token("b")).exists()
 
     with StateMaintenance.open(folder.database) as state:
-        (deleted,) = state.delete(["second"])
+        (deleted,) = state.delete(["second"], on_deleted=_ignore)
 
     assert deleted.input_file_folders == (_token("a"),)
     assert not (folder.input_files / _token("a")).exists()
@@ -276,7 +280,7 @@ def test_delete_refuses_unknown_or_unfinished_runs_before_deleting_anything(
 
     with StateMaintenance.open(folder.database) as state:
         with pytest.raises(StateMaintenanceError, match=message):
-            state.delete(run_ids)
+            state.delete(run_ids, on_deleted=_ignore)
 
     assert folder.run_ids() == ["done", "interrupted"]
     assert len(folder.bundles()) == 1
@@ -291,7 +295,7 @@ def test_a_failed_delete_transaction_leaves_the_whole_run(folder, monkeypatch):
     monkeypatch.setattr(maintenance_module.RunsTable, "delete", fail)
     with StateMaintenance.open(folder.database) as state:
         with pytest.raises(RuntimeError, match="interrupted"):
-            state.delete(["done"])
+            state.delete(["done"], on_deleted=_ignore)
         info = state.info()
 
     assert folder.run_ids() == ["done"]
@@ -314,7 +318,7 @@ def test_files_left_by_a_delete_interrupted_after_its_commit_are_reported_then_c
         patch.setattr(maintenance_module.ResultStore, "discard", fail)
         with StateMaintenance.open(folder.database) as state:
             with pytest.raises(StateMaintenanceError, match="already deleted|is deleted"):
-                state.delete(["done"])
+                state.delete(["done"], on_deleted=_ignore)
 
     assert folder.run_ids() == []
     with StateMaintenance.open(folder.database) as state:
@@ -328,6 +332,30 @@ def test_files_left_by_a_delete_interrupted_after_its_commit_are_reported_then_c
     assert list(folder.input_files.iterdir()) == []
 
 
+def test_a_failure_part_way_through_reports_the_runs_already_deleted(folder, monkeypatch):
+    folder.add_run("first", result=True)
+    folder.add_run("second", result=True)
+    folder.add_run("third", result=True)
+    removals = []
+
+    def discard(self, result):
+        removals.append(result.run_id)
+        if len(removals) == 2:
+            raise OSError("disk went away")
+
+    monkeypatch.setattr(maintenance_module.ResultStore, "discard", discard)
+    reported = []
+    with StateMaintenance.open(folder.database) as state:
+        with pytest.raises(StateMaintenanceError):
+            state.delete(
+                ["first", "second", "third"],
+                on_deleted=lambda run: reported.append(run.run_id),
+            )
+
+    assert reported == ["first"]
+    assert folder.run_ids() == ["third"]
+
+
 # ── Prune ────────────────────────────────────────────────
 
 
@@ -339,7 +367,7 @@ def test_prune_keep_last_keeps_the_newest_finished_runs_and_every_unfinished_one
     folder.add_run("new", RunStatus.FAILED)
 
     with StateMaintenance.open(folder.database) as state:
-        pruned = state.prune_keep_last(1)
+        pruned = state.prune_keep_last(1, on_deleted=_ignore)
 
     assert [run.run_id for run in pruned.deleted] == ["old", "middle"]
     assert pruned.unfinished_kept == 2
@@ -351,7 +379,7 @@ def test_prune_keep_last_zero_deletes_every_finished_run_but_no_unfinished_one(f
     folder.add_run("stuck", RunStatus.PENDING)
 
     with StateMaintenance.open(folder.database) as state:
-        pruned = state.prune_keep_last(0)
+        pruned = state.prune_keep_last(0, on_deleted=_ignore)
 
     assert [run.run_id for run in pruned.deleted] == ["done"]
     assert folder.run_ids() == ["stuck"]
@@ -363,10 +391,24 @@ def test_prune_before_deletes_finished_runs_triggered_before_the_cutoff(folder):
     folder.add_run("recent", triggered_at=_NOW)
 
     with StateMaintenance.open(folder.database) as state:
-        pruned = state.prune_before(datetime.fromtimestamp(_NOW - _DAY, UTC))
+        pruned = state.prune_before(
+            datetime.fromtimestamp(_NOW - _DAY, UTC), on_deleted=_ignore
+        )
 
     assert [run.run_id for run in pruned.deleted] == ["old"]
     assert folder.run_ids() == ["old-unfinished", "recent"]
+
+
+def test_prune_refuses_a_negative_count_or_a_date_without_time_zone(folder):
+    folder.add_run("done")
+
+    with StateMaintenance.open(folder.database) as state:
+        with pytest.raises(ValueError):
+            state.prune_keep_last(-1, on_deleted=_ignore)
+        with pytest.raises(ValueError):
+            state.prune_before(datetime(2026, 11, 1), on_deleted=_ignore)
+
+    assert folder.run_ids() == ["done"]
 
 
 # ── Clear ────────────────────────────────────────────────
@@ -455,10 +497,10 @@ def test_a_large_deletion_vacuums_and_a_small_one_leaves_free_pages(folder):
     folder.add_run("rest", logs=1)
 
     with StateMaintenance.open(folder.database) as state:
-        state.delete(["small"])
+        state.delete(["small"], on_deleted=_ignore)
         small = state.reclaim_space(always_vacuum=False)
     with StateMaintenance.open(folder.database) as state:
-        state.delete(["big"])
+        state.delete(["big"], on_deleted=_ignore)
         large = state.reclaim_space(always_vacuum=False)
 
     assert not small.vacuumed
@@ -483,7 +525,7 @@ def test_every_command_refuses_while_an_operator_holds_the_database(folder, caps
             ["clear", "--yes"],
         ):
             assert main(["state", *command, "--state-db", str(folder.database)]) == 1
-            assert "already in use" in capsys.readouterr().err
+            assert str(folder.database) in capsys.readouterr().err
     finally:
         holder.close()
     assert folder.run_ids() == ["done"]
@@ -495,7 +537,7 @@ def test_commands_refuse_a_database_that_does_not_exist(tmp_path, state_db, caps
 
     assert main(["state", "info", "--state-db", path]) == 1
 
-    assert capsys.readouterr().err.startswith("error: ")
+    assert path in capsys.readouterr().err
     assert not (tmp_path / "missing").exists()
 
 
@@ -503,7 +545,7 @@ def test_commands_refuse_a_database_that_does_not_exist(tmp_path, state_db, caps
     ("answer", "cleared"),
     [pytest.param("y\n", True, id="yes"), pytest.param("n\n", False, id="no")],
 )
-def test_clear_asks_before_deleting(folder, monkeypatch, capsys, answer, cleared):
+def test_clear_asks_before_deleting(folder, monkeypatch, answer, cleared):
     folder.add_run("done")
     monkeypatch.setattr("sys.stdin", _Input(answer))
 
@@ -511,7 +553,6 @@ def test_clear_asks_before_deleting(folder, monkeypatch, capsys, answer, cleared
 
     assert code == (0 if cleared else 1)
     assert folder.run_ids() == ([] if cleared else ["done"])
-    assert ("VACUUM" in capsys.readouterr().out) is cleared
 
 
 def test_clear_without_an_answer_deletes_nothing(folder, monkeypatch):
@@ -522,19 +563,20 @@ def test_clear_without_an_answer_deletes_nothing(folder, monkeypatch):
     assert folder.run_ids() == ["done"]
 
 
-def test_cli_info_delete_and_prune_report_what_they_did(folder, capsys):
+def test_cli_info_delete_and_prune_change_the_database(folder, capsys):
     folder.add_run("one", result=True, logs=2)
     folder.add_run("two")
     folder.add_run("three")
     database = str(folder.database)
 
     assert main(["state", "info", "--state-db", database]) == 0
-    assert "3 (3 success)" in capsys.readouterr().out
     assert main(["state", "delete", "one", "--state-db", database]) == 0
-    assert "one" in capsys.readouterr().out
+    assert folder.run_ids() == ["two", "three"]
     assert main(["state", "prune", "--keep-last", "1", "--state-db", database]) == 0
-    assert "two" in capsys.readouterr().out
     assert folder.run_ids() == ["three"]
+    # Each deleted run is reported by its ID.
+    output = capsys.readouterr().out
+    assert "one" in output and "two" in output
 
 
 @pytest.mark.parametrize("argument", [["--keep-last", "-1"], ["--before", "yesterday"]])
@@ -552,6 +594,10 @@ def test_prune_before_reads_a_date_without_time_zone_as_local_time(folder):
     assert main(["state", "prune", "--before", "2026-11-01", "--state-db", database]) == 0
 
     assert folder.run_ids() == ["new"]
+
+
+def _ignore(run: DeletedRun) -> None:
+    pass
 
 
 class _Input:

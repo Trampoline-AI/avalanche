@@ -130,7 +130,12 @@ from .result_store import (
     require_worker_descriptor_transfer,
 )
 from .results import EncodedWorkflowResult, decode_workflow_result
-from .run_processes import RunProcess, identify_run_process, stop_run_process
+from .run_processes import (
+    DEFAULT_CANCEL_GRACE_SECONDS,
+    RunProcess,
+    identify_run_process,
+    stop_run_process,
+)
 from .run_worker import run_worker
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
 from .state import OperatorStateStore, StateDbPath, StateStoreError
@@ -370,7 +375,7 @@ class Operator:
         ray_init_kwargs: Mapping[str, Any] | None = None,
         prepare_timeout: float = 15.0,
         discovery_timeout: float = DEFAULT_DISCOVERY_TIMEOUT,
-        cancel_grace: float = 5.0,
+        cancel_grace: float = DEFAULT_CANCEL_GRACE_SECONDS,
         stream_history_capacity: int = STREAM_HISTORY_CAPACITY,
         webhook_port: int = DEFAULT_WEBHOOK_PORT,
         structural_baseline_capacity: int = STRUCTURAL_BASELINE_CAPACITY,
