@@ -336,11 +336,13 @@ call starts.
 | `common.kind` | OpenAI Agents SDK |
 | --- | --- |
 | `run.started` | Sent before the run starts. `model` is the `model` setting, `None` for the SDK's default; `inputs` are the step's inputs, files by reference. |
+| `prompt.sent` | Sent when the first response starts. `system` is the instructions the SDK built, its sandbox instructions included, and `messages` is the input the SDK sent, both as the SDK hands them to its `on_llm_start` hook; each attached file is named, never its contents. `tools` and `output_schema` are the tools and answer format the first response echoes, as the API received them; a tool the API defines itself, such as `apply_patch`, is shown by its settings. |
 | `tool.started` | The model asked for a tool. `turn` is the turn that asked. |
 | `tool.finished` | The tool's result went back to the model. `turn` is the turn that asked; `error` is set when the tool failed. |
 | `turn.finished` | A response and its tool calls are done: sent when the next response starts, or when the run ends. |
 
-The `Summarize` call above sends, in order: `run.started`, `agent.started`, then
+The `Summarize` call above sends, in order: `run.started`, `agent.started`,
+`prompt.sent`, then
 `tool.started`, `tool.finished` and `turn.finished` for the first turn,
 `turn.finished` for the answering turn, then the final event.
 

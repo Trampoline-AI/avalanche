@@ -6,11 +6,12 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
+from typing import get_args
 
 import pytest
 
 from runtime.operator import Operator
-from runtime.operator.models import NodeState, NodeStatus, RunState, RunStatus
+from runtime.operator.models import AgentEventKind, NodeState, NodeStatus, RunState, RunStatus
 from runtime.operator.operator import RunAlreadyExistsError
 from runtime.operator.webhooks import WebhookRoute
 
@@ -304,6 +305,34 @@ def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
         assert (started.native_event_kind, started.agent_event_kind) == ("", "run.started")
     finally:
         operator.close()
+
+
+@pytest.mark.parametrize("kind", get_args(AgentEventKind))
+def test_every_agent_event_kind_round_trips_through_protobuf(kind):
+    from runtime.operator.convert_v2 import (
+        agent_event_activity_to_v2,
+        agent_event_descriptor_from_v2,
+    )
+    from runtime.operator.models import AgentEventDescriptor
+    from runtime.operator.proto import operator_pb2 as pb
+
+    event = AgentEventDescriptor(
+        invocation_id="call",
+        event_sequence=2,
+        size_bytes=10,
+        body_token="body",
+        agent_event_kind=kind,
+    )
+    wire = agent_event_activity_to_v2(
+        event,
+        run_id="run",
+        node_id="agent",
+        detail_ref=pb.ActivityDetailRefV2(object_key="body"),
+    )
+    decoded = agent_event_descriptor_from_v2(
+        pb.RunActivityDescriptorV2.FromString(wire.SerializeToString())
+    )
+    assert decoded.agent_event_kind == kind
 
 
 @pytest.mark.parametrize(

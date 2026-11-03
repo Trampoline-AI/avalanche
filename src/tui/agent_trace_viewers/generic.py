@@ -16,6 +16,7 @@ from . import InspectionTurn, PendingStep, TraceGroup, TraceItem, TraceSection, 
 
 COMMON_LABELS = {
     "run.started": "Run started",
+    "prompt.sent": "Prompt sent",
     "turn.finished": "Turn completed",
     "tool.started": "Tool call started",
     "tool.finished": "Tool call finished",

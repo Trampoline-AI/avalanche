@@ -42,6 +42,7 @@ import { Markdown } from "./Markdown";
 import { PythonSource } from "./PythonSource";
 import { InspectorFields, InspectorResources } from "./InspectorDefinition";
 import { OpenDefinitionButton } from "./OpenDefinitionButton";
+import { InitialPromptDialog } from "./InitialPromptDialog";
 import { RetainedAgentValue } from "./RetainedAgentValue";
 import { isUnknownRecord } from "./guards";
 import { StepInterfacePanel } from "./StepInterfacePanel";
@@ -940,6 +941,19 @@ function AgentAndStepInspector({
                   onLoadTurn={hydrateTraceTurn}
                   onTurnDetailOpenChange={setTurnDetailOpen}
                   onLoadMore={loadMoreEvents}
+                  actions={
+                    runId ? (
+                      <InitialPromptDialog
+                        api={api}
+                        operatorInstanceId={operatorInstanceId}
+                        asOfEventUlid={asOfEventUlid}
+                        runId={runId}
+                        nodeId={nodeId}
+                        eventPageToken={eventPageToken}
+                        liveEvents={liveEvents}
+                      />
+                    ) : undefined
+                  }
                   onScroll={(element) => {
                     const distanceFromBottom =
                       element.scrollHeight - element.scrollTop - element.clientHeight;

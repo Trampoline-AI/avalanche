@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import itertools
+import json
 import os
 import sys
 from pathlib import Path
@@ -39,7 +40,7 @@ from avalanche.agent import (  # noqa: E402
 from avalanche.agent import trace as trace_module  # noqa: E402
 from avalanche.agent.contract import ToolSpec  # noqa: E402
 from avalanche.agent.declaration import ClaudeAgentDeclaration  # noqa: E402
-from avalanche.agent.live import RunStarted, TurnFinished  # noqa: E402
+from avalanche.agent.live import PromptSent, RunStarted, TurnFinished  # noqa: E402
 from avalanche.agent.native.claude_agent import ClaudeAgentTurn  # noqa: E402
 from avalanche.agent.trace import TokenUsage, ToolCall  # noqa: E402
 from avalanche.runtimes import ClaudeAgent  # noqa: E402
@@ -184,9 +185,16 @@ def replay(monkeypatch):
     """Replace the Claude session with a recorded stream; returns the options it saw."""
     seen: dict[str, object] = {}
 
-    def install(messages, *, error: BaseException | None = None):
+    def install(
+        messages, *, error: BaseException | None = None, transcript: Path | None = None
+    ):
         async def query(*, prompt, options):
             seen.update(prompt=prompt, options=options)
+            if transcript is not None:
+                # The CLI names its transcript to the prompt hook before the first request.
+                (matcher,) = options.hooks["UserPromptSubmit"]
+                (hook,) = matcher.hooks
+                await hook({"transcript_path": str(transcript)}, None, {"signal": None})
             for message in messages:
                 yield message
             if error is not None:
@@ -338,6 +346,286 @@ async def test_the_claude_code_preset_carries_the_step_prompt_as_its_append(repl
     assert preset.strict_mcp_config is True
     assert preset.tools == plain.tools
     assert preset.allowed_tools == plain.allowed_tools
+
+
+def _transcript(
+    path: Path,
+    *,
+    keep: int = 0,
+    blob: bool = True,
+    request: bool = True,
+    output_config: dict | None = None,
+    extra: tuple[dict, ...] = (),
+) -> Path:
+    """A Claude CLI session transcript recording its first request, as the CLI writes it."""
+    entries = [
+        {"type": "queue-operation", "operation": "enqueue"},
+        {
+            "type": "api-request-shape",
+            "shapeHash": "shape-1",
+            "shape": {
+                "system": [
+                    {"type": "text", "text": "You are Claude Code."},
+                    {"type": "text", "text": "Add the numbers.", "cache_control": {}},
+                ],
+                "tools": [
+                    {
+                        "name": "StructuredOutput",
+                        "description": "Return the answer.",
+                        "input_schema": {"type": "object"},
+                        "eager_input_streaming": True,
+                    },
+                    {"name": "web_search", "type": "web_search_20250305", "max_uses": 5},
+                ],
+            },
+        },
+        *(
+            [
+                {
+                    "type": "api-request-blob",
+                    "hash": "message-1",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "<system-reminder>env</system-reminder>",
+                            },
+                            {"type": "text", "text": "Complete the task."},
+                            {
+                                "type": "document",
+                                "title": "report.pdf",
+                                "source": {"type": "base64", "media_type": "application/pdf"},
+                            },
+                        ],
+                    },
+                }
+            ]
+            if blob
+            else []
+        ),
+        # A side request the CLI makes for itself is not the step's prompt.
+        {
+            "type": "api-request",
+            "querySource": "generate_session_title",
+            "shapeHash": "shape-1",
+            "keep": 0,
+            "tail": [],
+            "params": {"model": "claude-haiku-4-5"},
+        },
+        *(
+            [
+                {
+                    "type": "api-request",
+                    "querySource": "sdk",
+                    "shapeHash": "shape-1",
+                    "keep": keep,
+                    "tail": ["message-1"],
+                    "params": {"model": MODEL, "output_config": output_config},
+                }
+            ]
+            if request
+            else []
+        ),
+        # Later requests carry tool calls, results and thinking, which are never read.
+        {
+            "type": "api-request-blob",
+            "hash": "message-2",
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "Look it up.", "signature": "s"},
+                    {"type": "tool_use", "id": "t1", "name": "lookup", "input": {}},
+                ],
+            },
+        },
+        {
+            "type": "api-request-blob",
+            "hash": "message-3",
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "10"}],
+            },
+        },
+        *(
+            [
+                {
+                    "type": "api-request",
+                    "querySource": "sdk",
+                    "shapeHash": "shape-1",
+                    "keep": 1,
+                    "tail": ["message-2", "message-3"],
+                    "params": {"model": MODEL},
+                }
+            ]
+            if request
+            else []
+        ),
+        # Entries of other kinds are never read either.
+        {"type": "summary", "leafUuid": "u1", "summary": "a session"},
+    ]
+    entries.extend(extra)
+    path.write_text("\n".join(json.dumps(entry) for entry in entries) + "\n")
+    return path
+
+
+async def _observe(agent: ava.Agent) -> list:
+    observed = []
+    with capture_agent_evidence(observed.append, errors="raise"):
+        await agent(a=2, b=3)
+    return observed
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_event_holds_the_first_request_the_cli_recorded(replay, tmp_path):
+    replay(_success_stream(), transcript=_transcript(tmp_path / "session.jsonl"))
+    observed = await _observe(_agent())
+
+    (prompt,) = [
+        event.common
+        for event in observed
+        if event.kind == "event" and isinstance(event.common, PromptSent)
+    ]
+    assert observed[-1].kind == "trace_finished"
+    assert [block.text for block in prompt.system] == [
+        "You are Claude Code.",
+        "Add the numbers.",
+    ]
+    (message,) = prompt.messages
+    assert message.role == "user"
+    text_one, text_two, document = message.parts
+    assert [text_one.text.text, text_two.text.text] == [
+        "<system-reminder>env</system-reminder>",
+        "Complete the task.",
+    ]
+    assert (document.name, document.content_type) == ("report.pdf", "application/pdf")
+    structured, search = prompt.tools
+    assert (structured.name, structured.description.text, structured.input_schema) == (
+        "StructuredOutput",
+        "Return the answer.",
+        {"type": "object"},
+    )
+    # A server tool has no input schema; its settings stand in for it.
+    assert (search.name, search.input_schema) == (
+        "web_search",
+        {"type": "web_search_20250305", "max_uses": 5},
+    )
+    assert prompt.output_schema is None
+
+
+@pytest.mark.asyncio
+async def test_an_answer_format_the_cli_sends_apart_from_tools_is_the_output_schema(
+    replay, tmp_path
+):
+    schema = {"type": "object", "properties": {"total": {"type": "integer"}}}
+    transcript = _transcript(
+        tmp_path / "s.jsonl",
+        output_config={"format": {"type": "json_schema", "schema": schema}},
+    )
+    replay(_success_stream(), transcript=transcript)
+    observed = await _observe(_agent())
+
+    (prompt,) = [
+        event.common
+        for event in observed
+        if event.kind == "event" and isinstance(event.common, PromptSent)
+    ]
+    assert prompt.output_schema == schema
+
+
+@pytest.mark.asyncio
+async def test_a_failed_session_still_sends_the_prompt_it_recorded(replay, tmp_path):
+    replay(
+        _success_stream()[:3],
+        error=RuntimeError("connection lost"),
+        transcript=_transcript(tmp_path / "s.jsonl"),
+    )
+    observed = []
+    with (
+        capture_agent_evidence(observed.append, errors="raise"),
+        pytest.raises(AgentStepExecutionError, match="connection lost"),
+    ):
+        await _agent()(a=2, b=3)
+
+    assert any(
+        event.kind == "event" and isinstance(event.common, PromptSent) for event in observed
+    )
+    assert observed[-1].kind == "trace_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_session_keeps_its_error_when_the_prompt_cannot_be_read(
+    replay, tmp_path
+):
+    replay(
+        _success_stream()[:3],
+        error=RuntimeError("connection lost"),
+        transcript=tmp_path / "missing.jsonl",
+    )
+    observed = []
+    with (
+        capture_agent_evidence(observed.append, errors="raise"),
+        pytest.raises(AgentStepExecutionError, match="connection lost") as raised,
+    ):
+        await _agent()(a=2, b=3)
+
+    # The session's error stays the error; the prompt's failure travels as a note.
+    cause = raised.value.__cause__
+    assert isinstance(cause, RuntimeError) and len(cause.__notes__) == 1
+    assert observed[-1].kind == "trace_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_a_transcript_that_cannot_be_read_fails_the_step(replay, tmp_path):
+    (tmp_path / "broken.jsonl").write_text("{not json\n")
+    replay(_success_stream(), transcript=tmp_path / "broken.jsonl")
+    observed = []
+    with (
+        capture_agent_evidence(observed.append, errors="raise"),
+        pytest.raises(AgentStepExecutionError, match="transcript"),
+    ):
+        await _agent()(a=2, b=3)
+    assert observed[-1].kind == "trace_unavailable"
+
+
+@pytest.mark.asyncio
+async def test_a_cli_that_records_no_request_sends_no_prompt_event(replay, tmp_path):
+    replay(_success_stream(), transcript=_transcript(tmp_path / "s.jsonl", request=False))
+    observed = await _observe(_agent())
+
+    assert not any(
+        event.kind == "event" and isinstance(event.common, PromptSent) for event in observed
+    )
+    assert observed[-1].kind == "trace_finished"
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"keep": 2},
+        {"blob": False},
+        {"output_config": {"format": {"type": "text"}}},
+        {"output_config": {"format": {"type": "json_schema"}}},
+        {"extra": ({"leafUuid": "u1", "summary": "a line without a type"},)},
+    ],
+    ids=[
+        "carried-messages",
+        "missing-message",
+        "non-schema-format",
+        "format-without-schema",
+        "untyped-line",
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_request_recorded_in_an_unknown_form_fails_the_step(replay, tmp_path, changes):
+    replay(_success_stream(), transcript=_transcript(tmp_path / "s.jsonl", **changes))
+    observed = []
+    with (
+        capture_agent_evidence(observed.append, errors="raise"),
+        pytest.raises(AgentStepExecutionError, match="transcript|request"),
+    ):
+        await _agent()(a=2, b=3)
+    assert observed[-1].kind == "trace_unavailable"
 
 
 @pytest.mark.asyncio
@@ -1228,7 +1516,7 @@ async def test_skills_without_files_add_only_the_skill_tool(replay, tmp_path):
     options = seen["options"]
     assert options.tools == ["Bash", "Skill"]
     assert not any(rule.startswith("Read") for rule in options.allowed_tools)
-    assert options.hooks is None
+    assert "PreToolUse" not in options.hooks
 
 
 @pytest.mark.asyncio
@@ -1355,7 +1643,8 @@ async def test_a_listed_read_tool_keeps_its_own_scope(replay, tmp_path):
     await agent(a=2, b=3)
 
     options = seen["options"]
-    assert (options.tools, options.hooks) == (["Read", "Skill"], None)
+    assert options.tools == ["Read", "Skill"]
+    assert "PreToolUse" not in options.hooks
 
 
 def _hook_matcher(matcher: str):
@@ -1516,6 +1805,4 @@ async def test_only_a_read_enabled_in_sdk_tools_lifts_the_skill_folder_guard(
     await agent(a=2, b=3)
 
     hooks = seen["options"].hooks
-    assert (
-        hooks is not None and [m.matcher for m in hooks["PreToolUse"]] == ["Read"]
-    ) is guarded
+    assert ([m.matcher for m in hooks.get("PreToolUse", ())] == ["Read"]) is guarded

@@ -212,6 +212,7 @@ _TRACE_STATUS_FROM_V2 = {value: key for key, value in _TRACE_STATUS_TO_V2.items(
 _AGENT_EVENT_KIND_TO_V2: Mapping[AgentEventKind, int] = {
     "native": pb.AGENT_EVENT_KIND_V2_NATIVE,
     "run.started": pb.AGENT_EVENT_KIND_V2_RUN_STARTED,
+    "prompt.sent": pb.AGENT_EVENT_KIND_V2_PROMPT_SENT,
     "turn.finished": pb.AGENT_EVENT_KIND_V2_TURN_FINISHED,
     "tool.started": pb.AGENT_EVENT_KIND_V2_TOOL_STARTED,
     "tool.finished": pb.AGENT_EVENT_KIND_V2_TOOL_FINISHED,

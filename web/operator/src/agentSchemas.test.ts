@@ -1,15 +1,37 @@
 import { describe, expect, it } from "vitest";
 
 import { parseAgentDeclaration } from "./GraphCanvas";
-import { AgentLiveEvent, AgentTraceTerminal } from "./generated/agentSchemas";
-import { finishedTrace, runStartedEvent, turnEvent } from "./test/agentTraceFixtures";
+import { AgentLiveEvent, AgentTraceTerminal, PromptText } from "./generated/agentSchemas";
+import {
+  finishedTrace,
+  promptSentEvent,
+  runStartedEvent,
+  turnEvent,
+} from "./test/agentTraceFixtures";
 import { agentDeclarationJson } from "./test/fixtures";
 
 const finished = finishedTrace();
 if (finished.kind !== "trace_finished") throw new Error("fixture is a finished trace");
 const { header } = finished;
 
+// The Python model's limit on each prompt part, in characters (code points).
+const PROMPT_LIMIT = 64 * 1024;
+
 describe("generated agent schemas", () => {
+  it.each([
+    ["at the limit", "a".repeat(PROMPT_LIMIT), true],
+    ["one character over the limit", "a".repeat(PROMPT_LIMIT + 1), false],
+    // Each emoji is two UTF-16 units but one character, as Python counts it.
+    ["of characters outside the BMP at the limit", "😀".repeat(PROMPT_LIMIT), true],
+    ["of characters outside the BMP over the limit", "😀".repeat(PROMPT_LIMIT + 1), false],
+  ])("counts prompt text %s as Python does", (_case, text, valid) => {
+    expect(PromptText.safeParse({ text, omitted_chars: 0 }).success).toBe(valid);
+  });
+
+  it("accepts a prompt event", () => {
+    expect(AgentLiveEvent.safeParse(promptSentEvent()).success).toBe(true);
+  });
+
   it.each([
     [
       "a stored runtime kind",

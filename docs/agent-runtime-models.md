@@ -312,7 +312,7 @@ class AgentLiveEvent:
 
 
 AgentEvent = Annotated[
-    RunStarted | TurnFinished | ToolStarted | ToolFinished,
+    RunStarted | PromptSent | TurnFinished | ToolStarted | ToolFinished,
     Field(discriminator="kind"),
 ]
 
@@ -322,6 +322,50 @@ class RunStarted:
     model: str | None
     inputs: dict[str, JsonValue]
     omitted_inputs: tuple[str, ...]
+
+
+class PromptText:
+    text: str                            # max_length=PROMPT_TEXT_LIMIT_CHARS (65,536)
+    omitted_chars: NonNegativeInt
+
+    @classmethod
+    def of(cls, text: str) -> Self: ...  # keeps the start, counts the rest
+
+
+def prompt_schema(schema: JsonValue) -> JsonValue: ...  # an unavailable marker past 64 KiB
+
+
+class PromptTextPart:
+    kind: Literal["text"] = "text"
+    text: PromptText
+
+
+class PromptFilePart:
+    kind: Literal["file"] = "file"
+    name: str | None
+    content_type: str | None
+
+
+PromptPart = Annotated[PromptTextPart | PromptFilePart, Field(discriminator="kind")]
+
+
+class PromptMessage:
+    role: str
+    parts: tuple[PromptPart, ...]
+
+
+class PromptTool:
+    name: str
+    description: PromptText | None
+    input_schema: JsonValue
+
+
+class PromptSent:
+    kind: Literal["prompt.sent"] = "prompt.sent"
+    system: tuple[PromptText, ...]
+    messages: tuple[PromptMessage, ...]
+    tools: tuple[PromptTool, ...]
+    output_schema: JsonValue | None
 
 
 class TurnFinished:

@@ -26,6 +26,7 @@ import {
   claudeTurnEvent,
   predictRlmTraceHeader,
   finishedTrace,
+  promptSentEvent,
   runStartedEvent,
   tokenUsage,
   turnEvent,
@@ -118,6 +119,7 @@ const runWithOutputs = RunSnapshotMsg.create({
 });
 const COMMON_EVENT_KINDS: Record<string, AgentEventKind> = {
   "run.started": "run.started",
+  "prompt.sent": "prompt.sent",
   "turn.finished": "turn.finished",
   "tool.started": "tool.started",
   "tool.finished": "tool.finished",
@@ -574,6 +576,104 @@ describe("retained run inspection", () => {
     const outputs = screen.getByRole("region", { name: "Outputs" });
     expect(await within(inputs).findByRole("note")).toHaveTextContent("question");
     expect(await within(outputs).findByRole("note")).toHaveTextContent("answer");
+  });
+
+  it("keeps the initial prompt behind a deliberate action in the trace and loads it only when opened", async () => {
+    const readJsonDetail = vi.fn(async (token: string) =>
+      token === "trace-body"
+        ? finishedTrace()
+        : token === "event-2"
+          ? promptSentEvent({
+              system: ["SYSTEM: you are Claude Code.", "SYSTEM: answer from the document."],
+              message: "FIRST: the question is why.",
+              tools: [
+                {
+                  name: "StructuredOutput",
+                  description: "Return the answer.",
+                  input_schema: { type: "object", title: "AnswerSchema" },
+                },
+              ],
+              outputSchema: { type: "object", title: "OutputSchema" },
+            })
+          : runStartedEvent({ question: "why" }),
+    );
+    const api = createApi({
+      listAgentEventPage: async () =>
+        eventPage([event(1, "run.started"), event(2, "prompt.sent"), event(3)]),
+      readJsonDetail,
+    });
+    render(
+      <Inspector
+        api={api}
+        run={runWithOutputs}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    const trace = await screen.findByRole("region", { name: "Agent trace" });
+    expect(
+      within(trace).getByRole("button", { name: "View initial prompt" }),
+    ).toBeInTheDocument();
+    openRunIo();
+    await screen.findByText("why");
+    expect(
+      screen.queryByRole("button", { name: "View initial prompt" }),
+    ).not.toBeInTheDocument();
+    expect(readJsonDetail).not.toHaveBeenCalledWith("event-2", expect.anything());
+    fireEvent.click(screen.getByRole("tab", { name: "Trace" }));
+
+    fireEvent.click(
+      within(await screen.findByRole("region", { name: "Agent trace" })).getByRole("button", {
+        name: "View initial prompt",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", { name: "Initial prompt" });
+    const system = await within(dialog).findByRole("region", { name: "System prompt" });
+    const message = within(dialog).getByRole("region", { name: "user message" });
+    const tools = within(dialog).getByRole("region", { name: "Tools (1)" });
+    const output = within(dialog).getByRole("region", { name: "Output schema" });
+    expect(system).toHaveTextContent("SYSTEM: you are Claude Code.");
+    expect(system).toHaveTextContent("SYSTEM: answer from the document.");
+    expect(system).not.toHaveTextContent("FIRST:");
+    expect(message).toHaveTextContent("FIRST: the question is why.");
+    expect(message).toHaveTextContent("report.pdf");
+    expect(tools).toHaveTextContent("StructuredOutput");
+    expect(tools).toHaveTextContent("AnswerSchema");
+    expect(output).toHaveTextContent("OutputSchema");
+    expect(within(system).getByRole("button", { name: /copy/i })).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Close initial prompt" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("pages to the prompt event and says when a step recorded none", async () => {
+    const listAgentEventPage = vi.fn(async (request: { afterEventSequence: string }) =>
+      request.afterEventSequence === "0"
+        ? eventPage([event(1, "run.started")], "next-page")
+        : eventPage([event(2)]),
+    );
+    const api = createApi({
+      listAgentEventPage,
+      readJsonDetail: async (token) =>
+        token === "trace-body" ? finishedTrace() : runStartedEvent({ question: "why" }),
+    });
+    render(
+      <Inspector
+        api={api}
+        run={runWithOutputs}
+        nodeId={node.nodeId}
+        onClose={() => undefined}
+      />,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "View initial prompt" }));
+    const dialog = await screen.findByRole("dialog", { name: "Initial prompt" });
+    expect(
+      await within(dialog).findByText(/No initial prompt is recorded/),
+    ).toBeInTheDocument();
+    expect(listAgentEventPage).toHaveBeenCalledWith(
+      expect.objectContaining({ pageToken: "next-page", afterEventSequence: "1" }),
+      expect.anything(),
+    );
   });
 
   it("keeps run history visible when the current node is absent", async () => {

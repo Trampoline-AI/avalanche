@@ -67,7 +67,12 @@ from ...agent.contract import (
     PythonOutputs,
     ToolSpec,
 )
-from ...agent.live import RunStarted, ToolFinished, ToolStarted, TurnFinished
+from ...agent.live import (
+    RunStarted,
+    ToolFinished,
+    ToolStarted,
+    TurnFinished,
+)
 from ...agent.native import claude_agent as native
 from ...agent.skills import SKILL_FILE, Skill
 from ...agent.steps import AgentOutputError, AgentStepError, AgentStepExecutionError
@@ -83,6 +88,7 @@ from ...agent.trace import (
 from ...file import File
 from ...references import AgentOutputFolder
 from ...workspace import Workspace
+from ._prompt import TranscriptFormatError, first_prompt
 from .runtime import unknown_sdk_options
 
 if TYPE_CHECKING:
@@ -203,6 +209,7 @@ async def run(
         # A Read the user enables through the SDK ``tools`` option keeps its usual
         # scope, as one in builtin_tools does.
         read_guard = "Read" in skill_tools and not _lists_read(runtime.sdk_options)
+        prompt_record = _PromptRecord()
         options = ClaudeAgentOptions(
             model=runtime.model,
             max_turns=runtime.max_turns,
@@ -228,11 +235,20 @@ async def run(
             # Only the step's own tools: no MCP servers or connectors from the user's
             # Claude account or configuration.
             strict_mcp_config=True,
-            hooks=(
-                {"PreToolUse": [HookMatcher(matcher="Read", hooks=[_read_only_inside(plugin)])]}
-                if read_guard
-                else None
-            ),
+            hooks={
+                # The hook learns where the CLI keeps the session's transcript, which
+                # records the prompt the CLI builds.
+                "UserPromptSubmit": [HookMatcher(hooks=[prompt_record.hook])],
+                **(
+                    {
+                        "PreToolUse": [
+                            HookMatcher(matcher="Read", hooks=[_read_only_inside(plugin)])
+                        ]
+                    }
+                    if read_guard
+                    else {}
+                ),
+            },
             system_prompt=_system_prompt(
                 signature.instructions,
                 runtime.system_prompt_append,
@@ -295,6 +311,11 @@ async def run(
                 "runs ClaudeAgent steps"
             ) from exc
         except Exception as exc:
+            try:
+                await prompt_record.send(events)
+            except Exception as prompt_error:
+                # The call's own failure stays the error; the prompt's travels with it.
+                exc.add_note(f"the prompt could not be recorded either: {prompt_error}")
             events.unavailable(
                 status="failed",
                 error=f"{type(exc).__name__}: {exc}",
@@ -303,6 +324,19 @@ async def run(
             )
             raise AgentStepExecutionError(
                 f"agent step {request.step_name!r} failed calling Claude: {exc}"
+            ) from exc
+        try:
+            await prompt_record.send(events)
+        except TranscriptFormatError as exc:
+            events.unavailable(
+                status="failed",
+                error=str(exc),
+                external_run_id=transcript.session_id,
+                complete=True,
+            )
+            raise AgentStepExecutionError(
+                f"agent step {request.step_name!r}: {exc}; this Claude CLI records its "
+                "requests in a form Avalanche does not know"
             ) from exc
         result = transcript.result
         if result is None:
@@ -669,6 +703,41 @@ def _system_prompt(
         return prompt
     # Claude Code's own system prompt comes first; the step's follows it.
     return SystemPromptPreset(type="preset", preset=preset, append=prompt)
+
+
+class _PromptSubmit(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    transcript_path: str
+
+
+class _PromptRecord:
+    """Sends the prompt the CLI built, read from its transcript once the session ends.
+
+    The CLI names the transcript to hooks; a session that never got as far as its
+    prompt has none, and sends no prompt event.
+    """
+
+    def __init__(self) -> None:
+        self.transcript: Path | None = None
+
+    async def hook(
+        self, hook_input: HookInput, tool_use_id: str | None, context: HookContext
+    ) -> HookJSONOutput:
+        self.transcript = Path(_PromptSubmit.model_validate(hook_input).transcript_path)
+        return {}
+
+    async def send(self, events: AgentEventSink) -> None:
+        if self.transcript is None:
+            return
+        try:
+            prompt = first_prompt(self.transcript)
+        except (OSError, ValidationError) as exc:
+            raise TranscriptFormatError(
+                f"the Claude CLI's transcript {self.transcript} cannot be read: {exc}"
+            ) from exc
+        if prompt is not None:
+            await events.emit(None, prompt)
 
 
 def _mentions(annotation: object, target: type, seen: frozenset[type] = frozenset()) -> bool:

@@ -82,9 +82,16 @@ function zod(schema, deps) {
     case "array":
       checkKeys(schema, ["type", "items"]);
       return `z.array(${zod(schema.items, deps)})`;
-    case "string":
-      checkKeys(schema, ["type", "minLength"]);
-      return "minLength" in schema ? `z.string().min(${schema.minLength})` : "z.string()";
+    case "string": {
+      checkKeys(schema, ["type", "minLength", "maxLength"]);
+      let code = "minLength" in schema ? `z.string().min(${schema.minLength})` : "z.string()";
+      // JSON Schema counts characters (code points), as Python does; zod's max counts
+      // UTF-16 units, which would reject text with characters outside the BMP.
+      if ("maxLength" in schema) {
+        code += `.refine((value) => [...value].length <= ${schema.maxLength}, "Expected at most ${schema.maxLength} characters")`;
+      }
+      return code;
+    }
     case "integer":
       checkKeys(schema, ["type", "minimum", "exclusiveMinimum"]);
       // z.int() accepts safe integers only; nanosecond timestamps exceed 2**53.

@@ -28,6 +28,7 @@ export const TRACE_VIEWERS = {
 // Events every runtime sends; an event without a native part is named by these.
 const COMMON_LABELS: Record<string, string> = {
   "run.started": "Agent run started",
+  "prompt.sent": "Prompt sent",
   "turn.finished": "Turn finished",
   "tool.started": "Calling tool",
   "tool.finished": "Tool call finished",

@@ -70,6 +70,7 @@ const TRACE_STATUSES: Partial<Record<AgentTraceStatusV2, AgentTraceStatus>> = {
 const AGENT_EVENT_KINDS: Partial<Record<AgentEventKindV2, AgentEventKind>> = {
   [AgentEventKindV2.NATIVE]: "native",
   [AgentEventKindV2.RUN_STARTED]: "run.started",
+  [AgentEventKindV2.PROMPT_SENT]: "prompt.sent",
   [AgentEventKindV2.TURN_FINISHED]: "turn.finished",
   [AgentEventKindV2.TOOL_STARTED]: "tool.started",
   [AgentEventKindV2.TOOL_FINISHED]: "tool.finished",

@@ -26,13 +26,17 @@ from agents.testing import (  # noqa: E402
     function_call,
 )
 from openai.types.responses import (  # noqa: E402
+    ApplyPatchTool,
+    FunctionTool,
     Response,
     ResponseCompletedEvent,
     ResponseCreatedEvent,
     ResponseCustomToolCall,
+    ResponseFormatTextJSONSchemaConfig,
     ResponseOutputMessage,
     ResponseOutputRefusal,
     ResponseReasoningItem,
+    ResponseTextConfig,
 )
 from openai.types.responses.response_reasoning_item import Summary  # noqa: E402
 from openai.types.responses.response_usage import (  # noqa: E402
@@ -53,6 +57,8 @@ from avalanche.agent.live import (  # noqa: E402
     AgentLiveEvent,
     AgentTraceFinished,
     AgentTraceUnavailable,
+    PromptFilePart,
+    PromptSent,
     RunStarted,
     ToolFinished,
     ToolStarted,
@@ -232,6 +238,7 @@ async def test_a_run_maps_onto_outputs_turns_and_live_events(scripted):
     assert kinds == [
         "RunStarted",
         "AgentStarted",
+        "PromptSent",
         "ToolStarted",
         "ToolFinished",
         "TurnFinished",
@@ -270,6 +277,106 @@ async def test_the_agent_gets_the_instructions_inputs_answer_schema_and_settings
     assert call.model_settings.temperature == 0.25
     assert [tool.name for tool in call.tools] == ["lookup_bonus"]
     assert scripted.names == [MODEL]
+
+
+@pytest.fixture
+def echoed(monkeypatch):
+    """Make each scripted response echo tools and an answer format, as the API does."""
+    from agents.testing import model as testing_model
+
+    lookup = FunctionTool(
+        type="function",
+        name="lookup_bonus",
+        description="Return the bonus for a name.",
+        parameters={"type": "object", "properties": {"name": {"type": "string"}}},
+        strict=True,
+    )
+    patch = ApplyPatchTool(type="apply_patch")
+    answer = {"type": "object", "properties": {"total": {"type": "integer"}}}
+    response_for_step = testing_model._response_for_step
+
+    def with_echo(step, output):
+        return response_for_step(step, output).model_copy(
+            update={
+                "tools": [lookup, patch],
+                "text": ResponseTextConfig(
+                    format=ResponseFormatTextJSONSchemaConfig(
+                        type="json_schema", name="answer", schema=answer
+                    )
+                ),
+            }
+        )
+
+    monkeypatch.setattr(testing_model, "_response_for_step", with_echo)
+    return answer
+
+
+def _prompt(observed) -> PromptSent:
+    (prompt,) = [e.common for e in _live(observed) if isinstance(e.common, PromptSent)]
+    return prompt
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_event_holds_everything_the_first_request_gives_the_model(
+    scripted, echoed
+):
+    model = scripted(_lookup(), _answer(total=15))
+    _, observed = await _observed(_agent(system_prompt_append="Be brief."), a=2, b=3)
+
+    prompt = _prompt(observed)
+    call = model.first_call
+    (message,) = call.input
+    (text,) = message["content"]
+    assert [part.text for part in prompt.system] == [call.system_instructions]
+    assert [(m.role, [p.text.text for p in m.parts]) for m in prompt.messages] == [
+        ("user", [text["text"]])
+    ]
+    # The tools and the answer's schema as the first response echoes them.
+    lookup, patch = prompt.tools
+    assert (lookup.name, lookup.description.text) == (
+        "lookup_bonus",
+        "Return the bonus for a name.",
+    )
+    assert lookup.input_schema["properties"] == {"name": {"type": "string"}}
+    assert (patch.name, patch.description) == ("apply_patch", None)
+    assert prompt.output_schema == echoed
+
+
+@pytest.mark.asyncio
+async def test_the_prompt_event_keeps_sandbox_instructions_and_names_attachments(
+    scripted, tmp_path
+):
+    class Describe(ava.Signature):
+        """Describe the file."""
+
+        document: ava.File = ava.InputField()
+        description: str = ava.OutputField()
+
+    (tmp_path / "note.txt").write_text("quiet words")
+    plain_model = scripted(_answer(description="a note"))
+    await ava.Agent(signature=Describe, step_name="describe", runtime=OpenAIAgent())(
+        document=ava.File.from_path(tmp_path / "note.txt")
+    )
+    model = scripted(_answer(description="a note"))
+    _, observed = await _observed(
+        ava.Agent(
+            signature=Describe,
+            step_name="describe",
+            runtime=OpenAIAgent(builtin_tools=["filesystem"]),
+        ),
+        document=ava.File.from_path(tmp_path / "note.txt"),
+    )
+
+    prompt = _prompt(observed)
+    (system,) = prompt.system
+    plain = plain_model.first_call.system_instructions
+    # The SDK's sandbox instructions are part of the system prompt the model got.
+    assert system.text == model.first_call.system_instructions
+    assert plain in system.text and len(system.text) > len(plain)
+    (message,) = prompt.messages
+    files = [part for part in message.parts if isinstance(part, PromptFilePart)]
+    assert [(f.name, f.content_type) for f in files] == [("note.txt", "text/plain")]
+    assert "quiet words" not in message.model_dump_json()
 
 
 @pytest.mark.asyncio
