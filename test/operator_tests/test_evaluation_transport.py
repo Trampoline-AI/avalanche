@@ -24,6 +24,7 @@ from runtime.operator.operator import Operator
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
 from runtime.operator.server import serve
+from runtime.operator.state.evaluations import RunEvaluationsTable
 from runtime.operator.web import start_browser_server
 
 
@@ -67,8 +68,11 @@ def _seed_run(operator: Operator, run_id: str) -> RunState:
 
 
 def _store(operator: Operator, record: EvaluationRecord) -> None:
-    with operator._lock:
-        operator._evaluations.setdefault(record.run_id, {})[record.evaluation_id] = record
+    with operator._lock, operator._state_store.transaction() as connection:
+        if RunEvaluationsTable.get(connection, record.run_id, record.evaluation_id) is None:
+            RunEvaluationsTable.insert(connection, record)
+        else:
+            RunEvaluationsTable.replace(connection, record)
 
 
 def _result() -> EvaluationResult:

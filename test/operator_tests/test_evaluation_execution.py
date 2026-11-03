@@ -34,6 +34,9 @@ from runtime.operator import Operator
 from runtime.operator.evaluation_models import EvaluationRecord
 from runtime.operator.evaluation_worker import EvaluationWorkers, snapshot_evaluation
 from runtime.operator.models import RunState, RunStatus
+from runtime.operator.state import OperatorStateStore
+from runtime.operator.state.evaluations import RunEvaluationsTable
+from runtime.operator.state.runs import RunsTable
 
 _NO_USAGE = PredictRLMUsage(
     main=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
@@ -337,6 +340,31 @@ def wait_evaluation(operator: Operator, run_id: str, timeout: float = 30) -> Eva
             return record
         time.sleep(0.03)
     raise AssertionError(f"Evaluation for {run_id} did not finish")
+
+
+def stored_evaluations(state_db: Path) -> list[EvaluationRecord]:
+    """Every evaluation record a closed operator left in its state database."""
+    store = OperatorStateStore.open(state_db)
+    try:
+        with store.transaction() as connection:
+            return [
+                record
+                for (run_id,) in connection.execute("SELECT run_id FROM runs")
+                for record in RunEvaluationsTable.list_run(connection, run_id)
+            ]
+    finally:
+        store.close()
+
+
+def stored_run_status(state_db: Path, run_id: str) -> RunStatus:
+    store = OperatorStateStore.open(state_db)
+    try:
+        with store.transaction() as connection:
+            loaded = RunsTable.load_all(connection)
+    finally:
+        store.close()
+    [run] = [item.stored.run for item in loaded if item.stored.run.run_id == run_id]
+    return run.status
 
 
 def evaluation_node(run: RunState) -> str:
@@ -847,7 +875,8 @@ def test_capacity_errors_do_not_backpressure_workflow(tmp_path, evaluation_servi
             return value
     """)
     )
-    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
+    state_db = tmp_path / "state.db"
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=state_db)
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.SUCCESS
@@ -860,9 +889,7 @@ def test_capacity_errors_do_not_backpressure_workflow(tmp_path, evaluation_servi
         assert all("Evaluation queue is full" in record.error for record in failed)
         assert any(record.status == "pending" for record in records)
         operator.close()
-        assert all(
-            record.status == "failed" for record in operator.list_evaluations(run.run_id)
-        )
+        assert all(record.status == "failed" for record in stored_evaluations(state_db))
     finally:
         evaluation_service.release.set()
         operator.close()
@@ -871,7 +898,8 @@ def test_capacity_errors_do_not_backpressure_workflow(tmp_path, evaluation_servi
 def test_close_interrupts_evaluations_without_leaking_processes(tmp_path, evaluation_service):
     workflow = write_workflow(tmp_path)
     evaluation_service.release.clear()
-    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
+    state_db = tmp_path / "state.db"
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=state_db)
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.SUCCESS
@@ -880,11 +908,11 @@ def test_close_interrupts_evaluations_without_leaking_processes(tmp_path, evalua
         started = time.monotonic()
         operator.close()
         assert time.monotonic() - started < 10
-        record = wait_evaluation(operator, run.run_id)
+        [record] = stored_evaluations(state_db)
         assert record.status == "failed"
         assert "closed" in record.error
         assert operator.current_sequence == before_close
-        assert operator.get_run(run.run_id).status == RunStatus.SUCCESS
+        assert stored_run_status(state_db, run.run_id) == RunStatus.SUCCESS
         assert not any(
             process.name == "avalanche-evaluator"
             for process in multiprocessing.active_children()

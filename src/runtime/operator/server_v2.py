@@ -54,7 +54,6 @@ from .models import (
     TriggerKind,
 )
 from .operator import (
-    ClassifierDetailExpiredError,
     InvalidRunIdError,
     NoScheduleError,
     Operator,
@@ -571,8 +570,6 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                     operator_instance_id=self._op.operator_instance_id,
                     revision=binding.trace_revision,
                 ).data
-        except ClassifierDetailExpiredError:
-            raise
         except StructuralBaselineUnavailableError as exc:
             context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
         except KeyError:
@@ -652,13 +649,9 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
     ) -> pb.ActivityDetailRefV2 | None:
         if not body_token:
             return None
-        try:
-            return self._body_detail_ref(
-                run_id, activity_id, body_token, run_sequence, size_bytes, context
-            )
-        except ClassifierDetailExpiredError:
-            # Queued live/replay descriptors may predate retention cleanup.
-            return None
+        return self._body_detail_ref(
+            run_id, activity_id, body_token, run_sequence, size_bytes, context
+        )
 
     def _trace_detail_ref(
         self,
@@ -701,10 +694,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 grpc.StatusCode.INVALID_ARGUMENT,
                 "Activity detail reference does not match its immutable descriptor",
             )
-        try:
-            data = self._read_activity_binding(entry.binding, context)
-        except ClassifierDetailExpiredError:
-            context.abort(grpc.StatusCode.NOT_FOUND, "Classifier invocation detail has expired")
+        data = self._read_activity_binding(entry.binding, context)
         derived = self._canonical_activity_reference(entry.binding, data)
         if not self._same_activity_reference(entry.reference, derived):
             context.abort(

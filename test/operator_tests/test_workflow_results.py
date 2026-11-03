@@ -693,8 +693,8 @@ def test_failed_result_index_write_fails_the_run_with_a_reason(monkeypatch):
         operator._drain_run_events(run_id, handle, [event])
         assert operator.get_run(run_id).status == RunStatus.FAILED
         assert any(
-            item.entry.node_id == "operator" and item.entry.level == LogLevel.ERROR
-            for item in operator._logs[run_id]
+            entry.node_id == "operator" and entry.level == LogLevel.ERROR
+            for entry in operator.get_run(run_id).logs
         )
         with pytest.raises(RunResultUnavailableError):
             operator.get_run_result(run_id)

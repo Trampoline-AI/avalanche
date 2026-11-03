@@ -404,12 +404,12 @@ colors:
 
 These views are local-development inspection, not a durable execution journal.
 The entire invocation detail body, including input and results, shares the
-operator's event/node/run size limits. Bodies are released when the operator closes.
-Historical descriptors retain call numbers and compact answers after full bodies
-expire; a retained run does not guarantee that its full evidence is still available.
-Expired or size-limited bodies are unavailable, not empty input or empty answers. Browser
-caches are bounded independently. There is no recovery or cross-restart history
-guarantee: explicitly persist required business results in your step.
+operator's event/node/run size limits. Bodies are kept with the run in the operator's
+local state database, so they stay readable after the run ends and after an operator
+restart; nothing removes them automatically. Size-limited bodies are unavailable, not
+empty input or empty answers. Browser caches are bounded independently. The state
+database is local, unencrypted development storage, not a durable execution journal:
+explicitly persist required business results in your step.
 
 Avalanche remains intended for local development and experimentation. This
 feature adds no production authentication boundary or remote-service deployment

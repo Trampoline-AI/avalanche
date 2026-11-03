@@ -154,6 +154,110 @@ MIGRATIONS: tuple[Migration, ...] = (
             "CREATE INDEX run_input_files_by_object_key ON run_input_files (object_key)",
         ),
     ),
+    Migration(
+        version=5,
+        name="run details",
+        statements=(
+            # A run's log, in append order. sequence is the run's log sequence, 1, 2, ...
+            """
+            CREATE TABLE run_logs (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                sequence INTEGER NOT NULL CHECK (sequence > 0),
+                node_id TEXT NOT NULL,
+                timestamp TEXT NOT NULL,
+                level TEXT NOT NULL CHECK (level IN ('DEBUG', 'INFO', 'WARN', 'ERROR')),
+                channel TEXT,
+                attempt TEXT,
+                message TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+                PRIMARY KEY (run_id, sequence)
+            ) STRICT
+            """,
+            "CREATE INDEX run_logs_by_node ON run_logs (run_id, node_id, sequence)",
+            # Each agent step's live events, in the order the operator accepted them.
+            """
+            CREATE TABLE run_agent_events (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                node_id TEXT NOT NULL,
+                event_sequence INTEGER NOT NULL CHECK (event_sequence > 0),
+                invocation_id TEXT NOT NULL,
+                event_json TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+                native_event_kind TEXT NOT NULL,
+                agent_event_kind TEXT NOT NULL,
+                turn INTEGER,
+                duration_ms INTEGER,
+                error INTEGER NOT NULL CHECK (error IN (0, 1)),
+                tool_call_count INTEGER NOT NULL CHECK (tool_call_count >= 0),
+                PRIMARY KEY (run_id, node_id, event_sequence)
+            ) STRICT
+            """,
+            # Each classifier step's invocation snapshots, in the order accepted.
+            """
+            CREATE TABLE run_classifier_events (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                node_id TEXT NOT NULL,
+                event_sequence INTEGER NOT NULL CHECK (event_sequence > 0),
+                invocation_id TEXT NOT NULL,
+                invocation_index INTEGER NOT NULL,
+                answers_json TEXT NOT NULL,
+                event_json TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+                event_kind TEXT NOT NULL,
+                duration_ms INTEGER,
+                error INTEGER NOT NULL CHECK (error IN (0, 1)),
+                PRIMARY KEY (run_id, node_id, event_sequence)
+            ) STRICT
+            """,
+            # The current trace descriptor of each agent step, and its last error.
+            """
+            CREATE TABLE run_traces (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                node_id TEXT NOT NULL,
+                descriptor_json TEXT NOT NULL,
+                error TEXT,
+                PRIMARY KEY (run_id, node_id)
+            ) STRICT
+            """,
+            # Finalized trace bodies, keyed by the revision that published each one.
+            """
+            CREATE TABLE run_trace_bodies (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                node_id TEXT NOT NULL,
+                revision INTEGER NOT NULL CHECK (revision > 0),
+                body BLOB NOT NULL,
+                PRIMARY KEY (run_id, node_id, revision)
+            ) STRICT
+            """,
+            # Every published trace revision and the body it serves; a later revision
+            # that did not finalize a new trace keeps serving the previous body.
+            """
+            CREATE TABLE run_trace_revisions (
+                run_id TEXT NOT NULL,
+                node_id TEXT NOT NULL,
+                revision INTEGER NOT NULL CHECK (revision > 0),
+                body_revision INTEGER NOT NULL CHECK (body_revision <= revision),
+                PRIMARY KEY (run_id, node_id, revision),
+                FOREIGN KEY (run_id, node_id, body_revision)
+                    REFERENCES run_trace_bodies (run_id, node_id, revision) ON DELETE CASCADE
+            ) STRICT
+            """,
+            # Evaluation records in submission order; record_json is the full record.
+            """
+            CREATE TABLE run_evaluations (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                evaluation_id TEXT NOT NULL,
+                position INTEGER NOT NULL CHECK (position >= 0),
+                node_id TEXT NOT NULL,
+                status TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'failed')),
+                record_json TEXT NOT NULL,
+                PRIMARY KEY (run_id, evaluation_id),
+                UNIQUE (run_id, position)
+            ) STRICT
+            """,
+            "CREATE INDEX run_evaluations_by_status ON run_evaluations (status)",
+        ),
+    ),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
