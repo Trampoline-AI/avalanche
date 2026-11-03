@@ -40,8 +40,15 @@
   the operator stops their leftover run processes, then marks the run and its
   unfinished steps failed with an "operator restarted" reason. Uploaded input
   files now live in `.avalanche/operator/input-files/` next to the database; files
-  a run used are kept when the operator stops, unused uploads are removed. Logs,
-  agent events, traces and evaluations are not stored yet.
+  a run used are kept when the operator stops, unused uploads are removed.
+- Operator: a run's details now survive an operator restart, including `kill -9`:
+  its logs, agent events and finished traces, classifier invocation snapshots and
+  evaluation records are written to the state database as they arrive, and the
+  Web UI, TUI and API read them from there, so a finished run shows the same
+  activity, trace turns and logs after a restart. Evaluations still pending when
+  the operator stopped are marked failed with an "operator restarted" reason on the
+  next start. Classifier invocation bodies are no longer dropped when the operator
+  closes, and the operator no longer keeps every run's bodies in memory.
 - Web UI: after the operator restarts, an open browser tab reconnects and shows the
   stored runs. It used to keep retrying with "Response does not belong to the
   connected operator scope" until the page was reloaded.

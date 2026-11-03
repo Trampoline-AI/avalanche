@@ -18,6 +18,7 @@ from runtime.operator.operator import Operator
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.results import EncodedWorkflowResult, decode_workflow_result
 from runtime.operator.server import serve as serve_operator
+from runtime.operator.state.logs import RunLogsTable
 from runtime.operator.web import start_browser_server
 
 _SERVICE = "/avalanche.operator.OperatorServiceV2/"
@@ -381,8 +382,11 @@ def _seed_rest_run(operator: Operator, run_id: str, log_count: int = 0):
     run.latest_log_sequence = log_count
     with operator._lock:
         operator._runs[run_id] = run
-        operator._logs[run_id] = entries
     operator._notify_run(run)
+    with operator._lock, operator._state_store.transaction() as connection:
+        for item in entries:
+            RunLogsTable.insert(connection, run_id, item)
+        operator._last_log_sequences[run_id] = len(entries)
 
 
 def test_rest_encoded_run_identifier_remains_one_path_segment(proxy):

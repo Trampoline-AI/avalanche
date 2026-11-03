@@ -577,9 +577,10 @@ evaluation errors, not fabricated scores. Late results do not reopen or change
 the workflow's terminal status. Reruns retain separate records rather than
 overwriting earlier judgments.
 
-Records survive normal coordinator completion, but are **local, in-memory
-operator state**. They do not survive operator restart; this is not durable
-recovery storage. Embedded Python `.run()` accepts declarations but reports
+Records are kept in the operator's **local state database**, so they survive
+coordinator completion and operator restarts. Evaluations still pending when the
+operator stops are not resumed: the next start marks them `failed` with an
+"operator restarted" reason. Embedded Python `.run()` accepts declarations but reports
 **not evaluated** and starts no automatic evaluation worker.
 
 Clients can query `ListEvaluations` with `runId` and optional `nodeId`, or use

@@ -133,11 +133,17 @@ from .run_processes import RunProcess, identify_run_process, stop_run_process
 from .run_worker import run_worker
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
 from .state import OperatorStateStore, StateDbPath, StateStoreError
+from .state.agent_events import RunAgentEventsTable
+from .state.classifier_events import RunClassifierEventsTable
+from .state.evaluations import RunEvaluationsTable
+from .state.logs import RunLogsTable
 from .state.metadata import OperatorMetadataTable
 from .state.results import RunResultTable
+from .state.run_details import load_run_detail_totals
 from .state.runs import RunRequest, RunsTable, StoredRun
 from .state.schedule_input_files import ScheduleInputFileClaims, ScheduleInputFileFolder
 from .state.schedules import ScheduleState
+from .state.traces import RunTracesTable
 from .step_io import StepInputs, StepIo, StepValuePreview
 from .webhooks import DEFAULT_WEBHOOK_PORT, WebhookServer, routes_for
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
@@ -206,10 +212,6 @@ class RunResultNotReadyError(RuntimeError):
 
 class RunResultUnavailableError(RuntimeError):
     """Raised when a failed or cancelled run has no workflow result."""
-
-
-class ClassifierDetailExpiredError(KeyError):
-    """A validated classifier invocation body was removed by retention."""
 
 
 class StructuralBaselineUnavailableError(RuntimeError):
@@ -288,6 +290,27 @@ class _ClassifierInvocationLifecycle:
     started_at: float
     declaration_digest: bytes
     terminal: bool
+
+
+@dataclass(frozen=True)
+class _TraceWrite:
+    """One step's trace descriptor as published, with a new body or the one it keeps."""
+
+    node_id: str
+    descriptor: TraceDescriptor
+    error: str | None
+    body: bytes | None
+    carried_from: int | None
+
+
+@dataclass(frozen=True)
+class _DetailWrites:
+    """The details one publication announces, stored with it in one transaction."""
+
+    log: SequencedLogEntry | None
+    agent_events: Mapping[str, AgentEvent]
+    classifier_events: Mapping[str, ClassifierEvent]
+    traces: tuple[_TraceWrite, ...]
 
 
 @dataclass(frozen=True)
@@ -442,18 +465,20 @@ class Operator:
             self._run_revisions: dict[str, int] = {}
             self._run_activity_sequences: dict[str, int] = {}
             self._node_revisions: dict[tuple[str, str], int] = {}
-            self._logs: dict[str, list[SequencedLogEntry]] = {}
-            self._log_sequences_by_node: dict[str, dict[str, list[int]]] = {}
-            self._agent_events: dict[tuple[str, str], list[AgentEvent]] = {}
-            self._classifier_events: dict[tuple[str, str], list[ClassifierEvent]] = {}
+            # Logs, agent and classifier events, trace bodies and evaluations live in
+            # the state database; memory keeps each run's and step's last sequence,
+            # byte counts and current trace descriptor, loaded from it at startup.
+            self._last_log_sequences: dict[str, int] = {}
+            self._last_agent_event_sequences: dict[tuple[str, str], int] = {}
+            self._last_classifier_event_sequences: dict[tuple[str, str], int] = {}
+            self._trace_descriptors: dict[tuple[str, str], TraceDescriptor] = {}
+            self._trace_errors: dict[tuple[str, str], str | None] = {}
+            # Protocol checks for evidence a run's coordinator may still send. They
+            # are released when its event drain ends: a finished run, or one loaded
+            # at startup, never accepts evidence again.
             self._classifier_invocations: dict[
                 str, dict[str, _ClassifierInvocationLifecycle]
             ] = {}
-            self._classifier_detail_runs: set[str] = set()
-            self._evaluations: dict[str, dict[str, EvaluationRecord]] = {}
-            self._trace_descriptors: dict[tuple[str, str], TraceDescriptor] = {}
-            self._trace_bodies: dict[tuple[str, str], dict[int, bytes]] = {}
-            self._trace_errors: dict[tuple[str, str], str | None] = {}
             self._agent_invocation_sequences: dict[tuple[str, str, str], int] = {}
             # Each invocation's runtime, fixed by its first evidence, and the digest of
             # its final body, so a replayed final trace can be told from a different one.
@@ -526,6 +551,7 @@ class Operator:
                 self._start_watcher()
             self._start_notification_dispatcher()
             self._fail_interrupted_runs(interrupted_runs)
+            self._fail_pending_evaluations()
             if schedule and self._workflow_paths:
                 self._scheduler.start()
         except BaseException as failure:
@@ -551,6 +577,7 @@ class Operator:
         with self._state_store.transaction() as connection:
             metadata = OperatorMetadataTable.read(connection)
             loaded_runs = RunsTable.load_all(connection)
+            details = load_run_detail_totals(connection)
         # The catalog of this instance is the one discovery just built, as of now.
         self._sequence = metadata.update_sequence
         self._catalog_sequence = metadata.update_sequence
@@ -567,6 +594,15 @@ class Operator:
                 self._node_revisions[(run.run_id, node_id)] = revision
             if run.status in _UNFINISHED_RUN_STATUSES:
                 interrupted.append((run.run_id, loaded.process))
+        self._last_log_sequences.update(details.last_log_sequences)
+        self._run_log_bytes.update(details.run_log_bytes)
+        self._last_agent_event_sequences.update(details.last_agent_event_sequences)
+        self._last_classifier_event_sequences.update(details.last_classifier_event_sequences)
+        self._node_detail_bytes.update(details.node_detail_bytes)
+        self._run_detail_bytes.update(details.run_detail_bytes)
+        for trace in details.traces:
+            self._trace_descriptors[(trace.run_id, trace.node_id)] = trace.descriptor
+            self._trace_errors[(trace.run_id, trace.node_id)] = trace.error
         return tuple(interrupted)
 
     def _fail_interrupted_runs(
@@ -605,6 +641,26 @@ class Operator:
                     terminal_reason=OPERATOR_RESTARTED_REASON,
                 )
             self._wait_for_notifications(notifications)
+
+    def _fail_pending_evaluations(self) -> None:
+        """Fail the evaluations a previous operator left pending.
+
+        Their workers ended with that operator, so no result can arrive for them.
+        """
+        with self._lock, self._state_store.transaction() as connection:
+            for record in RunEvaluationsTable.list_pending(connection):
+                RunEvaluationsTable.replace(
+                    connection,
+                    EvaluationRecord(
+                        evaluation_id=record.evaluation_id,
+                        run_id=record.run_id,
+                        node_id=record.node_id,
+                        status="failed",
+                        created_at=record.created_at,
+                        ended_at=max(record.created_at, time.time()),
+                        error=OPERATOR_RESTARTED_REASON,
+                    ),
+                )
 
     @property
     def operator_instance_id(self) -> str:
@@ -706,27 +762,30 @@ class Operator:
                 raise KeyError(run_id)
             if node_id and node_id not in run.nodes:
                 raise KeyError(node_id)
-            return [
-                record.model_copy(deep=True)
-                for record in self._evaluations.get(run_id, {}).values()
-                if not node_id or record.node_id == node_id
-            ]
+            with self._state_store.transaction() as connection:
+                return list(RunEvaluationsTable.list_run(connection, run_id, node_id))
 
     def _submit_evaluation(self, run_id: str, node_id: str, request: EvaluationRequest) -> None:
         with self._lock:
             run = self._runs[run_id]
             if node_id not in run.nodes:
                 raise _CoordinatorProtocolError("Evaluation references an unpublished node")
-            records = self._evaluations.setdefault(run_id, {})
-            if request.evaluation_id in records:
-                raise _CoordinatorProtocolError("Duplicate evaluation submission")
-            records[request.evaluation_id] = EvaluationRecord(
-                evaluation_id=request.evaluation_id,
-                run_id=run_id,
-                node_id=node_id,
-                status="pending",
-                created_at=request.created_at,
-            )
+            with self._state_store.transaction() as connection:
+                if (
+                    RunEvaluationsTable.get(connection, run_id, request.evaluation_id)
+                    is not None
+                ):
+                    raise _CoordinatorProtocolError("Duplicate evaluation submission")
+                RunEvaluationsTable.insert(
+                    connection,
+                    EvaluationRecord(
+                        evaluation_id=request.evaluation_id,
+                        run_id=run_id,
+                        node_id=node_id,
+                        status="pending",
+                        created_at=request.created_at,
+                    ),
+                )
         if request.error is not None:
             self._complete_evaluation(
                 run_id, request.evaluation_id, EvaluationOutcome(error=request.error)
@@ -748,17 +807,22 @@ class Operator:
     ) -> None:
         # This is deliberately not _apply_event / _publish_run_locked: a late
         # evaluation must not reopen a coordinator channel or advance lifecycle.
-        with self._lock:
-            previous = self._evaluations[run_id][evaluation_id]
-            self._evaluations[run_id][evaluation_id] = EvaluationRecord(
-                evaluation_id=evaluation_id,
-                run_id=run_id,
-                node_id=previous.node_id,
-                status="completed" if outcome.result is not None else "failed",
-                created_at=previous.created_at,
-                ended_at=max(previous.created_at, time.time()),
-                result=outcome.result,
-                error=outcome.error,
+        with self._lock, self._state_store.transaction() as connection:
+            previous = RunEvaluationsTable.get(connection, run_id, evaluation_id)
+            if previous is None:
+                raise KeyError(evaluation_id)
+            RunEvaluationsTable.replace(
+                connection,
+                EvaluationRecord(
+                    evaluation_id=evaluation_id,
+                    run_id=run_id,
+                    node_id=previous.node_id,
+                    status="completed" if outcome.result is not None else "failed",
+                    created_at=previous.created_at,
+                    ended_at=max(previous.created_at, time.time()),
+                    result=outcome.result,
+                    error=outcome.error,
+                ),
             )
 
     def get_run(self, run_id: str) -> RunState | None:
@@ -911,36 +975,21 @@ class Operator:
                     if order == _DESCRIPTOR_PAGE_ORDER_FORWARD
                     else before_sequence or through_sequence + 1
                 )
-            logs = self._logs.get(run_id)
-            if logs is None and run_id not in self._runs:
+            if run_id not in self._runs:
                 raise KeyError(run_id)
-            logs = logs or []
-            candidates: list[SequencedLogEntry]
-            if node_id:
-                run_node_sequences = self._log_sequences_by_node.get(run_id)
-                node_sequences = (
-                    () if run_node_sequences is None else run_node_sequences.get(node_id, ())
+            newest_first = order == _DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST
+            with self._state_store.transaction() as connection:
+                candidates = RunLogsTable.page(
+                    connection,
+                    run_id,
+                    after=0 if newest_first else cursor,
+                    through=min(cursor - 1, through_sequence)
+                    if newest_first
+                    else through_sequence,
+                    limit=size + 1,
+                    node_id=node_id,
+                    newest_first=newest_first,
                 )
-                if order == _DESCRIPTOR_PAGE_ORDER_FORWARD:
-                    start = bisect_right(node_sequences, cursor)
-                    stop = bisect_right(node_sequences, through_sequence)
-                    selected_sequences = node_sequences[start : min(start + size + 1, stop)]
-                else:
-                    stop = bisect_right(
-                        node_sequences,
-                        min(cursor - 1, through_sequence),
-                    )
-                    start = max(0, stop - size - 1)
-                    selected_sequences = reversed(node_sequences[start:stop])
-                candidates = [logs[sequence - 1] for sequence in selected_sequences]
-            elif order == _DESCRIPTOR_PAGE_ORDER_FORWARD:
-                start = min(cursor, len(logs))
-                stop = min(start + size + 1, through_sequence, len(logs))
-                candidates = logs[start:stop]
-            else:
-                start = min(cursor - 1, through_sequence, len(logs)) - 1
-                stop = max(-1, start - size - 1)
-                candidates = [logs[index] for index in range(start, stop, -1)]
             descriptors = [
                 self._log_descriptor_locked(
                     run_id,
@@ -1023,26 +1072,19 @@ class Operator:
                 raise KeyError(run_id)
             if node_id not in run.nodes:
                 raise KeyError(node_id)
-            events = self._agent_events.get((run_id, node_id), [])
-            if order == _DESCRIPTOR_PAGE_ORDER_FORWARD:
-                start = bisect_right(
-                    events,
-                    cursor,
-                    key=lambda item: item.event_sequence,
+            newest_first = order == _DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST
+            with self._state_store.transaction() as connection:
+                candidates = RunAgentEventsTable.page(
+                    connection,
+                    run_id,
+                    node_id,
+                    after=0 if newest_first else cursor,
+                    through=min(cursor - 1, through_sequence)
+                    if newest_first
+                    else through_sequence,
+                    limit=size + 1,
+                    newest_first=newest_first,
                 )
-                stop = min(start + size + 1, len(events))
-                candidates = [
-                    item
-                    for item in events[start:stop]
-                    if item.event_sequence <= through_sequence
-                ]
-            else:
-                upper = bisect_right(
-                    events,
-                    min(cursor - 1, through_sequence),
-                    key=lambda item: item.event_sequence,
-                )
-                candidates = list(reversed(events[max(0, upper - size - 1) : upper]))
             descriptors = [
                 self._agent_event_descriptor_locked(
                     run_id,
@@ -1126,20 +1168,23 @@ class Operator:
                     if order == _DESCRIPTOR_PAGE_ORDER_FORWARD
                     else before_event_sequence or through_sequence + 1
                 )
-            events = self._classifier_events.get((run_id, node_id), ())
-            if through_sequence > len(events):
+            if through_sequence > self._last_classifier_event_sequences.get(
+                (run_id, node_id), 0
+            ):
                 raise ValueError("Classifier page token exceeds retained history")
-            if order == _DESCRIPTOR_PAGE_ORDER_FORWARD:
-                start = bisect_right(events, cursor, key=lambda item: item.event_sequence)
-                stop = min(start + size + 1, through_sequence)
-                candidates = events[start:stop]
-            else:
-                upper = bisect_right(
-                    events,
-                    min(cursor - 1, through_sequence),
-                    key=lambda item: item.event_sequence,
+            newest_first = order == _DESCRIPTOR_PAGE_ORDER_NEWEST_FIRST
+            with self._state_store.transaction() as connection:
+                candidates = RunClassifierEventsTable.page(
+                    connection,
+                    run_id,
+                    node_id,
+                    after=0 if newest_first else cursor,
+                    through=min(cursor - 1, through_sequence)
+                    if newest_first
+                    else through_sequence,
+                    limit=size + 1,
+                    newest_first=newest_first,
                 )
-                candidates = list(reversed(events[max(0, upper - size - 1) : upper]))
             descriptors = [
                 self._classifier_event_descriptor_locked(
                     run_id, node_id, item, as_of_sequence=token["as_of_sequence"]
@@ -1170,34 +1215,28 @@ class Operator:
             self._validate_transport_token_locked(token)
             run_id = token["run_id"]
             sequence = token["sequence"]
-            if token["kind"] == "log-body":
-                logs = self._logs.get(run_id, ())
-                if sequence < 1 or sequence > len(logs):
-                    raise KeyError(sequence)
-                body = logs[sequence - 1].entry.message
-            elif token["kind"] == "classifier-event-body":
-                classifier_events = self._classifier_events.get((run_id, token["node_id"]), ())
-                if sequence > len(classifier_events):
-                    raise KeyError(sequence)
-                item = classifier_events[sequence - 1]
-                if item.invocation_id != token["invocation_id"]:
-                    raise ValueError("Classifier body token invocation does not match")
-                if not item.event_json:
-                    raise ClassifierDetailExpiredError(
-                        "Classifier invocation detail has expired"
+            with self._state_store.transaction() as connection:
+                if token["kind"] == "log-body":
+                    log_item = RunLogsTable.get(connection, run_id, sequence)
+                    if log_item is None:
+                        raise KeyError(sequence)
+                    body = log_item.entry.message
+                elif token["kind"] == "classifier-event-body":
+                    classifier_event = RunClassifierEventsTable.get(
+                        connection, run_id, token["node_id"], sequence
                     )
-                body = item.event_json
-            else:
-                node_id = token["node_id"]
-                events = self._agent_events.get((run_id, node_id), ())
-                index = bisect_right(
-                    events,
-                    sequence - 1,
-                    key=lambda item: item.event_sequence,
-                )
-                if index >= len(events) or events[index].event_sequence != sequence:
-                    raise KeyError(sequence)
-                body = events[index].event_json
+                    if classifier_event is None:
+                        raise KeyError(sequence)
+                    if classifier_event.invocation_id != token["invocation_id"]:
+                        raise ValueError("Classifier body token invocation does not match")
+                    body = classifier_event.event_json
+                else:
+                    agent_event = RunAgentEventsTable.get(
+                        connection, run_id, token["node_id"], sequence
+                    )
+                    if agent_event is None:
+                        raise KeyError(sequence)
+                    body = agent_event.event_json
         return body.encode()
 
     def read_trace(
@@ -1208,7 +1247,7 @@ class Operator:
         operator_instance_id: str,
         revision: int = 0,
     ) -> FinalizedTrace:
-        """Copy one immutable finalized trace body out of operator-owned memory."""
+        """Read one immutable finalized trace body from the state database."""
         with self._lock:
             if operator_instance_id != self._operator_instance_id:
                 raise StructuralBaselineUnavailableError(
@@ -1219,13 +1258,11 @@ class Operator:
                 raise KeyError(run_id)
             if node_id not in run.nodes:
                 raise KeyError(node_id)
-            versions = self._trace_bodies.get((run_id, node_id), {})
-            selected_revision = revision or (max(versions) if versions else 0)
-            try:
-                data = versions[selected_revision]
-            except KeyError:
-                raise KeyError(selected_revision) from None
-            return FinalizedTrace(revision=selected_revision, data=data)
+            with self._state_store.transaction() as connection:
+                body = RunTracesTable.read_body(connection, run_id, node_id, revision or None)
+            if body is None:
+                raise KeyError(revision)
+            return FinalizedTrace(revision=body.revision, data=body.data)
 
     def _materialize_structural_baseline_locked(self) -> _StructuralBaseline:
         as_of_sequence = self._sequence
@@ -1312,8 +1349,7 @@ class Operator:
             )
             for node in run.nodes.values()
         )
-        logs = self._logs.get(run.run_id, ())
-        latest_log_sequence = logs[-1].sequence if logs else 0
+        latest_log_sequence = self._last_log_sequences.get(run.run_id, 0)
         return RunSnapshot(
             operator_instance_id=self._operator_instance_id,
             as_of_sequence=as_of_sequence,
@@ -1335,14 +1371,13 @@ class Operator:
     def _current_log_page_token_locked(self, run_id: str) -> dict[str, Any]:
         if run_id not in self._runs:
             raise KeyError(run_id)
-        logs = self._logs.get(run_id, ())
         return {
             "v": 1,
             "kind": "logs",
             "operator_instance_id": self._operator_instance_id,
             "as_of_sequence": self._sequence,
             "run_id": run_id,
-            "through_sequence": logs[-1].sequence if logs else 0,
+            "through_sequence": self._last_log_sequences.get(run_id, 0),
         }
 
     def _current_event_page_token_locked(self, run_id: str, node_id: str) -> dict[str, Any]:
@@ -1362,14 +1397,13 @@ class Operator:
         node_id: str,
         as_of_sequence: int,
     ) -> str:
-        events = self._agent_events.get((run_id, node_id), ())
         return _encode_transport_token(
             kind="events",
             operator_instance_id=self._operator_instance_id,
             as_of_sequence=as_of_sequence,
             run_id=run_id,
             node_id=node_id,
-            through_sequence=events[-1].event_sequence if events else 0,
+            through_sequence=self._last_agent_event_sequences.get((run_id, node_id), 0),
         )
 
     def _classifier_event_page_token_locked(
@@ -1383,7 +1417,6 @@ class Operator:
             for declared_node, _ in run.topology.classifier_metadata_json
         ):
             raise KeyError(node_id)
-        events = self._classifier_events.get((run_id, node_id), ())
         return _encode_transport_token(
             kind="classifier-events",
             operator_instance_id=self._operator_instance_id,
@@ -1391,7 +1424,7 @@ class Operator:
             as_of_sequence=as_of_sequence,
             run_id=run_id,
             node_id=node_id,
-            through_sequence=events[-1].event_sequence if events else 0,
+            through_sequence=self._last_classifier_event_sequences.get((run_id, node_id), 0),
         )
 
     def _validate_transport_token_locked(self, token: Mapping[str, Any]) -> None:
@@ -1497,9 +1530,7 @@ class Operator:
                 node_id=node_id,
                 invocation_id=item.invocation_id,
                 sequence=item.event_sequence,
-            )
-            if item.event_json
-            else "",
+            ),
             event_kind=item.event_kind,
             duration_ms=item.duration_ms,
             error=item.error,
@@ -1510,19 +1541,23 @@ class Operator:
         trace_bodies = {}
         trace_errors = {}
         events = {}
-        for node_id in run.nodes:
-            key = (run.run_id, node_id)
-            events[node_id] = tuple(self._agent_events.get(key, ()))
-            descriptor = self._trace_descriptors.get(key)
-            captured_run.nodes[node_id].trace = descriptor
-            if descriptor is not None and descriptor.available:
-                body = self._trace_bodies.get(key, {}).get(descriptor.revision)
-                if body is not None:
-                    trace_bodies[node_id] = body
-            trace_errors[node_id] = self._trace_errors.get(key)
+        with self._state_store.transaction() as connection:
+            for node_id in run.nodes:
+                key = (run.run_id, node_id)
+                events[node_id] = RunAgentEventsTable.list_node(connection, run.run_id, node_id)
+                descriptor = self._trace_descriptors.get(key)
+                captured_run.nodes[node_id].trace = descriptor
+                if descriptor is not None and descriptor.available:
+                    body = RunTracesTable.read_body(
+                        connection, run.run_id, node_id, descriptor.revision
+                    )
+                    if body is not None:
+                        trace_bodies[node_id] = body.data
+                trace_errors[node_id] = self._trace_errors.get(key)
+            logs = RunLogsTable.list_run(connection, run.run_id)
         return _RunDetailCapture(
             run=captured_run,
-            logs=tuple(self._logs.get(run.run_id, ())),
+            logs=logs,
             events=MappingProxyType(events),
             trace_bodies=MappingProxyType(trace_bodies),
             trace_errors=MappingProxyType(trace_errors),
@@ -1825,7 +1860,6 @@ class Operator:
             # Reserve the ID before releasing the lock so concurrent callers
             # cannot create a second coordinator with the same caller-owned ID.
             self._active_runs[run_id] = handle
-            self._log_sequences_by_node.pop(run_id, None)
         try:
             with self._lock:
                 if self._closed:
@@ -1882,14 +1916,13 @@ class Operator:
             with self._lock:
                 run = self._runs.get(run_id)
                 if run is not None:
-                    self._evict_classifier_details_locked(run, remove_descriptors=True)
+                    self._forget_run_details_locked(run)
                     try:
                         with self._state_store.transaction() as connection:
                             RunsTable.delete(connection, run_id)
                     except (StateStoreError, sqlite3.Error) as exc:
                         failure.add_note(f"Removing the stored run also failed: {exc}")
                 self._runs.pop(run_id, None)
-                self._log_sequences_by_node.pop(run_id, None)
                 self._active_runs.pop(run_id, None)
             self._result_store.discard(result_bundle)
             _close_event_queue(event_queue)
@@ -2127,32 +2160,33 @@ class Operator:
             self._input_files.close()
             self._schedule_input_files.close()
 
-    def _evict_classifier_details_locked(
-        self, run: RunState, *, remove_descriptors: bool = False
-    ) -> None:
-        """Release bodies while retaining identity checks for historical invocations."""
-        released = 0
-        for node_id, _ in run.topology.classifier_metadata_json:
+    def _forget_run_details_locked(self, run: RunState) -> None:
+        """Drop a removed run's detail counters and protocol checks from memory.
+
+        Its stored rows go with its ``runs`` row.
+        """
+        self._release_evidence_checks_locked(run.run_id)
+        self._last_log_sequences.pop(run.run_id, None)
+        self._run_log_bytes.pop(run.run_id, None)
+        self._run_detail_bytes.pop(run.run_id, None)
+        for node_id in run.nodes:
             key = (run.run_id, node_id)
-            events = self._classifier_events.get(key)
-            if events is None:
-                continue
-            node_bytes = 0
-            for index, item in enumerate(events):
-                if item.event_json:
-                    node_bytes += item.size_bytes
-                    if not remove_descriptors:
-                        events[index] = replace(item, event_json="")
-            if remove_descriptors:
-                self._classifier_events.pop(key)
-            if node_bytes:
-                self._node_detail_bytes[key] -= node_bytes
-                released += node_bytes
-        if released:
-            self._run_detail_bytes[run.run_id] -= released
-        if remove_descriptors:
-            self._classifier_invocations.pop(run.run_id, None)
-        self._classifier_detail_runs.discard(run.run_id)
+            self._last_agent_event_sequences.pop(key, None)
+            self._last_classifier_event_sequences.pop(key, None)
+            self._node_detail_bytes.pop(key, None)
+            self._trace_descriptors.pop(key, None)
+            self._trace_errors.pop(key, None)
+
+    def _release_evidence_checks_locked(self, run_id: str) -> None:
+        """Release the checks that guard evidence from a run's coordinator."""
+        self._classifier_invocations.pop(run_id, None)
+        for checks in (
+            self._agent_invocation_sequences,
+            self._agent_invocation_runtimes,
+            self._agent_finished_invocations,
+        ):
+            for key in [key for key in checks if key[0] == run_id]:
+                del checks[key]
 
     def _begin_notification_shutdown(
         self,
@@ -2199,9 +2233,6 @@ class Operator:
         self._state_store.close()
 
     def _close_result_store(self) -> None:
-        with self._lock:
-            for run_id in tuple(self._classifier_detail_runs):
-                self._evict_classifier_details_locked(self._runs[run_id])
         self._result_store.close()
 
     def _start_notification_dispatcher(self) -> None:
@@ -2510,6 +2541,8 @@ class Operator:
             finally:
                 with self._lock:
                     self._active_runs.pop(run_id, None)
+                    # The coordinator is gone: no more evidence can arrive for this run.
+                    self._release_evidence_checks_locked(run_id)
                 _close_event_queue(handle.event_queue)
 
     def _apply_event(
@@ -2851,7 +2884,8 @@ class Operator:
                     f"agent invocation started on runtime {locked_runtime!r} "
                     f"but sent evidence from {runtime_kind!r}"
                 )
-        projected_events = self._agent_events.setdefault(key, [])
+        # Events are numbered 1, 2, ... per step, so the last number is also the count.
+        event_count = self._last_agent_event_sequences.get(key, 0)
         previous_descriptor = self._trace_descriptors.get(
             key, TraceDescriptor(status="in_progress")
         )
@@ -2878,7 +2912,7 @@ class Operator:
             turn_finished = common if isinstance(common, TurnFinished) else None
             projected_agent_event = AgentEvent(
                 invocation_id=invocation_id,
-                event_sequence=len(projected_events) + 1,
+                event_sequence=event_count + 1,
                 event_json=stored_json,
                 size_bytes=event_size,
                 native_event_kind=(evidence.native.kind if evidence.native is not None else ""),
@@ -2911,8 +2945,8 @@ class Operator:
             descriptor = replace(
                 previous_descriptor,
                 status=status,
-                event_count=len(projected_events) + 1,
-                latest_event_sequence=len(projected_events) + 1,
+                event_count=event_count + 1,
+                latest_event_sequence=event_count + 1,
             )
         else:
             finalized_trace = evidence.model_dump_json().encode()
@@ -2926,9 +2960,6 @@ class Operator:
                 raise _CoordinatorProtocolError(
                     f"agent terminal detail exceeds {self._max_trace_body_bytes} byte limit"
                 )
-            latest_event_sequence = (
-                projected_events[-1].event_sequence if projected_events else 0
-            )
             match evidence:
                 case AgentTraceFinished(header=header):
                     status = header.status
@@ -2938,9 +2969,9 @@ class Operator:
                         revision=previous_descriptor.revision,
                         available=True,
                         complete=evidence.complete,
-                        event_count=len(projected_events),
+                        event_count=event_count,
                         size_bytes=len(finalized_trace),
-                        latest_event_sequence=latest_event_sequence,
+                        latest_event_sequence=event_count,
                         header=_trace_header(header),
                     )
                     message = f"Agent trace {status}"
@@ -2953,9 +2984,9 @@ class Operator:
                         revision=previous_descriptor.revision,
                         available=True,
                         complete=evidence.complete,
-                        event_count=len(projected_events),
+                        event_count=event_count,
                         size_bytes=len(finalized_trace),
-                        latest_event_sequence=latest_event_sequence,
+                        latest_event_sequence=event_count,
                     )
                     message = f"Agent trace unavailable: {error}"
                     level = LogLevel.WARN
@@ -2981,7 +3012,7 @@ class Operator:
             node_bytes=body_size,
         )
         if projected_agent_event is not None:
-            projected_events.append(projected_agent_event)
+            self._last_agent_event_sequences[key] = projected_agent_event.event_sequence
             self._agent_invocation_sequences[invocation_key] = sequence
         self._trace_descriptors[key] = descriptor
         self._trace_errors[key] = error
@@ -3078,12 +3109,12 @@ class Operator:
                 else:
                     answers.append(ClassifierScoreSummary(question_id, answer.score))
         key = (run.run_id, node_id)
-        events = self._classifier_events.setdefault(key, [])
+        event_sequence = self._last_classifier_event_sequences.get(key, 0) + 1
         item = ClassifierEvent(
             invocation_id=invocation.invocation_id,
             invocation_index=invocation.invocation_index,
             answers=tuple(answers),
-            event_sequence=len(events) + 1,
+            event_sequence=event_sequence,
             event_json=event_json,
             size_bytes=event_size,
             event_kind=invocation.status,
@@ -3094,7 +3125,7 @@ class Operator:
             ),
             error=invocation.status in {"failed", "cancelled"},
         )
-        events.append(item)
+        self._last_classifier_event_sequences[key] = event_sequence
         self._classifier_invocations.setdefault(run.run_id, {})[invocation.invocation_id] = (
             _ClassifierInvocationLifecycle(
                 node_id=node_id,
@@ -3104,7 +3135,6 @@ class Operator:
                 terminal=invocation.status != "running",
             )
         )
-        self._classifier_detail_runs.add(run.run_id)
         self._node_detail_bytes[key] = self._node_detail_bytes.get(key, 0) + event_size
         self._run_detail_bytes[run.run_id] = (
             self._run_detail_bytes.get(run.run_id, 0) + event_size
@@ -3120,7 +3150,7 @@ class Operator:
         log_entries: int = 0,
         node_bytes: int = 0,
     ) -> None:
-        if len(self._logs.get(run_id, ())) + log_entries > self._max_run_log_entries:
+        if self._last_log_sequences.get(run_id, 0) + log_entries > self._max_run_log_entries:
             raise _CoordinatorProtocolError(
                 f"run logs exceed {self._max_run_log_entries} entry limit"
             )
@@ -3147,17 +3177,8 @@ class Operator:
         entry: LogEntry,
         size_bytes: int,
     ) -> None:
-        logs = self._logs.setdefault(run.run_id, [])
-        sequence = len(logs) + 1
-        logs.append(
-            SequencedLogEntry(
-                sequence=sequence,
-                entry=deepcopy(entry),
-                size_bytes=size_bytes,
-            )
-        )
-        node_sequences = self._log_sequences_by_node.setdefault(run.run_id, {})
-        node_sequences.setdefault(entry.node_id, []).append(sequence)
+        # The publication that announces the entry stores it, numbered by this count.
+        self._last_log_sequences[run.run_id] = self._last_log_sequences.get(run.run_id, 0) + 1
         self._run_log_bytes[run.run_id] = self._run_log_bytes.get(run.run_id, 0) + size_bytes
         self._run_detail_bytes[run.run_id] = (
             self._run_detail_bytes.get(run.run_id, 0) + size_bytes
@@ -3365,19 +3386,36 @@ class Operator:
                 (run.run_id, node_id), self._run_created_sequences[run.run_id]
             )
 
+        trace_writes = []
         for node_id in trace_node_ids:
             key = (run.run_id, node_id)
             descriptor = self._trace_descriptors[key]
-            versions = self._trace_bodies.setdefault(key, {})
             finalized_trace = finalized_traces.get(node_id)
-            if finalized_trace is not None:
-                versions[publication_sequence] = finalized_trace
-            elif descriptor.available and descriptor.revision in versions:
-                versions[publication_sequence] = versions[descriptor.revision]
-            self._trace_descriptors[key] = replace(
-                descriptor,
-                revision=publication_sequence,
+            published = replace(descriptor, revision=publication_sequence)
+            self._trace_descriptors[key] = published
+            trace_writes.append(
+                _TraceWrite(
+                    node_id=node_id,
+                    descriptor=published,
+                    error=self._trace_errors.get(key),
+                    body=finalized_trace,
+                    # The new revision keeps serving the body it already had.
+                    carried_from=(
+                        descriptor.revision
+                        if finalized_trace is None and descriptor.available
+                        else None
+                    ),
+                )
             )
+        log_item = (
+            None
+            if log_entry is None
+            else SequencedLogEntry(
+                sequence=self._last_log_sequences[run.run_id],
+                entry=log_entry,
+                size_bytes=len(log_entry.message.encode()),
+            )
+        )
 
         changes: list[Any] = []
         if is_new:
@@ -3418,8 +3456,7 @@ class Operator:
                         step_io=node.step_io,
                     )
                 )
-            if log_entry is not None:
-                log_item = self._logs[run.run_id][-1]
+            if log_item is not None:
                 changes.append(
                     LogAppended(
                         run_id=run.run_id,
@@ -3488,6 +3525,12 @@ class Operator:
             node_ids=run.nodes.keys() if is_new or summary_changed else changed_node_ids,
             start=start,
             update_sequence=publication_sequence,
+            details=_DetailWrites(
+                log=log_item,
+                agent_events=agent_events,
+                classifier_events=classifier_events,
+                traces=tuple(trace_writes),
+            ),
         )
         self._sequence = publication_sequence
         self._stream_history.extend(updates)
@@ -3572,6 +3615,7 @@ class Operator:
         node_ids: Collection[str],
         start: _RunStart | None,
         update_sequence: int,
+        details: _DetailWrites,
     ) -> None:
         if start is not None and not is_new:
             raise RuntimeError(f"Run {run.run_id} was already stored")
@@ -3590,6 +3634,27 @@ class Operator:
                 RunsTable.create(connection, stored, start.request, start.process)
             else:
                 RunsTable.update(connection, stored, node_ids)
+            if details.log is not None:
+                RunLogsTable.insert(connection, run.run_id, details.log)
+            for node_id, agent_event in details.agent_events.items():
+                RunAgentEventsTable.insert(connection, run.run_id, node_id, agent_event)
+            for node_id, classifier_event in details.classifier_events.items():
+                RunClassifierEventsTable.insert(
+                    connection, run.run_id, node_id, classifier_event
+                )
+            for trace in details.traces:
+                revision = trace.descriptor.revision
+                if trace.body is not None:
+                    RunTracesTable.insert_body(
+                        connection, run.run_id, trace.node_id, revision, trace.body
+                    )
+                elif trace.carried_from is not None:
+                    RunTracesTable.carry_body(
+                        connection, run.run_id, trace.node_id, revision, trace.carried_from
+                    )
+                RunTracesTable.write_descriptor(
+                    connection, run.run_id, trace.node_id, trace.descriptor, trace.error
+                )
             OperatorMetadataTable.write_sequences(
                 connection,
                 update_sequence=update_sequence,
