@@ -25,6 +25,9 @@ _MAX_NAME_BYTES = 255
 _MAX_MEDIA_TYPE_CHARS = 255
 _TOKEN_CHARS = frozenset("0123456789abcdef")
 
+INPUT_FILE_FOLDER_NAME = "input-files"
+"""The folder next to a state database that keeps the files runs used."""
+
 _logger = logging.getLogger(__name__)
 
 

@@ -161,6 +161,42 @@ input is validated against the workflow's input model when each run starts. To r
 workflow by hand, use `ava run` as for any other workflow. Targeting a workflow without a cron expression, or an unknown selector,
 prints the operator error to stderr and returns `1`.
 
+## `ava state COMMAND [options] [--state-db PATH]`
+
+Inspect and clear what the local operator keeps in its state database and the
+folders next to it (`results/`, `input-files/`, `schedule-inputs/`). The operator
+never deletes any of it automatically. Every command takes `--state-db PATH`, with
+the same default as `ava operator` (`.avalanche/operator/state.db` under the
+current folder), and needs an existing database file.
+
+The commands refuse to run while an operator uses the database: they print an
+error naming the database file and return `1`. Stop the operator first. While a
+command runs, no operator can start on that database.
+
+| Command | Effect |
+| --- | --- |
+| `ava state info` | Prints the database path and size, the number of runs by status, the number of schedules, and the number and size of stored results, staged input-file folders and schedule input-file folders. Also lists leftovers: files nothing refers to anymore, such as those left by an interrupted delete, and a stored result whose bundle is missing. |
+| `ava state delete RUN_ID...` | Deletes those runs with their steps, logs, agent and classifier events, traces, evaluations, result bundle, and the input files only they used. An unknown run ID, or a run that did not finish before its operator stopped, refuses the whole command before anything is deleted. |
+| `ava state prune --before DATE` | Deletes finished runs triggered before `DATE`, an ISO 8601 date or date-time such as `2026-11-01` or `2026-11-01T09:30`, read as local time unless it names a time zone. |
+| `ava state prune --keep-last N` | Keeps the `N` most recent finished runs and deletes the other finished runs. |
+| `ava state clear [--yes] [--include-schedules]` | Asks for confirmation, then deletes every run with everything that belongs to it, and every leftover file. `--yes` skips the question. Schedules (on/off state, input and its files) are kept unless `--include-schedules` is given. |
+
+`prune` never deletes unfinished runs (requesting, pending or running) or schedules.
+Runs that were unfinished when an operator stopped are marked failed the next time
+an operator starts on the database. `clear` first stops any process such a run left
+running, as an operator start does.
+
+Each run is deleted in one database transaction, so an interruption never leaves
+half a run. Its result bundle and input files are removed right after that
+transaction; if this fails, the run is already gone and `ava state info` lists the
+files left behind. Only `ava state clear` removes those leftovers.
+
+After deleting, the commands write the database's pending changes back into the
+file and say how its size changed. `clear` always rebuilds the file with SQLite's
+`VACUUM` to return the freed space to the disk; `delete` and `prune` do so once at
+least 25% of the file is free space, and otherwise leave the free space in the file
+for new data.
+
 ## `ava tui [FLOW[/NODE]] [options]`
 
 Launch the Textual terminal UI. Without `--connect`, use the mock provider; with
