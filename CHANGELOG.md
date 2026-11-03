@@ -11,6 +11,12 @@
   `ray_init_kwargs`. The local executor's behavior is unchanged; it is now always
   the default. Delta's separate remote runtime is unchanged.
 
+- `ava init`: new workspaces no longer set up a model provider. There is no
+  `scripts/configure-provider.sh`, provider prompt, `.env` file or `codex-lm` extra.
+  The starter is now `start_flow`: a source, a plain step, an agent step and a dest,
+  each with card text that names its node type. Running it needs `OPENAI_API_KEY`. A
+  new `README.md` in the workspace explains how to run it and which models and
+  credentials PredictRLM, ClaudeAgent and OpenAIAgent take.
 - Agents: each agent call now records everything the model is given before its
   first turn, as a new common live event, `prompt.sent`: the system prompt, the
   messages, every tool with its input schema, and the answer's schema. ClaudeAgent
