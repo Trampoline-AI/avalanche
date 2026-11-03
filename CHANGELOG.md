@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.17.4
+
 - Agents: each agent call now records everything the model is given before its
   first turn, as a new common live event, `prompt.sent`: the system prompt, the
   messages, every tool with its input schema, and the answer's schema. ClaudeAgent
