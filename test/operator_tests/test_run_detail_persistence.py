@@ -6,12 +6,13 @@ import json
 import subprocess
 import sys
 import time
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import datetime
 from pathlib import Path
 
 import pytest
 
+from runtime.operator.client import GrpcStateProvider, _DetailHydrationRaceError
 from runtime.operator.evaluation_models import EvaluationRecord
 from runtime.operator.models import (
     AgentEvent,
@@ -25,17 +26,19 @@ from runtime.operator.models import (
     RunStatus,
     SequencedLogEntry,
     TraceDescriptor,
+    TraceHeader,
     WorkflowTopology,
 )
 from runtime.operator.operator import OPERATOR_RESTARTED_REASON, Operator
-from runtime.operator.state import OperatorStateStore, StateRowError
+from runtime.operator.proto import operator_pb2 as pb
+from runtime.operator.state import OperatorStateStore, StateRowError, StateStoreError
 from runtime.operator.state.agent_events import RunAgentEventsTable
 from runtime.operator.state.classifier_events import RunClassifierEventsTable
 from runtime.operator.state.evaluations import RunEvaluationsTable
 from runtime.operator.state.logs import RunLogsTable
 from runtime.operator.state.run_details import delete_run_details, load_run_detail_totals
 from runtime.operator.state.runs import RunRequest, RunsTable, StoredRun
-from runtime.operator.state.traces import RunTracesTable
+from runtime.operator.state.traces import RunTracesTable, _StoredDescriptor, _StoredHeader
 
 from .test_classifier_transport import _event_handle, _invocation, _publish, _seed_run
 from .test_state_detail import _add_run, _finished, _live, _wire
@@ -218,6 +221,56 @@ def test_an_agent_run_shows_the_same_details_after_a_restart(tmp_path):
         restarted.close()
 
 
+def test_an_agent_trace_left_recording_ends_with_its_interrupted_run(tmp_path):
+    state_db = tmp_path / "state.db"
+    operator = Operator([], watch=False, schedule=False, webhook_port=0, state_db=state_db)
+    try:
+        run = _add_run(operator, "interrupted")
+        operator._apply_event(run.run_id, _state_event_handle(), _wire(_live(1)))
+        recording = operator.get_run(run.run_id).nodes["agent_1"].trace
+        assert recording is not None and recording.status == "in_progress"
+    finally:
+        operator.close()
+
+    restarted = Operator([], watch=False, schedule=False, webhook_port=0, state_db=state_db)
+    try:
+        failed = restarted.get_run(run.run_id)
+        assert failed is not None and failed.status is RunStatus.FAILED
+        trace = failed.nodes["agent_1"].trace
+        assert trace is not None and trace.status == "error"
+        assert trace.revision > recording.revision
+        envelope = json.loads(failed.nodes["agent_1"].agent_trace_json)
+        assert envelope["error"] == OPERATOR_RESTARTED_REASON
+        assert len(_agent_events(restarted, run.run_id, "agent_1")) == 1
+    finally:
+        restarted.close()
+
+    # Stored, so it reads the same after another restart.
+    again = Operator([], watch=False, schedule=False, webhook_port=0, state_db=state_db)
+    try:
+        assert again.get_run(run.run_id).nodes["agent_1"].trace == trace
+    finally:
+        again.close()
+
+
+def test_details_cannot_be_read_from_a_closed_operator(tmp_path):
+    operator = Operator([], watch=False, schedule=False, webhook_port=0, state_db=":memory:")
+    run = _add_run(operator, "closed")
+    operator._apply_event(run.run_id, _state_event_handle(), _wire(_live(1)))
+    operator.close()
+    with pytest.raises(StateStoreError, match="closed"):
+        operator.list_logs(run.run_id)
+    with pytest.raises(StateStoreError, match="closed"):
+        operator.list_agent_events(run.run_id, "agent_1")
+
+
+def test_stored_trace_descriptors_name_every_domain_field():
+    assert {field.name for field in fields(TraceDescriptor)} == set(
+        _StoredDescriptor.model_fields
+    )
+    assert {field.name for field in fields(TraceHeader)} == set(_StoredHeader.model_fields)
+
+
 def test_logs_received_before_a_kill_survive_it(tmp_path):
     flows = tmp_path / "flows.py"
     flows.write_text(_PRINTING_FLOW)
@@ -336,6 +389,39 @@ def test_a_pending_evaluation_is_failed_after_a_restart_and_finished_ones_are_ke
         assert restarted.list_evaluations("judged-run", "judged") == [kept, restarted_record]
     finally:
         restarted.close()
+
+
+def _trace_reference(scope: str, sha256: str) -> pb.ActivityDetailRefV2:
+    return pb.ActivityDetailRefV2(
+        run_id="run-1",
+        scope_ref=pb.ScopeReferenceV2(reference=scope),
+        activity_id="trace:agent:7",
+        run_sequence=3,
+        object_uri="avalanche-trace://run-1/agent/7",
+        object_key="run-1/agent/7",
+        sha256=sha256,
+        size_bytes=10,
+    )
+
+
+def test_a_client_takes_a_restarted_operators_references_for_the_same_details():
+    provider = GrpcStateProvider("127.0.0.1:1")
+    try:
+        provider.operator_instance_id = "operator-1"
+        provider._remember_detail_reference(_trace_reference("operator-1", "a" * 64))
+        # Before its stream reconnects, the client already reads the restarted
+        # operator, which serves the stored trace under the same key.
+        provider._remember_detail_reference(_trace_reference("operator-2", "a" * 64))
+        # Once the client resets to the restarted operator, a late reply from the
+        # previous one never moves the binding back.
+        provider._retire_scope("operator-2")
+        with pytest.raises(_DetailHydrationRaceError):
+            provider._remember_detail_reference(_trace_reference("operator-1", "a" * 64))
+        # Within one operator a reference never changes.
+        with pytest.raises(_DetailHydrationRaceError):
+            provider._remember_detail_reference(_trace_reference("operator-2", "b" * 64))
+    finally:
+        provider.close()
 
 
 # ── Adapters ─────────────────────────────────────────────

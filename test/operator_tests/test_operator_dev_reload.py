@@ -216,7 +216,10 @@ def test_close_cancels_run_after_start_returns_id(tmp_path):
 
     assert time.monotonic() - started < 3.0
     assert not handle.process.is_alive()
-    assert operator.get_run(run_id).status == RunStatus.CANCELLED
+    snapshot = operator.get_latest_run_snapshot(
+        run_id, operator_instance_id=operator.operator_instance_id
+    )
+    assert snapshot is not None and snapshot.summary.status == RunStatus.CANCELLED
     assert operator._active_runs == {}
 
 
