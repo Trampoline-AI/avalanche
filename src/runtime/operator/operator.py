@@ -588,12 +588,15 @@ class Operator:
                 run = self._runs[run_id]
                 run.status = RunStatus.FAILED
                 # Timestamps are monotonic; a reboot restarts that clock.
-                run.ended_at = max(time.monotonic(), run.started_at or 0.0)
+                now = time.monotonic()
+                run.ended_at = now if run.started_at is None else max(now, run.started_at)
                 changed_node_ids = []
                 for node in run.nodes.values():
                     if node.status in (NodeStatus.PENDING, NodeStatus.RUNNING):
                         node.status = NodeStatus.FAILED
-                        node.ended_at = max(run.ended_at, node.started_at or 0.0)
+                        node.ended_at = (
+                            now if node.started_at is None else max(now, node.started_at)
+                        )
                         node.error = OPERATOR_RESTARTED_REASON
                         changed_node_ids.append(node.node_id)
                 notifications = self._publish_run_locked(
@@ -1742,7 +1745,16 @@ class Operator:
         if run_id and len(run_id.encode("utf-8")) > MAX_RUN_ID_BYTES:
             raise InvalidRunIdError(f"run_id exceeds {MAX_RUN_ID_BYTES}-byte UTF-8 limit")
         triggered_at = time.time()
-        request = _run_request(input, context, input_files)
+        try:
+            request = RunRequest(
+                input=None if input is None else to_jsonable_python(input),
+                context=None if context is None else to_jsonable_python(context),
+                input_files=input_files,
+            )
+        except PydanticSerializationError as exc:
+            raise ValueError(
+                f"Run input and context must be JSON-serializable to be stored: {exc}"
+            ) from exc
         descriptor, configured_root = self._registry.resolve_source(flow_name)
         if (
             expected_version
@@ -1822,7 +1834,14 @@ class Operator:
                 if process.pid is None:
                     raise RuntimeError("Run coordinator did not expose a process ID")
                 assign_process(windows_job, process.pid)
-                start = _RunStart(request=request, process=identify_run_process(process.pid))
+                # Only a lasting database needs the process group, to stop it after
+                # a restart; a throwaway one is never read again.
+                start = _RunStart(
+                    request=request,
+                    process=None
+                    if self._state_store.path is None
+                    else identify_run_process(process.pid),
+                )
                 assignment_event.set()
                 run = RunState(
                     run_id=run_id,
@@ -3339,6 +3358,12 @@ class Operator:
                 self._node_revisions[(run.run_id, node_id)] = publication_sequence
         for node_id in changed_node_ids:
             self._node_revisions[(run.run_id, node_id)] = publication_sequence
+        # Nodes a prepared run adds without a change keep the revision snapshots
+        # report for them: the run's created sequence.
+        for node_id in run.nodes:
+            self._node_revisions.setdefault(
+                (run.run_id, node_id), self._run_created_sequences[run.run_id]
+            )
 
         for node_id in trace_node_ids:
             key = (run.run_id, node_id)
@@ -3449,21 +3474,23 @@ class Operator:
                 )
             )
 
-        updates = []
-        for change in changes:
-            self._sequence += 1
-            update = OperatorUpdate(sequence=self._sequence, change=change)
-            self._stream_history.append(update)
-            updates.append(update)
-        if self._sequence != publication_sequence:
+        updates = [
+            OperatorUpdate(sequence=self._sequence + offset, change=change)
+            for offset, change in enumerate(changes, start=1)
+        ]
+        if updates[-1].sequence != publication_sequence:
             raise RuntimeError("Run publication produced an inconsistent update batch")
+        # Stored before the sequence advances, so a failed write publishes nothing.
         self._store_run_locked(
             run,
             is_new=is_new,
             # A new or re-prepared run (whose nodes are replaced) stores every node.
             node_ids=run.nodes.keys() if is_new or summary_changed else changed_node_ids,
             start=start,
+            update_sequence=publication_sequence,
         )
+        self._sequence = publication_sequence
+        self._stream_history.extend(updates)
 
         envelopes = tuple(
             OperatorUpdateEnvelope(
@@ -3544,6 +3571,7 @@ class Operator:
         is_new: bool,
         node_ids: Collection[str],
         start: _RunStart | None,
+        update_sequence: int,
     ) -> None:
         if start is not None and not is_new:
             raise RuntimeError(f"Run {run.run_id} was already stored")
@@ -3553,10 +3581,7 @@ class Operator:
             revision=self._run_revisions[run.run_id],
             activity_sequence=self._run_activity_sequences[run.run_id],
             node_revisions={
-                node_id: self._node_revisions.get(
-                    (run.run_id, node_id), self._run_created_sequences[run.run_id]
-                )
-                for node_id in run.nodes
+                node_id: self._node_revisions[(run.run_id, node_id)] for node_id in run.nodes
             },
         )
         with self._state_store.transaction() as connection:
@@ -3565,14 +3590,20 @@ class Operator:
                 RunsTable.create(connection, stored, start.request, start.process)
             else:
                 RunsTable.update(connection, stored, node_ids)
-            self._store_sequences_locked(connection)
+            OperatorMetadataTable.write_sequences(
+                connection,
+                update_sequence=update_sequence,
+                catalog_sequence=self._catalog_sequence,
+            )
 
-    def _store_sequences_locked(self, connection: sqlite3.Connection) -> None:
-        OperatorMetadataTable.write_sequences(
-            connection,
-            update_sequence=self._sequence,
-            catalog_sequence=self._catalog_sequence,
-        )
+    def _store_sequences_locked(self, *, update_sequence: int, catalog_sequence: int) -> None:
+        # Stored before the counters advance, so a failed write publishes nothing.
+        with self._state_store.transaction() as connection:
+            OperatorMetadataTable.write_sequences(
+                connection,
+                update_sequence=update_sequence,
+                catalog_sequence=catalog_sequence,
+            )
 
     def _notify_run(self, run: RunState, *, summary_changed: bool = True) -> None:
         with self._lock:
@@ -3584,11 +3615,11 @@ class Operator:
 
     def _publish_catalog(self, view: CatalogView) -> CatalogSnapshot:
         with self._lock:
-            self._sequence += 1
-            self._catalog_sequence = self._sequence
+            sequence = self._sequence + 1
+            self._store_sequences_locked(update_sequence=sequence, catalog_sequence=sequence)
+            self._sequence = sequence
+            self._catalog_sequence = sequence
             catalog = self._catalog_snapshot(view, self._catalog_sequence)
-            with self._state_store.transaction() as connection:
-                self._store_sequences_locked(connection)
             update = OperatorUpdate(
                 sequence=self._sequence,
                 change=CatalogReplaced(catalog=catalog),
@@ -3616,18 +3647,24 @@ class Operator:
     def publish_update(self, change: OperatorUpdateChange) -> None:
         """Publish one caller-owned typed lifecycle update."""
         with self._lock:
-            self._sequence += 1
-            if isinstance(change, CatalogReloadRequired):
-                # A reload notice fences the existing catalog graph at this event.
-                # DiscoverFlows can therefore return a baseline that covers the notice
-                # without publishing a replacement catalog or changing its contents.
-                self._catalog_sequence = self._sequence
+            sequence = self._sequence + 1
+            # A reload notice fences the existing catalog graph at this event.
+            # DiscoverFlows can therefore return a baseline that covers the notice
+            # without publishing a replacement catalog or changing its contents.
+            catalog_sequence = (
+                sequence
+                if isinstance(change, CatalogReloadRequired)
+                else self._catalog_sequence
+            )
+            self._store_sequences_locked(
+                update_sequence=sequence, catalog_sequence=catalog_sequence
+            )
+            self._sequence = sequence
+            self._catalog_sequence = catalog_sequence
             update = OperatorUpdate(
                 sequence=self._sequence,
                 change=change,
             )
-            with self._state_store.transaction() as connection:
-                self._store_sequences_locked(connection)
             self._stream_history.append(update)
             envelope = OperatorUpdateEnvelope(
                 operator_instance_id=self._operator_instance_id,
@@ -3703,24 +3740,6 @@ class Operator:
                         item for item in self._update_subscribers if item is not subscription
                     ]
                     return
-
-
-def _run_request(
-    run_input: dict[str, Any] | None,
-    context: dict[str, Any] | None,
-    input_files: tuple[StagedInputFile, ...],
-) -> RunRequest:
-    """The request a run is stored with: its input and context in JSON form."""
-    try:
-        return RunRequest(
-            input=None if run_input is None else to_jsonable_python(run_input),
-            context=None if context is None else to_jsonable_python(context),
-            input_files=input_files,
-        )
-    except PydanticSerializationError as exc:
-        raise ValueError(
-            f"Run input and context must be JSON-serializable to be stored: {exc}"
-        ) from exc
 
 
 def _bounded_page_size(page_size: int) -> int:

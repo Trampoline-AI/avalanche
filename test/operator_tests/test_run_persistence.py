@@ -16,6 +16,7 @@ from pathlib import Path
 import grpc
 import pytest
 
+from runtime.operator import run_processes
 from runtime.operator.client import GrpcStateProvider
 from runtime.operator.input_files import InputFileStaging, StagedInputFile
 from runtime.operator.models import (
@@ -31,7 +32,12 @@ from runtime.operator.models import (
 from runtime.operator.operator import OPERATOR_RESTARTED_REASON, Operator, RunAlreadyExistsError
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
-from runtime.operator.run_processes import RunProcess, identify_run_process, stop_run_process
+from runtime.operator.run_processes import (
+    RunProcess,
+    RunProcessStopError,
+    identify_run_process,
+    stop_run_process,
+)
 from runtime.operator.server import serve as serve_operator
 from runtime.operator.state import OperatorStateStore, StateRowError
 from runtime.operator.state.metadata import OperatorMetadataTable
@@ -236,7 +242,11 @@ def test_runs_table_round_trips_runs_nodes_requests_and_processes():
         context={"tenant": "local"},
         input_files=(StagedInputFile("a" * 32 + "/notes.txt", "notes.txt", "", "b" * 64, 3),),
     )
-    process = RunProcess(process_group=4321, started="Mon Nov  2 10:00:00 2026")
+    process = RunProcess(
+        process_group=4321,
+        started="Mon Nov  2 10:00:00 2026",
+        booted="Thu Oct  8 03:04:29 2026",
+    )
     store = OperatorStateStore.open(":memory:")
     try:
         with store.transaction() as connection:
@@ -391,14 +401,18 @@ def test_a_run_left_running_by_a_killed_operator_is_stopped_and_failed(flows, tm
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
-def test_stopping_a_recorded_process_group_leaves_a_reused_id_alone():
+def test_stopping_a_recorded_process_group_leaves_unrelated_processes_alone():
     sleeper = subprocess.Popen(["sleep", "60"], start_new_session=True)
     try:
         recorded = identify_run_process(sleeper.pid)
         assert recorded is not None
-        reused = RunProcess(process_group=sleeper.pid, started="Thu Jan  1 00:00:00 1970")
+        reused = recorded.model_copy(update={"started": "Thu Jan  1 00:00:00 1970"})
+        rebooted = recorded.model_copy(update={"booted": "Thu Jan  1 00:00:00 1970"})
 
+        # Another process with the recorded ID, or any process after a restart of
+        # the machine, is not the run's.
         assert stop_run_process(reused, grace=1.0) is False
+        assert stop_run_process(rebooted, grace=1.0) is False
         assert sleeper.poll() is None
 
         assert stop_run_process(recorded, grace=1.0) is True
@@ -462,6 +476,8 @@ def test_a_connected_client_reads_stored_runs_from_the_restarted_operator(flows,
             assert after.status is RunStatus.SUCCESS
             assert _node_view(after) == _node_view(before)
             assert [run.run_id for run in provider.list_runs("quick")] == [run_id]
+            # The result stored before the restart is served for the stored run.
+            assert provider.get_run_result(run_id) == "HELLO ADA FROM NONE"
         finally:
             server.stop(grace=0).wait()
             second.close()
@@ -538,3 +554,39 @@ def test_closing_a_lasting_staging_folder_keeps_only_used_files(tmp_path):
 
     assert (tmp_path / used.object_key).read_bytes() == b"u"
     assert not (tmp_path / unused.object_key).parent.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_a_group_that_cannot_be_stopped_fails_startup_with_its_id(flows, tmp_path, monkeypatch):
+    sleeper = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        recorded = identify_run_process(sleeper.pid)
+        store = OperatorStateStore.open(tmp_path / "state.db")
+        try:
+            stored = _stored_run()
+            with store.transaction() as connection:
+                RunsTable.create(connection, stored, RunRequest(), recorded)
+                OperatorMetadataTable.write_sequences(
+                    connection, update_sequence=11, catalog_sequence=11
+                )
+        finally:
+            store.close()
+
+        def refuse(process_group, signal_number):
+            raise PermissionError("operation not permitted")
+
+        monkeypatch.setattr(run_processes.os, "killpg", refuse)
+        with pytest.raises(RunProcessStopError, match=str(sleeper.pid)):
+            _operator(flows, tmp_path / "state.db")
+        assert sleeper.poll() is None
+        # Nothing was marked failed: the run is still unfinished for the next start.
+        store = OperatorStateStore.open(tmp_path / "state.db")
+        try:
+            with store.transaction() as connection:
+                (loaded,) = RunsTable.load_all(connection)
+        finally:
+            store.close()
+        assert loaded.stored.run.status is RunStatus.RUNNING
+    finally:
+        sleeper.kill()
+        sleeper.wait(timeout=5)

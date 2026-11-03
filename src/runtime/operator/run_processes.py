@@ -37,6 +37,10 @@ class RunProcess(BaseModel):
     process_group: PositiveInt
     # The group leader's start time as ``ps -o lstart`` reports it.
     started: str
+    # When process 1 started, which changes when the machine (or container) restarts.
+    # After a restart none of the run's processes can be alive, and a process group
+    # with the recorded ID belongs to something else.
+    booted: str
 
 
 class RunProcessStopError(RuntimeError):
@@ -65,21 +69,26 @@ def identify_run_process(pid: int) -> RunProcess | None:
     """
     if os.name == "nt":
         return None
-    leader = next((info for info in _processes() if info.pid == pid), None)
+    processes = {info.pid: info for info in _processes("-p", f"1,{pid}")}
+    leader = processes.get(pid)
     if leader is None or not leader.live:
         return None
-    return RunProcess(process_group=pid, started=leader.started)
+    return RunProcess(process_group=pid, started=leader.started, booted=processes[1].started)
 
 
 def stop_run_process(process: RunProcess, *, grace: float) -> bool:
     """Stop a previous operator's run process group if it is still alive.
 
     Sends SIGTERM to the group, then SIGKILL after ``grace`` seconds. Returns
-    whether anything was stopped. A group whose leader is alive but started at
-    another time belongs to an unrelated process that reused the ID, and is left
-    alone. Raises :class:`RunProcessStopError` when live processes remain.
+    whether anything was stopped. Nothing is stopped when the machine restarted since
+    the run started, since none of its processes can have survived that, or when the
+    group leader is alive but started at another time: then an unrelated process
+    reused the ID. Raises :class:`RunProcessStopError` when live processes remain.
     """
     if os.name == "nt":
+        return False
+    (init,) = _processes("-p", "1")
+    if init.started != process.booted:
         return False
     members = _live_members(process.process_group)
     if not members:
@@ -112,13 +121,13 @@ def stop_run_process(process: RunProcess, *, grace: float) -> bool:
 
 def _live_members(process_group: int) -> tuple[_ProcessInfo, ...]:
     return tuple(
-        info for info in _processes() if info.process_group == process_group and info.live
+        info for info in _processes("-ax") if info.process_group == process_group and info.live
     )
 
 
-def _processes() -> tuple[_ProcessInfo, ...]:
+def _processes(*selection: str) -> tuple[_ProcessInfo, ...]:
     completed = subprocess.run(
-        [_PS, "-axo", "pid=,pgid=,stat=,lstart="],
+        [_PS, *selection, "-o", "pid=,pgid=,stat=,lstart="],
         check=True,
         capture_output=True,
         text=True,

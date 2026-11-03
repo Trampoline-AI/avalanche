@@ -1324,6 +1324,12 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         )
         return snapshot.summary.created_sequence if snapshot is not None else 0
 
+    def _result_cursor(self, run_sequence: int) -> pb.LifecycleCursorV2:
+        # A run stored before this operator started has its result as of this
+        # operator's first sequence: a stored result does not change, and this
+        # operator names no earlier sequence.
+        return self._cursor(max(run_sequence, self._first_event_sequence))
+
     @staticmethod
     def _set_file_metadata(descriptor, item) -> None:
         if item.name is not None:
@@ -1336,7 +1342,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         run_sequence = self._run_sequence(request.run_id)
         value_bytes = payload.value_json.encode("utf-8")
         return pb.RunResultV2(
-            cursor=self._cursor(run_sequence),
+            cursor=self._result_cursor(run_sequence),
             run_id=request.run_id,
             scope_ref=self._scope(),
             value=pb.ResultValueV2(
@@ -1384,7 +1390,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         size = _bounded_page_size(request.page_size)
         page = payload.files[offset : offset + size]
         next_offset = offset + len(page)
-        cursor = self._cursor(run_sequence)
+        cursor = self._result_cursor(run_sequence)
         message = pb.RunOutputArtifactPageV2(
             cursor=cursor,
             run_id=request.run_id,

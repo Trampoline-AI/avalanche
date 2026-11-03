@@ -113,7 +113,9 @@ MIGRATIONS: tuple[Migration, ...] = (
                 request_json TEXT NOT NULL,
                 process_group INTEGER,
                 process_started TEXT,
-                CHECK ((process_group IS NULL) = (process_started IS NULL))
+                process_booted TEXT,
+                CHECK ((process_group IS NULL) = (process_started IS NULL)),
+                CHECK ((process_group IS NULL) = (process_booted IS NULL))
             ) STRICT
             """,
             "CREATE INDEX runs_by_created_sequence ON runs (created_sequence)",
