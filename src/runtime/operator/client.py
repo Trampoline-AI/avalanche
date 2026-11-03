@@ -1246,15 +1246,17 @@ class GrpcStateProvider:
             existing = self._detail_refs_by_key.get(reference.object_key)
             # A restarted operator serves its stored details under the same keys
             # from a new scope, so its reference replaces an earlier operator's.
-            # Nothing else may replace a binding: not a change within one scope, and
-            # not a late reply from an operator this client has moved away from.
+            # Nothing else may replace a binding within one scope, and a late reply
+            # from an operator this client has moved away from is never bound, even
+            # after a new baseline has cleared the earlier bindings.
+            if reference.scope_ref.reference in self._retired_scopes:
+                raise _DetailHydrationRaceError(
+                    "activity detail reference comes from a retired operator"
+                )
             if (
                 existing is not None
                 and not self._same_detail_reference(existing, reference)
-                and (
-                    existing.scope_ref.reference == reference.scope_ref.reference
-                    or reference.scope_ref.reference in self._retired_scopes
-                )
+                and existing.scope_ref.reference == reference.scope_ref.reference
             ):
                 raise _DetailHydrationRaceError(
                     "activity detail reference binding was replaced"

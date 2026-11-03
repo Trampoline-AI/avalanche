@@ -7,7 +7,7 @@ import sys
 from collections.abc import Callable
 from datetime import datetime
 
-from runtime.operator.run_processes import RunProcessStopError
+from runtime.operator.run_processes import RunProcessError
 from runtime.operator.state import StateStoreError
 from runtime.operator.state.cli import add_state_db_argument
 from runtime.operator.state.maintenance import (
@@ -144,7 +144,7 @@ def _with_state(args: argparse.Namespace, command: Callable[[StateMaintenance], 
     try:
         with StateMaintenance.open(args.state_db) as state:
             return command(state)
-    except (StateStoreError, RunProcessStopError, OSError) as exc:
+    except (StateStoreError, RunProcessError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
 

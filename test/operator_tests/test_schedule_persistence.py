@@ -16,7 +16,11 @@ from runtime.operator.state.schedule_input_files import (
     ScheduleInputFile,
     ScheduleInputFileFolder,
 )
-from runtime.operator.state.schedules import SchedulesTable, ScheduleState
+from runtime.operator.state.schedules import (
+    ScheduleInputFileError,
+    SchedulesTable,
+    ScheduleState,
+)
 
 _GREETING = """import avalanche as ava
 
@@ -282,6 +286,39 @@ def test_a_missing_schedule_input_file_stops_the_operator_from_starting(store, t
 
     with pytest.raises(StateStoreError, match="main.txt"):
         ScheduleState(store, ScheduleInputFileFolder(tmp_path, temporary=False)).load()
+
+
+@pytest.mark.parametrize(
+    "run_input",
+    [
+        {"kind": "file", "path": "a.txt"},
+        {"items": [{"kind": "file"}, {"kind": "file", "name": "a", "size": 3}]},
+    ],
+)
+def test_schedule_input_with_its_own_kind_field_is_kept(store, tmp_path, run_input):
+    schedules = ScheduleState(store, ScheduleInputFileFolder(tmp_path, temporary=False))
+    schedules.save_input(
+        "flows.py::greeting",
+        enabled=True,
+        enabled_minute=None,
+        run_input=run_input,
+        input_files=(),
+    )
+
+    (state,) = schedules.load()
+    assert state.input == run_input
+
+
+def test_schedule_input_with_an_invalid_file_value_is_refused(store, tmp_path):
+    schedules = ScheduleState(store, ScheduleInputFileFolder(tmp_path, temporary=False))
+    with pytest.raises(ScheduleInputFileError):
+        schedules.save_input(
+            "flows.py::greeting",
+            enabled=True,
+            enabled_minute=None,
+            run_input={"doc": {"kind": "file", "version": 1, "name": "a", "extra": True}},
+            input_files=(),
+        )
 
 
 def test_restoring_a_workspace_reference_never_moves_it_to_another_folder(tmp_path):

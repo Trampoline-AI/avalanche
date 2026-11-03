@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -34,12 +35,13 @@ from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.proto import operator_pb2_grpc as pb_grpc
 from runtime.operator.run_processes import (
     RunProcess,
+    RunProcessLookupError,
     RunProcessStopError,
     identify_run_process,
     stop_run_process,
 )
 from runtime.operator.server import serve as serve_operator
-from runtime.operator.state import OperatorStateStore, StateRowError
+from runtime.operator.state import OperatorStateStore, StateRowError, StateStoreError
 from runtime.operator.state.metadata import OperatorMetadataTable
 from runtime.operator.state.runs import RunRequest, RunsTable, StoredRun
 from runtime.operator.step_io import StepIo, StepValuePreview, StepValuePreviewKind
@@ -590,3 +592,106 @@ def test_a_group_that_cannot_be_stopped_fails_startup_with_its_id(flows, tmp_pat
     finally:
         sleeper.kill()
         sleeper.wait(timeout=5)
+
+
+def test_a_run_whose_first_write_fails_can_be_started_again_with_its_id(
+    flows, tmp_path, monkeypatch
+):
+    operator = _operator(flows, tmp_path / "state.db")
+    try:
+        create = RunsTable.create
+        calls = []
+
+        def fail_once(*args, **kwargs):
+            calls.append(None)
+            if len(calls) == 1:
+                raise StateStoreError("disk full")
+            return create(*args, **kwargs)
+
+        monkeypatch.setattr(RunsTable, "create", staticmethod(fail_once))
+        sequence = operator.current_sequence
+        with pytest.raises(StateStoreError):
+            operator.start_run("quick", run_id="retried")
+        assert operator.get_run("retried") is None
+        assert operator.current_sequence == sequence
+
+        run_id = operator.start_run("quick", run_id="retried")
+        assert _wait_terminal(operator, run_id).status is RunStatus.SUCCESS
+    finally:
+        operator.close()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
+def test_run_processes_are_identified_from_proc_without_ps(monkeypatch):
+    monkeypatch.setenv("PATH", "")
+    sleeper = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
+    try:
+        recorded = identify_run_process(sleeper.pid)
+        assert recorded is not None
+        assert recorded.process_group == sleeper.pid
+        assert stop_run_process(recorded, grace=1.0) is True
+        assert sleeper.wait(timeout=5) == -signal.SIGTERM
+    finally:
+        if sleeper.poll() is None:
+            sleeper.kill()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
+def test_a_run_process_is_still_stopped_after_the_clock_steps(monkeypatch):
+    sleeper = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
+    try:
+        recorded = identify_run_process(sleeper.pid)
+        assert recorded is not None
+        # A wall-clock step (NTP, a VM time sync) moves the kernel's reported boot
+        # time without a reboot.
+        read_proc = run_processes._read_proc
+
+        def stepped(path):
+            text = read_proc(path)
+            if path == run_processes._PROC / "stat":
+                text = re.sub(
+                    r"^btime (\d+)$",
+                    lambda match: f"btime {int(match[1]) + 3600}",
+                    text,
+                    flags=re.MULTILINE,
+                )
+            return text
+
+        monkeypatch.setattr(run_processes, "_read_proc", stepped)
+        assert stop_run_process(recorded, grace=1.0) is True
+        assert sleeper.wait(timeout=5) == -signal.SIGTERM
+    finally:
+        if sleeper.poll() is None:
+            sleeper.kill()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
+def test_a_run_process_recorded_in_another_boot_is_not_stopped(monkeypatch):
+    sleeper = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
+    try:
+        recorded = identify_run_process(sleeper.pid)
+        assert recorded is not None
+        # After a reboot the kernel reports a new boot ID, and a process with the
+        # recorded ID and start time would be an unrelated one.
+        read_proc = run_processes._read_proc
+        boot_id = run_processes._PROC / "sys" / "kernel" / "random" / "boot_id"
+
+        def rebooted(path):
+            if path == boot_id:
+                return "00000000-0000-4000-8000-000000000000\n"
+            return read_proc(path)
+
+        monkeypatch.setattr(run_processes, "_read_proc", rebooted)
+        assert stop_run_process(recorded, grace=1.0) is False
+        assert sleeper.poll() is None
+    finally:
+        sleeper.kill()
+        sleeper.wait(timeout=5)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_a_missing_ps_command_is_a_lookup_error(monkeypatch):
+    monkeypatch.setattr(run_processes.sys, "platform", "darwin")
+    monkeypatch.setattr(run_processes.shutil, "which", lambda name: None)
+    with pytest.raises(RunProcessLookupError, match="ps"):
+        identify_run_process(os.getpid())

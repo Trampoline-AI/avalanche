@@ -355,7 +355,30 @@ def test_a_due_run_whose_last_start_cannot_be_stored_does_not_start(
         raise StateStoreError("disk full")
 
     monkeypatch.setattr(schedule_state, "save_last_triggered", fail)
-    scheduler._check_schedules()
+    with pytest.raises(StateStoreError):
+        scheduler._check_schedules()
 
     assert operator.started == []
     assert scheduler.last_triggered("root/a.py::shared") is None
+
+
+def test_a_workflow_that_returns_within_a_minute_it_ran_in_does_not_run_again(
+    schedule_state,
+):
+    operator = _Operator()
+    clock = _Clock()
+    scheduler = Scheduler(operator, state=schedule_state, clock=clock)
+    scheduler.reconcile([_descriptor("root/a.py::shared")])
+    scheduler.set_enabled("root/a.py::shared", True)
+    clock.next_minute()
+    scheduler._check_schedules()
+
+    # A dev reload drops the workflow from discovery and finds it again.
+    scheduler.reconcile([])
+    scheduler.reconcile([_descriptor("root/a.py::shared")])
+    scheduler._check_schedules()
+    assert operator.started == [("root/a.py::shared", TriggerKind.SCHEDULED)]
+
+    clock.next_minute()
+    scheduler._check_schedules()
+    assert len(operator.started) == 2

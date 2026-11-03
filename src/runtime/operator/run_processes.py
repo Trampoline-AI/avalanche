@@ -10,19 +10,25 @@ recorded coordinator apart from an unrelated process that later reused its ID.
 On Windows a run's processes belong to a kill-on-close Job Object owned by the
 operator, so the operating system already ends them when the operator dies and
 nothing is recorded.
+
+Linux reads process information from ``/proc``, so no external program is needed.
+Other POSIX systems (macOS) run the ``ps`` found on ``PATH``.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import signal
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, PositiveInt
 
-_PS = "/bin/ps"
+_PROC = Path("/proc")
 _PS_TIMEOUT_SECONDS = 5.0
 DEFAULT_CANCEL_GRACE_SECONDS = 5.0
 """How long a run's processes get between SIGTERM and SIGKILL by default."""
@@ -38,15 +44,24 @@ class RunProcess(BaseModel):
     model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
 
     process_group: PositiveInt
-    # The group leader's start time as ``ps -o lstart`` reports it.
+    # The group leader's start time: clock ticks after boot from ``/proc`` on Linux,
+    # ``ps -o lstart`` elsewhere.
     started: str
-    # When process 1 started, which changes when the machine (or container) restarts.
-    # After a restart none of the run's processes can be alive, and a process group
-    # with the recorded ID belongs to something else.
+    # When the machine and process 1 started, which changes when the machine (or
+    # container) restarts. After a restart none of the run's processes can be alive,
+    # and a process group with the recorded ID belongs to something else.
     booted: str
 
 
-class RunProcessStopError(RuntimeError):
+class RunProcessError(RuntimeError):
+    """Base class for failures to find or stop a run's processes."""
+
+
+class RunProcessLookupError(RunProcessError):
+    """The operating system's process information could not be read."""
+
+
+class RunProcessStopError(RunProcessError):
     """A previous operator's run processes are still alive and could not be stopped."""
 
 
@@ -72,11 +87,10 @@ def identify_run_process(pid: int) -> RunProcess | None:
     """
     if os.name == "nt":
         return None
-    processes = {info.pid: info for info in _processes("-p", f"1,{pid}")}
-    leader = processes.get(pid)
+    leader = _process(pid)
     if leader is None or not leader.live:
         return None
-    return RunProcess(process_group=pid, started=leader.started, booted=processes[1].started)
+    return RunProcess(process_group=pid, started=leader.started, booted=_booted())
 
 
 def stop_run_process(process: RunProcess, *, grace: float) -> bool:
@@ -90,8 +104,7 @@ def stop_run_process(process: RunProcess, *, grace: float) -> bool:
     """
     if os.name == "nt":
         return False
-    (init,) = _processes("-p", "1")
-    if init.started != process.booted:
+    if _booted() != process.booted:
         return False
     members = _live_members(process.process_group)
     if not members:
@@ -124,19 +137,92 @@ def stop_run_process(process: RunProcess, *, grace: float) -> bool:
 
 def _live_members(process_group: int) -> tuple[_ProcessInfo, ...]:
     return tuple(
-        info for info in _processes("-ax") if info.process_group == process_group and info.live
+        info for info in _all_processes() if info.process_group == process_group and info.live
     )
 
 
-def _processes(*selection: str) -> tuple[_ProcessInfo, ...]:
-    completed = subprocess.run(
-        [_PS, *selection, "-o", "pid=,pgid=,stat=,lstart="],
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=_PS_TIMEOUT_SECONDS,
-        env=_PS_ENVIRONMENT,
+def _process(pid: int) -> _ProcessInfo | None:
+    """The process with this ID, or ``None`` when it does not exist."""
+    if sys.platform == "linux":
+        return _proc_process(pid)
+    return next(iter(_ps_processes("-p", str(pid))), None)
+
+
+def _all_processes() -> tuple[_ProcessInfo, ...]:
+    if sys.platform == "linux":
+        try:
+            entries = tuple(entry.name for entry in os.scandir(_PROC) if entry.name.isdigit())
+        except OSError as exc:
+            raise RunProcessLookupError(f"Could not list processes in {_PROC}: {exc}") from exc
+        return tuple(
+            info for info in (_proc_process(int(name)) for name in entries) if info is not None
+        )
+    return _ps_processes("-ax")
+
+
+def _booted() -> str:
+    """Identify the current boot of the machine (or container)."""
+    if sys.platform == "linux":
+        # The kernel's boot ID, which stays fixed until a reboot (unlike its boot
+        # time, which follows wall-clock steps), plus process 1's start, which
+        # changes when a container restarts on a host that did not.
+        boot_id = _read_proc(_PROC / "sys" / "kernel" / "random" / "boot_id").strip()
+        if not boot_id:
+            raise RunProcessLookupError(f"{_PROC / 'sys/kernel/random/boot_id'} is empty")
+        init = _proc_process(1)
+        if init is None:
+            raise RunProcessLookupError("Process 1 is not visible in /proc")
+        return f"{boot_id}:{init.started}"
+    (init,) = _ps_processes("-p", "1")
+    return init.started
+
+
+def _proc_process(pid: int) -> _ProcessInfo | None:
+    path = _PROC / str(pid) / "stat"
+    try:
+        text = path.read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        # The process does not exist, or exited while it was being read.
+        return None
+    except OSError as exc:
+        raise RunProcessLookupError(f"Could not read {path}: {exc}") from exc
+    # The command name is in parentheses and may itself contain spaces or ")".
+    fields = text[text.rindex(")") + 2 :].split()
+    # Fields 3 (state), 5 (process group) and 22 (start time) of proc_pid_stat(5).
+    return _ProcessInfo(
+        pid=pid, process_group=int(fields[2]), state=fields[0], started=fields[19]
     )
+
+
+def _read_proc(path: Path) -> str:
+    try:
+        return path.read_text()
+    except OSError as exc:
+        raise RunProcessLookupError(f"Could not read {path}: {exc}") from exc
+
+
+def _ps_processes(*selection: str) -> tuple[_ProcessInfo, ...]:
+    ps = shutil.which("ps")
+    if ps is None:
+        raise RunProcessLookupError(
+            "The ps command was not found on PATH; the operator needs it to record "
+            "and stop run processes."
+        )
+    try:
+        completed = subprocess.run(
+            [ps, *selection, "-o", "pid=,pgid=,stat=,lstart="],
+            capture_output=True,
+            text=True,
+            timeout=_PS_TIMEOUT_SECONDS,
+            env=_PS_ENVIRONMENT,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RunProcessLookupError(f"Could not run {ps}: {exc}") from exc
+    # ps exits 1 when a selected process does not exist, with nothing on stderr.
+    if completed.returncode not in (0, 1) or completed.stderr.strip():
+        raise RunProcessLookupError(
+            f"{ps} failed with exit status {completed.returncode}: {completed.stderr.strip()}"
+        )
     processes = []
     for line in completed.stdout.splitlines():
         pid, process_group, state, started = line.split(maxsplit=3)

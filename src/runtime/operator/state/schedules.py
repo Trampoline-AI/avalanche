@@ -256,14 +256,16 @@ class ScheduleInputFileError(ValueError):
 def _file_workspaces(value: JsonValue) -> set[str]:
     """Workspace references of every ``ava.File`` wire value inside schedule input.
 
-    ``kind: "file"`` is the ``ava.File`` wire tag, so an object carrying it must be a
-    valid file reference.
+    An ``ava.File`` wire value carries ``kind: "file"`` and a ``version``, the same
+    tag workflow results use, and must be a valid file reference. Other objects,
+    such as workflow input with its own ``kind`` and ``path`` fields, are ordinary
+    input.
     """
     if isinstance(value, list):
         return {reference for item in value for reference in _file_workspaces(item)}
     if not isinstance(value, dict):
         return set()
-    if value.get("kind") == "file":
+    if value.get("kind") == "file" and "version" in value:
         try:
             return {File.model_validate(value).ref.workspace}
         except ValidationError as exc:

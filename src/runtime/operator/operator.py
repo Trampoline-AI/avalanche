@@ -17,11 +17,12 @@ import threading
 import time
 from bisect import bisect_right
 from collections import OrderedDict, deque
-from collections.abc import Collection, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
+from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, TypeVar
 from uuid import uuid4
@@ -119,6 +120,7 @@ from .registry import (
     workflow_revision,
 )
 from .result_store import (
+    RESULTS_DIRECTORY,
     PendingResultBundle,
     ResultPublicationCancelledError,
     ResultStore,
@@ -144,7 +146,11 @@ from .state.metadata import OperatorMetadataTable
 from .state.results import RunResultTable
 from .state.run_details import load_run_detail_totals
 from .state.runs import RunRequest, RunsTable, StoredRun
-from .state.schedule_input_files import ScheduleInputFileClaims, ScheduleInputFileFolder
+from .state.schedule_input_files import (
+    SCHEDULE_INPUT_FOLDER_NAME,
+    ScheduleInputFileClaims,
+    ScheduleInputFileFolder,
+)
 from .state.schedules import ScheduleState
 from .state.traces import RunTracesTable
 from .step_io import StepInputs, StepIo, StepValuePreview
@@ -246,6 +252,59 @@ class _RunStart:
 
     request: RunRequest
     process: RunProcess | None
+
+
+@dataclass(frozen=True)
+class _PublicationRollback:
+    """The operator memory one run publication changes before its write commits."""
+
+    terminal_seal: TerminalSealDescriptor | None
+    activity_sequence: int | None
+    created_sequence: int | None
+    run_revision: int | None
+    node_revisions: Mapping[tuple[str, str], int | None]
+    trace_descriptors: Mapping[tuple[str, str], TraceDescriptor]
+
+    @classmethod
+    def capture(
+        cls,
+        operator: Operator,
+        run: RunState,
+        changed_node_ids: Iterable[str],
+        trace_node_ids: Iterable[str],
+    ) -> _PublicationRollback:
+        node_keys = {(run.run_id, node_id) for node_id in (*run.nodes, *changed_node_ids)}
+        return cls(
+            terminal_seal=run.terminal_seal,
+            activity_sequence=operator._run_activity_sequences.get(run.run_id),
+            created_sequence=operator._run_created_sequences.get(run.run_id),
+            run_revision=operator._run_revisions.get(run.run_id),
+            node_revisions={key: operator._node_revisions.get(key) for key in node_keys},
+            trace_descriptors={
+                (run.run_id, node_id): operator._trace_descriptors[(run.run_id, node_id)]
+                for node_id in trace_node_ids
+            },
+        )
+
+    def restore(self, operator: Operator, run: RunState) -> None:
+        run.terminal_seal = self.terminal_seal
+        _restore_entry(operator._run_activity_sequences, run.run_id, self.activity_sequence)
+        _restore_entry(operator._run_created_sequences, run.run_id, self.created_sequence)
+        _restore_entry(operator._run_revisions, run.run_id, self.run_revision)
+        for key, revision in self.node_revisions.items():
+            _restore_entry(operator._node_revisions, key, revision)
+        operator._trace_descriptors.update(self.trace_descriptors)
+
+
+def _is_within(path: Path, roots: tuple[Path, ...]) -> bool:
+    return any(path == root or path.is_relative_to(root) for root in roots)
+
+
+def _restore_entry[K](entries: dict[K, int], key: K, value: int | None) -> None:
+    if value is None:
+        entries.pop(key, None)
+    else:
+        entries[key] = value
 
 
 @dataclass(frozen=True)
@@ -2261,11 +2320,15 @@ class Operator:
             locators = tuple(descriptor.locator for descriptor in self._registry.descriptors())
             source_roots = resolve_watch_roots(self._registry.configured_roots, locators)
             watch_dirs = tuple(str(path) for path in source_roots)
+            state_paths = self._state_paths()
             logger.info("Workflow watcher started: roots=%s", watch_dirs)
             for changes in watch(
                 *watch_dirs,
                 stop_event=self._watcher_stop,
-                watch_filter=lambda _, path: is_watch_path_included(path, source_roots),
+                watch_filter=lambda _, path: (
+                    is_watch_path_included(path, source_roots)
+                    and not _is_within(Path(path).resolve(), state_paths)
+                ),
                 rust_timeout=50,
                 yield_on_timeout=True,
             ):
@@ -2280,6 +2343,22 @@ class Operator:
         finally:
             self._watcher_ready.set()
             logger.info("Workflow watcher stopped")
+
+    def _state_paths(self) -> tuple[Path, ...]:
+        """The state database files and the folders beside it, which the operator
+        writes itself, so a database inside a watched source root never triggers a
+        reload."""
+        database = self._state_store.path
+        if database is None:
+            return ()
+        database = database.resolve()
+        folder = database.parent
+        return (
+            *(Path(f"{database}{suffix}") for suffix in ("", "-wal", "-shm", "-journal")),
+            folder / RESULTS_DIRECTORY,
+            folder / INPUT_FILE_FOLDER_NAME,
+            folder / SCHEDULE_INPUT_FOLDER_NAME,
+        )
 
     def _record_fatal_error(self, error: Exception) -> None:
         with self._lock:
@@ -3313,210 +3392,219 @@ class Operator:
             + len(classifier_events)
             + len(trace_node_ids)
         )
-        terminal_seal_appended = False
-        if (
-            run.status
-            in {
-                RunStatus.SUCCESS,
-                RunStatus.FAILED,
-                RunStatus.CANCELLED,
-            }
-            and run.terminal_seal is None
-        ):
-            terminal_sequence = self._run_activity_sequences.get(run.run_id, 0)
-            terminal_sequence += activity_count + 1
-            run.terminal_seal = TerminalSealDescriptor(
-                activity_id=f"terminal_seal:{run.run_id}:{terminal_sequence}",
-                run_sequence=terminal_sequence,
-                timestamp=datetime.now(),
-                terminal_status=run.status,
-                reason=terminal_reason,
+        # Everything below changes memory before the write; a failure undoes it, so
+        # memory keeps matching the database and a retry starts from the same state.
+        rollback = _PublicationRollback.capture(self, run, changed_node_ids, trace_node_ids)
+        try:
+            terminal_seal_appended = False
+            if (
+                run.status
+                in {
+                    RunStatus.SUCCESS,
+                    RunStatus.FAILED,
+                    RunStatus.CANCELLED,
+                }
+                and run.terminal_seal is None
+            ):
+                terminal_sequence = self._run_activity_sequences.get(run.run_id, 0)
+                terminal_sequence += activity_count + 1
+                run.terminal_seal = TerminalSealDescriptor(
+                    activity_id=f"terminal_seal:{run.run_id}:{terminal_sequence}",
+                    run_sequence=terminal_sequence,
+                    timestamp=datetime.now(),
+                    terminal_status=run.status,
+                    reason=terminal_reason,
+                )
+                terminal_seal_appended = True
+            activity_count += int(terminal_seal_appended)
+            self._run_activity_sequences[run.run_id] = (
+                self._run_activity_sequences.get(run.run_id, 0) + activity_count
             )
-            terminal_seal_appended = True
-        activity_count += int(terminal_seal_appended)
-        self._run_activity_sequences[run.run_id] = (
-            self._run_activity_sequences.get(run.run_id, 0) + activity_count
-        )
 
-        if is_new:
-            update_count = 1 + int(terminal_seal_appended)
-        else:
-            update_count = (
-                int(summary_changed)
-                + len(status_node_ids)
-                + int(log_entry is not None)
-                + len(agent_events)
-                + len(classifier_events)
-                + len(trace_node_ids)
-                + int(terminal_seal_appended)
-            )
-            if update_count == 0:
-                summary_changed = True
-                update_count = 1
+            if is_new:
+                update_count = 1 + int(terminal_seal_appended)
+            else:
+                update_count = (
+                    int(summary_changed)
+                    + len(status_node_ids)
+                    + int(log_entry is not None)
+                    + len(agent_events)
+                    + len(classifier_events)
+                    + len(trace_node_ids)
+                    + int(terminal_seal_appended)
+                )
+                if update_count == 0:
+                    summary_changed = True
+                    update_count = 1
 
-        first_sequence = self._sequence + 1
-        publication_sequence = self._sequence + update_count
-        self._run_created_sequences.setdefault(run.run_id, first_sequence)
-        if summary_changed or is_new:
-            self._run_revisions[run.run_id] = publication_sequence
-        if is_new:
-            for node_id in run.nodes:
+            first_sequence = self._sequence + 1
+            publication_sequence = self._sequence + update_count
+            self._run_created_sequences.setdefault(run.run_id, first_sequence)
+            if summary_changed or is_new:
+                self._run_revisions[run.run_id] = publication_sequence
+            if is_new:
+                for node_id in run.nodes:
+                    self._node_revisions[(run.run_id, node_id)] = publication_sequence
+            for node_id in changed_node_ids:
                 self._node_revisions[(run.run_id, node_id)] = publication_sequence
-        for node_id in changed_node_ids:
-            self._node_revisions[(run.run_id, node_id)] = publication_sequence
-        # Nodes a prepared run adds without a change keep the revision snapshots
-        # report for them: the run's created sequence.
-        for node_id in run.nodes:
-            self._node_revisions.setdefault(
-                (run.run_id, node_id), self._run_created_sequences[run.run_id]
-            )
+            # Nodes a prepared run adds without a change keep the revision snapshots
+            # report for them: the run's created sequence.
+            for node_id in run.nodes:
+                self._node_revisions.setdefault(
+                    (run.run_id, node_id), self._run_created_sequences[run.run_id]
+                )
 
-        trace_writes = []
-        for node_id in trace_node_ids:
-            key = (run.run_id, node_id)
-            descriptor = self._trace_descriptors[key]
-            finalized_trace = finalized_traces.get(node_id)
-            published = replace(descriptor, revision=publication_sequence)
-            self._trace_descriptors[key] = published
-            trace_writes.append(
-                _TraceWrite(
-                    node_id=node_id,
-                    descriptor=published,
-                    error=self._trace_errors.get(key),
-                    body=finalized_trace,
-                    # The new revision keeps serving the body it already had.
-                    carried_from=(
-                        descriptor.revision
-                        if finalized_trace is None and descriptor.available
-                        else None
-                    ),
-                )
-            )
-        log_item = (
-            None
-            if log_entry is None
-            else SequencedLogEntry(
-                sequence=self._last_log_sequences[run.run_id],
-                entry=log_entry,
-                size_bytes=len(log_entry.message.encode()),
-            )
-        )
-
-        changes: list[Any] = []
-        if is_new:
-            summary = self._run_summary_locked(run)
-            snapshot = self._run_snapshot_locked(
-                run,
-                summary=summary,
-                as_of_sequence=publication_sequence,
-            )
-            changes.append(
-                RunCreated(summary=summary, nodes=snapshot.nodes, topology=snapshot.topology)
-            )
-        else:
-            if summary_changed:
-                changes.append(
-                    RunStatusChanged(
-                        run_id=run.run_id,
-                        status=run.status,
-                        started_at=run.started_at,
-                        ended_at=run.ended_at,
-                        revision=publication_sequence,
-                    )
-                )
-            for node_id in status_node_ids:
-                node = run.nodes[node_id]
-                changes.append(
-                    NodeStatusChanged(
-                        run_id=run.run_id,
-                        node_id=node_id,
-                        status=node.status,
-                        started_at=node.started_at,
-                        ended_at=node.ended_at,
-                        running_elapsed_seconds=(
-                            node.elapsed if node.status is NodeStatus.RUNNING else None
-                        ),
-                        revision=publication_sequence,
-                        error=node.error,
-                        step_io=node.step_io,
-                    )
-                )
-            if log_item is not None:
-                changes.append(
-                    LogAppended(
-                        run_id=run.run_id,
-                        log=self._log_descriptor_locked(
-                            run.run_id,
-                            log_item,
-                            as_of_sequence=publication_sequence,
-                        ),
-                    )
-                )
-            for node_id, event in agent_events.items():
-                changes.append(
-                    AgentEventAppended(
-                        run_id=run.run_id,
-                        node_id=node_id,
-                        event=self._agent_event_descriptor_locked(
-                            run.run_id,
-                            node_id,
-                            event,
-                            as_of_sequence=publication_sequence,
-                        ),
-                    )
-                )
-            for node_id, event in classifier_events.items():
-                changes.append(
-                    ClassifierEventAppended(
-                        run_id=run.run_id,
-                        node_id=node_id,
-                        event=self._classifier_event_descriptor_locked(
-                            run.run_id,
-                            node_id,
-                            event,
-                            as_of_sequence=publication_sequence,
-                        ),
-                    )
-                )
+            trace_writes = []
             for node_id in trace_node_ids:
-                changes.append(
-                    TraceFinalized(
-                        run_id=run.run_id,
+                key = (run.run_id, node_id)
+                descriptor = self._trace_descriptors[key]
+                finalized_trace = finalized_traces.get(node_id)
+                published = replace(descriptor, revision=publication_sequence)
+                self._trace_descriptors[key] = published
+                trace_writes.append(
+                    _TraceWrite(
                         node_id=node_id,
-                        trace=self._trace_descriptors[(run.run_id, node_id)],
+                        descriptor=published,
+                        error=self._trace_errors.get(key),
+                        body=finalized_trace,
+                        # The new revision keeps serving the body it already had.
+                        carried_from=(
+                            descriptor.revision
+                            if finalized_trace is None and descriptor.available
+                            else None
+                        ),
                     )
                 )
-        if terminal_seal_appended:
-            if run.terminal_seal is None:
-                raise RuntimeError("terminal seal was not retained before publication")
-            changes.append(
-                TerminalSealAppended(
-                    run_id=run.run_id,
-                    seal=run.terminal_seal,
+            log_item = (
+                None
+                if log_entry is None
+                else SequencedLogEntry(
+                    sequence=self._last_log_sequences[run.run_id],
+                    entry=log_entry,
+                    size_bytes=len(log_entry.message.encode()),
                 )
             )
 
-        updates = [
-            OperatorUpdate(sequence=self._sequence + offset, change=change)
-            for offset, change in enumerate(changes, start=1)
-        ]
-        if updates[-1].sequence != publication_sequence:
-            raise RuntimeError("Run publication produced an inconsistent update batch")
-        # Stored before the sequence advances, so a failed write publishes nothing.
-        self._store_run_locked(
-            run,
-            is_new=is_new,
-            # A new or re-prepared run (whose nodes are replaced) stores every node.
-            node_ids=run.nodes.keys() if is_new or summary_changed else changed_node_ids,
-            start=start,
-            update_sequence=publication_sequence,
-            details=_DetailWrites(
-                log=log_item,
-                agent_events=agent_events,
-                classifier_events=classifier_events,
-                traces=tuple(trace_writes),
-            ),
-        )
+            changes: list[Any] = []
+            if is_new:
+                summary = self._run_summary_locked(run)
+                snapshot = self._run_snapshot_locked(
+                    run,
+                    summary=summary,
+                    as_of_sequence=publication_sequence,
+                )
+                changes.append(
+                    RunCreated(
+                        summary=summary, nodes=snapshot.nodes, topology=snapshot.topology
+                    )
+                )
+            else:
+                if summary_changed:
+                    changes.append(
+                        RunStatusChanged(
+                            run_id=run.run_id,
+                            status=run.status,
+                            started_at=run.started_at,
+                            ended_at=run.ended_at,
+                            revision=publication_sequence,
+                        )
+                    )
+                for node_id in status_node_ids:
+                    node = run.nodes[node_id]
+                    changes.append(
+                        NodeStatusChanged(
+                            run_id=run.run_id,
+                            node_id=node_id,
+                            status=node.status,
+                            started_at=node.started_at,
+                            ended_at=node.ended_at,
+                            running_elapsed_seconds=(
+                                node.elapsed if node.status is NodeStatus.RUNNING else None
+                            ),
+                            revision=publication_sequence,
+                            error=node.error,
+                            step_io=node.step_io,
+                        )
+                    )
+                if log_item is not None:
+                    changes.append(
+                        LogAppended(
+                            run_id=run.run_id,
+                            log=self._log_descriptor_locked(
+                                run.run_id,
+                                log_item,
+                                as_of_sequence=publication_sequence,
+                            ),
+                        )
+                    )
+                for node_id, event in agent_events.items():
+                    changes.append(
+                        AgentEventAppended(
+                            run_id=run.run_id,
+                            node_id=node_id,
+                            event=self._agent_event_descriptor_locked(
+                                run.run_id,
+                                node_id,
+                                event,
+                                as_of_sequence=publication_sequence,
+                            ),
+                        )
+                    )
+                for node_id, event in classifier_events.items():
+                    changes.append(
+                        ClassifierEventAppended(
+                            run_id=run.run_id,
+                            node_id=node_id,
+                            event=self._classifier_event_descriptor_locked(
+                                run.run_id,
+                                node_id,
+                                event,
+                                as_of_sequence=publication_sequence,
+                            ),
+                        )
+                    )
+                for node_id in trace_node_ids:
+                    changes.append(
+                        TraceFinalized(
+                            run_id=run.run_id,
+                            node_id=node_id,
+                            trace=self._trace_descriptors[(run.run_id, node_id)],
+                        )
+                    )
+            if terminal_seal_appended:
+                if run.terminal_seal is None:
+                    raise RuntimeError("terminal seal was not retained before publication")
+                changes.append(
+                    TerminalSealAppended(
+                        run_id=run.run_id,
+                        seal=run.terminal_seal,
+                    )
+                )
+
+            updates = [
+                OperatorUpdate(sequence=self._sequence + offset, change=change)
+                for offset, change in enumerate(changes, start=1)
+            ]
+            if updates[-1].sequence != publication_sequence:
+                raise RuntimeError("Run publication produced an inconsistent update batch")
+            # Stored before the sequence advances, so a failed write publishes nothing.
+            self._store_run_locked(
+                run,
+                is_new=is_new,
+                # A new or re-prepared run (whose nodes are replaced) stores every node.
+                node_ids=run.nodes.keys() if is_new or summary_changed else changed_node_ids,
+                start=start,
+                update_sequence=publication_sequence,
+                details=_DetailWrites(
+                    log=log_item,
+                    agent_events=agent_events,
+                    classifier_events=classifier_events,
+                    traces=tuple(trace_writes),
+                ),
+            )
+        except BaseException:
+            rollback.restore(self, run)
+            raise
         self._sequence = publication_sequence
         self._stream_history.extend(updates)
 

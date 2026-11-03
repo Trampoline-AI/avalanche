@@ -391,6 +391,9 @@ def test_a_pending_evaluation_is_failed_after_a_restart_and_finished_ones_are_ke
         restarted.close()
 
 
+_EVENT_ULID = "0" * 26
+
+
 def _trace_reference(scope: str, sha256: str) -> pb.ActivityDetailRefV2:
     return pb.ActivityDetailRefV2(
         run_id="run-1",
@@ -407,17 +410,18 @@ def _trace_reference(scope: str, sha256: str) -> pb.ActivityDetailRefV2:
 def test_a_client_takes_a_restarted_operators_references_for_the_same_details():
     provider = GrpcStateProvider("127.0.0.1:1")
     try:
-        provider.operator_instance_id = "operator-1"
+        provider._install_structural_baseline("operator-1", _EVENT_ULID, {})
         provider._remember_detail_reference(_trace_reference("operator-1", "a" * 64))
         # Before its stream reconnects, the client already reads the restarted
         # operator, which serves the stored trace under the same key.
         provider._remember_detail_reference(_trace_reference("operator-2", "a" * 64))
-        # Once the client resets to the restarted operator, a late reply from the
-        # previous one never moves the binding back.
-        provider._retire_scope("operator-2")
+        # Once the client installs the restarted operator's baseline, a late reply
+        # from the previous one is never bound again.
+        provider._install_structural_baseline("operator-2", _EVENT_ULID, {})
         with pytest.raises(_DetailHydrationRaceError):
             provider._remember_detail_reference(_trace_reference("operator-1", "a" * 64))
         # Within one operator a reference never changes.
+        provider._remember_detail_reference(_trace_reference("operator-2", "a" * 64))
         with pytest.raises(_DetailHydrationRaceError):
             provider._remember_detail_reference(_trace_reference("operator-2", "b" * 64))
     finally:

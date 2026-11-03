@@ -22,6 +22,7 @@ from croniter import CroniterBadDateError, croniter
 from pydantic import JsonValue
 
 from .models import TriggerKind, WorkflowDescriptor
+from .state.errors import StateStoreError
 from .state.schedule_input_files import ScheduleInputFile
 from .state.schedules import ScheduleState
 
@@ -101,13 +102,10 @@ class Scheduler:
         with self._dispatch_lock:
             with self._lock:
                 self._revision += 1
+                # Last started minutes stay, like enable choices and inputs: a workflow
+                # that leaves and returns within a minute it already ran in waits for
+                # the next one.
                 self._registrations = dict(sorted(registrations.items()))
-                current_ids = set(self._registrations)
-                self._last_triggered = {
-                    workflow_id: timestamp
-                    for workflow_id, timestamp in self._last_triggered.items()
-                    if workflow_id in current_ids
-                }
 
     @contextmanager
     def reconciliation_boundary(self) -> Iterator[None]:
@@ -172,6 +170,9 @@ class Scheduler:
                         descriptor.workflow_id,
                         descriptor.cron,
                     )
+            except StateStoreError:
+                # The schedules' stored state can no longer be trusted: stop scheduling.
+                raise
             except Exception as exc:
                 logger.warning("Scheduler error for %s: %s", descriptor.workflow_id, exc)
 
