@@ -31,7 +31,7 @@ from types import MappingProxyType
 from ..input_files import INPUT_FILE_FOLDER_NAME
 from ..models import RunStatus
 from ..result_store import ResultIndexReport, ResultStore
-from ..run_processes import stop_run_process
+from ..run_processes import DEFAULT_CANCEL_GRACE_SECONDS, stop_run_process
 from .errors import StateRowError, StateStoreError
 from .results import RunResultRow, RunResultTable
 from .run_details import DeletedRunDetails, delete_run_details
@@ -46,8 +46,6 @@ UNFINISHED_STATUSES = frozenset({RunStatus.REQUESTING, RunStatus.PENDING, RunSta
 VACUUM_FREE_FRACTION = 0.25
 """Rebuild the database file once at least this share of its pages is free."""
 
-# The operator's default grace between SIGTERM and SIGKILL for a run's processes.
-_STOP_GRACE_SECONDS = 5.0
 _TOKEN = re.compile(r"[0-9a-f]{32}")
 
 
@@ -263,11 +261,14 @@ class StateMaintenance:
             removed_pending_bundles=self._results.recovered_pending_bundles,
         )
 
-    def delete(self, run_ids: Sequence[str]) -> tuple[DeletedRun, ...]:
+    def delete(
+        self, run_ids: Sequence[str], *, on_deleted: Callable[[DeletedRun], None]
+    ) -> tuple[DeletedRun, ...]:
         """Delete finished runs with everything that belongs to them, one run at a time.
 
         Every ID is checked first: an unknown or unfinished run refuses the whole
-        request before anything is deleted.
+        request before anything is deleted. ``on_deleted`` hears about each run as
+        soon as it is deleted, so a failure on a later run never hides earlier ones.
         """
         requested = tuple(dict.fromkeys(run_ids))
         with self._store.transaction() as connection:
@@ -290,10 +291,15 @@ class StateMaintenance:
                 "operator on this database once: it stops them and marks the run failed. "
                 "Then delete it, or use `ava state clear`."
             )
-        return tuple(self._delete_run(summaries[run_id]) for run_id in requested)
+        return self._delete_runs([summaries[run_id] for run_id in requested], on_deleted)
 
-    def prune_before(self, cutoff: datetime) -> PrunedRuns:
-        """Delete finished runs triggered before ``cutoff``, a time-zone aware datetime."""
+    def prune_before(
+        self, cutoff: datetime, *, on_deleted: Callable[[DeletedRun], None]
+    ) -> PrunedRuns:
+        """Delete finished runs triggered before ``cutoff``, a time-zone aware datetime.
+
+        See :meth:`delete` for ``on_deleted``.
+        """
         if cutoff.tzinfo is None:
             raise ValueError("The prune cutoff needs a time zone")
         timestamp = cutoff.timestamp()
@@ -302,14 +308,20 @@ class StateMaintenance:
                 summary
                 for summary in finished
                 if summary.triggered_at is not None and summary.triggered_at < timestamp
-            ]
+            ],
+            on_deleted,
         )
 
-    def prune_keep_last(self, count: int) -> PrunedRuns:
+    def prune_keep_last(
+        self, count: int, *, on_deleted: Callable[[DeletedRun], None]
+    ) -> PrunedRuns:
         """Delete every finished run except the ``count`` most recently created."""
         if count < 0:
+            # A negative count would select more than every finished run.
             raise ValueError("The number of finished runs to keep cannot be negative")
-        return self._prune(lambda finished: finished[: max(len(finished) - count, 0)])
+        return self._prune(
+            lambda finished: finished[: max(len(finished) - count, 0)], on_deleted
+        )
 
     def clear(self, *, include_schedules: bool) -> ClearedState:
         """Delete every run, result and staged input file; schedules too if asked.
@@ -327,7 +339,7 @@ class StateMaintenance:
             for summary in summaries
             if summary.status in UNFINISHED_STATUSES
             and summary.process is not None
-            and stop_run_process(summary.process, grace=_STOP_GRACE_SECONDS)
+            and stop_run_process(summary.process, grace=DEFAULT_CANCEL_GRACE_SECONDS)
         )
         with self._store.transaction() as connection:
             RunResultTable.delete_all(connection)
@@ -393,16 +405,30 @@ class StateMaintenance:
             raise
         self._store.close()
 
-    def _prune(self, select: Callable[[list[RunSummary]], list[RunSummary]]) -> PrunedRuns:
+    def _prune(
+        self,
+        select: Callable[[list[RunSummary]], list[RunSummary]],
+        on_deleted: Callable[[DeletedRun], None],
+    ) -> PrunedRuns:
         with self._store.transaction() as connection:
             summaries = RunsTable.list_summaries(connection)
         finished = [
             summary for summary in summaries if summary.status not in UNFINISHED_STATUSES
         ]
         return PrunedRuns(
-            deleted=tuple(self._delete_run(summary) for summary in select(finished)),
+            deleted=self._delete_runs(select(finished), on_deleted),
             unfinished_kept=len(summaries) - len(finished),
         )
+
+    def _delete_runs(
+        self, summaries: Sequence[RunSummary], on_deleted: Callable[[DeletedRun], None]
+    ) -> tuple[DeletedRun, ...]:
+        deleted = []
+        for summary in summaries:
+            run = self._delete_run(summary)
+            on_deleted(run)
+            deleted.append(run)
+        return tuple(deleted)
 
     def _delete_run(self, summary: RunSummary) -> DeletedRun:
         run_id = summary.run_id
