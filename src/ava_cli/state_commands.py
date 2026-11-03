@@ -82,9 +82,7 @@ def _run_info(args: argparse.Namespace) -> int:
 
 def _run_delete(args: argparse.Namespace) -> int:
     def delete(state: StateMaintenance) -> int:
-        deleted = state.delete(args.run_ids)
-        for run in deleted:
-            _print_deleted(run)
+        state.delete(args.run_ids, on_deleted=_print_deleted)
         _print_reclaimed(state)
         return 0
 
@@ -94,11 +92,9 @@ def _run_delete(args: argparse.Namespace) -> int:
 def _run_prune(args: argparse.Namespace) -> int:
     def prune(state: StateMaintenance) -> int:
         if args.before is not None:
-            pruned = state.prune_before(args.before)
+            pruned = state.prune_before(args.before, on_deleted=_print_deleted)
         else:
-            pruned = state.prune_keep_last(args.keep_last)
-        for run in pruned.deleted:
-            _print_deleted(run)
+            pruned = state.prune_keep_last(args.keep_last, on_deleted=_print_deleted)
         print(
             f"Pruned {_plural(len(pruned.deleted), 'finished run')}; "
             f"{_plural(pruned.unfinished_kept, 'unfinished run')} left alone."

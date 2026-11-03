@@ -24,6 +24,9 @@ from pydantic import BaseModel, ConfigDict, PositiveInt
 
 _PS = "/bin/ps"
 _PS_TIMEOUT_SECONDS = 5.0
+DEFAULT_CANCEL_GRACE_SECONDS = 5.0
+"""How long a run's processes get between SIGTERM and SIGKILL by default."""
+
 _POLL_INTERVAL_SECONDS = 0.05
 # A fixed locale and time zone, so the same process always reports the same start.
 _PS_ENVIRONMENT = {"LC_ALL": "C", "TZ": "UTC"}
