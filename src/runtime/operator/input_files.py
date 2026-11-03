@@ -73,6 +73,10 @@ class InputFileStaging:
     Each file lives in its own folder, ``<token>/<name>``, so the ``ava.File`` a run
     receives keeps the uploaded name and grants access to that one folder. Files no
     run or schedule used expire after ``ttl_seconds``; the rest stay until ``close``.
+
+    By default ``close`` removes the whole folder. With ``keep_used_files`` it removes
+    only the files nothing used and keeps the folder, so files runs used outlive the
+    operator in a folder it reopens next time.
     """
 
     def __init__(
@@ -81,11 +85,15 @@ class InputFileStaging:
         *,
         ttl_seconds: float = STAGED_INPUT_FILE_TTL_SECONDS,
         clock: Callable[[], float] = time.time,
+        keep_used_files: bool = False,
     ) -> None:
+        if keep_used_files and root is None:
+            raise ValueError("Keeping used input files needs a staging folder that lasts")
         self._root = (
             Path(tempfile.mkdtemp(prefix="avalanche-input-files-")) if root is None else root
         ).resolve(strict=True)
         self._ttl_seconds = ttl_seconds
+        self._keep_used_files = keep_used_files
         self._clock = clock
         self._lock = threading.Lock()
         # Signalled when an upload finishes writing, so close waits for it.
@@ -228,6 +236,14 @@ class InputFileStaging:
             self.release((object_key,))
         return entry.file
 
+    def staged_file(self, object_key: str) -> StagedInputFile:
+        """The staged file a claimed key names."""
+        with self._lock:
+            entry = self._entries.get(object_key)
+            if entry is None:
+                raise InputFileStorageError(f"Input file {object_key!r} was removed")
+            return entry.file
+
     def release(self, object_keys: Iterable[str]) -> None:
         """Undo one use per key, so a file no request uses expires like an unused one."""
         with self._lock:
@@ -261,14 +277,19 @@ class InputFileStaging:
                 _logger.warning("Could not remove expired input file %s", folder, exc_info=True)
 
     def close(self) -> None:
-        """Remove the staging folder and every file in it."""
+        """Remove the staging folder, or with ``keep_used_files`` every unused file."""
         with self._lock:
             if self._closed:
                 return
             self._closed = True
-            self._entries.clear()
             self._writes_done.wait_for(lambda: self._writing == 0)
-        shutil.rmtree(self._root)
+            unused = [entry.path.parent for entry in self._entries.values() if not entry.claims]
+            self._entries.clear()
+        if not self._keep_used_files:
+            shutil.rmtree(self._root)
+            return
+        for folder in unused:
+            shutil.rmtree(folder)
 
     def _validate_key(self, object_key: str) -> None:
         token, separator, name = object_key.partition("/")
@@ -305,16 +326,24 @@ class InputFileClaims:
         self._staging = staging
         # One entry per use this request counted, so a release undoes only those.
         self._keys: list[str] = []
+        self._files: list[StagedInputFile] = []
+
+    @property
+    def files(self) -> tuple[StagedInputFile, ...]:
+        """The staged files this request uses, in the order it claimed them."""
+        return tuple(self._files)
 
     def file(self, object_key: str, *, sha256: str, size_bytes: int) -> File:
         """Build the ``ava.File`` for a staged key; its digest and size must match."""
         file = self._staging.claim(object_key, sha256=sha256, size_bytes=size_bytes)
         self._keys.append(object_key)
+        self._files.append(self._staging.staged_file(object_key))
         return file
 
     def release(self) -> None:
         """Undo every use this request counted."""
         keys, self._keys = self._keys, []
+        self._files = []
         self._staging.release(keys)
 
     def inline(self, name: str, media_type: str, content: bytes, sha256: str) -> File:

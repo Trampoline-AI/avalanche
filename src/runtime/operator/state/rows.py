@@ -1,7 +1,8 @@
 """Helpers that turn ``sqlite3`` rows and JSON columns into typed models.
 
 These are the only places a raw column value is read. Every adapter passes its
-rows through :func:`row_model` and its JSON columns through :func:`json_column`,
+rows through :func:`row_model` and its JSON columns through :func:`json_column`
+(or :func:`json_value` for a domain dataclass),
 so a stored value that does not match its model raises :class:`StateRowError`
 naming the table instead of flowing on as an untyped value.
 """
@@ -10,7 +11,7 @@ from __future__ import annotations
 
 import sqlite3
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from .errors import StateRowError
 
@@ -27,6 +28,16 @@ def json_column[M: BaseModel](model: type[M], raw: str, *, table: str, column: s
     """Validate one JSON column into its domain model."""
     try:
         return model.model_validate_json(raw)
+    except ValidationError as exc:
+        raise StateRowError(
+            f"Invalid JSON in operator state column {table}.{column}: {exc}"
+        ) from exc
+
+
+def json_value[T](adapter: TypeAdapter[T], raw: str, *, table: str, column: str) -> T:
+    """Validate one JSON column into a domain dataclass or another non-model type."""
+    try:
+        return adapter.validate_json(raw)
     except ValidationError as exc:
         raise StateRowError(
             f"Invalid JSON in operator state column {table}.{column}: {exc}"

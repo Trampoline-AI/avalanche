@@ -148,7 +148,10 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         self._issued_cursors: OrderedDict[_CursorIdentity, pb.LifecycleCursorV2] = OrderedDict()
         self._event_ulids_by_sequence: dict[int, str] = {}
         self._sequences_by_event_ulid: dict[str, int] = {}
-        self._next_event_sequence = 0
+        # Sequences keep growing across operator restarts; this instance only ever
+        # names its own, so event ULIDs start at its first sequence, not at zero.
+        self._first_event_sequence = operator.instance_first_sequence
+        self._next_event_sequence = self._first_event_sequence
         self._continuations: OrderedDict[_ContinuationRegistryKey, _ContinuationBinding] = (
             OrderedDict()
         )
@@ -195,6 +198,11 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
     def _event_ulid_for_sequence(self, sequence: int) -> str:
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
             raise ValueError("lifecycle sequence must be a non-negative integer")
+        if sequence < self._first_event_sequence:
+            raise ValueError(
+                f"lifecycle sequence {sequence} predates this operator instance, "
+                f"which started at {self._first_event_sequence}"
+            )
         with self._binding_lock:
             while self._next_event_sequence <= sequence:
                 previous = self._event_ulids_by_sequence.get(self._next_event_sequence - 1)
@@ -987,6 +995,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                     input=run_input,
                     context=run_context,
                     expected_version=request.expected_version,
+                    input_files=claims.files,
                 )
                 return pb.StartRunResponseV2(run_id=run_id)
             except (InvalidRunIdError, MissingRunInputError) as exc:
