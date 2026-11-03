@@ -149,7 +149,7 @@ Calls start at index 1 in ascending order, with every row collapsed. Only explic
 expanded calls fetch full details. Their eight-entry, 8 MiB cache holds full bodies only.
 Evicting a body leaves the list summary intact, and reopening its call reloads
 details automatically. Classifier descriptors require `classifier_summary`,
-including when the corresponding detail body has expired.
+including when the corresponding detail body is unavailable.
 
 Run snapshots retain the selected node while its ID exists in the destination
 topology. The canvas notice reads **Viewing a run snapshot** and states that the

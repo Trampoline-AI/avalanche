@@ -34,7 +34,7 @@ default serve the browser UI and REST API.
 | `--log-level` | `WARNING` | Terminal log threshold: `DEBUG`, `INFO`, `WARNING`, `ERROR`; input is case-normalized. |
 | `--discovery-timeout SECONDS` | `60.0` | Positive finite maximum duration of a discovery scan. |
 | `--schedules-enabled` | Off | Start with every discovered cron schedule enabled, for this start only. Otherwise each schedule starts as it was last turned on or off, kept in the state database; a schedule never turned on starts disabled. |
-| `--state-db PATH` | `.avalanche/operator/state.db` | SQLite file that holds the operator's state, relative to the folder the command starts in. `:memory:` uses a throwaway database. Only one operator can use a file at a time; a second one fails at startup. A file written by a newer Avalanche version is refused. |
+| `--state-db PATH` | `.avalanche/operator/state.db` | SQLite file that holds the operator's state (runs, step states, logs, events, traces, evaluations, the result index and schedules), relative to the folder the command starts in; result bundles and input files go in folders next to it. `:memory:` uses a throwaway database. Only one operator can use a file at a time; a second one fails at startup. A file written by a newer Avalanche version is refused. See [what survives a restart](#what-the-operator-keeps-across-restarts). |
 
 ### Target configuration
 
@@ -65,13 +65,41 @@ choice as `operator`.
 | `--ray` | Off | Use Ray execution. |
 | `--log-level` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. |
 | `--discovery-timeout SECONDS` | `60.0` | Positive finite discovery deadline. |
-| `--schedules-enabled` | Off | Start with every cron schedule enabled, for this start only. |
-| `--state-db PATH` | `.avalanche/operator/state.db` | SQLite file that holds the operator's state, relative to the folder the command starts in. `:memory:` uses a throwaway database. Only one operator can use a file at a time; a second one fails at startup. A file written by a newer Avalanche version is refused. |
+| `--schedules-enabled` | Off | Start with every cron schedule enabled, for this start only; not saved in the state database. |
+| `--state-db PATH` | `.avalanche/operator/state.db` | SQLite file that holds the operator's state (runs, step states, logs, events, traces, evaluations, the result index and schedules), relative to the folder the command starts in; result bundles and input files go in folders next to it. `:memory:` uses a throwaway database. Only one operator can use a file at a time; a second one fails at startup. A file written by a newer Avalanche version is refused. See [what survives a restart](#what-the-operator-keeps-across-restarts). |
 
 Unlike `operator`, `dev` has no `--host`, `--webhook-port`, or `--no-web` options.
 Its local webhook port is `7434`. Startup reports discovery, gRPC readiness, and
 browser/REST endpoints. Ctrl-C initiates cleanup of owned services. Startup or
 shutdown failure returns a nonzero status.
+
+### What the operator keeps across restarts
+
+`ava operator` and `ava dev` keep their state in the `--state-db` file and three
+folders next to it: `results/` (result bundles), `input-files/` (uploaded run input
+files; the ones a run used are kept with it) and `schedule-inputs/` (copies of files
+a schedule's input uses). After a restart, including a crash or `kill -9`, the run
+list, each run's step states, logs, agent and classifier events, traces and
+evaluations, `ava result RUN_ID`, and each schedule's on/off state, input and last
+trigger are as they were. Connected clients reload them on their own.
+
+A run that was unfinished when the operator stopped is **not resumed**: the next
+start stops any of its processes still running, then marks the run and its
+unfinished steps failed with "Operator restarted before the run finished; it was
+not resumed". An evaluation still pending is marked failed the same way.
+`--schedules-enabled` applies to one start only and is not saved.
+
+Startup fails with an error when another operator uses the database, when the
+database was written by a newer Avalanche version, or when a stored schedule's
+input file is missing (restore the file, or run
+`ava state clear --include-schedules` to forget the schedules). It only warns
+about result bundles that do not match the index, and never serves them.
+
+Nothing expires: no time limit and no size limit. Use [`ava state`](#ava-state-command-options---state-db-path)
+to see and clear what is kept. The database and folders are local, unencrypted
+files that hold step inputs, tool outputs, logs and results as recorded; keep
+them on a local disk and out of version control. There is one operator per
+database, with no authentication or shared store.
 
 ## `ava web [options]`
 
@@ -167,7 +195,10 @@ Inspect and clear what the local operator keeps in its state database and the
 folders next to it (`results/`, `input-files/`, `schedule-inputs/`). The operator
 never deletes any of it automatically. Every command takes `--state-db PATH`, with
 the same default as `ava operator` (`.avalanche/operator/state.db` under the
-current folder), and needs an existing database file.
+current folder), and needs an existing database file. They do not run discovery,
+so they work on a database whose workflows are gone or whose operator will not
+start. Like the operator, they are unavailable on Windows, where the result store
+reports "Secure workflow result storage is unavailable".
 
 The commands refuse to run while an operator uses the database: they print an
 error naming the database file and return `1`. Stop the operator first. While a

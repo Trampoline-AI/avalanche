@@ -317,7 +317,7 @@ snapshot of the state sent to TypeSafe, not inferred from the node's inputs.
 It remains attached to running and terminal snapshots, including failed and
 cancelled calls. A successful result is captured before control returns to the
 step body. If later Python postprocessing fails, the node fails but the already
-captured input and answers remain inspectable within retention limits. These
+captured input and answers remain inspectable within the operator's size limits. These
 records are independent of what the node returns; they are not inferred from
 its return value or presented as an agent reasoning trace.
 
