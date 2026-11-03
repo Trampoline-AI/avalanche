@@ -52,7 +52,7 @@ execute a model during graph construction or discovery.
 
 One output field becomes its validated value; multiple fields become an ordered
 tuple and separate downstream arguments. A single list- or tuple-valued field
-remains one argument under both Local and Ray execution, even when empty.
+remains one argument under local execution, even when empty.
 Outputs are validated strictly against their field annotations and constraints;
 missing fields raise `AgentStepError`, and invalid values raise Pydantic
 `ValidationError`, without coercion, fallback, or retry.
@@ -93,7 +93,7 @@ async def summarize(document: str, *, agent: ava.Agent) -> str:
     return result.outputs.summary
 ```
 
-A runtime value only holds settings. Creating one starts nothing and needs nothing optional, so it can be used at workflow definition time and sent to Ray workers. A `ClaudeAgent` given SDK options, or an `OpenAIAgent` given model settings, imports its SDK when it is installed, to check their names.
+A runtime value only holds settings. Creating one starts nothing and needs nothing optional, so it can be used at workflow definition time. A `ClaudeAgent` given SDK options, or an `OpenAIAgent` given model settings, imports its SDK when it is installed, to check their names.
 
 ### PredictRLM
 
@@ -139,9 +139,9 @@ ava.runtimes.ClaudeAgent(
 )
 ```
 
-Avalanche checks only the name: an unknown one raises `ValueError` when the runtime is built if the `claude` extra is installed there, and `AgentStepError` when the step runs otherwise. `mcp_servers`, `hooks`, `plugins`, `allowed_tools`, `add_dirs`, and lists given as `tools` or `skills`, are added to what Avalanche sets for the step; a server named `avalanche` raises `AgentStepError`. `system_prompt`, `output_format` and `cwd` raise `ValueError`: use `system_prompt_append`, the signature's outputs and an `ava.Workspace` input instead. Any other option replaces Avalanche's value; replacing `setting_sources` or `strict_mcp_config` lets your own Claude settings or MCP servers reach the step. A step's options replace the workflow default's option by option. These options are never published or recorded, so `env` values and MCP credentials stay in the process that runs the step; with `RayExecutor` they must pickle. The full rules are on the [ClaudeAgent runtime](../runtimes/claude-agent.md#claude-agent-sdk-options) page.
+Avalanche checks only the name: an unknown one raises `ValueError` when the runtime is built if the `claude` extra is installed there, and `AgentStepError` when the step runs otherwise. `mcp_servers`, `hooks`, `plugins`, `allowed_tools`, `add_dirs`, and lists given as `tools` or `skills`, are added to what Avalanche sets for the step; a server named `avalanche` raises `AgentStepError`. `system_prompt`, `output_format` and `cwd` raise `ValueError`: use `system_prompt_append`, the signature's outputs and an `ava.Workspace` input instead. Any other option replaces Avalanche's value; replacing `setting_sources` or `strict_mcp_config` lets your own Claude settings or MCP servers reach the step. A step's options replace the workflow default's option by option. These options are never published or recorded, so `env` values and MCP credentials stay in the process that runs the step. The full rules are on the [ClaudeAgent runtime](../runtimes/claude-agent.md#claude-agent-sdk-options) page.
 
-**Setup.** Install the `claude` extra on every machine that runs the step, Ray workers included. The Claude Agent SDK package it installs ships the Claude Code CLI; a separately installed `claude` CLI is used only where the package has none of its own. A workflow that only declares Claude steps imports and publishes without them; running a step without the SDK raises `AgentStepExecutionError` naming the extra.
+**Setup.** Install the `claude` extra on every machine that runs the step. The Claude Agent SDK package it installs ships the Claude Code CLI; a separately installed `claude` CLI is used only where the package has none of its own. A workflow that only declares Claude steps imports and publishes without them; running a step without the SDK raises `AgentStepExecutionError` naming the extra.
 
 **Sign-in.** The CLI signs in as it does in a script, using the first of:
 
@@ -183,11 +183,11 @@ ava.runtimes.OpenAIAgent(model="gpt-5.4-mini", max_turns=6)
 | `narrate` | `bool`; default `True` | As for ClaudeAgent: asks the model to say what it is about to do before each tool call, and requires a `run_summary` string in its answer, which Avalanche removes from the outputs and shows as the answering turn's message. A signature output named `run_summary` needs `narrate=False`. |
 | `tracing` | `bool`; default `False` | Sends the SDK's own trace of each call to OpenAI. Off, nothing but the model calls reaches OpenAI. |
 
-Any other keyword is a field of the SDK's `agents.ModelSettings`, such as `temperature`, `reasoning` or `max_tokens`, passed to the SDK with the SDK's own types. Avalanche checks only the name: an unknown one raises `ValueError` when the runtime is built if the `openai` extra is installed there, and `AgentStepError` when the step runs otherwise. A step's settings replace the workflow default's setting by setting. Model settings are never published or recorded; with `RayExecutor` they must pickle.
+Any other keyword is a field of the SDK's `agents.ModelSettings`, such as `temperature`, `reasoning` or `max_tokens`, passed to the SDK with the SDK's own types. Avalanche checks only the name: an unknown one raises `ValueError` when the runtime is built if the `openai` extra is installed there, and `AgentStepError` when the step runs otherwise. A step's settings replace the workflow default's setting by setting. Model settings are never published or recorded.
 
 `ava.File` inputs are attached to the model's message. By default the agent has no tools besides the step's: `ava.File` outputs are text files the model answers with by name and content, and `ava.Workspace` inputs or outputs raise `AgentStepError`. `builtin_tools=["filesystem", "shell"]` turns on the SDK's sandbox tools: the model then edits files and runs commands in the step's `ava.Workspace` input, in place, writes `ava.File` outputs itself, and can run skill scripts. The local sandbox does not confine commands on Linux. Signature, tool parameter and output types must fit OpenAI strict JSON schemas; one that does not, such as a `dict[str, int]` output, raises `AgentStepError` before the call starts. The full rules are on the [OpenAIAgent runtime](../runtimes/openai-agent.md) page.
 
-**Setup.** Install the `openai` extra on every machine that runs the step, Ray workers included. A workflow that only declares OpenAI steps imports and publishes without it; running a step without the SDK raises `AgentStepExecutionError` naming the extra. Each call creates its own OpenAI client from `OPENAI_API_KEY` and, when set, `OPENAI_BASE_URL`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` in the environment of the process that runs the step.
+**Setup.** Install the `openai` extra on every machine that runs the step. A workflow that only declares OpenAI steps imports and publishes without it; running a step without the SDK raises `AgentStepExecutionError` naming the extra. Each call creates its own OpenAI client from `OPENAI_API_KEY` and, when set, `OPENAI_BASE_URL`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` in the environment of the process that runs the step.
 
 ## Signature declarations
 
