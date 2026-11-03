@@ -7,6 +7,7 @@ import sqlite3
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 from ._transaction import sqlite_transaction
@@ -17,6 +18,23 @@ MEMORY = ":memory:"
 DEFAULT_STATE_DB = Path(".avalanche") / "operator" / "state.db"
 
 StateDbPath = str | os.PathLike[str]
+
+
+@dataclass(frozen=True)
+class PageUsage:
+    """How many of the database's pages hold data and how many are free for reuse."""
+
+    page_size: int
+    page_count: int
+    free_pages: int
+
+    @property
+    def free_bytes(self) -> int:
+        return self.page_size * self.free_pages
+
+    @property
+    def free_fraction(self) -> float:
+        return self.free_pages / self.page_count if self.page_count else 0.0
 
 
 class OperatorStateStore:
@@ -87,6 +105,30 @@ class OperatorStateStore:
             with sqlite_transaction(self._connection) as connection:
                 yield connection
 
+    def page_usage(self) -> PageUsage:
+        """The database's page size, page count and free pages."""
+        with self.transaction() as connection:
+            return PageUsage(
+                page_size=_pragma_int(connection, "page_size"),
+                page_count=_pragma_int(connection, "page_count"),
+                free_pages=_pragma_int(connection, "freelist_count"),
+            )
+
+    def compact(self, *, vacuum: bool) -> None:
+        """Write the WAL back into the database file, rebuilding it first with ``vacuum``.
+
+        ``VACUUM`` returns free pages to the file system; without it they stay in
+        the file for SQLite to reuse. Neither can run inside a transaction.
+        """
+        with self._lock:
+            if self._closed:
+                raise StateStoreError(f"Operator state database {self.location} is closed")
+            if self._connection.in_transaction:
+                raise StateStoreError("Operator state compaction cannot run in a transaction")
+            if vacuum:
+                self._connection.execute("VACUUM")
+            self._connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
     def close(self) -> None:
         """Checkpoint, release the lock and close the connection; idempotent."""
         with self._lock:
@@ -131,6 +173,13 @@ def _connect(database: str) -> sqlite3.Connection:
     connection = sqlite3.connect(database, timeout=0, check_same_thread=False, autocommit=True)
     connection.row_factory = sqlite3.Row
     return connection
+
+
+def _pragma_int(connection: sqlite3.Connection, name: str) -> int:
+    value = connection.execute(f"PRAGMA {name}").fetchone()[0]
+    if not isinstance(value, int):
+        raise StateStoreError(f"SQLite returned {value!r} for PRAGMA {name}")
+    return value
 
 
 def _configure(connection: sqlite3.Connection) -> None:

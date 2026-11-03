@@ -46,6 +46,7 @@ from .discovery import (
 from .evaluation_models import EvaluationRecord
 from .evaluation_worker import EvaluationOutcome, EvaluationRequest, EvaluationWorkers
 from .input_files import (
+    INPUT_FILE_FOLDER_NAME,
     InputFileStaging,
     StagedInputFile,
     StagedInputFileError,
@@ -539,7 +540,7 @@ class Operator:
         # throwaway staging folder.
         if self._state_store.path is None:
             return InputFileStaging()
-        root = self._state_store.path.parent / "input-files"
+        root = self._state_store.path.parent / INPUT_FILE_FOLDER_NAME
         root.mkdir(mode=0o700, exist_ok=True)
         return InputFileStaging(root, keep_used_files=True)
 
