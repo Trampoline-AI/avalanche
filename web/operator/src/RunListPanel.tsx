@@ -450,9 +450,8 @@ export function RunListPanel({
                       transform: `translateY(${virtualRow.start}px)`,
                     };
                     const summary = filteredRuns[pageOffset + virtualRow.index];
-                    const triggeredAt = summary.startedAt
-                      ? new Date(summary.startedAt * 1000)
-                      : runTriggeredAt(summary);
+                    // startedAt is a monotonic clock reading, not a date.
+                    const triggeredAt = runTriggeredAt(summary);
                     const elapsedSeconds = runElapsedSeconds(summary);
                     return (
                       <button
