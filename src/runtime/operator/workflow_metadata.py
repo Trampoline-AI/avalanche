@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 import textwrap
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, JsonValue
 
@@ -116,3 +117,20 @@ def node_source_code_for_workflow(workflow: Workflow, node_ids: list[str]) -> di
         if source_code:
             source_by_node[node_id] = source_code
     return source_by_node
+
+
+def node_tags_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, Any]:
+    """Return display tags declared on each node, keyed by node id."""
+    tags_by_node: dict[str, Any] = {}
+    for node_id in node_ids:
+        node = workflow.nodes[node_id].node
+        raw_tags = getattr(node.fn, "__avalanche_tags__", None)
+        if raw_tags is None and hasattr(node, "tags"):
+            raw_tags = getattr(node, "tags")
+        if not raw_tags:
+            continue
+        if isinstance(raw_tags, dict):
+            tags_by_node[node_id] = {str(key): str(value) for key, value in raw_tags.items()}
+        else:
+            tags_by_node[node_id] = [str(tag) for tag in raw_tags]
+    return tags_by_node
