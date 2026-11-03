@@ -160,8 +160,8 @@ uv run ava dev examples/classifier_workflow.py
 
 The browser shows default questions before a run, or indicates that questions
 are supplied at runtime. Call details retain actual resolved questions and answers,
-including overrides. Evidence uses existing local operator retention limits and
-lifetime; it is not durable recovery storage.
+including overrides. Evidence is kept with the run in the operator's local state
+database, within the per-item size limits; it is not durable recovery storage.
 
 ### Runtime questions
 
@@ -400,7 +400,8 @@ Set `TYPESAFE_API_KEY` alongside agent provider credentials. Evaluation
 requires operator-managed execution; embedded `.run()` reports **not evaluated**.
 The browser shows independent pending/completed/failed records per execution,
 including reruns. Errors never gate workflow progress or change its result.
-Records survive coordinator completion only in operator memory, not restart.
+Records are kept in the operator's state database and survive a restart; one
+still pending at a restart is marked failed, not resumed.
 See [native evaluations](agent-steps.md#native-evaluations) for full examples,
 first-return capture semantics, configuration, and verification guidance.
 

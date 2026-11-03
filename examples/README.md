@@ -11,7 +11,10 @@ uv run ava dev .
 
 This explicit target keeps discovery inside `examples/`. The local operator and
 browser UI start together; select any discovered workflow in the UI to start a
-run.
+run. Runs, their logs and traces, results and schedule choices are kept in
+`examples/.avalanche/operator/` and come back when you restart; see
+[where the operator keeps its data](../README.md#where-the-operator-keeps-its-data)
+and `uv run ava state info` to inspect or clear them.
 
 ## Canonical Examples
 

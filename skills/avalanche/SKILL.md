@@ -240,7 +240,9 @@ merging unrelated evidence. Follow the
 Native evaluations are operator-only and never gate the workflow. They require
 `TYPESAFE_API_KEY` separately from agent credentials, use classifier
 model/timeout defaults, and expose independent pending/results/errors per
-execution. They survive coordinator completion, not operator restart.
+execution. Their records are kept in the operator's state database, so they
+survive an operator restart; one still pending at a restart is marked failed,
+not resumed.
 Embedded execution reports **not evaluated**. Never promise file/media
 evaluation or durable recovery, and never describe controlled fixture responses
 as live model judgments.
