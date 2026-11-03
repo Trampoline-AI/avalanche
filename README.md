@@ -81,32 +81,27 @@ Create an empty directory, move into it, and run:
 uvx avalanche-ai@latest init
 ```
 
-Follow the instructions to set up your LLM provider.
-
-This installs a ready-to-run starter project with project dependencies, the Avalanche
-authoring skill, provider setup, and an example workflow. Its key structure is:
+This installs a ready-to-run starter project with its dependencies, the Avalanche
+authoring skill, and `start_flow`, a starter workflow with a plain step and an agent
+step. Its key structure is:
 
 ```text
 .
 ├── .agent/
 │   └── skills/
 │       └── avalanche/                # Avalanche workflow creation skill
-├── scripts/
-│   └── configure-provider.sh         # LLM provider setup
 ├── src/                              # workflows live here
-│   └── binary_converter/
+│   └── start_flow/
 │       └── flow.py                   # included example workflow
-├── AGENTS.md                       
-├── pyproject.toml                  
+├── AGENTS.md
+├── README.md                         # running start_flow, runtimes and model choices
+├── pyproject.toml
 └── uv.lock
 ```
 
-When run from an interactive terminal, the bootstrapper offers provider setup immediately. To change
-providers or credentials later in the starter project:
-
-```bash
-bash scripts/configure-provider.sh
-```
+To run it, set `OPENAI_API_KEY`, then run `uv run ava dev`. The starter project's
+`README.md` lists the agent runtimes, what models each one supports, and how to give
+it credentials.
 
 #### Local checkout dependencies
 

@@ -5,7 +5,7 @@ set -Eeuo pipefail
 readonly AVALANCHE_REPOSITORY="https://github.com/Trampoline-AI/avalanche.git"
 readonly PREDICT_RLM_REPOSITORY="https://github.com/Trampoline-AI/predict-rlm.git"
 readonly PROJECT_NAME="avalanche-workspace"
-readonly STARTER_WORKFLOW_NAME="binary_converter"
+readonly STARTER_WORKFLOW_NAME="start_flow"
 
 workspace_root="$(pwd -P)"
 staging_root=""
@@ -79,281 +79,174 @@ write_starter_flow() {
   local flow_path="$staging_root/src/$STARTER_WORKFLOW_NAME/flow.py"
   mkdir -p "$(dirname "$flow_path")"
   cat >"$flow_path" <<'EOF'
-import random
+"""Starter Avalanche flow: a source, a plain step, an agent step and a dest."""
 
 import avalanche as ava
 
-# Managed by scripts/configure-provider.sh. Do not place credentials here.
-STARTER_PROVIDER = "unconfigured"
-STARTER_MODEL = ""
-
-
-def starter_lm():
-    if STARTER_PROVIDER == "codex-lm":
-        from dspy_codex_lm import CodexLM
-
-        return CodexLM(model=STARTER_MODEL)
-    return STARTER_MODEL
-
 
 @ava.source
-def generate_binary() -> str:
-    length = random.randint(128, 256)
-    return "1" + "".join(random.choice("01") for _ in range(length - 1))
+def create_topic() -> str:
+    """Source node: starts the flow by creating the topic "hello world"."""
+    return "hello world"
+
+
+@ava.step
+def prepare_request(topic: str) -> str:
+    """Step node: plain Python that turns the topic into a request for the agent."""
+    return f"Write a greeting about {topic}."
 
 
 @ava.agent_step(
-    ava.Signature("binary: str -> decimal: str"),
-    runtime=ava.runtimes.PredictRLM(lm=starter_lm()),
+    ava.Signature(
+        "request: str -> greeting: str",
+        "Agent step: answer the request with one friendly sentence.",
+    ),
+    runtime=ava.runtimes.PredictRLM(
+        lm="openai/gpt-5.5", sub_lm="openai/gpt-5.5", max_iterations=5
+    ),
 )
-async def convert_binary(binary: str, *, agent: ava.Agent) -> str:
-    return (await agent(binary=binary)).outputs.decimal
+async def write_greeting(request: str, *, agent: ava.Agent) -> str:
+    """Agent step: asks the model to write a greeting that answers the request."""
+    return (await agent(request=request)).outputs.greeting
 
 
 @ava.dest
-def print_result(result: str) -> str:
-    print(result)
-    return result
+def print_greeting(greeting: str) -> str:
+    """Dest node: ends the flow by printing the finished greeting and returning it."""
+    print(greeting)
+    return greeting
 
 
 @ava.workflow
-def binary_converter():
-    return generate_binary() >> convert_binary() >> print_result()
+def start_flow():
+    """Prepare a request, have an agent write a greeting, then print it."""
+    return create_topic() >> prepare_request() >> write_greeting() >> print_greeting()
 EOF
 }
 
-write_provider_configurator() {
-  local setup_path="$staging_root/scripts/configure-provider.sh"
-  mkdir -p "$(dirname "$setup_path")"
-  cat >"$setup_path" <<'EOF'
-#!/usr/bin/env bash
-# Configure the model provider for the workspace starter flow.
-set -Eeuo pipefail
+write_workspace_readme() {
+  cat >"$staging_root/README.md" <<'EOF'
+# Avalanche workspace
 
-workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
-flow_path="$workspace_root/src/binary_converter/flow.py"
-provider_name=""
-provider_key=""
-model=""
-credential_env=""
-api_key=""
-needs_codex_lm=false
+This project holds your [Avalanche](https://github.com/Trampoline-AI/avalanche)
+workflows. Each folder under `src/` is one workflow. It comes with `start_flow`, a
+starter flow with a plain Python step and an agent step.
 
-fail() {
-  printf 'error: %s\n' "$*" >&2
-  exit 1
-}
+## Run start_flow
 
-require_command() {
-  local command=$1
-  command -v "$command" >/dev/null 2>&1 || fail "Missing required command: $command"
-}
+`start_flow` calls a real model, so it needs that model's API key. Avalanche does not
+load this key from a file: set it in the terminal where you start Avalanche.
 
-require_interactive_terminal() {
-  [[ -t 0 && -t 1 ]] || fail "Provider setup requires a terminal. Run bash scripts/configure-provider.sh from an interactive shell."
-}
+```bash
+export OPENAI_API_KEY=...
+uv run ava dev
+```
 
-choose_option() {
-  local prompt=$1
-  local choice
-  while true; do
-    read -r -p "$prompt" choice
-    case "$choice" in
-    1 | 2 | 3 | 4 | 5 | 6)
-      printf '%s\n' "$choice"
-      return
-      ;;
-    *) printf 'Choose one of the listed options.\n' >&2 ;;
-    esac
-  done
-}
+To keep the key in a file instead, put it in `.env`, which Git ignores, and pass that
+file to `uv run`. A plain `uv run ava dev` does not read `.env` for agent steps.
 
-choose_model() {
-  local prompt=$1
-  shift
-  local models=("$@")
-  local choice
-  local index
+```bash
+uv run --env-file .env ava dev
+```
 
-  while true; do
-    printf '\nChoose a model:\n' >&2
-    for index in "${!models[@]}"; do
-      printf '  %d) %s\n' "$((index + 1))" "${models[index]}" >&2
-    done
-    read -r -p "$prompt" choice
-    if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#models[@]})); then
-      printf '%s\n' "${models[choice - 1]}"
-      return
-    fi
-    printf 'Choose one of the listed models.\n' >&2
-  done
-}
+Open the browser UI at the address the command prints, select `start_flow` and click
+**Run**. You can look at the flow without a key, but a run stops at the agent step. To
+use another provider, see [Choose a runtime and model](#choose-a-runtime-and-model).
 
-choose_model_id() {
-  while true; do
-    read -r -p 'Model ID (for example, provider/model): ' model
-    [[ -n "$model" ]] && return
-    printf 'A model ID is required.\n' >&2
-  done
-}
+Zoom in on the graph until the node cards show their details. Each card then says what
+kind of node it is and what it does. That text is the first line of the function's
+docstring; on an agent step, it is the first line of the signature's instructions.
 
-choose_credential_env() {
-  while true; do
-    read -r -p 'Credential environment variable (leave blank if none is required): ' credential_env
-    [[ -z "$credential_env" || "$credential_env" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] && return
-    printf 'Use a valid environment-variable name.\n' >&2
-  done
-}
+| Node | Type | What it does |
+| --- | --- | --- |
+| `create_topic` | Source: starts a flow | Creates the topic `hello world` |
+| `prepare_request` | Step: runs plain Python | Turns the topic into a request |
+| `write_greeting` | Agent step: gives a task to a model | Writes a greeting |
+| `print_greeting` | Dest: ends a flow | Prints the greeting and returns it |
 
-select_provider() {
-  local choice
-  printf 'Avalanche provider setup\n\n'
-  printf 'Choose a model provider:\n'
-  printf '  1) CodexLM — ChatGPT/Codex subscription\n'
-  printf '  2) OpenAI API\n'
-  printf '  3) Anthropic API\n'
-  printf '  4) Gemini API\n'
-  printf '  5) Kimi (Moonshot AI) API\n'
-  printf '  6) Other provider (DSPy model ID)\n'
-  choice=$(choose_option 'Selection [1-6]: ')
+`>>` connects the nodes in `src/start_flow/flow.py`: each node receives the previous
+node's output as its first argument.
 
-  case "$choice" in
-  1)
-    provider_name="CodexLM via ChatGPT/Codex subscription"
-    provider_key="codex-lm"
-    model=$(choose_model 'Selection [1]: ' "gpt-5.6-terra")
-    needs_codex_lm=true
-    ;;
-  2)
-    provider_name="OpenAI API"
-    provider_key="model-id"
-    model=$(choose_model 'Selection [1-4]: ' "openai/gpt-5.6-terra" "openai/gpt-5.6-sol" "openai/gpt-5.6-luna" "openai/gpt-5.5")
-    credential_env="OPENAI_API_KEY"
-    ;;
-  3)
-    provider_name="Anthropic API"
-    provider_key="model-id"
-    model=$(choose_model 'Selection [1-3]: ' "anthropic/claude-sonnet-5" "anthropic/claude-opus-5" "anthropic/claude-haiku-4-5")
-    credential_env="ANTHROPIC_API_KEY"
-    ;;
-  4)
-    provider_name="Gemini API"
-    provider_key="model-id"
-    model=$(choose_model 'Selection [1-4]: ' "gemini/gemini-2.5-pro" "gemini/gemini-2.0-flash" "gemini/gemini-3.5-flash" "gemini/gemini-3.6-flash")
-    credential_env="GEMINI_API_KEY"
-    ;;
-  5)
-    provider_name="Kimi (Moonshot AI) API"
-    provider_key="model-id"
-    model=$(choose_model 'Selection [1-3]: ' "moonshot/kimi-k3" "moonshot/kimi-k2.7-code" "moonshot/kimi-k2.6")
-    credential_env="MOONSHOT_API_KEY"
-    ;;
-  6)
-    provider_name="Other provider"
-    provider_key="model-id"
-    choose_model_id
-    choose_credential_env
-    ;;
-  esac
-}
+## Choose a runtime and model
 
-collect_api_key() {
-  [[ -n "$credential_env" ]] || return 0
+An agent step runs on one of three runtimes. To change what `start_flow` uses, edit
+`runtime=` on `write_greeting` and set that provider's key instead of `OPENAI_API_KEY`.
 
-  printf '\nPaste your %s key now. Input is hidden and it will be saved only in .env.\n' "$provider_name"
-  while true; do
-    read -r -s -p 'API key: ' api_key
-    printf '\n'
-    [[ -n "$api_key" ]] && return
-    printf 'An API key is required for the selected provider.\n' >&2
-  done
-}
+| Runtime | Install | Models | Credentials |
+| --- | --- | --- | --- |
+| `ava.runtimes.PredictRLM` | Included | Many providers, as `provider/model` | The provider's API key |
+| `ava.runtimes.ClaudeAgent` | `uv add 'avalanche-ai[claude]'` | Claude only | A `claude` login, `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` |
+| `ava.runtimes.OpenAIAgent` | `uv add 'avalanche-ai[openai]'` | OpenAI only | `OPENAI_API_KEY` |
 
-write_flow_configuration() {
-  "$workspace_root/.venv/bin/python" - "$flow_path" "$provider_key" "$model" <<'PY'
-import json
-import re
-import sys
-from pathlib import Path
+### PredictRLM
 
-flow_path = Path(sys.argv[1])
-provider, model = sys.argv[2:]
-text = flow_path.read_text()
-for name, value in (("STARTER_PROVIDER", provider), ("STARTER_MODEL", model)):
-    text, replacements = re.subn(
-        rf"^{name} = .*$",
-        f"{name} = {json.dumps(value)}",
-        text,
-        count=1,
-        flags=re.MULTILINE,
-    )
-    if replacements != 1:
-        raise RuntimeError(f"Cannot find the managed {name} setting in {flow_path}")
-flow_path.write_text(text)
-PY
-}
+The agent writes Python and runs it in a sandbox. Nothing extra needs installing.
 
-write_api_key() {
-  local env_path="$workspace_root/.env"
-  local temporary_path
-  local line
+```python
+ava.runtimes.PredictRLM(lm="anthropic/claude-sonnet-5", sub_lm="anthropic/claude-haiku-4-5")
+```
 
-  temporary_path=$(mktemp "$workspace_root/.env.XXXXXX") ||
-    fail "Cannot create a temporary .env file."
-  if [[ -f "$env_path" ]]; then
-    while IFS= read -r line || [[ -n "$line" ]]; do
-      [[ "$line" == "$credential_env="* ]] || printf '%s\n' "$line" >>"$temporary_path"
-    done <"$env_path"
-  fi
-  printf '%s=%s\n' "$credential_env" "$api_key" >>"$temporary_path"
-  chmod 600 "$temporary_path"
-  mv "$temporary_path" "$env_path"
-  unset api_key
-}
+`lm` is the main model and `sub_lm` is a second, usually smaller model the agent can
+ask for structured answers. Both take `provider/model` IDs, which follow the naming
+in [LiteLLM's provider list](https://docs.litellm.ai/docs/providers). Look up model
+IDs there, then check how the prefix is served.
 
-authenticate_codex() {
-  [[ "$needs_codex_lm" == true ]] || return 0
+These prefixes work as installed, because DSPy, the library PredictRLM calls models
+with, talks to them directly:
 
-  uv sync --extra codex-lm --directory "$workspace_root"
+| Prefix | Provider | Credential |
+| --- | --- | --- |
+| `openai/` | OpenAI | `OPENAI_API_KEY` |
+| `anthropic/` | Anthropic | `ANTHROPIC_API_KEY` |
+| `gemini/` | Google Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
+| `moonshot/` | Moonshot AI (Kimi) | `MOONSHOT_API_KEY` |
+| `xai/` | xAI | `XAI_API_KEY` |
+| `groq/` | Groq | `GROQ_API_KEY` |
+| `deepseek/` | DeepSeek | `DEEPSEEK_API_KEY` |
+| `openrouter/` | OpenRouter | `OPENROUTER_API_KEY` |
+| `ollama/` | Local Ollama server | None |
 
-  local response
-  read -r -p 'Set up Codex subscription authentication now? [Y/n] ' response
-  case "$response" in
-  "" | y | Y | yes | YES)
-    require_command codex
-    "$workspace_root/.venv/bin/codex-lm" auth login default --device-auth
-    ;;
-  *)
-    printf 'CodexLM authentication skipped. Before running the flow, run:\n'
-    printf '  .venv/bin/codex-lm auth login default --device-auth\n'
-    ;;
-  esac
-}
+Every other prefix in LiteLLM's list, such as `bedrock/` or `vertex_ai/`, needs
+LiteLLM itself, which this workspace leaves out on purpose. To use one, delete
+`exclude-dependencies = ["litellm"]` from `pyproject.toml`, then run:
 
-main() {
-  require_interactive_terminal
-  [[ -f "$flow_path" ]] || fail "Run this script from an initialized Avalanche workspace."
-  [[ -x "$workspace_root/.venv/bin/python" ]] || fail "The workspace virtual environment is missing. Rerun init.sh."
+```bash
+uv add 'dspy[litellm]'
+```
 
-  select_provider
-  collect_api_key
-  write_flow_configuration
-  if [[ -n "$credential_env" ]]; then
-    write_api_key
-  fi
-  authenticate_codex
+### ClaudeAgent
 
-  printf '\nConfigured %s with %s.\n' "$provider_name" "$model"
-  if [[ -n "$credential_env" ]]; then
-    printf '.env contains %s and is ignored by Git.\n' "$credential_env"
-  fi
-  printf '\nStart the demo with:\n'
-  printf '  uv run ava dev\n'
-}
+Runs Claude through the Claude Agent SDK. `model` is a Claude model ID; leave it out
+to let the Claude CLI choose.
 
-main "$@"
+```bash
+uv add 'avalanche-ai[claude]'
+```
+
+```python
+ava.runtimes.ClaudeAgent(model="claude-haiku-5-5", builtin_tools=["Read", "Grep"])
+```
+
+The extra includes the Claude Code CLI. It signs in as it does in a terminal: with a
+`claude` login, `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`, or
+`ANTHROPIC_API_KEY`.
+
+### OpenAIAgent
+
+Runs OpenAI models through the OpenAI Agents SDK. `model` is an OpenAI model ID,
+without a provider prefix; leave it out to use `OPENAI_DEFAULT_MODEL` or else the
+SDK's default.
+
+```bash
+uv add 'avalanche-ai[openai]'
+```
+
+```python
+ava.runtimes.OpenAIAgent(model="gpt-5.4-mini", max_turns=6)
+```
+
+It reads `OPENAI_API_KEY` from the environment, and `OPENAI_BASE_URL` when set.
 EOF
-  chmod 755 "$setup_path"
 }
 
 write_workspace_guidance() {
@@ -363,11 +256,12 @@ write_workspace_guidance() {
 ## Purpose
 
 This repository is one UV workspace for a collection of Avalanche workflows.
-The `binary_converter` starter is a statically checked example flow.
+The `start_flow` starter has a source, a plain step, an agent step and a dest.
+`README.md` explains the key it needs, how to run it and how to choose a runtime.
 
 ```text
 src/
-├── binary_converter/       # starter flow
+├── start_flow/             # starter flow
 ├── research_assistant/     # future workflow
 └── document_reviewer/      # future workflow
 ```
@@ -386,7 +280,7 @@ uv run ava dev
 To scan one flow instead of the configured workspace target:
 
 ```bash
-uv run ava dev src/binary_converter/flow.py
+uv run ava dev src/start_flow/flow.py
 ```
 
 ## Deploying to Delta Cloud
@@ -433,32 +327,33 @@ version = "0.1.0"
 requires-python = ">=3.13,<3.14"
 EOF
 
-  cat >>"$staging_root/pyproject.toml" <<'EOF'
+  if [[ "$use_editable_dependencies" == true ]]; then
+    # uv applies a source only to a direct dependency, so the checkout must be listed.
+    cat >>"$staging_root/pyproject.toml" <<'EOF'
 dependencies = [
-    "avalanche-ai>=0.13",
-    "predict-rlm>=0.10",
+    "avalanche-ai>=0.17",
+    "predict-rlm",
 ]
+EOF
+  else
+    cat >>"$staging_root/pyproject.toml" <<'EOF'
+dependencies = ["avalanche-ai>=0.17"]
+EOF
+  fi
+
+  cat >>"$staging_root/pyproject.toml" <<'EOF'
 
 [dependency-groups]
 dev = ["trampoline-delta>=0.3.4"]
-EOF
-
-  cat >>"$staging_root/pyproject.toml" <<'EOF'
 
 [tool.avalanche]
 flow_targets = ["src"]
 
 [tool.uv]
-# DSPy still declares litellm; model calls use DSPy's native engines.
-# Routes served only through LiteLLM (for example bedrock/, vertex_ai/) need this
-# exclusion removed and dspy[litellm] added.
+# Avalanche installs PredictRLM and DSPy. DSPy still declares litellm but calls the main
+# providers directly. Routes served only through LiteLLM (for example bedrock/, vertex_ai/)
+# need this exclusion removed and dspy[litellm] added.
 exclude-dependencies = ["litellm"]
-EOF
-
-  cat >>"$staging_root/pyproject.toml" <<'EOF'
-
-[project.optional-dependencies]
-codex-lm = ["predict-rlm[codex-lm]"]
 EOF
 
   if [[ "$use_editable_dependencies" == true ]]; then
@@ -478,15 +373,11 @@ EOF
   cp -R "$AVALANCHE_SKILL_SOURCE" "$staging_root/.agent/skills/avalanche"
 
   printf '.env\n' >>"$staging_root/.gitignore"
-  cat >"$staging_root/.env" <<'EOF'
-# Managed by scripts/configure-provider.sh. Provider credentials are stored here.
-EOF
-  chmod 600 "$staging_root/.env"
 
   write_starter_flow
   uv sync --directory "$staging_root"
 
-  write_provider_configurator
+  write_workspace_readme
   write_workspace_guidance
 }
 
@@ -518,12 +409,13 @@ for module, relative_checkout in checkouts:
 import importlib.util
 from pathlib import Path
 
-flow_path = Path.cwd() / "src/binary_converter/flow.py"
+flow_path = Path.cwd() / "src/start_flow/flow.py"
 spec = importlib.util.spec_from_file_location("starter_flow", flow_path)
 if spec is None or spec.loader is None:
     raise RuntimeError(f"Cannot import starter flow: {flow_path}")
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
+module.start_flow()
 print(flow_path)
 '
 
@@ -532,8 +424,7 @@ print(flow_path)
     .venv/bin/delta version >/dev/null
     git check-ignore .env >/dev/null
     test -f AGENTS.md
-    test -x scripts/configure-provider.sh
-    bash -n scripts/configure-provider.sh
+    test -f README.md
   )
 }
 
@@ -566,36 +457,10 @@ report_success() {
   else
     printf 'Avalanche dependency: published avalanche-ai\n'
   fi
-}
-
-configure_provider() {
-  local response
-
-  if [[ ! -t 0 || ! -t 1 ]]; then
-    printf '\nConfigure a provider later from an interactive terminal:\n'
-    printf '  bash scripts/configure-provider.sh\n'
-    return
-  fi
-
-  while true; do
-    if ! read -r -p 'Configure a provider now? [Y/n] ' response; then
-      printf '\nProvider setup skipped. Run when ready:\n'
-      printf '  bash scripts/configure-provider.sh\n'
-      return
-    fi
-    case "$response" in
-    "" | y | Y | yes | YES)
-      bash "$workspace_root/scripts/configure-provider.sh"
-      return
-      ;;
-    n | N | no | NO)
-      printf '\nProvider setup skipped. Run when ready:\n'
-      printf '  bash scripts/configure-provider.sh\n'
-      return
-      ;;
-    *) printf 'Choose Y or n.\n' >&2 ;;
-    esac
-  done
+  printf '\nThe starter flow calls a real model. Set its key, then select start_flow in the browser UI:\n'
+  printf '  export OPENAI_API_KEY=...\n'
+  printf '  uv run ava dev\n'
+  printf 'README.md explains the flow and how to choose another runtime or model.\n'
 }
 
 main() {
@@ -607,7 +472,6 @@ main() {
   rebuild_workspace_environment
   verify_workspace "$workspace_root"
   report_success
-  configure_provider
 }
 
 main "$@"

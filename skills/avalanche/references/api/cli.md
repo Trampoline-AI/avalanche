@@ -13,9 +13,10 @@ for the Python values submitted or retrieved through the CLI.
 
 Initialize an empty working directory using the packaged bootstrap script.
 `--editable-deps` clones Avalanche and PredictRLM for editable development instead
-of using only published packages. This command installs dependencies and may
-prompt for provider setup; it is not a read-only project inspection. It returns
-the bootstrap script's exit status.
+of using only published packages. This command installs dependencies; it is not
+a read-only project inspection. It creates `start_flow`, a starter workflow with
+an agent step, and a `README.md` that explains the key it needs and the available
+runtimes. It returns the bootstrap script's exit status.
 
 ## `ava operator [FLOW ...] [options]`
 
