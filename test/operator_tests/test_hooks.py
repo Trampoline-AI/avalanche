@@ -2,11 +2,11 @@
 
 import queue
 import threading
-from concurrent.futures import CancelledError, ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from avalanche import LocalExecutor, RayExecutor, dest, source, step, workflow
+from avalanche import LocalExecutor, dest, source, step, workflow
 from runtime.operator.hooks import RunHooks
 from runtime.operator.run_worker import _QueueStream, _with_node_streams
 
@@ -146,71 +146,3 @@ def test_queue_stream_keeps_parallel_node_output_separate():
     assert len({event["attempt"] for event in events}) == 2
     stdout.write("after-nodes\n")
     assert event_queue.get_nowait()["node_id"] == "operator"
-
-
-@pytest.mark.ray
-def test_ray_hooks_cancel_before_dependent_child_starts():
-    """Cancellation observed after a parent succeeds should stop child submission."""
-    pytest.importorskip("ray")
-    import ray
-
-    if ray.is_initialized():
-        ray.shutdown()
-
-    ray.init(
-        num_cpus=2,
-        ignore_reinit_error=True,
-        include_dashboard=False,
-    )
-
-    try:
-
-        @ray.remote
-        class Recorder:
-            def __init__(self):
-                self.started = []
-
-            def record_start(self, label):
-                self.started.append(label)
-
-            def get_started(self):
-                return list(self.started)
-
-        recorder = Recorder.remote()
-
-        @source
-        def parent():
-            import ray
-
-            ray.get(recorder.record_start.remote("parent"))
-            return "data"
-
-        @step
-        def child(value):
-            import ray
-
-            ray.get(recorder.record_start.remote(f"child:{value}"))
-            return value
-
-        @workflow
-        def dependent_workflow():
-            parent() >> child()
-
-        canceled = False
-
-        def on_success(_node_id):
-            nonlocal canceled
-            canceled = True
-
-        with pytest.raises(CancelledError):
-            dependent_workflow().run(
-                executor=RayExecutor(),
-                hooks=RunHooks(
-                    on_node_success=on_success,
-                    cancel_requested=lambda: canceled,
-                ),
-            ).result()
-
-        assert ray.get(recorder.get_started.remote()) == ["parent"]
-    finally:
-        ray.shutdown()

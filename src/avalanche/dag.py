@@ -697,89 +697,10 @@ def dest(
 # Workflow execution helpers
 
 
-def _deferred_stream_upstream_of(value: Any):
-    """Find a ``DeferredStreamUpstream`` nested in a resolved provider value.
-
-    Stream resolution yields ``(stream, upstream_data, source_node_slugs)``, so
-    the carrier is nested inside a tuple. Recurses through tuple/list/dict.
-    """
-    from .types import DeferredStreamUpstream
-
-    if isinstance(value, DeferredStreamUpstream):
-        return value
-    if isinstance(value, (tuple, list)):
-        for item in value:
-            found = _deferred_stream_upstream_of(item)
-            if found is not None:
-                return found
-    if isinstance(value, dict):
-        for item in value.values():
-            found = _deferred_stream_upstream_of(item)
-            if found is not None:
-                return found
-    return None
-
-
-def _stamp_deferred_stream_upstream(value: Any, *, parent_kwarg: str) -> Any:
-    """Stamp the collision-free hidden kwarg name and clear the parent ref.
-
-    ``Stream.resolve`` emits a ``DeferredStreamUpstream`` with a placeholder
-    ``parent_kwarg`` and the parent payload ref. The DAG submit lift generates
-    the final, node+param-scoped hidden kwarg name (see ``_safe_hidden_kwarg``),
-    lifts the ref into a top-level task kwarg so Ray tracks the dependency, and
-    stamps that name here while clearing the ref — so the wrapper closure carries
-    only the kwarg name plus tiny metadata, never an ObjectRef. Preserves
-    tuple/list/dict shape.
-    """
-    from dataclasses import replace
-
-    from .types import DeferredStreamUpstream
-
-    if isinstance(value, DeferredStreamUpstream):
-        return replace(value, parent_kwarg=parent_kwarg, ref=None)
-    if isinstance(value, tuple):
-        return tuple(
-            _stamp_deferred_stream_upstream(item, parent_kwarg=parent_kwarg) for item in value
-        )
-    if isinstance(value, list):
-        return [
-            _stamp_deferred_stream_upstream(item, parent_kwarg=parent_kwarg) for item in value
-        ]
-    if isinstance(value, dict):
-        return {
-            k: _stamp_deferred_stream_upstream(v, parent_kwarg=parent_kwarg)
-            for k, v in value.items()
-        }
-    return value
-
-
-def _safe_hidden_kwarg(node_id: str, param_name: str, existing: dict[str, Any]) -> str:
-    """Generate a unique, sanitized hidden kwarg name for a deferred Stream ref.
-
-    Scoped by node id + param name so multiple Stream params on one node never
-    collide, with a numeric suffix as a final guard against any residual clash
-    with existing kwargs.
-    """
-    safe_node = "".join(ch if ch.isalnum() else "_" for ch in str(node_id))
-    safe_param = "".join(ch if ch.isalnum() else "_" for ch in str(param_name))
-    base = f"__ava_stream_parent_{safe_node}_{safe_param}"
-    name = base
-    counter = 0
-    while name in existing:
-        counter += 1
-        name = f"{base}_{counter}"
-    return name
-
-
 def _resolve_to_ref(arg, result_refs, executor=None):
     """Convert a NodeFuture argument to its ref, handling tuple indexing.
 
-    For an indexed future:
-    - true multi-return (``result_refs[future_id]`` is a tuple/list of refs):
-      return the selected element ref directly — no materialization;
-    - single-return whose payload is a tuple/list (one ref under Ray): use
-      ``executor.project`` so a worker opens the tuple instead of the driver;
-    - local / already-materialized value: index in place.
+    Indexed futures select an element from the already-materialized result.
     """
     if not isinstance(arg, NodeFuture):
         return arg
@@ -791,16 +712,6 @@ def _resolve_to_ref(arg, result_refs, executor=None):
     # True multi-return: the ref is already a tuple/list of per-slot refs.
     if isinstance(ref, (tuple, list)):
         return ref[arg.tuple_index]
-
-    # Single-return node whose payload is a tuple/list. Under a distributed
-    # executor the ref is opaque; project it worker-side rather than fetching
-    # the whole tuple to the driver just to index one element.
-    if (
-        executor is not None
-        and _is_executor_ref(ref, executor)
-        and hasattr(executor, "project")
-    ):
-        return executor.project(ref, arg.tuple_index)
 
     return ref[arg.tuple_index]
 
@@ -1343,27 +1254,6 @@ def _validate_no_skipped_non_stream_inputs(
                 )
 
 
-def _is_executor_ref(value: Any, executor: Any) -> bool:
-    """Return True when value is a concrete future/ref for this executor."""
-    ray = getattr(executor, "ray", None)
-    object_ref_type = getattr(ray, "ObjectRef", None)
-    return object_ref_type is not None and isinstance(value, object_ref_type)
-
-
-def _should_fetch_with_executor(value: Any, executor: Any) -> bool:
-    """Ray can only fetch ObjectRefs; LocalExecutor can fetch materialized values."""
-    if getattr(executor, "ray", None) is not None:
-        return _is_executor_ref(value, executor)
-    return True
-
-
-def _all_fetchable_with_executor(values: list[Any], executor: Any) -> bool:
-    """Return True when all values can be passed to executor.get()."""
-    if getattr(executor, "ray", None) is not None:
-        return all(_is_executor_ref(value, executor) for value in values)
-    return True
-
-
 def _inspect_providers(fn: Callable, kwargs: dict[str, Any], providers: list) -> dict[str, Any]:
     """
     Inspect function signature and kwargs for injectable parameter types.
@@ -1617,8 +1507,7 @@ def _reattach_lineage(value: Any, lineage_source: Any) -> Any:
 def _wrap_lineaged_result(value: Any, context: Any, *, num_returns: int) -> Any:
     """Wrap a node return value with the lineage vector of its producers.
 
-    Multi-return nodes wrap each item individually so executor multi-return
-    (e.g. Ray) still sees the expected number of results.
+    Multi-return nodes wrap each item individually to preserve the output count.
     """
     from .types import LineagedResult
 
@@ -1631,63 +1520,6 @@ def _wrap_lineaged_result(value: Any, context: Any, *, num_returns: int) -> Any:
     if num_returns > 1 and isinstance(value, list):
         return [LineagedResult(item, lineage) for item in value]
     return LineagedResult(value, lineage)
-
-
-_STREAM_PARENT_KWARG_PREFIX = "__ava_stream_parent_"
-
-
-def _materialize_append_handles_for_worker(value: Any) -> Any:
-    """Convert ``AppendResultHandle``s to ``AppendResult`` inside a Ray worker.
-
-    Runs before user code / provider wrappers so no user function or Stream
-    consumer ever receives the internal handle. Dereferences data refs via
-    ``ray.get`` (worker-side, not the driver). No-op when Ray is unavailable
-    (LocalExecutor) or there are no handles.
-    """
-    from .types import materialize_append_handles
-
-    try:
-        import ray
-    except ImportError:
-        return value
-    return materialize_append_handles(value, ray.get)
-
-
-def _materialize_worker_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Materialize worker kwargs, EXCEPT hidden Stream parent kwargs.
-
-    A deferred Stream upstream is lifted into a top-level hidden kwarg named
-    ``__ava_stream_parent_*`` so Ray tracks the producer as a dependency. That
-    value must NOT be generic-materialized here: ``stream_wrapper`` owns its
-    control/data split and pops the hidden kwarg itself, converting the small
-    ``AppendResultHandle`` into an ``AppendResult`` only when it decides to.
-    Fetching the handle's ``data_ref`` here would defeat the split (early frame
-    fetch) and bypass Stream's own worker-side resolver.
-    """
-    return {
-        key: value
-        if isinstance(key, str) and key.startswith(_STREAM_PARENT_KWARG_PREFIX)
-        else _materialize_append_handles_for_worker(value)
-        for key, value in kwargs.items()
-    }
-
-
-def _materialize_append_handles_for_driver(value: Any, executor: Any) -> Any:
-    """Convert ``AppendResultHandle``s to ``AppendResult`` on the driver.
-
-    Used only where driver-side payload materialization is already intentional:
-    explicit workflow returns and ``unwrap_result`` hooks. Fetches each data ref
-    via ``executor.get`` (Ray) or returns it as-is (already materialized). Never
-    called on progress-only / no-return paths.
-    """
-    from .types import materialize_append_handles
-
-    def get_data(ref: Any) -> Any:
-        if _should_fetch_with_executor(ref, executor):
-            return executor.get([ref])[0]
-        return ref
-
-    return materialize_append_handles(value, get_data)
 
 
 def _with_current_run_context(
@@ -1706,9 +1538,6 @@ def _with_current_run_context(
     function runs, and the node's own result is re-wrapped with the resulting
     vector.
 
-    Under Ray, upstream ``AppendResultHandle``s in args/kwargs are materialized
-    back into ``AppendResult`` here (worker-side) so user code and Stream
-    wrappers never see the internal transport type.
     """
     from .references import LocalReferenceBinder, rebind_arguments
     from .runtime import RunContext
@@ -1738,8 +1567,6 @@ def _with_current_run_context(
         # internal transport type.
         @wraps(fn)
         def plain(*args: Any, **kwargs: Any) -> Any:
-            args = _materialize_append_handles_for_worker(args)
-            kwargs = _materialize_worker_kwargs(kwargs)
             for name in context_param_names:
                 kwargs[name] = context
             args, kwargs = rebuild(_unwrap_lineaged_tree(args), _unwrap_lineaged_tree(kwargs))
@@ -1749,13 +1576,6 @@ def _with_current_run_context(
 
     @wraps(fn)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
-        # Materialize off-driver AppendResult handles worker-side first so
-        # lineage collection and user code operate on public AppendResults.
-        # Hidden Stream parent kwargs are skipped — stream_wrapper owns their
-        # control/data split (see _materialize_worker_kwargs).
-        args = _materialize_append_handles_for_worker(args)
-        kwargs = _materialize_worker_kwargs(kwargs)
-
         parent_lineage = _lineage_from_tree(args)
         parent_lineage.update(_lineage_from_tree(kwargs))
         if parent_lineage:
@@ -1939,26 +1759,17 @@ def _fetch_node_result(
         # to return one. Then fetch only the selected value for the explicit
         # workflow return.
         selected = _indexed_parent_result(ref, fetch_target.tuple_index, executor)
-        if _should_fetch_with_executor(selected, executor):
-            selected = executor.get([selected])[0]
-        selected = _materialize_append_handles_for_driver(selected, executor)
+        selected = executor.get([selected])[0]
         return _unwrap_lineaged_tree(selected)
     elif node.node.num_returns > 1:
         # Multi-return node: ref is tuple/list of refs
         refs_to_fetch = list(ref)
-        if _all_fetchable_with_executor(refs_to_fetch, executor):
-            fetched = executor.get(refs_to_fetch)
-            value = _materialize_append_handles_for_driver(tuple(fetched), executor)
-            return _unwrap_lineaged_tree(value)
-        value = _materialize_append_handles_for_driver(tuple(refs_to_fetch), executor)
+        fetched = executor.get(refs_to_fetch)
+        value = tuple(fetched)
         return _unwrap_lineaged_tree(value)
     else:
         # Single return node: ref is a single ref
-        if _should_fetch_with_executor(ref, executor):
-            value = executor.get([ref])[0]
-        else:
-            value = ref
-        value = _materialize_append_handles_for_driver(value, executor)
+        value = executor.get([ref])[0]
         return _unwrap_lineaged_tree(value)
 
 
@@ -2005,15 +1816,7 @@ def _indexed_parent_result(presult: Any, tuple_index: int, executor: Any = None)
     """Index into a parent result without materializing payloads on the driver.
 
     Preserves any ``LineagedResult`` envelope on the selected element so
-    downstream Python-arg consumers still record the producer. Cases:
-
-    - already-materialized ``LineagedResult`` (local): index its value in place;
-    - true Ray multi-return (``presult`` is a tuple/list of per-slot refs):
-      return the selected element ref directly — no ``get``;
-    - single-return tuple/list hidden behind one Ray ObjectRef: project it in a
-      worker via ``executor.project`` rather than fetching the whole tuple to
-      the driver;
-    - local tuple/list: index in place.
+    downstream Python-arg consumers still record the producer.
     """
     from .types import LineagedResult
 
@@ -2023,14 +1826,6 @@ def _indexed_parent_result(presult: Any, tuple_index: int, executor: Any = None)
     # True multi-return: presult is already a tuple/list of per-slot refs.
     if isinstance(presult, (tuple, list)):
         return presult[tuple_index]
-
-    # Single-return tuple/list behind one distributed ref: project worker-side.
-    if (
-        executor is not None
-        and _is_executor_ref(presult, executor)
-        and hasattr(executor, "project")
-    ):
-        return executor.project(presult, tuple_index)
 
     return presult[tuple_index]
 
@@ -2308,7 +2103,7 @@ class Workflow:
         Start the workflow and return its process-local lifecycle handle.
 
         Args:
-            executor: Execution engine (defaults to RayExecutor or LocalExecutor)
+            executor: Execution engine (defaults to LocalExecutor)
             hooks: Optional callbacks for monitoring node lifecycle
             input: Optional run input payload or BaseInput instance
             context: Optional run context payload or BaseContext instance
@@ -2321,11 +2116,9 @@ class Workflow:
         """
         canonical_run_id = run_id if run_id is not None else str(ULID())
         handle: RunHandle[Any] = RunHandle(canonical_run_id)
-        from runtime.executor import RayExecutor, get_default_executor
+        from runtime.executor import get_default_executor
 
         resolved_executor = executor if executor is not None else get_default_executor()
-        if isinstance(resolved_executor, RayExecutor):
-            resolved_executor._prepare_for_run()
 
         cancel_requested = handle._compose_cancel_requested(
             hooks.cancel_requested if hooks is not None else None
@@ -2386,7 +2179,7 @@ class Workflow:
 
         if run_id is None:
             raise ValueError("workflow driver requires a run_id")
-        executor_type = "ray" if type(executor).__name__ == "RayExecutor" else "local"
+        executor_type = "local"
         if execution_services is not None:
             from .execution_services import ExecutionServicesSpec
 
@@ -2411,9 +2204,6 @@ class Workflow:
         )
 
         result_refs: dict[str, Any] = {}
-        # Ray-only: small per-node status refs from submit_with_status. Fetching
-        # a status ref surfaces a task failure without materializing the payload.
-        status_refs: dict[str, Any] = {}
         # Service receipts are a separate control channel. They are never
         # stored in result_refs or exposed to workflow arguments/context.
         receipt_refs: dict[str, Any] = {}
@@ -2428,26 +2218,6 @@ class Workflow:
             dependencies_map = _filter_dependencies(dependencies_map, scheduled_node_ids)
 
         from .runtime.providers import PROVIDERS
-
-        is_ray_executor = (
-            type(executor).__name__ == "RayExecutor"
-            and getattr(executor, "ray", None) is not None
-        )
-
-        # Ray only: request a small status ref (submit_with_status) when we need
-        # to observe completion/failure or drain a no-return workflow without
-        # materializing node payloads on the driver.
-        needs_status = bool(
-            is_ray_executor
-            and (
-                cancel_requested is not None
-                or self.returns is None
-                or (
-                    hooks
-                    and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
-                )
-            )
-        )
 
         def submit_node(
             node_id: str,
@@ -2677,28 +2447,6 @@ class Workflow:
                 # Apply wrappers or collect params for direct injection
                 params_to_inject = {}
                 for provider, param_value, resolved_params in params_by_provider.values():
-                    # Ray dependency visibility: for deferred Stream upstreams,
-                    # lift the parent payload ref into a TOP-LEVEL hidden task
-                    # kwarg so Ray tracks it as a real scheduling dependency
-                    # (the consumer must not start before the producer). Generate
-                    # a unique, node+param-scoped hidden kwarg name here (where
-                    # node_id and param name are available), stamp it onto the
-                    # carrier, and clear the ref so the wrapper closure never
-                    # serializes an ObjectRef.
-                    for rp_name, rp_value in list(resolved_params.items()):
-                        deferred = _deferred_stream_upstream_of(rp_value)
-                        if deferred is not None and deferred.ref is not None:
-                            parent_kwarg = _safe_hidden_kwarg(
-                                node_id,
-                                rp_name,
-                                {**resolved_kwargs, **runtime_params},
-                            )
-                            resolved_kwargs[parent_kwarg] = deferred.ref
-                            resolved_params[rp_name] = _stamp_deferred_stream_upstream(
-                                rp_value,
-                                parent_kwarg=parent_kwarg,
-                            )
-
                     wrapper = provider.create_wrapper(param_value, actual_fn, resolved_params)
                     if wrapper is not None:
                         actual_fn = wrapper
@@ -2727,7 +2475,7 @@ class Workflow:
                             for parent_id in dependencies_map.get(node_id, [])
                             if parent_id in receipt_refs
                         )
-                    result, receipt_ref, status_ref = executor.submit_with_services(
+                    result, receipt_ref, _status = executor.submit_with_services(
                         actual_fn,
                         execution_services,
                         ExecutionTaskSpec(
@@ -2748,21 +2496,6 @@ class Workflow:
                     )
                     with receipt_refs_lock:
                         receipt_refs[node_id] = receipt_ref
-                    if is_ray_executor and status_ref is not None:
-                        # Status is a same-task completion/failure marker. Keep
-                        # receipts worker-side until terminal publication.
-                        status_refs[node_id] = status_ref
-                elif needs_status and hasattr(executor, "submit_with_status"):
-                    # Ray: get a small status ref alongside the payload so
-                    # completion/failure can be observed without materializing
-                    # the payload. The status ref is produced by the same task.
-                    result, status_ref = executor.submit_with_status(
-                        actual_fn,
-                        *resolved_args,
-                        num_returns=node_ref.node.num_returns,
-                        **resolved_kwargs,
-                    )
-                    status_refs[node_id] = status_ref
                 else:
                     result = executor.submit(
                         actual_fn,
@@ -2809,15 +2542,11 @@ class Workflow:
         def resolve_submitted_result(node_ref: NodeFuture, result: Any) -> Any:
             if node_ref.node.num_returns > 1 and isinstance(result, tuple):
                 value: Any = executor.get(list(result))
-            elif _should_fetch_with_executor(result, executor):
-                value = executor.get([result])[0]
             else:
-                value = result
-            # unwrap_result / driver boundary: convert internal handles back to
-            # public AppendResult (payload fetch here is intentional).
-            return _materialize_append_handles_for_driver(value, executor)
+                value = executor.get([result])[0]
+            return value
 
-        def complete_non_ray_node(
+        def complete_node(
             node_id: str,
             node_ref: NodeFuture,
             result: Any,
@@ -2843,151 +2572,7 @@ class Workflow:
 
         is_local_executor = isinstance(executor, LocalExecutor)
 
-        observe_ray_completion = bool(
-            is_ray_executor
-            and (
-                cancel_requested is not None
-                or (
-                    hooks
-                    and (hooks.on_node_success or hooks.on_node_failure or hooks.unwrap_result)
-                )
-            )
-        )
-
-        if observe_ray_completion:
-            ray = executor.ray
-            pending_refs: dict[Any, str] = {}
-            node_pending_refs: dict[str, list[Any]] = {}
-            completed_nodes: set[str] = set()
-
-            def ray_refs_for_result(result: Any) -> list[Any]:
-                if isinstance(result, (tuple, list)):
-                    return [item for item in result if _is_executor_ref(item, executor)]
-                if _is_executor_ref(result, executor):
-                    return [result]
-                return []
-
-            def complete_ray_node(node_id: str) -> None:
-                node_ref = self.nodes[node_id]
-                result = result_refs[node_id]
-                try:
-                    if hooks and hooks.unwrap_result:
-                        # unwrap_result needs the user-facing value, so a payload
-                        # fetch here is intentional. Keep the lineage-preserving
-                        # envelope in result_refs for downstream dataflow,
-                        # reattaching any hook replacement.
-                        resolved_val = resolve_submitted_result(node_ref, result)
-                        user_val = _unwrap_lineaged_tree(resolved_val)
-                        replacement = hooks.unwrap_result(node_id, user_val)
-                        result_refs[node_id] = _reattach_lineage(replacement, resolved_val)
-                    elif node_id in status_refs:
-                        # Progress-only: fetch just the tiny status ref to
-                        # surface a task failure. Never materialize the payload;
-                        # result_refs keeps the payload ref for downstream tasks.
-                        executor.get([status_refs[node_id]])
-                    if hooks and hooks.on_node_success:
-                        hooks.on_node_success(node_id)
-                    completed_nodes.add(node_id)
-                except Exception as exc:
-                    if hooks and hooks.on_node_failure:
-                        hooks.on_node_failure(node_id, exc)
-                    raise
-
-            def track_ray_node(node_id: str, result: Any) -> None:
-                # Prefer waiting on the tiny status ref (progress-only mode) so
-                # readiness never depends on materializing the payload. When
-                # unwrap_result is active we still only wait here; the payload
-                # fetch happens in complete_ray_node.
-                if node_id in status_refs:
-                    refs = [status_refs[node_id]]
-                else:
-                    refs = ray_refs_for_result(result)
-                if not refs:
-                    complete_ray_node(node_id)
-                    return
-                node_pending_refs[node_id] = refs
-                for ref in refs:
-                    pending_refs[ref] = node_id
-
-            def drain_ray_completions(*, block: bool) -> bool:
-                if not pending_refs:
-                    return False
-
-                timeout = 0.1 if block else 0
-                ready, _ = ray.wait(
-                    list(pending_refs.keys()),
-                    num_returns=1 if block else len(pending_refs),
-                    timeout=timeout,
-                )
-                if not ready:
-                    return False
-
-                more_ready, _ = ray.wait(
-                    list(pending_refs.keys()),
-                    num_returns=len(pending_refs),
-                    timeout=0,
-                )
-                ready_refs = list(dict.fromkeys([*ready, *more_ready]))
-
-                for ref in ready_refs:
-                    node_id = pending_refs.pop(ref)
-                    refs = node_pending_refs[node_id]
-                    if any(node_ref in pending_refs for node_ref in refs):
-                        continue
-
-                    del node_pending_refs[node_id]
-                    complete_ray_node(node_id)
-
-                return True
-
-            def dependencies_ready(node_id: str) -> bool:
-                return all(
-                    parent_id in completed_nodes
-                    for parent_id in dependencies_map.get(node_id, [])
-                )
-
-            remaining_nodes = list(execution_order)
-            cancelled = False
-
-            while remaining_nodes:
-                submitted_any = False
-
-                for node_id in list(remaining_nodes):
-                    # Check cancellation before starting each node
-                    if cancel_requested and cancel_requested():
-                        cancelled = True
-                        break
-                    if not dependencies_ready(node_id):
-                        continue
-
-                    _node_ref, result = submit_node(node_id)
-                    result_refs[node_id] = result
-                    track_ray_node(node_id, result)
-                    remaining_nodes.remove(node_id)
-                    submitted_any = True
-
-                if cancelled:
-                    break
-                if submitted_any:
-                    continue
-                if pending_refs:
-                    drain_ray_completions(block=True)
-                    if pending_refs and cancel_requested and cancel_requested():
-                        cancelled = True
-                    continue
-                break
-
-            while pending_refs:
-                try:
-                    drain_ray_completions(block=True)
-                except Exception:
-                    if not cancelled:
-                        raise
-                if pending_refs and cancel_requested and cancel_requested():
-                    cancelled = True
-            if cancelled:
-                raise CancelledError()
-        elif is_local_executor and executor.max_workers != 1:
+        if is_local_executor and executor.max_workers != 1:
             completed_nodes: set[str] = set()
             remaining_nodes = list(execution_order)
             pending_tasks: dict[Future[tuple[NodeFuture, Any]], str] = {}
@@ -3042,7 +2627,7 @@ class Workflow:
                             continue
 
                         try:
-                            complete_non_ray_node(node_id, node_ref, result)
+                            complete_node(node_id, node_ref, result)
                         except Exception as exc:
                             if primary_failure is None:
                                 primary_failure = exc
@@ -3060,7 +2645,7 @@ class Workflow:
                     raise CancelledError()
 
                 node_ref, result = submit_node(node_id)
-                complete_non_ray_node(node_id, node_ref, result)
+                complete_node(node_id, node_ref, result)
 
         # If workflow doesn't return anything, wait for all nodes to complete.
         # Skip if hooks were active — we already resolved per-node above.
@@ -3071,16 +2656,6 @@ class Workflow:
             )
             if already_observed:
                 # Per-node completion/failure was already observed above (hooks).
-                publish_terminal_receipts()
-                return None
-            if is_ray_executor and status_refs:
-                # Fetch only the tiny status refs: this surfaces any task
-                # failure without materializing node payloads on the driver.
-                pending_status = [
-                    status_refs[fid] for fid in execution_order if fid in status_refs
-                ]
-                if pending_status:
-                    executor.get(pending_status)
                 publish_terminal_receipts()
                 return None
             # Local / non-status fallback: values are already materialized for

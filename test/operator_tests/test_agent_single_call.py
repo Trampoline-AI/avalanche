@@ -84,9 +84,7 @@ def _write_workflow(root: Path) -> Path:
 
 
 def test_second_agent_call_fails_the_node_and_reaches_its_error(tmp_path):
-    operator = Operator(
-        [str(_write_workflow(tmp_path))], executor_backend="local", watch=False, schedule=False
-    )
+    operator = Operator([str(_write_workflow(tmp_path))], watch=False, schedule=False)
     try:
         run = wait_terminal(operator, operator.start_run("twice"))
         assert run.status == RunStatus.FAILED

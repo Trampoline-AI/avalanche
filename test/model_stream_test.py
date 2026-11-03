@@ -14,17 +14,9 @@ from avalanche._testing.model_stream_helpers import (
 from avalanche.iceberg import IcebergNs, IcebergNsConfig, IcebergTable
 
 
-@pytest.fixture(params=["local", pytest.param("ray", marks=pytest.mark.ray)])
-def executor(request):
-    if request.param == "local":
-        yield ava.LocalExecutor()
-        return
-    ray = pytest.importorskip("ray")
-    ray.init(num_cpus=2, include_dashboard=False)
-    try:
-        yield ava.RayExecutor()
-    finally:
-        ray.shutdown()
+@pytest.fixture
+def executor():
+    return ava.LocalExecutor()
 
 
 @pytest.fixture

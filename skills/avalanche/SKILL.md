@@ -501,7 +501,6 @@ never scans the current directory by default. Its flags are:
 - `--port PORT`: operator gRPC port, default `7433`;
 - `--web-port PORT`: browser UI and REST API HTTP port, default `7435`; it must
   differ from `--port`;
-- `--ray`: use the Ray executor.
 
 For programmatic control without the UI, send JSON HTTP requests to
 `http://127.0.0.1:7435/api/v1` by default. `ava dev`, `ava operator`, and
@@ -540,7 +539,7 @@ uv run ava web --connect localhost:7433 --host 127.0.0.1 --port 7435
 `ava operator` resolves targets with the same explicit-or-configured rule and
 serves the browser UI and REST API on port `7435` by default. Use `--web-port`
 to change that port, or `--no-web` when running `ava web` separately as above.
-It also accepts `--ray`. Its `--log-level` accepts `DEBUG`, `INFO`, `WARNING`,
+Its `--log-level` accepts `DEBUG`, `INFO`, `WARNING`,
 or `ERROR`. `ava web` connects with `--connect HOST:PORT`; use `--trusted-proxy`
 only for non-loopback traffic protected by a trusted, authenticated proxy.
 

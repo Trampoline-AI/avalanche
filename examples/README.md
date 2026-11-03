@@ -94,7 +94,7 @@ brief. See its [README](customer_feedback_review/README.md) for the full flow.
 
 Simplest local flow execution path. It demonstrates the Python DAG API,
 explicit data passing, fan-out, fan-in, and `ava.LocalExecutor` without requiring
-Iceberg, Ray, the operator, or the TUI.
+Iceberg, the operator, or the TUI.
 
 
 ### `stream_pattern.py`

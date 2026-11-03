@@ -37,17 +37,9 @@ def namespace(request, tmp_path):
     return ns
 
 
-@pytest.fixture(params=["local", pytest.param("ray", marks=pytest.mark.ray)])
-def executor(request):
-    if request.param == "local":
-        yield ava.LocalExecutor()
-        return
-    ray = pytest.importorskip("ray")
-    ray.init(num_cpus=1, include_dashboard=False)
-    try:
-        yield ava.RayExecutor()
-    finally:
-        ray.shutdown()
+@pytest.fixture
+def executor():
+    return ava.LocalExecutor()
 
 
 def test_table_backed_stream_commits_progress(namespace, executor):

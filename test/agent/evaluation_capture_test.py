@@ -8,11 +8,11 @@ import inspect
 import warnings
 from typing import Literal
 
+import cloudpickle
 import pytest
 from dspy import Prediction
 from predict_rlm import IterationStep, RunEvent, RunEventKind, RunEvidence, RunTrace
 from pydantic import BaseModel
-from ray import cloudpickle
 
 import avalanche as ava
 from avalanche._agent_evidence import capture_agent_evidence
@@ -576,7 +576,7 @@ def test_local_workflows_use_own_classifier_defaults_and_actual_call_inputs(
 
 
 @pytest.mark.asyncio
-async def test_ray_serialization_uses_worker_context_and_synchronous_owned_snapshot(
+async def test_serialization_uses_worker_context_and_synchronous_owned_snapshot(
     evaluations,
     monkeypatch,
 ):

@@ -329,7 +329,7 @@ class IcebergTable(StorageTable):
     def _refresh_table_metadata(self) -> None:
         """Reload catalog metadata so reads see commits from other processes.
 
-        Distributed executors (e.g. Ray) commit appends from worker processes.
+        Operator coordinators can commit appends from other processes.
         The parent-process handle caches the table it loaded at push()/reconnect
         time and would otherwise scan a stale snapshot, returning rows written
         before the workflow ran. Refresh binds the latest committed metadata.

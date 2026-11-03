@@ -203,7 +203,7 @@ class _EvaluationJob:
 class EvaluationWorkers:
     """Two dispatchers, a bounded nonblocking queue, and one fresh process per job.
 
-    Processes belong to the operator, not coordinator/Ray process groups. A fresh
+    Processes belong to the operator, not coordinator process groups. A fresh
     process prevents source-module caches, author globals and dotenv from leaking
     across executions. Close interrupts in-flight work instead of draining forever.
     """

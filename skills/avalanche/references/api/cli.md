@@ -30,7 +30,6 @@ default serve the browser UI and REST API.
 | `--webhook-port` | `7434` | Local webhook HTTP port. |
 | `--web-port` | `7435` | Loopback browser UI and REST API HTTP port. |
 | `--no-web` | Off | Disable the browser/REST listener, leaving gRPC and webhook operation. |
-| `--ray` | Off | Run workflows through Ray rather than the local executor. Requires the `ray` extra. |
 | `--log-level` | `WARNING` | Terminal log threshold: `DEBUG`, `INFO`, `WARNING`, `ERROR`; input is case-normalized. |
 | `--discovery-timeout SECONDS` | `60.0` | Positive finite maximum duration of a discovery scan. |
 
@@ -53,14 +52,13 @@ root used in canonical workflow selectors.
 ## `ava dev [FLOW ...] [options]`
 
 Start the operator and browser/REST listener, open the browser, watch workflows,
-and stop owned services on exit. Uses the same target selection and local/Ray
-choice as `operator`.
+and stop owned services on exit. Uses the same target selection and local
+execution as `operator`.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `--port` | `7433` | Local gRPC listener port. |
 | `--web-port` | `7435` | Local browser/REST port. |
-| `--ray` | Off | Use Ray execution. |
 | `--log-level` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. |
 | `--discovery-timeout SECONDS` | `60.0` | Positive finite discovery deadline. |
 

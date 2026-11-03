@@ -25,6 +25,15 @@ PredictRLM has no separate number. Delta reaches it only through Avalanche
 Avalanche keeps its `predict-rlm` range to one minor. A PredictRLM change Delta
 would notice needs an Avalanche protocol bump.
 
+## Avalanche 0.18.0
+
+Ray execution is removed: the `ray` extra, `RayExecutor` export, `--ray`
+operator/dev flags, and the operator's `executor_factory`, `executor_backend`,
+`ray_runtime_env`, and `ray_init_kwargs` arguments no longer exist. Use the
+unchanged `LocalExecutor`; it is now always the default in-repository executor.
+Delta's separate remote runtime is unchanged. **No protocol bump:** Delta does
+not use the removed backend or its configuration.
+
 ## Release rule
 
 A major change needs a `BREAKING-PROTOCOL` line in `CHANGELOG.md` explaining the

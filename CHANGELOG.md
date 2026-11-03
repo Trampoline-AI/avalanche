@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Breaking (0.18.0): removed the Ray executor, the `ray` extra, the `--ray`
+  operator/dev flags, and the `RayExecutor` export. Operator construction no
+  longer accepts `executor_factory`, `executor_backend`, `ray_runtime_env`, or
+  `ray_init_kwargs`. The local executor's behavior is unchanged; it is now always
+  the default. Delta's separate remote runtime is unchanged.
+
 - Agents: each agent call now records everything the model is given before its
   first turn, as a new common live event, `prompt.sent`: the system prompt, the
   messages, every tool with its input schema, and the answer's schema. ClaudeAgent

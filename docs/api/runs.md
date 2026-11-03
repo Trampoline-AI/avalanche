@@ -21,7 +21,7 @@ Starts execution and returns a process-local `RunHandle` without waiting for com
 
 | Parameter | Contract |
 | --- | --- |
-| `executor=None` | Default selection uses Ray when importable, otherwise local execution. Choose `ava.LocalExecutor()` explicitly for predictable in-process runs. Ray initialization/execution failures do not silently fall back to local. |
+| `executor=None` | Defaults to `ava.LocalExecutor()` for concurrent in-process execution. Pass `ava.LocalExecutor(max_workers=1)` for serial execution. |
 | `input: Any = None` | Validated against the declared `BaseInput` subclass. An existing instance is retained; other values are validated; omission constructs the declared model with no arguments. Without an input declaration, retained as supplied. |
 | `context: Any = None` | Caller context validated against the declared `BaseContext` subclass, or `RunContext` when undeclared. Runtime-owned identifiers cannot be overridden. See [injection and context fields](inputs-context.md). |
 | `run_id: str \| None = None` | Caller identity or generated ULID string; available as `handle.run_id` and in injected context. Does not deduplicate runs or provide persistent lookup. |

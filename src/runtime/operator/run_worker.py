@@ -30,8 +30,8 @@ from avalanche.dag import Workflow
 from avalanche.evaluation_capture import capture_evaluations
 from avalanche.runtime import BaseInput
 
-from ..executor import Executor, LocalExecutor, RayExecutor
-from .evaluation_worker import EvaluationRequest, _local_modules, snapshot_evaluation
+from ..executor import LocalExecutor
+from .evaluation_worker import EvaluationRequest, snapshot_evaluation
 from .hooks import RunHooks
 from .models import display_name_from_id
 from .registry import (
@@ -60,22 +60,11 @@ _log_attempt: ContextVar[str] = ContextVar("operator_log_attempt", default="")
 _log_node: ContextVar[str] = ContextVar("operator_log_node", default="")
 
 
-def _import_isolated_ray() -> Any:
-    """Import Ray without inheriting the caller's ``uv run`` project."""
-    # The operator supplies a workflow-specific working_dir and owns the whole
-    # coordinator process group. Ray's automatic uv hook would instead launch
-    # workers through the caller's project environment, adding uv subprocesses
-    # that can outlive Ray shutdown and prevent verified success quiescence.
-    os.environ["RAY_ENABLE_UV_RUN_RUNTIME_ENV"] = "0"
-    return importlib.import_module("ray")
-
-
 def run_worker(
     import_root: str,
     workflow_relative_module_file: str,
     builder_symbol: str,
     run_id: str,
-    executor_config: dict[str, Any],
     assignment_event: Any,
     input_value: dict[str, Any] | None,
     context_value: dict[str, Any] | None,
@@ -97,7 +86,6 @@ def run_worker(
             workflow_relative_module_file,
             builder_symbol,
             run_id,
-            executor_config,
             assignment_event,
             input_value,
             context_value,
@@ -117,7 +105,6 @@ def _run_worker(
     workflow_relative_module_file: str,
     builder_symbol: str,
     run_id: str,
-    executor_config: dict[str, Any],
     assignment_event: Any,
     input_value: dict[str, Any] | None,
     context_value: dict[str, Any] | None,
@@ -142,11 +129,7 @@ def _run_worker(
     sys.stderr = stderr
     _install_log_capture(event_queue)
 
-    executor: Executor | None = None
-    ray_log_queue: Any | None = None
-    ray_log_drain: threading.Thread | None = None
-    ray_log_errors: list[BaseException] = []
-    ray_logs_finished = False
+    executor: LocalExecutor | None = None
     terminal_event: dict[str, Any] | None = None
     try:
         if not assignment_event.wait(timeout=30.0):
@@ -198,49 +181,10 @@ def _run_worker(
             return
 
     try:
-        wrap_fn: Callable[[str, Callable[..., Any]], Callable[..., Any]]
-        executor_mode = executor_config["backend"]
-        if executor_mode == "local":
-            executor = LocalExecutor()
+        executor = LocalExecutor()
 
-            def wrap_fn(node_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
-                return _with_local_node_observers(node_id, fn, stdout, stderr, event_queue)
-        elif executor_mode == "ray":
-            ray = _import_isolated_ray()
-            from ray import cloudpickle as ray_cloudpickle
-
-            # Standalone modules have synthetic import names. Ship their named
-            # selectors/models (and package siblings) with the task rather than
-            # asking Ray workers to import a coordinator-only module name.
-            for local_module in _local_modules(root):
-                ray_cloudpickle.register_pickle_by_value(local_module)
-
-            if ray.is_initialized():
-                raise RuntimeError(
-                    "Ray must not be initialized before the run coordinator applies "
-                    "the workflow runtime_env"
-                )
-            runtime_env = dict(executor_config.get("runtime_env") or {})
-            runtime_env["working_dir"] = str(root)
-            executor = RayExecutor(
-                runtime_env=runtime_env,
-                ray_init_kwargs=dict(executor_config.get("ray_init_kwargs") or {}),
-            )
-            from ray.util.queue import Queue as RayQueue
-
-            ray_log_queue = RayQueue()
-            ray_log_drain = threading.Thread(
-                target=_drain_ray_logs,
-                args=(ray_log_queue, event_queue, ray_log_errors),
-                name=f"avalanche-ray-log-drain-{run_id}",
-                daemon=True,
-            )
-            ray_log_drain.start()
-
-            def wrap_fn(node_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
-                return _with_ray_node_observers(node_id, fn, ray_log_queue)
-        else:
-            raise ValueError(f"Unknown executor mode: {executor_mode}")
+        def wrap_fn(node_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
+            return _with_local_node_observers(node_id, fn, stdout, stderr, event_queue)
 
         _put_run_event(event_queue, {"type": "running", "timestamp": time.monotonic()})
         hooks = RunHooks(
@@ -274,9 +218,6 @@ def _run_worker(
             context=context_value,
             run_id=run_id,
         ).result()
-        if ray_log_queue is not None and ray_log_drain is not None:
-            _finish_ray_logs(ray_log_queue, ray_log_drain, ray_log_errors)
-            ray_logs_finished = True
         status = "cancelled" if cancel_event.is_set() else "success"
         terminal_event = {"type": "terminal", "status": status}
         if status == "success":
@@ -318,30 +259,6 @@ def _run_worker(
     finally:
         if executor is not None:
             executor.shutdown()
-        if ray_log_queue is not None and ray_log_drain is not None and not ray_logs_finished:
-            try:
-                _finish_ray_logs(ray_log_queue, ray_log_drain, ray_log_errors)
-            except BaseException as exc:
-                terminal_event = {
-                    "type": "terminal",
-                    "status": "cancelled" if cancel_event.is_set() else "failed",
-                    "error": _bounded_event_text(f"{type(exc).__name__}: {exc}", 65_536),
-                }
-        if ray_log_queue is not None:
-            try:
-                ray_log_queue.shutdown(force=True)
-            except Exception:
-                pass
-        if ray_log_drain is not None and ray_log_drain.is_alive():
-            ray_log_drain.join(timeout=1.0)
-        if executor_mode == "ray":
-            try:
-                import ray
-
-                if ray.is_initialized():
-                    ray.shutdown()
-            except Exception:
-                pass
         # The terminal success event is a protocol boundary: the operator
         # quiesces the coordinator and rejects every event observed after it.
         # Flush partial captured output first so interpreter shutdown cannot
@@ -526,7 +443,7 @@ class _QueueStream:
         return False
 
     def fileno(self) -> int:
-        """Expose the underlying standard fd for libraries such as Ray."""
+        """Expose the underlying standard file descriptor."""
         stream = sys.__stderr__ if self._level >= logging.ERROR else sys.__stdout__
         if stream is None:
             raise OSError("standard stream is unavailable")
@@ -785,124 +702,6 @@ def _with_step_io(
         return result
 
     return wrapper
-
-
-_RAY_LOG_STOP = {"type": "_ray_log_stop"}
-
-
-def _with_ray_node_observers(
-    node_id: str,
-    fn: Callable[..., Any],
-    ray_log_queue: Any,
-) -> Callable[..., Any]:
-    if getattr(fn, "__agent_step__", None) is not None:
-        fn = _with_agent_evidence(node_id, fn, ray_log_queue)
-        fn = _with_evaluations(node_id, fn, ray_log_queue)
-    if getattr(fn, "__classifier_step__", None) is not None:
-        fn = _with_classifier_evidence(node_id, fn, ray_log_queue)
-    fn = _with_step_io(node_id, fn, ray_log_queue)
-    return _with_ray_node_streams(node_id, fn, ray_log_queue)
-
-
-def _begin_log_attempt() -> Token[str]:
-    return _log_attempt.set(uuid4().hex)
-
-
-def _end_log_attempt(token: Token[str]) -> None:
-    _log_attempt.reset(token)
-
-
-def _with_ray_node_streams(
-    node_id: str,
-    fn: Callable[..., Any],
-    ray_log_queue: Any,
-) -> Callable[..., Any]:
-    """Return a cloudpickle-safe worker wrapper using only a Ray queue."""
-    name = node_id
-
-    if inspect.iscoroutinefunction(fn):
-
-        @wraps(fn)
-        async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
-            attempt_token = _begin_log_attempt()
-            capture_queue = _SealableEventQueue(ray_log_queue)
-            stdout = _QueueStream(capture_queue, name, logging.INFO)
-            stderr = _QueueStream(capture_queue, name, logging.ERROR)
-            old_stdout, old_stderr = sys.stdout, sys.stderr
-            root_logger = logging.getLogger()
-            old_level = root_logger.level
-            handler = _QueueLogHandler(capture_queue, node_id)
-            root_logger.addHandler(handler)
-            root_logger.setLevel(logging.INFO)
-            sys.stdout, sys.stderr = stdout, stderr
-            try:
-                return await fn(*args, **kwargs)
-            finally:
-                stdout.flush()
-                stderr.flush()
-                sys.stdout, sys.stderr = old_stdout, old_stderr
-                root_logger.removeHandler(handler)
-                root_logger.setLevel(old_level)
-                _end_log_attempt(attempt_token)
-
-        return async_wrapper
-
-    @wraps(fn)
-    def wrapper(*args: Any, **kwargs: Any) -> Any:
-        attempt_token = _begin_log_attempt()
-        capture_queue = _SealableEventQueue(ray_log_queue)
-        stdout = _QueueStream(capture_queue, name, logging.INFO)
-        stderr = _QueueStream(capture_queue, name, logging.ERROR)
-        old_stdout, old_stderr = sys.stdout, sys.stderr
-        root_logger = logging.getLogger()
-        old_level = root_logger.level
-        handler = _QueueLogHandler(capture_queue, node_id)
-        root_logger.addHandler(handler)
-        root_logger.setLevel(logging.INFO)
-        sys.stdout, sys.stderr = stdout, stderr
-        try:
-            return fn(*args, **kwargs)
-        finally:
-            stdout.flush()
-            stderr.flush()
-            sys.stdout, sys.stderr = old_stdout, old_stderr
-            root_logger.removeHandler(handler)
-            root_logger.setLevel(old_level)
-            _end_log_attempt(attempt_token)
-
-    return wrapper
-
-
-def _drain_ray_logs(ray_log_queue: Any, event_queue: Any, errors: list[BaseException]) -> None:
-    """Bridge Ray events, retaining publication failures for the coordinator."""
-    try:
-        from ray.util.queue import Empty
-
-        while True:
-            try:
-                event = ray_log_queue.get(timeout=0.2)
-            except Empty:
-                continue
-            if event == _RAY_LOG_STOP:
-                return
-            _put_run_event(event_queue, event)
-    except BaseException as exc:
-        errors.append(exc)
-
-
-def _finish_ray_logs(
-    ray_log_queue: _RunEventQueue,
-    ray_log_drain: threading.Thread,
-    errors: list[BaseException],
-) -> None:
-    """Flush all completed task evidence before publishing the workflow result."""
-    if ray_log_drain.is_alive():
-        ray_log_queue.put({"type": "_ray_log_stop"})
-        ray_log_drain.join(timeout=5.0)
-        if ray_log_drain.is_alive():
-            raise TimeoutError("Ray event forwarding did not finish")
-    if errors:
-        raise RuntimeError("Ray event forwarding failed") from errors[0]
 
 
 def _put_preparation_event(event_queue: Any, event: dict[str, Any]) -> None:

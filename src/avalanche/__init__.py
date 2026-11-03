@@ -15,7 +15,7 @@ from importlib import import_module
 
 # DAG primitives
 # Execution engines
-from runtime.executor import Executor, LocalExecutor, RayExecutor, get_default_executor
+from runtime.executor import Executor, LocalExecutor, get_default_executor
 
 from .dag import Pipeline, Workflow, dest, pipeline, source, step, transform, workflow
 from .execution_services import (
@@ -138,7 +138,6 @@ __all__ = [
     # Executors
     "Executor",
     "LocalExecutor",
-    "RayExecutor",
     "get_default_executor",
     "EXECUTION_SERVICES_V1",
     "ExecutionServiceReceipt",

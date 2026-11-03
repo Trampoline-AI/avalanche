@@ -260,7 +260,7 @@ def test_spawned_inline_agent_feeds_typed_downstream_result_and_retains_evidence
     tmp_path, flow_name
 ):
     workflow = _write_workflow(tmp_path)
-    operator = Operator([str(workflow)], executor_backend="local", watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         current = {item.name: item for item in operator.list_workflows()}[flow_name]
         [agent_id] = current.agent_node_ids
@@ -340,7 +340,7 @@ def test_spawned_inline_agent_failure_never_publishes_partial_result(
     tmp_path, flow_name, failure
 ):
     workflow = _write_workflow(tmp_path, failure=failure)
-    operator = Operator([str(workflow)], executor_backend="local", watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         current = {item.name: item for item in operator.list_workflows()}[flow_name]
         [agent_id] = current.agent_node_ids
@@ -367,7 +367,6 @@ def test_spawned_running_inline_agent_cancellation_never_publishes_partial_resul
     workflow = _write_workflow(tmp_path, block=True)
     operator = Operator(
         [str(workflow)],
-        executor_backend="local",
         watch=False,
         schedule=False,
         cancel_grace=0.2,

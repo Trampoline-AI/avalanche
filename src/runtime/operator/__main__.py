@@ -45,7 +45,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--no-web", action="store_true", help="serve gRPC without the HTTP listener"
     )
-    parser.add_argument("--ray", action="store_true", help="use the Ray executor")
     parser.add_argument(
         "--schedules-enabled",
         action="store_true",
@@ -86,7 +85,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     print("Avalanche operator")
     for line in format_scan_targets(selection):
         print(line)
-    print(f"  Executor: {'Ray' if args.ray else 'Local'}")
+    print("  Executor: Local")
     print("  Discovering workflows...")
 
     from . import serve
@@ -99,7 +98,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             webhook_port=args.webhook_port,
             web_port=None if args.no_web else args.web_port,
             discovery_timeout=args.discovery_timeout,
-            executor_backend="ray" if args.ray else "local",
             schedules_enabled=args.schedules_enabled,
         )
     except WorkflowDiscoveryError as exc:

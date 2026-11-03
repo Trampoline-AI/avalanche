@@ -212,7 +212,7 @@ def assert_mixed_answers(result: ClassificationResult | None) -> None:
 
 def test_spawned_local_workflow_returns_all_answer_types(tmp_path, typesafe_service):
     workflow = write_workflow(tmp_path, "return await classifier(state=ticket)")
-    operator = Operator([str(workflow)], executor_backend="local", watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.SUCCESS
@@ -252,7 +252,7 @@ def test_spawned_calls_snapshot_per_call_questions(tmp_path, typesafe_service, d
         "return [result.scores['severity'].legend for result in results]",
         questions=defaults,
     )
-    operator = Operator([str(workflow)], executor_backend="local", watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.SUCCESS
@@ -304,7 +304,7 @@ def test_invalid_call_questions_retain_failed_evidence_without_network(
     tmp_path, typesafe_service, defaults, call
 ):
     workflow = write_workflow(tmp_path, f"return await {call}", questions=defaults)
-    operator = Operator([str(workflow)], executor_backend="local", watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.FAILED
@@ -338,7 +338,7 @@ def test_postprocessing_does_not_replace_successful_classifier_answers(
         "ticket['private_ticket'] = 'mutated after request'\n"
         "result.choices['department'].probabilities['billing'] = 0.0\n" + ending,
     )
-    operator = Operator([str(workflow)], executor_backend="local", watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         if fail_after_classification:
@@ -403,7 +403,7 @@ def test_concurrent_calls_and_later_runs_retain_distinct_invocations(
     tmp_path, typesafe_service
 ):
     workflow = write_workflow(tmp_path, MULTIPLE_CALL_BODY)
-    operator = Operator([str(workflow)], executor_backend="local", watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         identities = set()
         for _ in range(2):
@@ -425,9 +425,7 @@ def test_cancelled_inflight_request_retains_declaration_without_fabricated_answe
     workflow = write_workflow(
         tmp_path, "return await classifier(state={**ticket, 'block': True})"
     )
-    operator = Operator(
-        [str(workflow)], executor_backend="local", watch=False, schedule=False, cancel_grace=0.2
-    )
+    operator = Operator([str(workflow)], watch=False, schedule=False, cancel_grace=0.2)
     try:
         run_id = operator.start_run("flow")
         sent_input = typesafe_service.requests.get(timeout=15)["state"]
@@ -457,35 +455,3 @@ def test_cancelled_inflight_request_retains_declaration_without_fabricated_answe
     finally:
         operator.close()
         typesafe_service.release.set()
-
-
-@pytest.mark.ray
-def test_ray_operator_forwards_classifier_invocations_through_worker_queue(
-    tmp_path, typesafe_service
-):
-    pytest.importorskip("ray")
-    workflow = write_workflow(tmp_path, MULTIPLE_CALL_BODY)
-    operator = Operator(
-        [str(workflow)],
-        executor_backend="ray",
-        ray_init_kwargs={"address": "local", "num_cpus": 2, "include_dashboard": False},
-        ray_runtime_env={
-            "env_vars": {
-                "TYPESAFE_BASE_URL": typesafe_service.origin,
-                "TYPESAFE_API_KEY": typesafe_service.api_key,
-            }
-        },
-        prepare_timeout=30.0,
-        watch=False,
-        schedule=False,
-    )
-    try:
-        run = wait_terminal(operator, operator.start_run("flow"), timeout=90)
-        assert run.status == RunStatus.SUCCESS
-        output = operator.get_run_result(run.run_id)
-        assert output["probabilities"] == [0.2, 0.8]
-        assert output["pid"] != os.getpid()
-        assert_distinct_calls(operator, run, typesafe_service.requests)
-        assert operator.list_agent_events(run.run_id, classifier_node(run)).events == ()
-    finally:
-        operator.close()

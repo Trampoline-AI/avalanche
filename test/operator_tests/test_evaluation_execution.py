@@ -881,41 +881,6 @@ def test_close_interrupts_evaluations_without_leaking_processes(tmp_path, evalua
         operator.close()
 
 
-@pytest.mark.ray
-def test_ray_evaluation_survives_ray_and_coordinator_shutdown(tmp_path, evaluation_service):
-    pytest.importorskip("ray")
-    workflow = write_workflow(tmp_path)
-    evaluation_service.release.clear()
-    operator = Operator(
-        [str(workflow)],
-        executor_backend="ray",
-        ray_init_kwargs={"address": "local", "num_cpus": 2, "include_dashboard": False},
-        ray_runtime_env={
-            "env_vars": {
-                "TYPESAFE_BASE_URL": evaluation_service.origin,
-                "TYPESAFE_API_KEY": evaluation_service.api_key,
-            }
-        },
-        prepare_timeout=30,
-        watch=False,
-        schedule=False,
-    )
-    try:
-        run = wait_terminal(operator, operator.start_run("flow"), timeout=120)
-        assert run.status == RunStatus.SUCCESS
-        assert operator.list_evaluations(run.run_id)[0].status == "pending"
-        sequence = operator.current_sequence
-        evaluation_service.release.set()
-        record = wait_evaluation(operator, run.run_id)
-        assert record.status == "completed", record.error
-        assert operator.current_sequence == sequence
-        assert operator.get_run(run.run_id).status == RunStatus.SUCCESS
-        assert_original_requests(evaluation_service)
-    finally:
-        evaluation_service.release.set()
-        operator.close()
-
-
 _INLINE_WORKFLOW_SOURCE = """
 import dspy
 import predict_rlm

@@ -37,9 +37,6 @@ ava = "ava_cli:main"
 avalanche-ai = "ava_cli:main"
 
 [project.optional-dependencies]
-ray = [
-    "ray[default]>=2.50.0",
-]
 lance = [
     "pylance>=0.24.0",
 ]
@@ -62,7 +59,6 @@ dev = [
     "grpcio-tools>=1.75.1",
     "moto[s3,server]>=5,<6",
     "pylance>=0.24.0",
-    "ray[default]>=2.50.0",
     "s3fs>=2026.6.0,<2027",
     "pytest-cov>=7.0.0",
     "textual>=6.2.1",
@@ -91,7 +87,6 @@ testpaths = ["test"]
 asyncio_mode = "strict"
 markers = [
     "tmux: tests that require a tmux session (real terminal rendering)",
-    "ray: tests that require a local Ray runtime",
 ]
 
 [tool.ruff]
