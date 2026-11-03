@@ -1652,11 +1652,16 @@ class GrpcStateProvider:
                 raise _DetailHydrationRaceError("client epoch changed during hydration")
 
             current = self._runs_by_id.get(hydrated.run_id)
+            if (
+                current is not None
+                and current.operator_instance_id != hydrated.operator_instance_id
+            ):
+                # Cached from an earlier operator, which the checks above show this
+                # client no longer follows. A restarted operator serves its stored
+                # runs again under the same ID, so the new snapshot replaces it.
+                current = None
             if current is not None:
-                if (
-                    current.operator_instance_id != hydrated.operator_instance_id
-                    or current.created_sequence != hydrated.created_sequence
-                ):
+                if current.created_sequence != hydrated.created_sequence:
                     raise _DetailHydrationRaceError("run identity changed during hydration")
                 if current.latest_log_sequence > hydrated.latest_log_sequence:
                     raise _DetailHydrationRaceError("logs advanced during hydration")

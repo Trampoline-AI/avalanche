@@ -18,7 +18,7 @@ import time
 import warnings
 from bisect import bisect_right
 from collections import OrderedDict, deque
-from collections.abc import Iterator, Mapping
+from collections.abc import Collection, Iterator, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Callable, Literal, TypeAlias, TypeVar
 from uuid import uuid4
 
 from pydantic import JsonValue
+from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from avalanche.classifier.models import (
     ChoiceAnswer,
@@ -128,10 +129,13 @@ from .result_store import (
     require_worker_descriptor_transfer,
 )
 from .results import EncodedWorkflowResult, decode_workflow_result
+from .run_processes import RunProcess, identify_run_process, stop_run_process
 from .run_worker import run_worker
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
 from .state import OperatorStateStore, StateDbPath, StateStoreError
+from .state.metadata import OperatorMetadataTable
 from .state.results import RunResultTable
+from .state.runs import RunRequest, RunsTable, StoredRun
 from .state.schedule_input_files import ScheduleInputFileClaims, ScheduleInputFileFolder
 from .state.schedules import ScheduleState
 from .step_io import StepInputs, StepIo, StepValuePreview
@@ -178,6 +182,11 @@ MAX_RUN_LOG_ENTRIES = 100_000
 MAX_RUN_DETAIL_BYTES = 128 * 1024 * 1024
 MAX_AGENT_DETAIL_DEPTH = 64
 _MISSING_WORKFLOW_ID = "\0"
+_UNFINISHED_RUN_STATUSES = frozenset(
+    {RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING}
+)
+# Why a run, and its unfinished steps, failed when a new operator started.
+OPERATOR_RESTARTED_REASON = "Operator restarted before the run finished; it was not resumed"
 DeprecatedExecutorFactory: TypeAlias = (
     type[LocalExecutor] | type[RayExecutor] | partial[RayExecutor]
 )
@@ -235,6 +244,14 @@ class _RunHandle:
     drain_thread: threading.Thread | None = None
     preparation_thread: threading.Thread | None = None
     success_quiesced: bool = False
+
+
+@dataclass(frozen=True)
+class _RunStart:
+    """What a run records once, with its first publication."""
+
+    request: RunRequest
+    process: RunProcess | None
 
 
 @dataclass(frozen=True)
@@ -351,7 +368,11 @@ class Operator:
         ``state_db`` is the SQLite state database file, or ``":memory:"`` for a
         throwaway one. The operator opens and locks it before discovery and
         releases it when it closes, so a second operator on the same file fails
-        here with ``StateStoreLockedError``.
+        here with ``StateStoreLockedError``. Runs, their steps and the update
+        sequence are stored there and read back at startup. Runs a previous
+        operator left unfinished are never resumed: their recorded process group
+        is stopped, then they and their unfinished steps are marked failed with
+        ``OPERATOR_RESTARTED_REASON``.
 
         Discovered cron schedules start disabled; ``schedules_enabled`` starts
         them all enabled instead, for this process. Enable and disable choices and
@@ -447,8 +468,10 @@ class Operator:
             self._detail_callbacks: list[Callable[[DetailUpdate], None]] = []
             self._update_subscribers: list[queue.Queue] = []
             self._operator_instance_id = uuid4().hex
+            # Loaded from the state database below, so they never go backwards.
             self._sequence = 0
             self._catalog_sequence = 0
+            self._instance_first_sequence = 0
             self._stream_history: deque[OperatorUpdate] = deque(maxlen=stream_history_capacity)
             self._structural_baseline_capacity = structural_baseline_capacity
             self._structural_baselines: OrderedDict[int, _StructuralBaseline] = OrderedDict()
@@ -465,11 +488,12 @@ class Operator:
             result_store = ResultStore(self._state_store)
             self._result_store = result_store
             report_result_index(result_store)
-            self._input_files = InputFileStaging()
+            self._input_files = self._open_input_file_staging()
             self._notification_stop_enqueued = False
             self._notification_shutdown_thread: threading.Thread | None = None
             self._notification_queue: queue.Queue[_RunNotifications | None] = queue.Queue()
             self._notification_thread: threading.Thread | None = None
+            interrupted_runs = self._load_runs()
 
             from .scheduler import Scheduler
 
@@ -501,6 +525,7 @@ class Operator:
             if watch and self._workflow_paths:
                 self._start_watcher()
             self._start_notification_dispatcher()
+            self._fail_interrupted_runs(interrupted_runs)
             if schedule and self._workflow_paths:
                 self._scheduler.start()
         except BaseException as failure:
@@ -511,9 +536,81 @@ class Operator:
                     failure.add_note(f"Operator shutdown also failed: {exc}")
                 raise
 
+    def _open_input_file_staging(self) -> InputFileStaging:
+        # Files a run used stay next to the state database, so they outlive the
+        # operator with the run that used them; a throwaway database gets a
+        # throwaway staging folder.
+        if self._state_store.path is None:
+            return InputFileStaging()
+        root = self._state_store.path.parent / "input-files"
+        root.mkdir(mode=0o700, exist_ok=True)
+        return InputFileStaging(root, keep_used_files=True)
+
+    def _load_runs(self) -> tuple[tuple[str, RunProcess | None], ...]:
+        """Restore stored runs and sequences; return the runs left unfinished."""
+        with self._state_store.transaction() as connection:
+            metadata = OperatorMetadataTable.read(connection)
+            loaded_runs = RunsTable.load_all(connection)
+        # The catalog of this instance is the one discovery just built, as of now.
+        self._sequence = metadata.update_sequence
+        self._catalog_sequence = metadata.update_sequence
+        self._instance_first_sequence = metadata.update_sequence
+        interrupted = []
+        for loaded in loaded_runs:
+            stored = loaded.stored
+            run = stored.run
+            self._runs[run.run_id] = run
+            self._run_created_sequences[run.run_id] = stored.created_sequence
+            self._run_revisions[run.run_id] = stored.revision
+            self._run_activity_sequences[run.run_id] = stored.activity_sequence
+            for node_id, revision in stored.node_revisions.items():
+                self._node_revisions[(run.run_id, node_id)] = revision
+            if run.status in _UNFINISHED_RUN_STATUSES:
+                interrupted.append((run.run_id, loaded.process))
+        return tuple(interrupted)
+
+    def _fail_interrupted_runs(
+        self, interrupted: tuple[tuple[str, RunProcess | None], ...]
+    ) -> None:
+        """Stop and fail the runs a previous operator left unfinished.
+
+        They are never resumed. Each run's recorded process group is stopped
+        first, so a run shown as failed cannot still be running.
+        """
+        for run_id, process in interrupted:
+            if process is not None and stop_run_process(process, grace=self._cancel_grace):
+                logger.warning(
+                    "Stopped process group %d of run %s left by a previous operator",
+                    process.process_group,
+                    run_id,
+                )
+            with self._lock:
+                run = self._runs[run_id]
+                run.status = RunStatus.FAILED
+                # Timestamps are monotonic; a reboot restarts that clock.
+                run.ended_at = max(time.monotonic(), run.started_at or 0.0)
+                changed_node_ids = []
+                for node in run.nodes.values():
+                    if node.status in (NodeStatus.PENDING, NodeStatus.RUNNING):
+                        node.status = NodeStatus.FAILED
+                        node.ended_at = max(run.ended_at, node.started_at or 0.0)
+                        node.error = OPERATOR_RESTARTED_REASON
+                        changed_node_ids.append(node.node_id)
+                notifications = self._publish_run_locked(
+                    run,
+                    changed_node_ids=tuple(changed_node_ids),
+                    terminal_reason=OPERATOR_RESTARTED_REASON,
+                )
+            self._wait_for_notifications(notifications)
+
     @property
     def operator_instance_id(self) -> str:
         return self._operator_instance_id
+
+    @property
+    def instance_first_sequence(self) -> int:
+        """The sequence this operator started from; it publishes only later ones."""
+        return self._instance_first_sequence
 
     @property
     def current_sequence(self) -> int:
@@ -1632,13 +1729,20 @@ class Operator:
         input: dict[str, Any] | None = None,
         context: dict[str, Any] | None = None,
         expected_version: str = "",
+        input_files: tuple[StagedInputFile, ...] = (),
     ) -> str:
-        """Publish a requesting run, then prepare it asynchronously."""
+        """Publish a requesting run, then prepare it asynchronously.
+
+        The run is stored with its input and context in JSON form and with
+        ``input_files``, the staged files its input uses, so they outlive the
+        operator together with the run.
+        """
         if run_id is not None and not isinstance(run_id, str):
             raise InvalidRunIdError("run_id must be a string")
         if run_id and len(run_id.encode("utf-8")) > MAX_RUN_ID_BYTES:
             raise InvalidRunIdError(f"run_id exceeds {MAX_RUN_ID_BYTES}-byte UTF-8 limit")
         triggered_at = time.time()
+        request = _run_request(input, context, input_files)
         descriptor, configured_root = self._registry.resolve_source(flow_name)
         if (
             expected_version
@@ -1652,12 +1756,10 @@ class Operator:
             if self._closed:
                 raise RuntimeError("Operator is closed")
             run_id = run_id or f"run_{str(uuid4())[:8]}"
+            # Stored runs are loaded at startup, so this also refuses the ID of a run
+            # from before a restart, and of any result such a run stored.
             if run_id in self._runs or run_id in self._active_runs:
                 raise RunAlreadyExistsError(f"Run {run_id} already exists")
-            # A result stored before a restart still owns its run ID.
-            with self._state_store.transaction() as connection:
-                if RunResultTable.get(connection, run_id) is not None:
-                    raise RunAlreadyExistsError(f"Run {run_id} already exists")
             # Callers learn about a missing required field now, not from a run that
             # fails while it is prepared. Cron and webhook runs report it as a failed
             # run. A reused run ID still reports the existing run first.
@@ -1720,6 +1822,7 @@ class Operator:
                 if process.pid is None:
                     raise RuntimeError("Run coordinator did not expose a process ID")
                 assign_process(windows_job, process.pid)
+                start = _RunStart(request=request, process=identify_run_process(process.pid))
                 assignment_event.set()
                 run = RunState(
                     run_id=run_id,
@@ -1731,7 +1834,7 @@ class Operator:
                     workflow_display_name=descriptor.display_name,
                 )
                 self._runs[run_id] = run
-                notifications = self._publish_run_locked(run)
+                notifications = self._publish_run_locked(run, start=start)
             self._wait_for_notifications(notifications)
             preparation_thread = threading.Thread(
                 target=self._prepare_requested_run,
@@ -1752,7 +1855,7 @@ class Operator:
                 handle.preparation_thread = preparation_thread
                 preparation_thread.start()
             return run_id
-        except BaseException:
+        except BaseException as failure:
             cancel_event.set()
             handle.publication_event.set()
             handle.start_event.set()
@@ -1761,6 +1864,11 @@ class Operator:
                 run = self._runs.get(run_id)
                 if run is not None:
                     self._evict_classifier_details_locked(run, remove_descriptors=True)
+                    try:
+                        with self._state_store.transaction() as connection:
+                            RunsTable.delete(connection, run_id)
+                    except (StateStoreError, sqlite3.Error) as exc:
+                        failure.add_note(f"Removing the stored run also failed: {exc}")
                 self._runs.pop(run_id, None)
                 self._log_sequences_by_node.pop(run_id, None)
                 self._active_runs.pop(run_id, None)
@@ -3154,8 +3262,16 @@ class Operator:
         agent_events: Mapping[str, AgentEvent] | None = None,
         classifier_events: Mapping[str, ClassifierEvent] | None = None,
         log_entry: LogEntry | None = None,
+        start: _RunStart | None = None,
+        terminal_reason: str | None = None,
     ) -> _RunNotifications:
-        """Atomically publish one mutation to structural, detail, and update state."""
+        """Atomically publish one mutation to structural, detail, and update state.
+
+        The run, the nodes it changed and the sequence counters are stored in the
+        same step. A run's first publication also stores ``start``, its request and
+        process group; without one the run is stored as started with no input and
+        no process group to stop after a restart.
+        """
         if self._notification_stop_enqueued:
             raise RuntimeError("Operator notification dispatcher is closed")
 
@@ -3189,6 +3305,7 @@ class Operator:
                 run_sequence=terminal_sequence,
                 timestamp=datetime.now(),
                 terminal_status=run.status,
+                reason=terminal_reason,
             )
             terminal_seal_appended = True
         activity_count += int(terminal_seal_appended)
@@ -3340,6 +3457,13 @@ class Operator:
             updates.append(update)
         if self._sequence != publication_sequence:
             raise RuntimeError("Run publication produced an inconsistent update batch")
+        self._store_run_locked(
+            run,
+            is_new=is_new,
+            # A new or re-prepared run (whose nodes are replaced) stores every node.
+            node_ids=run.nodes.keys() if is_new or summary_changed else changed_node_ids,
+            start=start,
+        )
 
         envelopes = tuple(
             OperatorUpdateEnvelope(
@@ -3413,6 +3537,43 @@ class Operator:
         self._notification_queue.put_nowait(notifications)
         return notifications
 
+    def _store_run_locked(
+        self,
+        run: RunState,
+        *,
+        is_new: bool,
+        node_ids: Collection[str],
+        start: _RunStart | None,
+    ) -> None:
+        if start is not None and not is_new:
+            raise RuntimeError(f"Run {run.run_id} was already stored")
+        stored = StoredRun(
+            run=run,
+            created_sequence=self._run_created_sequences[run.run_id],
+            revision=self._run_revisions[run.run_id],
+            activity_sequence=self._run_activity_sequences[run.run_id],
+            node_revisions={
+                node_id: self._node_revisions.get(
+                    (run.run_id, node_id), self._run_created_sequences[run.run_id]
+                )
+                for node_id in run.nodes
+            },
+        )
+        with self._state_store.transaction() as connection:
+            if is_new:
+                start = start or _RunStart(request=RunRequest(), process=None)
+                RunsTable.create(connection, stored, start.request, start.process)
+            else:
+                RunsTable.update(connection, stored, node_ids)
+            self._store_sequences_locked(connection)
+
+    def _store_sequences_locked(self, connection: sqlite3.Connection) -> None:
+        OperatorMetadataTable.write_sequences(
+            connection,
+            update_sequence=self._sequence,
+            catalog_sequence=self._catalog_sequence,
+        )
+
     def _notify_run(self, run: RunState, *, summary_changed: bool = True) -> None:
         with self._lock:
             notifications = self._publish_run_locked(
@@ -3426,6 +3587,8 @@ class Operator:
             self._sequence += 1
             self._catalog_sequence = self._sequence
             catalog = self._catalog_snapshot(view, self._catalog_sequence)
+            with self._state_store.transaction() as connection:
+                self._store_sequences_locked(connection)
             update = OperatorUpdate(
                 sequence=self._sequence,
                 change=CatalogReplaced(catalog=catalog),
@@ -3463,6 +3626,8 @@ class Operator:
                 sequence=self._sequence,
                 change=change,
             )
+            with self._state_store.transaction() as connection:
+                self._store_sequences_locked(connection)
             self._stream_history.append(update)
             envelope = OperatorUpdateEnvelope(
                 operator_instance_id=self._operator_instance_id,
@@ -3538,6 +3703,24 @@ class Operator:
                         item for item in self._update_subscribers if item is not subscription
                     ]
                     return
+
+
+def _run_request(
+    run_input: dict[str, Any] | None,
+    context: dict[str, Any] | None,
+    input_files: tuple[StagedInputFile, ...],
+) -> RunRequest:
+    """The request a run is stored with: its input and context in JSON form."""
+    try:
+        return RunRequest(
+            input=None if run_input is None else to_jsonable_python(run_input),
+            context=None if context is None else to_jsonable_python(context),
+            input_files=input_files,
+        )
+    except PydanticSerializationError as exc:
+        raise ValueError(
+            f"Run input and context must be JSON-serializable to be stored: {exc}"
+        ) from exc
 
 
 def _bounded_page_size(page_size: int) -> int:
