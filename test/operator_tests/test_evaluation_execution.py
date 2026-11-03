@@ -181,9 +181,6 @@ class EchoSignature(ava.Signature):
     handoff: Handoff = ava.OutputField()
 
 class Predictor:
-    def __init__(self):
-        self.world_returning = asyncio.Event()
-
     async def acall(self, *, text, payload):
         if text == "failed":
             failure = ValueError("agent call failed")
@@ -191,8 +188,6 @@ class Predictor:
                 run_id="failed-run", complete=True, terminal_outcome="error"
             )
             raise failure
-        if text == "hello":
-            await self.world_returning.wait()
         handoff = Handoff(
             summary="agent " + text.upper(),
             payload=payload,
@@ -221,8 +216,6 @@ class Predictor:
                 run_id=text + "-run", complete=True, terminal_outcome="completed"
             ),
         )
-        if text == "world":
-            self.world_returning.set()
         return prediction
 
 {extra}
@@ -251,20 +244,16 @@ async def research(ticket: dict, repeat: int = 2, *, agent: ava.Agent,
     predict_rlm_runtime._build_predictor = lambda *args, **kwargs: Predictor()
     {before_calls}
     agent_payload = {{"items": list(ticket["items"])}}
-    predictions = await asyncio.gather(
-        agent(text="hello", payload=agent_payload),
-        agent(text="world", payload=agent_payload),
-    )
-    later = await agent(text="later", payload=agent_payload)
-    predictions[1].outputs.handoff.summary = "mutated by caller"
-    predictions[1].outputs.handoff.payload["items"].append("caller output mutation")
+    prediction = await agent(text="world", payload=agent_payload)
+    prediction.outputs.handoff.summary = "mutated by caller"
+    prediction.outputs.handoff.payload["items"].append("caller output mutation")
     agent_payload["items"].append("caller input mutation")
     {body}
     return Report(
-        summary="postprocessed " + " ".join(p.outputs.answer for p in predictions),
+        summary="postprocessed " + prediction.outputs.answer,
         payload=ticket,
         producer_pid=os.getpid(),
-        answers=[p.outputs.answer for p in predictions] + [later.outputs.answer],
+        answers=[prediction.outputs.answer],
     )
 
 @ava.step
@@ -343,14 +332,15 @@ def evaluation_node(run: RunState) -> str:
     return next(node_id for node_id, node in run.nodes.items() if node.name == "research")
 
 
-def assert_original_requests(service: EvaluationService, *, winner: str = "world") -> None:
+def assert_original_requests(service: EvaluationService) -> None:
+    text = "world"
     requests = [service.requests.get(timeout=10), service.requests.get(timeout=10)]
     report = next(item for item in requests if "quality" in item["questions"])
     assert report["model"] == "evaluation-workflow-model"
-    assert report["state"]["summary"] == "agent " + winner.upper()
-    assert report["state"]["answer"] == winner.upper()
+    assert report["state"]["summary"] == "agent " + text.upper()
+    assert report["state"]["answer"] == text.upper()
     assert report["state"]["inputs"] == {
-        "text": winner,
+        "text": text,
         "payload": {"items": ["original"]},
     }
     assert report["state"]["payload"] == {"items": ["original"]}
@@ -359,7 +349,7 @@ def assert_original_requests(service: EvaluationService, *, winner: str = "world
     trace_request = next(item for item in requests if "trace" in item["questions"])
     trace = trace_request["state"]
     assert trace["header"]["status"] == "succeeded"
-    assert trace["header"]["external_run_id"] == winner + "-run"
+    assert trace["header"]["external_run_id"] == text + "-run"
     assert trace["header"]["turn_count"] == 1
     [turn] = trace["turns"]
     assert turn["index"] == 1
@@ -369,23 +359,17 @@ def assert_original_requests(service: EvaluationService, *, winner: str = "world
     native = turn["native"]
     assert (native["format"], native["code"], native["output"], native["error"]) == (
         "predict_rlm.run/v1",
-        "SUBMIT(answer=" + repr(winner.upper()) + ")",
-        winner,
+        "SUBMIT(answer=" + repr(text.upper()) + ")",
+        text,
         False,
     )
     assert service.requests.empty()
 
 
-@pytest.mark.parametrize("winner", ["world", "first"])
 def test_slow_evaluation_survives_terminal_and_keeps_owned_evidence(
-    tmp_path, evaluation_service, winner
+    tmp_path, evaluation_service
 ):
-    workflow = write_workflow(
-        tmp_path,
-        before_calls=(
-            'await agent(text="first", payload=ticket)' if winner == "first" else "pass"
-        ),
-    )
+    workflow = write_workflow(tmp_path)
     evaluation_service.release.clear()
     operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
@@ -395,7 +379,7 @@ def test_slow_evaluation_survives_terminal_and_keeps_owned_evidence(
         assert operator.get_run_result(run.run_id)["payload"] == {
             "items": ["original", "downstream"]
         }
-        assert operator.get_run_result(run.run_id)["answers"] == ["HELLO", "WORLD", "LATER"]
+        assert operator.get_run_result(run.run_id)["answers"] == ["WORLD"]
         [pending] = operator.list_evaluations(run.run_id, evaluation_node(run))
         assert pending.status == "pending"
         assert pending.result is None and pending.error is None
@@ -411,7 +395,7 @@ def test_slow_evaluation_survives_terminal_and_keeps_owned_evidence(
         assert pending.status == "pending"
         record.result.composites["quality"] = 0
         assert operator.list_evaluations(run.run_id)[0].result.composites == {"quality": 0.8}
-        assert_original_requests(evaluation_service, winner=winner)
+        assert_original_requests(evaluation_service)
     finally:
         evaluation_service.release.set()
         operator.close()

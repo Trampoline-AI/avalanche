@@ -179,6 +179,30 @@ async def render_artifacts(
 ```
 
 
+### One agent call per step
+
+An agent step calls its agent **once** each time it runs. Traces, live events,
+evaluations, and run views all describe a step as one agent run, so a second
+call in the same execution raises `ava.agent.AgentStepCallError` before any
+model work starts and fails the step. This applies on every runtime and to every
+kind of repeat: a second `await agent(...)`, a call in a loop, two calls started
+together with `asyncio.gather`, or calls from several threads. A call that fails
+still counts as the step's one call.
+
+```python
+from avalanche.agent import AgentStepCallError
+```
+
+When a step needs several model runs, split the work into separate agent steps,
+or give the single call everything it needs in its inputs and the signature's
+instructions. A rerun of the step, such as a new workflow run, is a new
+execution with a fresh agent, so it may call the agent again.
+
+A step body that returns without calling its agent logs a warning on the step,
+because no model ran and no trace or evaluation was recorded. The warning never
+fails the step, and a body that raises before calling its agent logs none. If the step never
+needs a model, make it a plain `@ava.step`.
+
 ## Skills and tools
 
 Pass `tools=` and `skills=` on the agent call or decorator, not on the signature.
@@ -415,8 +439,8 @@ evaluation, and their runtime failures remain separate from workflow execution.
 
 Selectors receive `ava.EvalContext(inputs, output, trace)`:
 
-- `ctx.inputs` is the **validated inputs** of the first successful `await agent(...)`
-  call to return, not the enclosing step's arguments: an instance of the signature's
+- `ctx.inputs` is the **validated inputs** of the step's `await agent(...)` call,
+  not the enclosing step's arguments: an instance of the signature's
   input model, as the runtime received it. Read fields as attributes, such as
   `ctx.inputs.document`.
 - `ctx.output` is that call's **validated outputs**, the same object as
@@ -434,12 +458,11 @@ Selectors receive `ava.EvalContext(inputs, output, trace)`:
 A call whose outputs fail validation does not count as successful: its trace is
 still recorded for the run, but it submits no evaluation.
 
-Capture happens before the result returns to the step body. The first
-successful agent call to return wins, even if another call started earlier.
-Later calls still execute and return normally but cannot replace the capture
-or trigger another evaluation. Calls that fail or are cancelled do not claim it.
-If no call succeeds, there is no evaluation record. Once submitted, evaluation
-continues even if subsequent step postprocessing fails or is cancelled.
+Capture happens before the result returns to the step body. A step calls its
+agent [once](#one-agent-call-per-step), so there is at most one evaluation per
+step execution. A call that fails or is cancelled submits none, and neither
+does a step that never calls its agent. Once submitted, evaluation continues
+even if subsequent step postprocessing fails or is cancelled.
 
 Each metric has a collapsed **Input** section listing qualified source paths,
 such as `input.document`, `output.review.summary`, `output`, or `trace`. **Input**
@@ -564,8 +587,8 @@ Evaluation authentication errors remain visible separately from the completed br
 
 ### Execution, errors, and retention
 
-Automatic evaluations run **only in operator-managed execution**, when the first
-successful agent invocation returns, before step postprocessing. The operator
+Automatic evaluations run **only in operator-managed execution**, when the
+step's agent invocation returns successfully, before step postprocessing. The operator
 owns the background worker, so evaluation completion is not awaited by downstream
 steps or workflow result delivery. A submitted evaluation survives later step
 failure. Evaluation errors never fail, retry, route, or otherwise gate the workflow.

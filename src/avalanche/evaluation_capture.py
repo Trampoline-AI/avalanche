@@ -1,4 +1,4 @@
-"""Process-local handoff of first-returned agent evaluations to an operator collector."""
+"""Process-local handoff of an agent step's evaluation to an operator collector."""
 
 from __future__ import annotations
 
@@ -84,7 +84,6 @@ class _StepEvaluationCapture:
         self.evaluations = evaluations
         self.step_name = step_name
         self.collector = _EVALUATION_COLLECTOR.get()
-        self.claimed = False
 
     def submit(
         self,
@@ -92,11 +91,8 @@ class _StepEvaluationCapture:
         output: BaseModel,
         trace: AgentTrace,
     ) -> None:
-        if self.claimed:
-            return
-        # No await before or during handoff: the first successful return owns
-        # this slot, including any evaluation-only snapshot/submission failure.
-        self.claimed = True
+        # An agent step calls its agent once (``Agent`` enforces it), so its one
+        # successful return is submitted here, with no await before or during handoff.
         if self.collector is None:
             _diagnostic(
                 f"Evaluations for agent step {self.step_name!r} were not evaluated: "

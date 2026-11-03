@@ -48,8 +48,7 @@ def test_agent_file_mount_and_reserved_outputs(tmp_path):
                     "SUBMIT(result='/sand' + 'box/output/result/converted.pdf')"
                 ),
             }
-        ]
-        * 2,
+        ],
         adapter=JSONAdapter(),
     )
 
@@ -66,11 +65,8 @@ def test_agent_file_mount_and_reserved_outputs(tmp_path):
         ),
     )
     async def convert(document: ava.File, *, agent: ava.Agent) -> ava.File:
-        first = await agent(document=document, directory=workspace, documents=[document, None])
-        second = await agent(document=document, directory=workspace, documents=[document, None])
-        assert first.outputs.result.path != second.outputs.result.path
-        assert first.outputs.result.read_bytes() == second.outputs.result.read_bytes()
-        return second.outputs.result
+        result = await agent(document=document, directory=workspace, documents=[document, None])
+        return result.outputs.result
 
     @ava.step
     def consume(converted: ava.File) -> ava.File:
