@@ -4,7 +4,6 @@ import hashlib
 import socket
 import threading
 import time
-from dataclasses import replace
 from datetime import datetime
 
 import grpc
@@ -19,6 +18,7 @@ from runtime.operator.proto import operator_pb2_grpc as pb_grpc
 from runtime.operator.result_store import publish_workflow_result
 from runtime.operator.results import EncodedWorkflowResult, ResultFileAttachment
 from runtime.operator.server import serve
+from runtime.operator.state.logs import RunLogsTable
 from runtime.operator.state.results import RunResultTable
 
 
@@ -69,8 +69,11 @@ def _seed_run_with_logs(operator: Operator, run_id: str, messages: tuple[str, ..
     run.latest_log_sequence = len(entries)
     with operator._lock:
         operator._runs[run_id] = run
-        operator._logs[run_id] = entries
     operator._notify_run(run)
+    with operator._lock, operator._state_store.transaction() as connection:
+        for item in entries:
+            RunLogsTable.insert(connection, run_id, item)
+        operator._last_log_sequences[run_id] = len(entries)
     return run
 
 
@@ -204,11 +207,10 @@ def test_activity_detail_refs_are_immutable_and_rederived_before_streaming(trans
         list(service.ReadActivityDetail(pb.ReadActivityDetailRequestV2(detail_ref=forged)))
     assert forged_error.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
-    with operator._lock:
-        original = operator._logs["run-detail"][0]
-        operator._logs["run-detail"][0] = replace(
-            original,
-            entry=replace(original.entry, message="rewritten body with a different size"),
+    with operator._lock, operator._state_store.transaction() as connection:
+        connection.execute(
+            "UPDATE run_logs SET message = ? WHERE run_id = ? AND sequence = 1",
+            ("rewritten body with a different size", "run-detail"),
         )
 
     with pytest.raises(grpc.RpcError) as stale_error:

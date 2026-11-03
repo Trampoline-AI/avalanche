@@ -207,8 +207,8 @@ child processes are not captured by the Python stream adapter.
 
 Reachability is cached from the transport. An idle UI sends no health/run polling
 requests; reconnect uses bounded backoff and the existing baseline/reset/ACK
-handshake. The local operator is ephemeral: restarting it resets history instead
-of pretending it recovered old runs.
+handshake. After the local operator restarts, clients reload the history it kept in
+its state database; runs that were unfinished are shown failed, never resumed.
 
 These are client transport options, not evidence that the local operator provides
 a production authentication service. Do not expose a local operator solely on
