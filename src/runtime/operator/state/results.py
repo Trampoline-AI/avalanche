@@ -73,6 +73,11 @@ class RunResultTable:
         return None if row is None else row_model(RunResultRow, row, table=_TABLE)
 
     @staticmethod
+    def delete_all(connection: sqlite3.Connection) -> int:
+        """Remove every index row; return how many there were."""
+        return connection.execute(f"DELETE FROM {_TABLE}").rowcount
+
+    @staticmethod
     def list_all(connection: sqlite3.Connection) -> tuple[RunResultRow, ...]:
         rows = connection.execute(f"SELECT {_COLUMNS} FROM {_TABLE} ORDER BY run_id").fetchall()
         return tuple(row_model(RunResultRow, row, table=_TABLE) for row in rows)

@@ -25,6 +25,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from ava_cli.state_commands import STATE_DESCRIPTION, STATE_HELP, add_state_commands
 from runtime.operator._signals import request_shutdown, shutdown_cleanup
 from runtime.operator.discovery import (
     DEFAULT_DISCOVERY_TIMEOUT,
@@ -352,6 +353,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     add_state_db_argument(dev)
     dev.set_defaults(handler=_run_dev)
+
+    state = subcommands.add_parser("state", help=STATE_HELP, description=STATE_DESCRIPTION)
+    add_state_commands(state)
 
     return parser
 

@@ -80,6 +80,11 @@ class SchedulesTable:
         return None if row is None else _schedule(row_model(_ScheduleRow, row, table=_TABLE))
 
     @staticmethod
+    def delete_all(connection: sqlite3.Connection) -> int:
+        """Forget every schedule's state and input; return how many there were."""
+        return connection.execute(f"DELETE FROM {_TABLE}").rowcount
+
+    @staticmethod
     def write_enabled(
         connection: sqlite3.Connection,
         workflow_id: str,

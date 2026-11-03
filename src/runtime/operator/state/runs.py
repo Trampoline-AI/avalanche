@@ -77,6 +77,22 @@ class StoredRun:
 
 
 @dataclass(frozen=True)
+class RunSummary:
+    """A stored run's identity, status and start, without its nodes or details.
+
+    ``triggered_at`` is wall-clock time; ``created_sequence`` orders runs by
+    creation across restarts.
+    """
+
+    run_id: str
+    workflow_id: str
+    status: RunStatus
+    triggered_at: float | None
+    created_sequence: int
+    process: RunProcess | None
+
+
+@dataclass(frozen=True)
 class LoadedRun:
     """A stored run read back at startup, with the process group it recorded."""
 
@@ -109,6 +125,19 @@ class _RunRow(BaseModel):
     created_sequence: PositiveInt
     revision: PositiveInt
     activity_sequence: NonNegativeInt
+    process_group: PositiveInt | None
+    process_started: str | None
+    process_booted: str | None
+
+
+class _SummaryRow(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    run_id: str
+    workflow_id: str
+    status: RunStatus = Field(strict=False)
+    triggered_at: float | None
+    created_sequence: PositiveInt
     process_group: PositiveInt | None
     process_started: str | None
     process_booted: str | None
@@ -242,6 +271,52 @@ class RunsTable:
         connection.execute(f"DELETE FROM {_RUNS} WHERE run_id = ?", (run_id,))
 
     @staticmethod
+    def delete_all(connection: sqlite3.Connection) -> int:
+        """Remove every run with its nodes, input files and details; return the count."""
+        return connection.execute(f"DELETE FROM {_RUNS}").rowcount
+
+    @staticmethod
+    def list_summaries(connection: sqlite3.Connection) -> tuple[RunSummary, ...]:
+        """Every stored run's summary, in creation order."""
+        return tuple(
+            _summary(row_model(_SummaryRow, row, table=_RUNS))
+            for row in connection.execute(
+                "SELECT run_id, workflow_id, status, triggered_at, created_sequence, "
+                f"process_group, process_started, process_booted FROM {_RUNS} "
+                "ORDER BY created_sequence, run_id"
+            )
+        )
+
+    @staticmethod
+    def input_file_keys(connection: sqlite3.Connection, run_id: str) -> tuple[str, ...]:
+        """The object keys of the staged files one run's input used."""
+        return tuple(
+            _object_key(row)
+            for row in connection.execute(
+                f"SELECT object_key FROM {_INPUT_FILES} WHERE run_id = ? ORDER BY position",
+                (run_id,),
+            )
+        )
+
+    @staticmethod
+    def input_file_keys_in_use(connection: sqlite3.Connection) -> frozenset[str]:
+        """The object keys of the staged files any stored run's input used."""
+        return frozenset(
+            _object_key(row)
+            for row in connection.execute(f"SELECT DISTINCT object_key FROM {_INPUT_FILES}")
+        )
+
+    @staticmethod
+    def input_file_key_in_use(connection: sqlite3.Connection, object_key: str) -> bool:
+        """Whether any stored run's input used the staged file with this key."""
+        return (
+            connection.execute(
+                f"SELECT 1 FROM {_INPUT_FILES} WHERE object_key = ? LIMIT 1", (object_key,)
+            ).fetchone()
+            is not None
+        )
+
+    @staticmethod
     def load_all(connection: sqlite3.Connection) -> tuple[LoadedRun, ...]:
         """Every stored run with its nodes, in creation order."""
         nodes: dict[str, list[_NodeRow]] = {}
@@ -370,18 +445,6 @@ def _loaded_run(row: _RunRow, node_rows: Collection[_NodeRow]) -> LoadedRun:
             else json_column(StepIo, node.step_io_json, table=_NODES, column="step_io_json"),
         )
         node_revisions[node.node_id] = node.revision
-    process = None
-    # The table stores all three process columns or none of them.
-    if (
-        row.process_group is not None
-        and row.process_started is not None
-        and row.process_booted is not None
-    ):
-        process = RunProcess(
-            process_group=row.process_group,
-            started=row.process_started,
-            booted=row.process_booted,
-        )
     return LoadedRun(
         stored=StoredRun(
             run=run,
@@ -390,5 +453,35 @@ def _loaded_run(row: _RunRow, node_rows: Collection[_NodeRow]) -> LoadedRun:
             activity_sequence=row.activity_sequence,
             node_revisions=MappingProxyType(node_revisions),
         ),
-        process=process,
+        process=_process(row.process_group, row.process_started, row.process_booted),
     )
+
+
+def _summary(row: _SummaryRow) -> RunSummary:
+    return RunSummary(
+        run_id=row.run_id,
+        workflow_id=row.workflow_id,
+        status=row.status,
+        triggered_at=row.triggered_at,
+        created_sequence=row.created_sequence,
+        process=_process(row.process_group, row.process_started, row.process_booted),
+    )
+
+
+def _process(
+    process_group: int | None, started: str | None, booted: str | None
+) -> RunProcess | None:
+    # The table stores all three process columns or none of them.
+    if process_group is None or started is None or booted is None:
+        return None
+    return RunProcess(process_group=process_group, started=started, booted=booted)
+
+
+class _ObjectKeyRow(BaseModel):
+    model_config = ConfigDict(frozen=True, strict=True, extra="forbid")
+
+    object_key: str
+
+
+def _object_key(row: sqlite3.Row) -> str:
+    return row_model(_ObjectKeyRow, row, table=_INPUT_FILES).object_key

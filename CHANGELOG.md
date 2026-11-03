@@ -49,6 +49,16 @@
   the operator stopped are marked failed with an "operator restarted" reason on the
   next start. Classifier invocation bodies are no longer dropped when the operator
   closes, and the operator no longer keeps every run's bodies in memory.
+- CLI: new `ava state` commands inspect and clear what the operator keeps, since
+  nothing is deleted automatically. `ava state info` shows the database, its runs
+  by status, and the size of stored results and input files, and lists files left
+  behind that nothing refers to. `ava state delete RUN_ID...` deletes runs with
+  everything that belongs to them; `ava state prune --before DATE` or
+  `--keep-last N` deletes old finished runs and never unfinished ones or schedules;
+  `ava state clear` deletes every run after a confirmation (`--yes` skips it) and
+  keeps schedules unless `--include-schedules` is given. They take `--state-db` like
+  the operator and refuse to run while an operator uses the database. Large
+  deletions reclaim disk space with `VACUUM`.
 - Web UI: after the operator restarts, an open browser tab reconnects and shows the
   stored runs. It used to keep retrying with "Response does not belong to the
   connected operator scope" until the page was reloaded.

@@ -325,6 +325,20 @@ class ResultStore:
                 pass
             return row
 
+    def remove_unindexed_bundles(self) -> tuple[str, ...]:
+        """Remove every accepted bundle no index row names; return their names.
+
+        These are left by a crash between a bundle's acceptance and its index
+        commit, or by a delete interrupted after its row was committed. They are
+        never served, so only an explicit clear removes them.
+        """
+        with self._lock:
+            root_fd = self._require_open(self._root_fd)
+            names = self.check_index().unindexed_bundles
+            for name in names:
+                _remove_bundle_at(root_fd, name)
+            return names
+
     def check_index(self) -> ResultIndexReport:
         """Compare the ``run_results`` index with the bundles in the root."""
         with self._lock:
