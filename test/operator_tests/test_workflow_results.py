@@ -805,7 +805,8 @@ def test_results_survive_an_operator_restart_on_the_same_database(tmp_path):
 
     second = Operator([str(workflow)], watch=False, schedule=False, state_db=state_db)
     try:
-        assert second.get_run(run_id) is None
+        # The run is stored too, so the restarted operator knows it succeeded.
+        assert second.get_run(run_id).status is RunStatus.SUCCESS
         assert second._get_run_result_payload(run_id) == before
         result = second.get_run_result(run_id)
         assert result["label"] == "kept"

@@ -111,6 +111,7 @@ class _RunRow(BaseModel):
     activity_sequence: NonNegativeInt
     process_group: PositiveInt | None
     process_started: str | None
+    process_booted: str | None
 
 
 class _NodeRow(BaseModel):
@@ -155,7 +156,7 @@ _STATE_COLUMNS = (
     "revision",
     "activity_sequence",
 )
-_START_COLUMNS = ("request_json", "process_group", "process_started")
+_START_COLUMNS = ("request_json", "process_group", "process_started", "process_booted")
 _NODE_COLUMNS = (
     "node_id",
     "position",
@@ -203,6 +204,7 @@ class RunsTable:
                 _RequestValues(input=request.input, context=request.context).model_dump_json(),
                 None if process is None else process.process_group,
                 None if process is None else process.started,
+                None if process is None else process.booted,
             ),
         )
         connection.executemany(
@@ -251,7 +253,8 @@ class RunsTable:
             nodes.setdefault(node.run_id, []).append(node)
         runs = []
         for row in connection.execute(
-            f"SELECT run_id, {', '.join(_STATE_COLUMNS)}, process_group, process_started "
+            f"SELECT run_id, {', '.join(_STATE_COLUMNS)}, process_group, process_started, "
+            "process_booted "
             f"FROM {_RUNS} ORDER BY created_sequence, run_id"
         ):
             run_row = row_model(_RunRow, row, table=_RUNS)
@@ -368,8 +371,17 @@ def _loaded_run(row: _RunRow, node_rows: Collection[_NodeRow]) -> LoadedRun:
         )
         node_revisions[node.node_id] = node.revision
     process = None
-    if row.process_group is not None and row.process_started is not None:
-        process = RunProcess(process_group=row.process_group, started=row.process_started)
+    # The table stores all three process columns or none of them.
+    if (
+        row.process_group is not None
+        and row.process_started is not None
+        and row.process_booted is not None
+    ):
+        process = RunProcess(
+            process_group=row.process_group,
+            started=row.process_started,
+            booted=row.process_booted,
+        )
     return LoadedRun(
         stored=StoredRun(
             run=run,
