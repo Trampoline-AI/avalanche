@@ -14,6 +14,60 @@ import { MessageType } from "@protobuf-ts/runtime";
 /**
  * Bounded JSON DTOs for optional TuiExtensions v1 resources. No file bodies.
  *
+ * @generated from protobuf message avalanche.operator.ControlWaitRequestV2
+ */
+export interface ControlWaitRequestV2 {
+    /**
+     * @generated from protobuf field: string run_id = 1
+     */
+    runId: string;
+    /**
+     * @generated from protobuf field: string kind = 2
+     */
+    kind: string; // event | decision | list
+    /**
+     * @generated from protobuf field: string address = 3
+     */
+    address: string; // exact event key or decision invocation identity
+    /**
+     * @generated from protobuf field: string payload_json = 4
+     */
+    payloadJson: string;
+    /**
+     * @generated from protobuf field: string idempotency_key = 5
+     */
+    idempotencyKey: string;
+    /**
+     * @generated from protobuf field: string reason = 6
+     */
+    reason: string;
+    /**
+     * @generated from protobuf field: uint32 offset = 7
+     */
+    offset: number;
+    /**
+     * @generated from protobuf field: optional uint32 limit = 8
+     */
+    limit?: number;
+}
+/**
+ * @generated from protobuf message avalanche.operator.ControlWaitResponseV2
+ */
+export interface ControlWaitResponseV2 {
+    /**
+     * @generated from protobuf field: string receipt_json = 1
+     */
+    receiptJson: string;
+    /**
+     * @generated from protobuf field: repeated string waits_json = 2
+     */
+    waitsJson: string[];
+    /**
+     * @generated from protobuf field: optional uint32 next_offset = 3
+     */
+    nextOffset?: number;
+}
+/**
  * @generated from protobuf message avalanche.operator.ReadTuiResourceRequestV2
  */
 export interface ReadTuiResourceRequestV2 {
@@ -346,6 +400,18 @@ export interface FlowInfoV2 {
      * @generated from protobuf field: optional string schedule_input_json = 21
      */
     scheduleInputJson?: string;
+    /**
+     * @generated from protobuf field: map<string, string> node_policies_json = 30
+     */
+    nodePoliciesJson: {
+        [key: string]: string;
+    };
+    /**
+     * @generated from protobuf field: map<string, string> node_waits_json = 31
+     */
+    nodeWaitsJson: {
+        [key: string]: string;
+    };
 }
 /**
  * @generated from protobuf message avalanche.operator.DiscoveryDiagnosticV2
@@ -1966,6 +2032,170 @@ export enum PageOrderV2 {
     NEWEST_FIRST = 1
 }
 // @generated message type with reflection information, may provide speed optimized methods
+class ControlWaitRequestV2$Type extends MessageType<ControlWaitRequestV2> {
+    constructor() {
+        super("avalanche.operator.ControlWaitRequestV2", [
+            { no: 1, name: "run_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "kind", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "address", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "payload_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 5, name: "idempotency_key", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 6, name: "reason", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 7, name: "offset", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 8, name: "limit", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ }
+        ]);
+    }
+    create(value?: PartialMessage<ControlWaitRequestV2>): ControlWaitRequestV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.runId = "";
+        message.kind = "";
+        message.address = "";
+        message.payloadJson = "";
+        message.idempotencyKey = "";
+        message.reason = "";
+        message.offset = 0;
+        if (value !== undefined)
+            reflectionMergePartial<ControlWaitRequestV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: ControlWaitRequestV2): ControlWaitRequestV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string run_id */ 1:
+                    message.runId = reader.string();
+                    break;
+                case /* string kind */ 2:
+                    message.kind = reader.string();
+                    break;
+                case /* string address */ 3:
+                    message.address = reader.string();
+                    break;
+                case /* string payload_json */ 4:
+                    message.payloadJson = reader.string();
+                    break;
+                case /* string idempotency_key */ 5:
+                    message.idempotencyKey = reader.string();
+                    break;
+                case /* string reason */ 6:
+                    message.reason = reader.string();
+                    break;
+                case /* uint32 offset */ 7:
+                    message.offset = reader.uint32();
+                    break;
+                case /* optional uint32 limit */ 8:
+                    message.limit = reader.uint32();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: ControlWaitRequestV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string run_id = 1; */
+        if (message.runId !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.runId);
+        /* string kind = 2; */
+        if (message.kind !== "")
+            writer.tag(2, WireType.LengthDelimited).string(message.kind);
+        /* string address = 3; */
+        if (message.address !== "")
+            writer.tag(3, WireType.LengthDelimited).string(message.address);
+        /* string payload_json = 4; */
+        if (message.payloadJson !== "")
+            writer.tag(4, WireType.LengthDelimited).string(message.payloadJson);
+        /* string idempotency_key = 5; */
+        if (message.idempotencyKey !== "")
+            writer.tag(5, WireType.LengthDelimited).string(message.idempotencyKey);
+        /* string reason = 6; */
+        if (message.reason !== "")
+            writer.tag(6, WireType.LengthDelimited).string(message.reason);
+        /* uint32 offset = 7; */
+        if (message.offset !== 0)
+            writer.tag(7, WireType.Varint).uint32(message.offset);
+        /* optional uint32 limit = 8; */
+        if (message.limit !== undefined)
+            writer.tag(8, WireType.Varint).uint32(message.limit);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.ControlWaitRequestV2
+ */
+export const ControlWaitRequestV2 = new ControlWaitRequestV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ControlWaitResponseV2$Type extends MessageType<ControlWaitResponseV2> {
+    constructor() {
+        super("avalanche.operator.ControlWaitResponseV2", [
+            { no: 1, name: "receipt_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "waits_json", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "next_offset", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ }
+        ]);
+    }
+    create(value?: PartialMessage<ControlWaitResponseV2>): ControlWaitResponseV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.receiptJson = "";
+        message.waitsJson = [];
+        if (value !== undefined)
+            reflectionMergePartial<ControlWaitResponseV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: ControlWaitResponseV2): ControlWaitResponseV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string receipt_json */ 1:
+                    message.receiptJson = reader.string();
+                    break;
+                case /* repeated string waits_json */ 2:
+                    message.waitsJson.push(reader.string());
+                    break;
+                case /* optional uint32 next_offset */ 3:
+                    message.nextOffset = reader.uint32();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: ControlWaitResponseV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string receipt_json = 1; */
+        if (message.receiptJson !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.receiptJson);
+        /* repeated string waits_json = 2; */
+        for (let i = 0; i < message.waitsJson.length; i++)
+            writer.tag(2, WireType.LengthDelimited).string(message.waitsJson[i]);
+        /* optional uint32 next_offset = 3; */
+        if (message.nextOffset !== undefined)
+            writer.tag(3, WireType.Varint).uint32(message.nextOffset);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.ControlWaitResponseV2
+ */
+export const ControlWaitResponseV2 = new ControlWaitResponseV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class ReadTuiResourceRequestV2$Type extends MessageType<ReadTuiResourceRequestV2> {
     constructor() {
         super("avalanche.operator.ReadTuiResourceRequestV2", [
@@ -2678,7 +2908,9 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
             { no: 18, name: "input_schema_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 19, name: "version", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 20, name: "schedule_enabled", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
-            { no: 21, name: "schedule_input_json", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
+            { no: 21, name: "schedule_input_json", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 30, name: "node_policies_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
+            { no: 31, name: "node_waits_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
         ]);
     }
     create(value?: PartialMessage<FlowInfoV2>): FlowInfoV2 {
@@ -2702,6 +2934,8 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         message.inputSchemaJson = "";
         message.version = "";
         message.scheduleEnabled = false;
+        message.nodePoliciesJson = {};
+        message.nodeWaitsJson = {};
         if (value !== undefined)
             reflectionMergePartial<FlowInfoV2>(this, message, value);
         return message;
@@ -2774,6 +3008,12 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
                 case /* optional string schedule_input_json */ 21:
                     message.scheduleInputJson = reader.string();
                     break;
+                case /* map<string, string> node_policies_json */ 30:
+                    this.binaryReadMap30(message.nodePoliciesJson, reader, options);
+                    break;
+                case /* map<string, string> node_waits_json */ 31:
+                    this.binaryReadMap31(message.nodeWaitsJson, reader, options);
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -2829,6 +3069,38 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
                     val = reader.string();
                     break;
                 default: throw new globalThis.Error("unknown map entry field for avalanche.operator.FlowInfoV2.evaluation_metadata_json");
+            }
+        }
+        map[key ?? ""] = val ?? "";
+    }
+    private binaryReadMap30(map: FlowInfoV2["nodePoliciesJson"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof FlowInfoV2["nodePoliciesJson"] | undefined, val: FlowInfoV2["nodePoliciesJson"][any] | undefined;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case 1:
+                    key = reader.string();
+                    break;
+                case 2:
+                    val = reader.string();
+                    break;
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.FlowInfoV2.node_policies_json");
+            }
+        }
+        map[key ?? ""] = val ?? "";
+    }
+    private binaryReadMap31(map: FlowInfoV2["nodeWaitsJson"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof FlowInfoV2["nodeWaitsJson"] | undefined, val: FlowInfoV2["nodeWaitsJson"][any] | undefined;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case 1:
+                    key = reader.string();
+                    break;
+                case 2:
+                    val = reader.string();
+                    break;
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.FlowInfoV2.node_waits_json");
             }
         }
         map[key ?? ""] = val ?? "";
@@ -2897,6 +3169,12 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         /* optional string schedule_input_json = 21; */
         if (message.scheduleInputJson !== undefined)
             writer.tag(21, WireType.LengthDelimited).string(message.scheduleInputJson);
+        /* map<string, string> node_policies_json = 30; */
+        for (let k of globalThis.Object.keys(message.nodePoliciesJson))
+            writer.tag(30, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.nodePoliciesJson[k]).join();
+        /* map<string, string> node_waits_json = 31; */
+        for (let k of globalThis.Object.keys(message.nodeWaitsJson))
+            writer.tag(31, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.nodeWaitsJson[k]).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -7266,6 +7544,7 @@ export const OperatorServiceV2 = new ServiceType("avalanche.operator.OperatorSer
     { name: "GetWorkflowNodeSource", options: {}, I: GetWorkflowNodeSourceRequestV2, O: WorkflowNodeSourceV2 },
     { name: "StartRun", options: {}, I: StartRunRequestV2, O: StartRunResponseV2 },
     { name: "CancelRun", options: {}, I: CancelRunRequestV2, O: CancelRunResponseV2 },
+    { name: "ControlWait", options: {}, I: ControlWaitRequestV2, O: ControlWaitResponseV2 },
     { name: "SetScheduleEnabled", options: {}, I: SetScheduleEnabledRequestV2, O: FlowInfoV2 },
     { name: "StageInputFile", options: {}, I: StageInputFileRequestV2, O: FileAttachmentV2 },
     { name: "ListRunSummaries", options: {}, I: ListRunSummariesRequestV2, O: RunSummaryPageV2 },

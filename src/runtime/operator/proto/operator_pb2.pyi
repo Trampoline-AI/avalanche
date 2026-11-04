@@ -58,6 +58,36 @@ AGENT_EVENT_KIND_V2_PROMPT_SENT: AgentEventKindV2
 PAGE_ORDER_V2_FORWARD: PageOrderV2
 PAGE_ORDER_V2_NEWEST_FIRST: PageOrderV2
 
+class ControlWaitRequestV2(_message.Message):
+    __slots__ = ("run_id", "kind", "address", "payload_json", "idempotency_key", "reason", "offset", "limit")
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
+    ADDRESS_FIELD_NUMBER: _ClassVar[int]
+    PAYLOAD_JSON_FIELD_NUMBER: _ClassVar[int]
+    IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
+    REASON_FIELD_NUMBER: _ClassVar[int]
+    OFFSET_FIELD_NUMBER: _ClassVar[int]
+    LIMIT_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    kind: str
+    address: str
+    payload_json: str
+    idempotency_key: str
+    reason: str
+    offset: int
+    limit: int
+    def __init__(self, run_id: _Optional[str] = ..., kind: _Optional[str] = ..., address: _Optional[str] = ..., payload_json: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., reason: _Optional[str] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ...) -> None: ...
+
+class ControlWaitResponseV2(_message.Message):
+    __slots__ = ("receipt_json", "waits_json", "next_offset")
+    RECEIPT_JSON_FIELD_NUMBER: _ClassVar[int]
+    WAITS_JSON_FIELD_NUMBER: _ClassVar[int]
+    NEXT_OFFSET_FIELD_NUMBER: _ClassVar[int]
+    receipt_json: str
+    waits_json: _containers.RepeatedScalarFieldContainer[str]
+    next_offset: int
+    def __init__(self, receipt_json: _Optional[str] = ..., waits_json: _Optional[_Iterable[str]] = ..., next_offset: _Optional[int] = ...) -> None: ...
+
 class ReadTuiResourceRequestV2(_message.Message):
     __slots__ = ("resource", "workflow_selector", "run_id", "version", "node_id", "attempt", "cursor", "limit", "byte_limit")
     RESOURCE_FIELD_NUMBER: _ClassVar[int]
@@ -175,7 +205,7 @@ class WorkflowNodeSourceV2(_message.Message):
     def __init__(self, source_code: _Optional[str] = ...) -> None: ...
 
 class FlowInfoV2(_message.Message):
-    __slots__ = ("workflow_selector", "display_name", "manifest_digest", "node_ids", "workflow_id", "file_path", "topology", "agent_node_ids", "agent_declarations_json", "cron", "next_run_at", "last_run_at", "webhook_path", "webhook_url", "webhook_active", "classifier_metadata_json", "evaluation_metadata_json", "input_schema_json", "version", "schedule_enabled", "schedule_input_json")
+    __slots__ = ("workflow_selector", "display_name", "manifest_digest", "node_ids", "workflow_id", "file_path", "topology", "agent_node_ids", "agent_declarations_json", "cron", "next_run_at", "last_run_at", "webhook_path", "webhook_url", "webhook_active", "classifier_metadata_json", "evaluation_metadata_json", "input_schema_json", "version", "schedule_enabled", "schedule_input_json", "node_policies_json", "node_waits_json")
     class AgentDeclarationsJsonEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -191,6 +221,20 @@ class FlowInfoV2(_message.Message):
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     class EvaluationMetadataJsonEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class NodePoliciesJsonEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class NodeWaitsJsonEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
@@ -218,6 +262,8 @@ class FlowInfoV2(_message.Message):
     VERSION_FIELD_NUMBER: _ClassVar[int]
     SCHEDULE_ENABLED_FIELD_NUMBER: _ClassVar[int]
     SCHEDULE_INPUT_JSON_FIELD_NUMBER: _ClassVar[int]
+    NODE_POLICIES_JSON_FIELD_NUMBER: _ClassVar[int]
+    NODE_WAITS_JSON_FIELD_NUMBER: _ClassVar[int]
     workflow_selector: str
     display_name: str
     manifest_digest: str
@@ -239,7 +285,9 @@ class FlowInfoV2(_message.Message):
     version: str
     schedule_enabled: bool
     schedule_input_json: str
-    def __init__(self, workflow_selector: _Optional[str] = ..., display_name: _Optional[str] = ..., manifest_digest: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., workflow_id: _Optional[str] = ..., file_path: _Optional[str] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., agent_node_ids: _Optional[_Iterable[str]] = ..., agent_declarations_json: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., webhook_path: _Optional[str] = ..., webhook_url: _Optional[str] = ..., webhook_active: bool = ..., classifier_metadata_json: _Optional[_Mapping[str, str]] = ..., evaluation_metadata_json: _Optional[_Mapping[str, str]] = ..., input_schema_json: _Optional[str] = ..., version: _Optional[str] = ..., schedule_enabled: bool = ..., schedule_input_json: _Optional[str] = ...) -> None: ...
+    node_policies_json: _containers.ScalarMap[str, str]
+    node_waits_json: _containers.ScalarMap[str, str]
+    def __init__(self, workflow_selector: _Optional[str] = ..., display_name: _Optional[str] = ..., manifest_digest: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., workflow_id: _Optional[str] = ..., file_path: _Optional[str] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., agent_node_ids: _Optional[_Iterable[str]] = ..., agent_declarations_json: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., webhook_path: _Optional[str] = ..., webhook_url: _Optional[str] = ..., webhook_active: bool = ..., classifier_metadata_json: _Optional[_Mapping[str, str]] = ..., evaluation_metadata_json: _Optional[_Mapping[str, str]] = ..., input_schema_json: _Optional[str] = ..., version: _Optional[str] = ..., schedule_enabled: bool = ..., schedule_input_json: _Optional[str] = ..., node_policies_json: _Optional[_Mapping[str, str]] = ..., node_waits_json: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class DiscoveryDiagnosticV2(_message.Message):
     __slots__ = ("path", "kind", "message")

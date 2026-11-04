@@ -20,6 +20,7 @@ from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
+from multiprocessing.connection import Connection
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Callable, TypeVar
 from uuid import uuid4
@@ -33,6 +34,7 @@ from avalanche.classifier.models import (
     NoulAnswer,
 )
 from avalanche.evaluations import EvaluationDeclaration
+from avalanche.local_waits import WaitRefusalError
 from avalanche.step_interface import StepInterface
 
 from ._signals import shutdown_cleanup
@@ -126,6 +128,12 @@ from .results import EncodedWorkflowResult, decode_workflow_result
 from .run_worker import run_worker
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
 from .step_io import StepInputs, StepIo, StepValuePreview
+from .wait_control import (
+    FinalWaitSnapshot,
+    RunControls,
+    WaitControlRequest,
+    WaitControlResponse,
+)
 from .webhooks import DEFAULT_WEBHOOK_PORT, WebhookServer, routes_for
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
 from .workflow_metadata import (
@@ -216,6 +224,8 @@ class _RunHandle:
     drain_thread: threading.Thread | None = None
     preparation_thread: threading.Thread | None = None
     success_quiesced: bool = False
+    cancel_writer: Connection | None = None
+    controls: RunControls | None = None
 
 
 @dataclass(frozen=True)
@@ -407,6 +417,7 @@ class Operator:
         self._run_detail_bytes: dict[str, int] = {}
         self._node_detail_bytes: dict[tuple[str, str], int] = {}
         self._active_runs: dict[str, _RunHandle] = {}
+        self._wait_controls: dict[str, RunControls] = {}
         self._run_callbacks: list[Callable[[RunState], None]] = []
         self._log_callbacks: list[Callable[[LogEntry], None]] = []
         self._detail_callbacks: list[Callable[[DetailUpdate], None]] = []
@@ -1599,6 +1610,9 @@ class Operator:
                     raise MissingRunInputError(missing)
             require_worker_descriptor_transfer()
             event_queue = self._mp.Queue()
+            control_parent, control_child = self._mp.Pipe()
+            cancel_reader, cancel_writer = self._mp.Pipe(duplex=False)
+            controls = RunControls(control_parent)
             cancel_event = self._mp.Event()
             start_event = self._mp.Event()
             assignment_event = self._mp.Event()
@@ -1620,6 +1634,8 @@ class Operator:
                         start_event,
                         transferred_result_bundle,
                         (result_bundle.device, result_bundle.inode),
+                        control_child,
+                        cancel_reader,
                     ),
                     name=f"avalanche-run-{run_id}",
                     daemon=False,
@@ -1627,6 +1643,8 @@ class Operator:
                 windows_job = create_kill_on_close_job()
             except BaseException:
                 self._result_store.discard(result_bundle)
+                for endpoint in (control_parent, control_child, cancel_reader, cancel_writer):
+                    endpoint.close()
                 _close_event_queue(event_queue)
                 raise
             handle = _RunHandle(
@@ -1638,16 +1656,21 @@ class Operator:
                 windows_job=windows_job,
                 result_bundle=result_bundle,
                 publication_event=threading.Event(),
+                cancel_writer=cancel_writer,
+                controls=controls,
             )
             # Reserve the ID before releasing the lock so concurrent callers
             # cannot create a second coordinator with the same caller-owned ID.
             self._active_runs[run_id] = handle
+            self._wait_controls[run_id] = controls
             self._log_sequences_by_node.pop(run_id, None)
         try:
             with self._lock:
                 if self._closed:
                     raise RuntimeError("Operator closed while creating run")
                 process.start()
+                control_child.close()
+                cancel_reader.close()
                 if process.pid is None:
                     raise RuntimeError("Run coordinator did not expose a process ID")
                 assign_process(windows_job, process.pid)
@@ -1697,6 +1720,9 @@ class Operator:
                 self._stored_results.pop(run_id, None)
                 self._active_runs.pop(run_id, None)
             self._result_store.discard(result_bundle)
+            _close_run_controls(handle)
+            control_child.close()
+            cancel_reader.close()
             _close_event_queue(event_queue)
             raise
 
@@ -1785,9 +1811,22 @@ class Operator:
         handle.start_event.set()
         _teardown_process_group(handle.process, handle.windows_job)
         self._result_store.discard(handle.result_bundle)
+        _close_run_controls(handle)
         _close_event_queue(handle.event_queue)
         if notifications is not None:
             self._wait_for_notifications(notifications)
+
+    def wait_control(self, run_id: str, request: WaitControlRequest) -> WaitControlResponse:
+        with self._lock:
+            if run_id not in self._runs or run_id not in self._wait_controls:
+                raise WaitRefusalError("unknown_run", 404)
+            controls = self._wait_controls[run_id]
+            closed = self._runs[run_id].status in {
+                RunStatus.SUCCESS,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+            }
+        return controls.request(request, closed=closed)
 
     def cancel_run(self, run_id: str) -> None:
         with self._lock:
@@ -1806,6 +1845,11 @@ class Operator:
             }:
                 return
         if handle is not None and not already_requested:
+            if handle.cancel_writer is not None:
+                try:
+                    handle.cancel_writer.send_bytes(b"cancel")
+                except (BrokenPipeError, OSError):
+                    pass  # The coordinator already exited; teardown below owns cleanup.
             threading.Thread(
                 target=self._force_cancel_after_grace,
                 args=(run_id, handle),
@@ -1905,6 +1949,12 @@ class Operator:
         for _, handle in handles:
             handle.cancel_event.set()
             handle.start_event.set()
+            if handle.cancel_writer is not None:
+                try:
+                    handle.cancel_writer.send_bytes(b"cancel")
+                except (BrokenPipeError, OSError):
+                    pass  # Coordinator teardown is already complete.
+
         deadline = time.monotonic() + self._cancel_grace
         for _, handle in handles:
             if handle.process.pid is not None:
@@ -2349,6 +2399,7 @@ class Operator:
             finally:
                 with self._lock:
                     self._active_runs.pop(run_id, None)
+                _close_run_controls(handle)
                 _close_event_queue(handle.event_queue)
 
     def _apply_event(
@@ -2358,6 +2409,15 @@ class Operator:
         event: dict[str, Any],
     ) -> bool:
         event_type = _validate_run_event(event, validate_result=False)
+        if event_type == "wait_snapshot":
+            snapshot = FinalWaitSnapshot.model_validate_json(event["snapshot"])
+            with self._lock:
+                controls = self._wait_controls[run_id]
+                with controls.lock:
+                    if controls.final_snapshot is not None:
+                        raise _CoordinatorProtocolError("duplicate final wait snapshot")
+                    controls.final_snapshot = snapshot
+            return False
         if event_type == "evaluation_submitted":
             self._submit_evaluation(
                 run_id, event["node_id"], EvaluationRequest.model_validate(event["submission"])
@@ -3734,6 +3794,7 @@ _RUN_EVENT_TYPES = {
     "step_output",
     "log",
     "terminal",
+    "wait_snapshot",
 }
 _NODE_EVENT_TYPES = {"node_started", "node_succeeded", "node_failed"}
 _TERMINAL_STATUSES = {"success", "failed", "cancelled"}
@@ -4097,7 +4158,13 @@ def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
     event_type = _event_type(event)
     if event_type not in _RUN_EVENT_TYPES:
         raise _CoordinatorProtocolError(f"unknown run event type {_bounded_ascii(event_type)}")
-    if event_type == "running":
+    if event_type == "wait_snapshot":
+        _require_exact_event_keys(event, {"type", "snapshot"})
+        try:
+            FinalWaitSnapshot.model_validate_json(_required_field(event, "snapshot"))
+        except (ValueError, TypeError) as exc:
+            raise _CoordinatorProtocolError("invalid final wait snapshot") from exc
+    elif event_type == "running":
         _require_exact_event_keys(event, {"type", "timestamp"})
         _timestamp_field(event, "timestamp")
     elif event_type in _NODE_EVENT_TYPES:
@@ -4194,6 +4261,13 @@ def _event_after_provisional_success(event_queue: Any) -> object | None:
         except queue.Empty:
             continue
     return None
+
+
+def _close_run_controls(handle: _RunHandle) -> None:
+    if handle.controls is not None:
+        handle.controls.close()
+    if handle.cancel_writer is not None:
+        handle.cancel_writer.close()
 
 
 def _close_event_queue(event_queue: Any) -> None:

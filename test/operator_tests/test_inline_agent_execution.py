@@ -172,13 +172,13 @@ def _write_workflow(root: Path, *, failure: str | None = None, block: bool = Fal
             def single():
                 reviewed = ava.agent.step(
                     Review, inputs={{"ticket": load_ticket(), "threshold": 2}},
-                    slug="review-ticket",
+                    slug="review-ticket", retries=0,
                     runtime=ava.runtimes.PredictRLM(lm="inline-model", max_iterations=2))
                 return consume_decision(reviewed)
 
             @ava.workflow(agent_defaults=DEFAULTS)
             def multiple():
-                routed = ava.agent.step(Route, slug="route-ticket")
+                routed = ava.agent.step(Route, slug="route-ticket", retries=0)
                 load_amount() >> routed
                 return consume_route(routed[0], routed[1])
             '''

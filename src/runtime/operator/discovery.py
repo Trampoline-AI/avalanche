@@ -24,6 +24,7 @@ from croniter import croniter
 from avalanche.agent.declaration import AgentDeclaration
 from avalanche.classifier.models import ClassifierDeclaration
 from avalanche.dag import Workflow
+from avalanche.policies import StepPolicy, WaitSpec
 
 from .models import (
     WorkflowDescriptor,
@@ -644,6 +645,13 @@ def _descriptor_to_dict(
             "builder_symbol": symbol,
         },
         "node_ids": node_ids,
+        "node_policies": [
+            [nid, workflow.nodes[nid].node.policy.model_dump()] for nid in node_ids
+        ],
+        "node_waits": [
+            [nid, spec.model_dump(mode="json", by_alias=True)]
+            for nid, spec in workflow.node_waits.items()
+        ],
         "graph": [[key, value] for key, value in workflow.graph.items()],
         "node_types": [[nid, workflow.nodes[nid].node.node_type.value] for nid in node_ids],
         "display_names": [[nid, display_name_from_id(nid)] for nid in node_ids],
@@ -671,6 +679,12 @@ def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
         display_name=item["display_name"],
         locator=WorkflowLocator(**item["locator"]),
         node_ids=tuple(item["node_ids"]),
+        node_policies=tuple(
+            (key, StepPolicy.model_validate(value)) for key, value in item["node_policies"]
+        ),
+        node_waits=tuple(
+            (key, WaitSpec.model_validate(value)) for key, value in item["node_waits"]
+        ),
         graph=tuple((key, tuple(value)) for key, value in item["graph"]),
         node_types=tuple((key, value) for key, value in item["node_types"]),
         display_names=tuple((key, value) for key, value in item["display_names"]),

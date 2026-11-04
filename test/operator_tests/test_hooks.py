@@ -64,7 +64,7 @@ def test_local_parallel_failure_drains_sibling_and_skips_descendant():
     descendant_started = threading.Event()
     failures = []
 
-    @source
+    @source(retries=0)
     def failing():
         both_running.wait(timeout=2)
         raise ValueError("boom")

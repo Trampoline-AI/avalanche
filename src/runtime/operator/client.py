@@ -86,6 +86,8 @@ from .results import (
 if TYPE_CHECKING:
     from avalanche.agent.live import AgentLiveEvent, AgentTraceTerminal
 
+    from .wait_control import WaitControlRequest, WaitControlResponse
+
 DEFAULT_UNARY_TIMEOUT_SECONDS = 10.0
 DETAIL_HYDRATION_PAGE_SIZE = 100
 GET_RUN_SNAPSHOT_MAX_ATTEMPTS = 3
@@ -1956,6 +1958,41 @@ class GrpcStateProvider:
             ),
         )
         return workflow_info_from_v2(response)
+
+    def wait_control(self, run_id: str, command: WaitControlRequest) -> WaitControlResponse:
+        if self._read_only and command.kind != "list":
+            from tui.state import TuiExtensionError
+
+            raise TuiExtensionError("read_only", "Provider is read-only")
+        from pydantic import JsonValue, TypeAdapter
+
+        from avalanche.local_waits import WaitReceipt
+
+        from .wait_control import WaitControlResponse
+
+        response = self._call(
+            self._stub.ControlWait,
+            pb.ControlWaitRequestV2(
+                run_id=run_id,
+                kind=command.kind,
+                address=command.address,
+                payload_json=json.dumps(command.payload, allow_nan=False),
+                idempotency_key=command.idempotency_key,
+                reason=command.reason,
+                offset=command.offset,
+                limit=command.limit,
+            ),
+        )
+        return WaitControlResponse(
+            receipt=WaitReceipt.model_validate_json(response.receipt_json)
+            if response.receipt_json
+            else None,
+            waits=[
+                TypeAdapter(dict[str, JsonValue]).validate_json(card)
+                for card in response.waits_json
+            ],
+            next_offset=response.next_offset if response.HasField("next_offset") else None,
+        )
 
     def cancel_run(self, run_id: str) -> None:
         if self._read_only:

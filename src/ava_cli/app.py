@@ -49,7 +49,47 @@ _MAX_PARENT_IDENTITY_SCAN = 4096
 _OPERATOR_READY_TIMEOUT_SECONDS = 5.0
 
 
+def _run_wait_command(argv: list[str]) -> int:
+    from runtime.operator.client import OperatorCallError
+    from runtime.operator.wait_control import WaitControlRequest
+
+    kind = "event" if argv[:2] == ["event", "send"] else "decision"
+    parser = argparse.ArgumentParser(prog="ava " + " ".join(argv[:2]))
+    parser.add_argument("run_id")
+    parser.add_argument("address", help="declared exact event key or decision invocation ID")
+    parser.add_argument("json", help="typed JSON payload")
+    parser.add_argument("--connect", default="localhost:7433")
+    parser.add_argument("--idempotency-key", required=True)
+    parser.add_argument("--reason", required=kind == "decision", default="")
+    args = parser.parse_args(argv[2:])
+    provider = _make_provider(args.connect)
+    try:
+        payload = _parse_json_object(args.json, "payload")
+        if payload is None:
+            raise ValueError("payload must be a JSON object")
+        response = provider.wait_control(
+            args.run_id,
+            WaitControlRequest(
+                kind=kind,
+                address=args.address,
+                payload=payload,
+                idempotency_key=args.idempotency_key,
+                reason=args.reason,
+            ),
+        )
+        print(response.receipt.model_dump_json())
+        return 0
+    except (OperatorCallError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    finally:
+        provider.close()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    arguments = list(argv) if argv is not None else sys.argv[1:]
+    if arguments[:2] in (["event", "send"], ["run", "decide"]):
+        return _run_wait_command(arguments)
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command in {"dev", "operator"}:
@@ -80,6 +120,11 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Avalanche command line interface.",
     )
     subcommands = parser.add_subparsers(dest="command", metavar="COMMAND")
+
+    events = subcommands.add_parser("event", help="send a declared run event")
+    events.add_subparsers(dest="event_command").add_parser(
+        "send", help="send a typed JSON event"
+    )
 
     init = subcommands.add_parser(
         "init",

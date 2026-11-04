@@ -10,7 +10,7 @@ from urllib.parse import unquote
 from uuid import uuid4
 
 import grpc
-from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, Response
+from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -64,6 +64,12 @@ class _CreateRun(BaseModel):
     context_json: dict[str, JsonValue] = Field(default_factory=dict)
 
 
+class _DecisionSubmission(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    outcome: dict[str, JsonValue]
+    reason: str = Field(min_length=1)
+
+
 class _SetSchedule(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
 
@@ -78,6 +84,11 @@ class _SetSchedule(BaseModel):
 
 class _Query(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class _WaitQuery(_Query):
+    offset: int = Field(default=0, ge=0, le=2**32 - 1)
+    limit: int = Field(default=64, ge=1, le=64)
 
 
 class _PageQuery(_Query):
@@ -347,6 +358,59 @@ def create_rest_app(channel: grpc.Channel) -> FastAPI:
     def cancel_run(run_id: str, query: Annotated[_Query, Query()]) -> Response:
         return _protobuf_response(
             stub.CancelRun(pb.CancelRunRequestV2(run_id=run_id), timeout=_RPC_TIMEOUT_SECONDS)
+        )
+
+    def control_wait(request: pb.ControlWaitRequestV2) -> Response:
+        try:
+            return _protobuf_response(stub.ControlWait(request, timeout=_RPC_TIMEOUT_SECONDS))
+        except grpc.RpcError as exc:
+            if exc.code() == grpc.StatusCode.INVALID_ARGUMENT:
+                raise HTTPException(422, "invalid_wait_submission") from exc
+            raise
+
+    @router.get("/v1/runs/{run_id}/waits", summary="List pinned wait cards")
+    def list_waits(run_id: str, query: Annotated[_WaitQuery, Query()]) -> Response:
+        return control_wait(
+            pb.ControlWaitRequestV2(
+                run_id=run_id, kind="list", offset=query.offset, limit=query.limit
+            )
+        )
+
+    @router.post("/v1/runs/{run_id}/events/{key}", summary="Send one exact declared event")
+    def send_event(
+        run_id: str,
+        key: str,
+        payload: dict[str, JsonValue],
+        idempotency_key: Annotated[str, Header(min_length=1)],
+        query: Annotated[_Query, Query()],
+    ) -> Response:
+        return control_wait(
+            pb.ControlWaitRequestV2(
+                run_id=run_id,
+                kind="event",
+                address=key,
+                payload_json=json.dumps(payload, allow_nan=False),
+                idempotency_key=idempotency_key,
+            )
+        )
+
+    @router.post("/v1/runs/{run_id}/decisions/{node}", summary="Submit a typed decision")
+    def decide(
+        run_id: str,
+        node: str,
+        payload: _DecisionSubmission,
+        idempotency_key: Annotated[str, Header(min_length=1)],
+        query: Annotated[_Query, Query()],
+    ) -> Response:
+        return control_wait(
+            pb.ControlWaitRequestV2(
+                run_id=run_id,
+                kind="decision",
+                address=node,
+                payload_json=json.dumps(payload.outcome, allow_nan=False),
+                idempotency_key=idempotency_key,
+                reason=payload.reason,
+            )
         )
 
     @router.get("/v1/runs/{run_id}/output", summary="Get a completed run's output")
