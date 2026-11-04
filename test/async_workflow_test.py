@@ -53,7 +53,7 @@ def test_async_branches_overlap_and_failure_prevents_descendants():
     both_running = threading.Barrier(2)
     called = []
 
-    @ava.source
+    @ava.source(retries=0)
     async def load(value):
         await asyncio.sleep(0)
         both_running.wait(timeout=5)

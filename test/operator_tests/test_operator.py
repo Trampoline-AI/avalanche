@@ -36,6 +36,135 @@ def wait_terminal(operator, run_id):
     pytest.fail(f"Run {run_id} did not finish")
 
 
+def test_spawned_run_accepts_early_event_and_typed_decision(tmp_path):
+    """Use the real coordinator, pinned wait schema and synchronous control receipts."""
+    import http.client
+    import socket
+    import subprocess
+    import sys
+
+    from runtime.operator.client import GrpcStateProvider
+    from runtime.operator.server import serve
+    from runtime.operator.wait_control import WaitControlRequest
+    from runtime.operator.web import start_browser_server
+
+    fixture = Path(__file__).parents[1] / "fixtures" / "durable_waits_flow.py"
+    target = tmp_path / "flow.py"
+    # Local operator derives the identity from its OS account, not a body field.
+    import getpass
+
+    target.write_text(
+        fixture.read_text().replace(
+            'approvers=["reviewer"]', f"approvers=[{getpass.getuser()!r}]"
+        )
+    )
+    op = Operator([str(target)], watch=False, schedule=False, webhook_port=0)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    server = serve(op, port=port, block=False)
+    address = f"127.0.0.1:{port}"
+    browser = start_browser_server(address, port=0)
+    client = GrpcStateProvider(address)
+    try:
+        (info,) = client.list_workflows()
+        assert info.node_policies["draft_1"].on_uncertain == "hold"
+        assert info.node_waits["decision_1"].approvers == (getpass.getuser(),)
+        run_id = client.start_run(info.selector)
+        event = WaitControlRequest(
+            kind="event",
+            address="docusign.signed",
+            payload={"envelope_id": "signed"},
+            idempotency_key="early",
+        )
+        sent = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ava_cli",
+                "event",
+                "send",
+                run_id,
+                "docusign.signed",
+                '{"envelope_id":"signed"}',
+                "--connect",
+                address,
+                "--idempotency-key",
+                "early",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert sent.returncode == 0, sent.stderr
+        receipt = client.wait_control(run_id, event).receipt
+        assert receipt is not None
+        assert json.loads(sent.stdout)["receipt_id"] == receipt.receipt_id
+        assert receipt.run_id == run_id
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            cards = op.wait_control(run_id, WaitControlRequest(kind="list")).waits
+            if any(
+                card["node_id"] == "decision_1" and card["state"] == "waiting" for card in cards
+            ):
+                break
+            time.sleep(0.03)
+        else:
+            pytest.fail("decision did not arm")
+        http = http.client.HTTPConnection(browser.host, browser.port, timeout=10)
+        http.request(
+            "POST",
+            f"/api/v1/runs/{run_id}/decisions/decision_1",
+            body=json.dumps({"outcome": {"kind": "invalid"}, "reason": "invalid"}),
+            headers={"Content-Type": "application/json", "Idempotency-Key": "invalid"},
+        )
+        refused = http.getresponse()
+        assert refused.status == 422
+        refused.read()
+        http.close()
+        decision = WaitControlRequest(
+            kind="decision",
+            address="decision_1",
+            payload={"kind": "approve"},
+            idempotency_key="approval",
+            reason="checked pinned draft",
+        )
+        decided = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ava_cli",
+                "run",
+                "decide",
+                run_id,
+                "decision_1",
+                '{"kind":"approve"}',
+                "--connect",
+                address,
+                "--idempotency-key",
+                "approval",
+                "--reason",
+                "checked pinned draft",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert decided.returncode == 0, decided.stderr
+        audit = client.wait_control(run_id, decision).receipt
+        assert audit is not None
+        assert audit.principal == getpass.getuser()
+        assert audit.reason == "checked pinned draft"
+        assert wait_terminal(op, run_id).status == RunStatus.SUCCESS
+        assert op.wait_control(run_id, event).receipt == receipt
+        assert client.wait_control(run_id, decision).receipt == audit
+    finally:
+        client.close()
+        browser.close()
+        server.stop(grace=0).wait()
+        op.close()
+
+
 def test_discovered_workflow_executes_nodes_and_returns_detached_state(operator):
     workflow = next(
         item for item in operator.list_workflows() if item.name == "simple_workflow"
@@ -194,7 +323,11 @@ def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
     run.nodes["agent_1"] = NodeState("agent_1", "agent", "step", status=NodeStatus.RUNNING)
     operator._runs[run.run_id] = run
     handle = SimpleNamespace(
-        cancel_event=threading.Event(), result_bundle=None, success_quiesced=False
+        cancel_event=threading.Event(),
+        result_bundle=None,
+        success_quiesced=False,
+        controls=None,
+        cancel_writer=None,
     )
 
     def apply(event):
@@ -361,7 +494,11 @@ def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
     run.nodes["agent_1"] = NodeState("agent_1", "agent", "step", status=NodeStatus.RUNNING)
     operator._runs[run.run_id] = run
     handle = SimpleNamespace(
-        cancel_event=threading.Event(), result_bundle=None, success_quiesced=False
+        cancel_event=threading.Event(),
+        result_bundle=None,
+        success_quiesced=False,
+        controls=None,
+        cancel_writer=None,
     )
 
     def apply(event):

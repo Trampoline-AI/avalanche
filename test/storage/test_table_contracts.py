@@ -236,7 +236,7 @@ def test_passthrough_failure_leaves_snapshot_available_for_retry(table, asynchro
         await asyncio.sleep(0)
         fail(frame)
 
-    consume = ava.step(async_fail if asynchronous else fail)
+    consume = ava.step(async_fail if asynchronous else fail, retries=0)
 
     @ava.workflow
     def flow():

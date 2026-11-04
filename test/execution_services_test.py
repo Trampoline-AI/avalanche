@@ -160,7 +160,7 @@ def test_opened_failure_aborts_and_tears_down_once(failure_stage):
 
     called = []
 
-    @ava.source
+    @ava.source(retries=0)
     def task(payload: ManagedInput):
         called.append(payload.scalar)
         if failure_stage == "user":
@@ -195,7 +195,7 @@ def test_open_failure_has_no_fallback_or_opened_session_cleanup():
 
     called = []
 
-    @ava.source
+    @ava.source(retries=0)
     def task(value: str):
         called.append(value)
 
@@ -217,7 +217,7 @@ def test_open_failure_has_no_fallback_or_opened_session_cleanup():
 def test_malformed_multi_return_aborts_before_finalize():
     events: list[tuple[Any, ...]] = []
 
-    @ava.source(num_returns=2)
+    @ava.source(num_returns=2, retries=0)
     def task(payload: ManagedInput):
         return (payload.scalar,)
 

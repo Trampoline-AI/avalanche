@@ -370,7 +370,7 @@ def test_missing_output_fails_without_retry(predictor_factory, signature):
 
     @ava.workflow
     def flow():
-        return ava.agent.step(signature, inputs={"text": "missing"})
+        return ava.agent.step(signature, inputs={"text": "missing"}, retries=0)
 
     with pytest.raises(AgentOutputError):
         flow().run(executor=ava.LocalExecutor()).result()

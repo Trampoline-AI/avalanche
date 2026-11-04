@@ -59,7 +59,7 @@ def test_model_passthrough_and_lazy_rerun_preserve_order(table, executor):
 def test_model_cardinality_failure_does_not_consume_snapshot(table, executor):
     first = table.append(ModelRow(id=7, name="single"))
     second = table.append([ModelRow(id=8, name="left"), ModelRow(id=9, name="right")])
-    consume = ava.step(slug="consume-person")(return_model)
+    consume = ava.step(slug="consume-person", retries=0)(return_model)
 
     @ava.workflow
     def one():

@@ -15,6 +15,7 @@ CANONICAL_EXAMPLES = [
     Path("examples/cursor_pattern.py"),
     Path("examples/operator_workflow.py"),
     Path("examples/scripted_agent.py"),
+    Path("examples/durable_waits.py"),
 ]
 
 

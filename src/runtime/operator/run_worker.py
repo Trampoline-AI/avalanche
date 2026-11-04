@@ -12,6 +12,7 @@ import time
 import traceback
 from contextvars import ContextVar, Token
 from functools import wraps
+from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any, Callable, Protocol
 from uuid import uuid4
@@ -48,6 +49,7 @@ from .result_store import (
 )
 from .results import encode_workflow_result
 from .step_io import preview_step_inputs, preview_value, step_signatures
+from .wait_control import serve_wait_controls
 from .workflow_metadata import (
     MAX_PREPARED_INPUT_LENGTH,
     PreparedRunInput,
@@ -73,6 +75,8 @@ def run_worker(
     start_event: Any,
     transferred_result_bundle_descriptor: Any,
     result_bundle_identity: tuple[int, int],
+    control_connection: Connection | None = None,
+    cancel_reader: Connection | None = None,
 ) -> None:
     """Detach exactly one inode-bound bundle capability and close it on exit."""
     bundle_descriptor: int | None = None
@@ -94,6 +98,8 @@ def run_worker(
             start_event,
             bundle_descriptor,
             result_bundle_identity,
+            control_connection,
+            cancel_reader,
         )
     finally:
         if bundle_descriptor is not None:
@@ -113,6 +119,8 @@ def _run_worker(
     start_event: Any,
     result_bundle_descriptor: int,
     result_bundle_identity: tuple[int, int],
+    control_connection: Connection | None = None,
+    cancel_reader: Connection | None = None,
 ) -> None:
     """Import/build exactly once, prepare, wait for the parent, and execute."""
     event_queue = _SealableEventQueue(event_queue)
@@ -211,13 +219,16 @@ def _run_worker(
             cancel_requested=cancel_event.is_set,
             wrap_fn=wrap_fn,
         )
-        result = workflow.run(
+        run_handle = workflow.run(
             executor=executor,
             hooks=hooks,
             input=input_value if validated_input is None else validated_input,
             context=context_value,
             run_id=run_id,
-        ).result()
+        )
+        if control_connection is not None:
+            serve_wait_controls(run_handle, control_connection, cancel_reader)
+        result = run_handle.result()
         status = "cancelled" if cancel_event.is_set() else "success"
         terminal_event = {"type": "terminal", "status": status}
         if status == "success":
