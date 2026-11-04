@@ -118,6 +118,12 @@ Optional `approvers` further restricts `run:decide`. Event permission cannot
 resolve a decision. A second different decision conflicts; it cannot overwrite
 the first or resurrect a withdrawn run.
 
+Reviewed JSON up to 4 KiB is displayed inline. Larger values are pinned as a
+SHA-256 digest of canonical JSON (sorted keys, compact separators, ASCII escaping),
+with the byte length and a partial 1 KiB preview marked `truncated`. Cards and
+acceptance receipts share that same descriptor; it is not a complete artifact
+viewer or a durable blob store. Review the full artifact separately before approving.
+
 ## Events and acceptance receipts
 
 Address events to **one run and one exact declared key**:
@@ -149,7 +155,10 @@ if the run is later cancelled.
 restart**. The existing embedded driver and worker pool remain thread-backed.
 Waits occupy no worker and create no per-wait thread: the driver parks on one
 condition and wakes on a deadline, event, decision, cancellation or task completion.
-Other ready branches keep executing, including with `max_workers=1`.
+Other ready branches keep executing, including with `max_workers=1`. Nullable
+event timeouts pass through implicit `>>` composition. Execution-service receipts
+flow across waits without opening service sessions for them; a wait-only run has
+an empty receipt tuple.
 
 ```python
 run = contract_flow().run(
@@ -195,6 +204,20 @@ Loopback reachability is not authentication: do not expose this development
 operator as a production authorization boundary. Durable hosts must authenticate
 principals and enforce tenant/run permissions themselves. No automatic TTY prompt
 runs in noninteractive mode.
+
+Wait lists are paged: `GET /v1/runs/{run}/waits?offset=0&limit=64` returns
+`waits_json` and an optional `next_offset`; follow that offset until absent.
+`ControlWait` and the Python provider expose the same fields, and the browser
+follows every page. The default and maximum page size are 64. Control frames stay
+within 2 MiB: an oversized response is refused as `response_too_large` without
+breaking subsequent decisions. Reduce the page size for oversized aggregate
+metadata. Decision reasons are limited to 4,096 characters.
+
+Before a coordinator exits normally, the operator retains an immutable final
+wait snapshot with bounded display previews, including system timeout audits and
+withdrawn cards. Terminal lists read that snapshot, accepted receipts still
+replay, and new writes remain refused. These records last only as long as the
+operator's in-memory run; a forced coordinator kill cannot export a final snapshot.
 
 Run the synthetic example with `uv run python examples/durable_waits.py`.
 

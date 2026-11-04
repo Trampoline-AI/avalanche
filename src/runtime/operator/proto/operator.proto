@@ -55,11 +55,14 @@ message ControlWaitRequestV2 {
   string payload_json = 4;
   string idempotency_key = 5;
   string reason = 6;
+  uint32 offset = 7;
+  optional uint32 limit = 8;
 }
 
 message ControlWaitResponseV2 {
   string receipt_json = 1;
   repeated string waits_json = 2;
+  optional uint32 next_offset = 3;
 }
 
 message ReadTuiResourceRequestV2 {

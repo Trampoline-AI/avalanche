@@ -11,7 +11,10 @@
   retained acceptance receipts, reconciliation, controlled deadlines and CLI
   event/decision submission. Wait nodes park without occupying a worker. Local
   state remains process-local; durable hosts must enforce crash recovery and
-  authorization. See [Retries and waits](docs/retries-and-waits.md).
+  authorization. Nullable timeouts and execution-service receipts propagate
+  through waits. Bound reviewed previews and control responses, page wait lists,
+  and retain terminal timeout audits and withdrawn cards in operator memory.
+  See [Retries and waits](docs/retries-and-waits.md).
 
 - Breaking (0.18.0): removed the Ray executor, the `ray` extra, the `--ray`
   operator/dev flags, and the `RayExecutor` export. Operator construction no

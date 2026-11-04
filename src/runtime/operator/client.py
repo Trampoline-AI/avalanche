@@ -1979,6 +1979,8 @@ class GrpcStateProvider:
                 payload_json=json.dumps(command.payload, allow_nan=False),
                 idempotency_key=command.idempotency_key,
                 reason=command.reason,
+                offset=command.offset,
+                limit=command.limit,
             ),
         )
         return WaitControlResponse(
@@ -1989,6 +1991,7 @@ class GrpcStateProvider:
                 TypeAdapter(dict[str, JsonValue]).validate_json(card)
                 for card in response.waits_json
             ],
+            next_offset=response.next_offset if response.HasField("next_offset") else None,
         )
 
     def cancel_run(self, run_id: str) -> None:

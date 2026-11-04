@@ -86,6 +86,11 @@ class _Query(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class _WaitQuery(_Query):
+    offset: int = Field(default=0, ge=0, le=2**32 - 1)
+    limit: int = Field(default=64, ge=1, le=64)
+
+
 class _PageQuery(_Query):
     page_size: int = Field(default=100, ge=1, le=2**32 - 1)
     continuation: str | None = Field(
@@ -364,8 +369,12 @@ def create_rest_app(channel: grpc.Channel) -> FastAPI:
             raise
 
     @router.get("/v1/runs/{run_id}/waits", summary="List pinned wait cards")
-    def list_waits(run_id: str, query: Annotated[_Query, Query()]) -> Response:
-        return control_wait(pb.ControlWaitRequestV2(run_id=run_id, kind="list"))
+    def list_waits(run_id: str, query: Annotated[_WaitQuery, Query()]) -> Response:
+        return control_wait(
+            pb.ControlWaitRequestV2(
+                run_id=run_id, kind="list", offset=query.offset, limit=query.limit
+            )
+        )
 
     @router.post("/v1/runs/{run_id}/events/{key}", summary="Send one exact declared event")
     def send_event(

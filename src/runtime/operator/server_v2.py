@@ -150,6 +150,8 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 ),
                 idempotency_key=request.idempotency_key,
                 reason=request.reason,
+                offset=request.offset,
+                limit=request.limit if request.HasField("limit") else 64,
             )
             if command.kind == "cancel":
                 context.abort(grpc.StatusCode.INVALID_ARGUMENT, "use CancelRun")
@@ -159,6 +161,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 403: grpc.StatusCode.PERMISSION_DENIED,
                 404: grpc.StatusCode.NOT_FOUND,
                 409: grpc.StatusCode.ALREADY_EXISTS,
+                413: grpc.StatusCode.RESOURCE_EXHAUSTED,
                 422: grpc.StatusCode.INVALID_ARGUMENT,
                 503: grpc.StatusCode.UNAVAILABLE,
             }[exc.status]
@@ -168,6 +171,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         return pb.ControlWaitResponseV2(
             receipt_json=result.receipt.model_dump_json() if result.receipt is not None else "",
             waits_json=[json.dumps(card, allow_nan=False) for card in result.waits],
+            next_offset=result.next_offset,
         )
 
     def __init__(self, operator: Operator) -> None:

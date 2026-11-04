@@ -1872,8 +1872,8 @@ def _collect_implicit_parent_results(
     for incoming in incoming_refs:
         if incoming.future_id in explicit_ids:
             continue
-        presult = result_refs.get(incoming.future_id)
-        if presult is not None:
+        if incoming.future_id in result_refs:
+            presult = result_refs[incoming.future_id]
             if incoming.tuple_index is not None:
                 auto_values.append(
                     _indexed_parent_result(presult, incoming.tuple_index, executor)
@@ -2257,6 +2257,18 @@ class Workflow:
         # stored in result_refs or exposed to workflow arguments/context.
         receipt_refs: dict[str, Any] = {}
         receipt_refs_lock = Lock()
+        # Non-executing waits forward the nearest executable ancestors. Keep
+        # identities (not receipt values) so fan-in deduplicates shared ancestry.
+        receipt_frontiers: dict[str, tuple[str, ...]] = {}
+
+        def parent_receipt_frontier(node_id: str) -> tuple[str, ...]:
+            return tuple(
+                dict.fromkeys(
+                    ancestor
+                    for parent in dependencies_map.get(node_id, [])
+                    for ancestor in receipt_frontiers[parent]
+                )
+            )
 
         # Build reverse dependency map (child -> parents) for execution.
         # Keep the original map so rerun stream providers can still identify
@@ -2521,8 +2533,7 @@ class Workflow:
                     with receipt_refs_lock:
                         parent_receipts = tuple(
                             receipt_refs[parent_id]
-                            for parent_id in dependencies_map.get(node_id, [])
-                            if parent_id in receipt_refs
+                            for parent_id in parent_receipt_frontier(node_id)
                         )
                     result, receipt_ref, _status = executor.submit_with_services(
                         actual_fn,
@@ -2545,6 +2556,7 @@ class Workflow:
                     )
                     with receipt_refs_lock:
                         receipt_refs[node_id] = receipt_ref
+                        receipt_frontiers[node_id] = (node_id,)
                 else:
                     result = executor.submit(
                         actual_fn,
@@ -2575,7 +2587,14 @@ class Workflow:
                     child_id in scheduled_node_ids for child_id in self.graph.get(node_id, [])
                 )
             ]
-            refs = [receipt_refs[node_id] for node_id in terminal_node_ids]
+            terminal_receipt_ids = tuple(
+                dict.fromkeys(
+                    ancestor
+                    for node_id in terminal_node_ids
+                    for ancestor in receipt_frontiers[node_id]
+                )
+            )
+            refs = [receipt_refs[node_id] for node_id in terminal_receipt_ids]
             values = executor.get(refs) if refs else []
             receipt_sink(
                 tuple(
@@ -2584,7 +2603,7 @@ class Workflow:
                         node_slug=self.node_slugs[node_id],
                         value=value,
                     )
-                    for node_id, value in zip(terminal_node_ids, values)
+                    for node_id, value in zip(terminal_receipt_ids, values)
                 )
             )
 
@@ -2612,6 +2631,9 @@ class Workflow:
                     if hooks.on_node_success:
                         hooks.on_node_success(node_id)
                 result_refs[node_id] = result
+                if execution_services is not None and node_ref.node.node_type == NodeType.WAIT:
+                    with receipt_refs_lock:
+                        receipt_frontiers[node_id] = parent_receipt_frontier(node_id)
             except Exception as exc:
                 if hooks and hooks.on_node_failure:
                     hooks.on_node_failure(node_id, exc)

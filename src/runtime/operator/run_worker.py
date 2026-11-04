@@ -29,6 +29,7 @@ from avalanche.classifier import capture_classifier_evidence
 from avalanche.classifier.models import ClassifierInvocation
 from avalanche.dag import Workflow
 from avalanche.evaluation_capture import capture_evaluations
+from avalanche.run_handle import RunHandle
 from avalanche.runtime import BaseInput
 
 from ..executor import LocalExecutor
@@ -49,7 +50,7 @@ from .result_store import (
 )
 from .results import encode_workflow_result
 from .step_io import preview_step_inputs, preview_value, step_signatures
-from .wait_control import serve_wait_controls
+from .wait_control import FinalWaitSnapshot, serve_wait_controls
 from .workflow_metadata import (
     MAX_PREPARED_INPUT_LENGTH,
     PreparedRunInput,
@@ -139,6 +140,7 @@ def _run_worker(
 
     executor: LocalExecutor | None = None
     terminal_event: dict[str, Any] | None = None
+    run_handle: RunHandle | None = None
     try:
         if not assignment_event.wait(timeout=30.0):
             raise TimeoutError("Coordinator process ownership was not confirmed")
@@ -277,6 +279,15 @@ def _run_worker(
         stdout.flush()
         stderr.flush()
         if terminal_event is not None:
+            if run_handle is not None:
+                run_handle.waits.close()
+                _put_run_event(
+                    event_queue,
+                    {
+                        "type": "wait_snapshot",
+                        "snapshot": FinalWaitSnapshot.capture(run_handle).model_dump_json(),
+                    },
+                )
             _put_terminal_run_event(event_queue, terminal_event)
 
 

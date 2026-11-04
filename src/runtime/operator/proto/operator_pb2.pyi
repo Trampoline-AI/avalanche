@@ -59,28 +59,34 @@ PAGE_ORDER_V2_FORWARD: PageOrderV2
 PAGE_ORDER_V2_NEWEST_FIRST: PageOrderV2
 
 class ControlWaitRequestV2(_message.Message):
-    __slots__ = ("run_id", "kind", "address", "payload_json", "idempotency_key", "reason")
+    __slots__ = ("run_id", "kind", "address", "payload_json", "idempotency_key", "reason", "offset", "limit")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     KIND_FIELD_NUMBER: _ClassVar[int]
     ADDRESS_FIELD_NUMBER: _ClassVar[int]
     PAYLOAD_JSON_FIELD_NUMBER: _ClassVar[int]
     IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
     REASON_FIELD_NUMBER: _ClassVar[int]
+    OFFSET_FIELD_NUMBER: _ClassVar[int]
+    LIMIT_FIELD_NUMBER: _ClassVar[int]
     run_id: str
     kind: str
     address: str
     payload_json: str
     idempotency_key: str
     reason: str
-    def __init__(self, run_id: _Optional[str] = ..., kind: _Optional[str] = ..., address: _Optional[str] = ..., payload_json: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., reason: _Optional[str] = ...) -> None: ...
+    offset: int
+    limit: int
+    def __init__(self, run_id: _Optional[str] = ..., kind: _Optional[str] = ..., address: _Optional[str] = ..., payload_json: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., reason: _Optional[str] = ..., offset: _Optional[int] = ..., limit: _Optional[int] = ...) -> None: ...
 
 class ControlWaitResponseV2(_message.Message):
-    __slots__ = ("receipt_json", "waits_json")
+    __slots__ = ("receipt_json", "waits_json", "next_offset")
     RECEIPT_JSON_FIELD_NUMBER: _ClassVar[int]
     WAITS_JSON_FIELD_NUMBER: _ClassVar[int]
+    NEXT_OFFSET_FIELD_NUMBER: _ClassVar[int]
     receipt_json: str
     waits_json: _containers.RepeatedScalarFieldContainer[str]
-    def __init__(self, receipt_json: _Optional[str] = ..., waits_json: _Optional[_Iterable[str]] = ...) -> None: ...
+    next_offset: int
+    def __init__(self, receipt_json: _Optional[str] = ..., waits_json: _Optional[_Iterable[str]] = ..., next_offset: _Optional[int] = ...) -> None: ...
 
 class ReadTuiResourceRequestV2(_message.Message):
     __slots__ = ("resource", "workflow_selector", "run_id", "version", "node_id", "attempt", "cursor", "limit", "byte_limit")
