@@ -97,6 +97,28 @@ def reviewed_preview(value: JsonValue) -> JsonValue:
     }
 
 
+MAX_FINAL_WAIT_CARD_BYTES = 32 * 1024
+
+
+def encode_final_wait_card(card: dict[str, JsonValue]) -> str:
+    """Use the same bounded export at admission and teardown; never trim an audit."""
+    card = deepcopy(card)
+    for field_name in ("schema", "show"):
+        card[field_name] = reviewed_preview(card[field_name])
+    for field_name in ("prompt", "key"):
+        value = card[field_name]
+        preview = reviewed_preview(value)
+        if isinstance(value, str) and isinstance(preview, dict):
+            card[field_name] = value[:1024] + f" … [truncated; sha256={preview['sha256']}]"
+    # A retained terminal card has no active deadline. This also makes admission
+    # independent of the clock's floating-point rendering at later export.
+    card["remaining_seconds"] = None
+    encoded = json.dumps(card, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    if len(encoded.encode("utf-8")) > MAX_FINAL_WAIT_CARD_BYTES:
+        raise WaitRefusalError("wait_card_too_large", 413)
+    return encoded
+
+
 class LocalWaits:
     def __init__(
         self,
@@ -380,6 +402,9 @@ class LocalWaits:
             receipt = self._receipt(
                 address, wire, slot.spec.schema_, principal, reason, slot.reviewed
             )
+            final_card = self._card(node, slot)
+            final_card.update(state="resolved", audit=receipt.model_dump(mode="json"))
+            encode_final_wait_card(final_card)
             self._receipts[(address, idempotency_key)] = receipt
             slot.value = value
             slot.audit = receipt
@@ -399,35 +424,34 @@ class LocalWaits:
             raise slot.failure
         return slot.value
 
+    def _card(self, node: str, slot: _Wait) -> dict[str, JsonValue]:
+        return {
+            "node_id": node,
+            "kind": slot.spec.kind,
+            "state": (
+                "withdrawn"
+                if self._closed and not slot.resolved
+                else "resolved"
+                if slot.resolved
+                else "waiting"
+                if slot.armed
+                else "pending"
+            ),
+            "schema": deepcopy(slot.spec.schema_),
+            "audit": slot.audit.model_dump(mode="json") if slot.audit is not None else None,
+            "prompt": slot.spec.prompt,
+            "show": deepcopy(slot.reviewed),
+            "key": slot.spec.key,
+            "remaining_seconds": (
+                max(0.0, slot.deadline - self.now()) if slot.deadline is not None else None
+            ),
+        }
+
     def snapshot(self) -> list[dict[str, JsonValue]]:
         with self.condition:
             self._expire()
             return [
-                {
-                    "node_id": node,
-                    "kind": slot.spec.kind,
-                    "state": (
-                        "withdrawn"
-                        if self._closed and not slot.resolved
-                        else "resolved"
-                        if slot.resolved
-                        else "waiting"
-                        if slot.armed
-                        else "pending"
-                    ),
-                    "schema": deepcopy(slot.spec.schema_),
-                    "audit": slot.audit.model_dump(mode="json")
-                    if slot.audit is not None
-                    else None,
-                    "prompt": slot.spec.prompt,
-                    "show": deepcopy(slot.reviewed),
-                    "key": slot.spec.key,
-                    "remaining_seconds": (
-                        max(0.0, slot.deadline - self.now())
-                        if slot.deadline is not None
-                        else None
-                    ),
-                }
+                self._card(node, slot)
                 for node, slot in self._waits.items()
             ]
 

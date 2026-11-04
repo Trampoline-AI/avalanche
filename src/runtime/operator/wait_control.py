@@ -12,10 +12,11 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from avalanche.local_waits import (
+    MAX_FINAL_WAIT_CARD_BYTES,
     LocalPrincipal,
     WaitReceipt,
     WaitRefusalError,
-    reviewed_preview,
+    encode_final_wait_card,
 )
 from avalanche.run_handle import RunHandle
 
@@ -74,24 +75,15 @@ class FinalWaitSnapshot(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     # Operator admission caps graph nodes at 10,000; each decision map adds
     # at most 64 children. Display fields are previewed before serialization.
-    cards: tuple[Annotated[str, Field(max_length=32 * 1024)], ...] = Field(
+    cards: tuple[Annotated[str, Field(max_length=MAX_FINAL_WAIT_CARD_BYTES)], ...] = Field(
         default=(), max_length=640_000
     )
 
     @classmethod
     def capture(cls, handle: RunHandle) -> FinalWaitSnapshot:
-        cards = handle.waits.snapshot()
-        for card in cards:
-            for field_name in ("schema", "show"):
-                card[field_name] = reviewed_preview(card[field_name])
-            for field_name in ("prompt", "key"):
-                value = card[field_name]
-                preview = reviewed_preview(value)
-                if isinstance(value, str) and isinstance(preview, dict):
-                    card[field_name] = (
-                        value[:1024] + f" … [truncated; sha256={preview['sha256']}]"
-                    )
-        return cls(cards=tuple(json.dumps(card, separators=(",", ":")) for card in cards))
+        return cls(
+            cards=tuple(encode_final_wait_card(card) for card in handle.waits.snapshot())
+        )
 
     def read(self, request: WaitControlRequest) -> WaitControlResponse:
         end = request.offset + request.limit

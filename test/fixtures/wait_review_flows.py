@@ -16,7 +16,7 @@ def large_artifact():
 
 @ava.workflow
 def large_response():
-    return ava.decision(Approval, prompt="p" * (3 * 1024 * 1024), timeout=None)
+    return ava.decision(Approval, prompt="p" * (3 * 1024 * 1024), show="x" * 4000, timeout=None)
 
 
 @ava.workflow
