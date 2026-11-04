@@ -459,6 +459,36 @@ create or modify workflow implementation files, generate scaffolding, or begin
 implementation until the user explicitly approves the plan. If the user asks
 for changes, update and re-present the complete plan for approval.
 
+## Write step descriptions as a coherent story
+
+Always give every workflow step a succinct, plain-language description in its
+function docstring. Start with one self-contained sentence on a single line:
+state the concrete action and the result it contributes to the workflow. Use
+familiar words and meaningful names for the data; do more than repeat the
+function name. Put any necessary technical detail after the opening sentence.
+
+The UI uses the first non-empty function-docstring line for ordinary steps,
+including sources, destinations, and classifiers. For agent steps, it uses the
+opening line of the signature's instructions: begin the signature docstring
+(or inline signature instructions) with the same kind of clear summary, then
+retain the full agent instructions below it. Keep a decorated agent function's
+summary consistent with its signature summary.
+
+Read all descriptions in graph order, from the first input to the final result.
+Together they must tell a coherent story of how the workflow reaches its goal.
+Use consistent terms for the same inputs and artifacts, and make each handoff
+clear enough that a reader can follow the work without opening the code. Each
+description must also make sense on its own. Describe parallel branches and
+conditional outcomes accurately; do not imply an order the graph does not have.
+
+For example: "Read the selected source article." → "Develop one article pitch
+from the source's evidence." → "Approve the pitch or explain why it should not
+be published."
+
+Whenever a step's behavior, inputs, outputs, or role changes, update its
+description in the same edit. Re-read the complete sequence and adjust affected
+neighboring descriptions so the story remains accurate and connected.
+
 ## Build the designed workflow
 
 1. Define workflow inputs and every meaningful payload/result as Pydantic models.
@@ -745,6 +775,9 @@ the workflow body's expression statement.
 
 ## Completion checks
 
+- Every step has a current, succinct docstring summary in the location used by
+  the UI. Read together in graph order, the summaries tell a coherent story from
+  input to outcome, including branches and conditional outcomes.
 - User and agent aligned on goal, authoritative inputs, expected outputs,
   success criteria, boundaries, and approvals before design.
 - Every structured inter-node data shape has a Pydantic model; compact inline

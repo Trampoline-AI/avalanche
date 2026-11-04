@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- The Avalanche skill now requires clear, succinct step descriptions that read
+  as a coherent story from input to outcome and stay current as steps change.
+
 - Breaking (0.18.0): removed the Ray executor, the `ray` extra, the `--ray`
   operator/dev flags, and the `RayExecutor` export. Operator construction no
   longer accepts `executor_factory`, `executor_backend`, `ray_runtime_env`, or
