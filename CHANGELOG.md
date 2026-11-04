@@ -5,6 +5,18 @@
 - The Avalanche skill now requires clear, succinct step descriptions that read
   as a coherent story from input to outcome and stay current as steps change.
 
+- Workflows: `step.map(...)` and inline `ava.agent.step.map(...)` create runtime
+  fan-out, with strict positional zip, broadcast keywords and ordered list results.
+  Chained maps pipeline per item. Empty lists create no children. Maps default to
+  8 items (`max_items=` can raise this to 64), fail on overflow without truncating,
+  and support fail-fast or collect-all item errors. Local fail-fast stops admission
+  but cannot interrupt already-running Python calls. Agent children each get a
+  fresh agent and keep the existing per-node traces and evaluations.
+- Operator, browser and TUI: maps appear as one group with actual-count item strips,
+  UI-only placeholders for uncreated chained items, and per-item drill-down. Protocol
+  2.1 adds map declarations, run-scoped expansions and item parent/index metadata;
+  expansion publication precedes child events. Delta integration is separate.
+
 - Breaking (0.18.0): removed the Ray executor, the `ray` extra, the `--ray`
   operator/dev flags, and the `RayExecutor` export. Operator construction no
   longer accepts `executor_factory`, `executor_backend`, `ray_runtime_env`, or

@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from avalanche.mapping import NodesExpanded
+
 
 @dataclass
 class RunHooks:
@@ -15,6 +17,7 @@ class RunHooks:
     still overlap in the thread pool.
     """
 
+    on_nodes_expanded: Callable[[NodesExpanded], None] | None = None
     on_node_start: Callable[[str], None] | None = None
     on_node_success: Callable[[str], None] | None = None
     on_node_failure: Callable[[str, Exception], None] | None = None

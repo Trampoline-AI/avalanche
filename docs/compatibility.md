@@ -25,6 +25,22 @@ PredictRLM has no separate number. Delta reaches it only through Avalanche
 Avalanche keeps its `predict-rlm` range to one minor. A PredictRLM change Delta
 would notice needs an Avalanche protocol bump.
 
+## Protocol 2.1: runtime maps
+
+`PROTOCOL_VERSION` is **2.1**. Record `workflow.required_protocol` as a deployment's
+requirement: it is 2.1 for map declarations and 2.0 for non-map workflows.
+A worker providing 2.0 cannot run a deployment requiring 2.1 under `supports`.
+Package versions are unchanged by this addition.
+
+The additive operator fields are `WorkflowTopologyV2.map_specs` (`MapSpecV2` with
+mapped/broadcast argument names, effective maximum, inheritance and `fail_fast`),
+`RunSnapshotV2.expansions`, and `NodeSnapshotV2.map_parent` / `map_index`.
+`RunStatusEnvelopeV2.nodes_expanded` publishes run-scoped topology and actual
+expected counts before any new child event. A chained group's not-yet-created
+items have no node records. Traces and evaluations retain their existing schema.
+Older clients may ignore the additive fields, but need the expansion event to
+render live map children. Delta's map scheduler integration is not included here.
+
 ## Avalanche 0.18.0
 
 Ray execution is removed: the `ray` extra, `RayExecutor` export, `--ray`

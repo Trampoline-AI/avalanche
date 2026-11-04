@@ -8,8 +8,9 @@ import textwrap
 from pydantic import BaseModel, ConfigDict, JsonValue
 
 from avalanche.agent.declaration import AgentDeclaration
-from avalanche.dag import NodeFuture, NodeType, Workflow, run_input_parameters
+from avalanche.dag import MapFuture, NodeFuture, NodeType, Workflow, run_input_parameters
 from avalanche.input_ref import InputRef
+from avalanche.mapping import MapSpec
 from avalanche.runtime import BaseInput
 
 
@@ -68,6 +69,14 @@ def agent_declarations_for_workflow(
         if spec is not None:
             declarations[node_id] = spec.declaration(workflow.agent_defaults)
     return declarations
+
+
+def map_specs_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, MapSpec]:
+    return {
+        node_id: future.map_spec
+        for node_id in node_ids
+        if isinstance((future := workflow.nodes[node_id]), MapFuture)
+    }
 
 
 def step_interface_for_workflow(workflow: Workflow, node_ids: list[str]) -> dict[str, str]:

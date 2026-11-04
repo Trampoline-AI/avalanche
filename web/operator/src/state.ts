@@ -140,6 +140,7 @@ function withoutKey<T>(buckets: Record<string, T>, key: string): Record<string, 
 }
 
 function runIdForChange(change: OperatorUpdate["change"]): string {
+  if (change.oneofKind === "nodesExpanded") return change.nodesExpanded.runId;
   return change.oneofKind === "runStatusChanged"
     ? change.runStatusChanged.runId
     : change.oneofKind === "nodeStatusChanged"
@@ -264,6 +265,18 @@ function applyEnvelope(
         },
       };
     }
+  } else if (change.oneofKind === "nodesExpanded" && selected) {
+    const expanded = change.nodesExpanded;
+    const existing = new Set(selected.nodes.map((node) => node.nodeId));
+    next.selectedRun = {
+      ...selected,
+      topology: expanded.topology,
+      expansions: expanded.expansions,
+      nodes: [
+        ...selected.nodes,
+        ...expanded.nodes.filter((node) => !existing.has(node.nodeId)),
+      ],
+    };
   } else if (change.oneofKind === "nodeStatusChanged" && selected) {
     const changed = change.nodeStatusChanged;
     next.selectedRun = {

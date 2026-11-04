@@ -33,6 +33,7 @@ from avalanche.classifier.models import (
     NoulAnswer,
 )
 from avalanche.evaluations import EvaluationDeclaration
+from avalanche.mapping import MapSpec, NodesExpanded
 from avalanche.step_interface import StepInterface
 
 from ._signals import shutdown_cleanup
@@ -86,6 +87,7 @@ from .models import (
     ResetRequired,
     RunCreated,
     RunInput,
+    RunNodesExpanded,
     RunSnapshot,
     RunState,
     RunStatus,
@@ -123,6 +125,7 @@ from .result_store import (
     require_worker_descriptor_transfer,
 )
 from .results import EncodedWorkflowResult, decode_workflow_result
+from .run_topology import expand_run
 from .run_worker import run_worker
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
 from .step_io import StepInputs, StepIo, StepValuePreview
@@ -1138,6 +1141,8 @@ class Operator:
             NodeSnapshot(
                 node_id=node.node_id,
                 name=node.name,
+                map_parent=node.map_parent,
+                map_index=node.map_index,
                 node_type=node.node_type,
                 status=node.status,
                 started_at=node.started_at,
@@ -1180,6 +1185,7 @@ class Operator:
             topology=run.topology,
             terminal_seal=run.terminal_seal,
             input=run.input,
+            expansions=dict(run.expansions),
         )
 
     def _current_log_page_token_locked(self, run_id: str) -> dict[str, Any]:
@@ -2207,6 +2213,10 @@ class Operator:
         display_name = prepared.get("display_name") or catalog_display_name
         node_ids = tuple(prepared["node_ids"])
         topology = WorkflowTopology(
+            map_specs=tuple(
+                (key, MapSpec.model_validate_json(json.dumps(value), strict=True))
+                for key, value in prepared.get("map_specs", {}).items()
+            ),
             node_ids=node_ids,
             graph=tuple(
                 (node_id, tuple(prepared["graph"].get(node_id, ()))) for node_id in node_ids
@@ -2422,6 +2432,16 @@ class Operator:
                             run.started_at = event["timestamp"]
                             summary_changed = True
                             mutated = True
+                    elif event_type == "nodes_expanded":
+                        try:
+                            expansion = NodesExpanded.model_validate_json(
+                                event["expansion"], strict=True
+                            )
+                            changed_node_ids = expand_run(run, expansion)
+                        except ValueError as exc:
+                            raise _CoordinatorProtocolError("invalid nodes expansion") from exc
+                        status_node_ids = ()
+                        mutated = True
                     elif event_type.startswith("node_"):
                         node = run.nodes.get(event["node_id"])
                         if node is None:
@@ -2561,6 +2581,7 @@ class Operator:
                     notifications = self._publish_run_locked(
                         run,
                         summary_changed=summary_changed,
+                        nodes_expanded=event_type == "nodes_expanded",
                         changed_node_ids=changed_node_ids,
                         status_node_ids=status_node_ids,
                         trace_node_ids=trace_node_ids,
@@ -3088,6 +3109,7 @@ class Operator:
         run: RunState,
         *,
         summary_changed: bool = True,
+        nodes_expanded: bool = False,
         changed_node_ids: tuple[str, ...] = (),
         status_node_ids: tuple[str, ...] | None = None,
         trace_node_ids: tuple[str, ...] = (),
@@ -3142,6 +3164,7 @@ class Operator:
         else:
             update_count = (
                 int(summary_changed)
+                + int(nodes_expanded)
                 + len(status_node_ids)
                 + int(log_entry is not None)
                 + len(agent_events)
@@ -3179,6 +3202,20 @@ class Operator:
             )
 
         changes: list[Any] = []
+        if nodes_expanded:
+            snapshot = self._run_snapshot_locked(
+                run, summary=self._run_summary_locked(run), as_of_sequence=publication_sequence
+            )
+            changes.append(
+                RunNodesExpanded(
+                    run_id=run.run_id,
+                    nodes=tuple(
+                        node for node in snapshot.nodes if node.node_id in changed_node_ids
+                    ),
+                    topology=run.topology,
+                    expansions=dict(run.expansions),
+                )
+            )
         if is_new:
             summary = self._run_summary_locked(run)
             snapshot = self._run_snapshot_locked(
@@ -3723,6 +3760,7 @@ def _replace_queue_contents(subscription: queue.Queue, item: Any) -> None:
 
 
 _RUN_EVENT_TYPES = {
+    "nodes_expanded",
     "running",
     "node_started",
     "node_succeeded",
@@ -3950,7 +3988,8 @@ def _validate_preparation_event(event: object) -> str:
                 "step_interface_json",
                 "input_declaration_json",
                 "input",
-            },
+            }
+            | ({"map_specs"} if "map_specs" in event else set()),
         )
         node_ids = _required_field(event, "node_ids")
         if not isinstance(node_ids, list) or any(
@@ -4043,6 +4082,10 @@ def _validate_preparation_event(event: object) -> str:
             type(display_name) is not str or len(display_name) > _MAX_EVENT_FIELD_LENGTH
         ):
             raise _CoordinatorProtocolError("field 'display_name' must be a bounded string")
+        if "map_specs" in event:
+            specs = event["map_specs"]
+            if not isinstance(specs, dict) or not set(specs) <= set(node_ids):
+                raise _CoordinatorProtocolError("invalid map declaration nodes")
         _validate_prepared_input(event, node_ids)
         return event_type
     if event_type == "prepare_failed":
@@ -4100,6 +4143,9 @@ def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
     if event_type == "running":
         _require_exact_event_keys(event, {"type", "timestamp"})
         _timestamp_field(event, "timestamp")
+    elif event_type == "nodes_expanded":
+        _require_exact_event_keys(event, {"type", "expansion"})
+        _string_field(event, "expansion", maximum_length=_MAX_EVENT_MESSAGE_LENGTH)
     elif event_type in _NODE_EVENT_TYPES:
         expected = {"type", "node_id", "timestamp"}
         if event_type == "node_failed":

@@ -14,6 +14,7 @@ from pydantic import JsonValue, TypeAdapter
 from avalanche.agent.declaration import AgentDeclaration
 from avalanche.agent.native import TraceHeaderNative
 from avalanche.agent.trace import AgentTraceStatus, TokenUsage
+from avalanche.mapping import MapSpec
 
 from .models import (
     AgentEventAppended,
@@ -39,6 +40,7 @@ from .models import (
     ResetRequired,
     RunCreated,
     RunInput,
+    RunNodesExpanded,
     RunSnapshot,
     RunStatus,
     RunStatusChanged,
@@ -100,6 +102,16 @@ def workflow_topology_to_v2(topology: WorkflowTopology) -> pb.WorkflowTopologyV2
         evaluation_metadata_json=dict(topology.evaluation_metadata_json),
         step_interface_json=dict(topology.step_interface_json),
         input_declaration_json=topology.input_declaration_json,
+        map_specs={
+            key: pb.MapSpecV2(
+                mapped_args=spec.mapped_args,
+                broadcast_args=spec.broadcast_args,
+                max_items=spec.max_items,
+                inherited=spec.inherited,
+                fail_fast=spec.fail_fast,
+            )
+            for key, spec in topology.map_specs
+        },
     )
 
 
@@ -114,6 +126,7 @@ def workflow_info_to_v2(info: WorkflowInfo) -> pb.FlowInfoV2:
         evaluation_metadata_json=tuple(sorted(info.evaluation_metadata_json.items())),
         step_interface_json=tuple(sorted(info.step_interface_json.items())),
         input_declaration_json=info.input_declaration_json,
+        map_specs=tuple(info.map_specs.items()),
     )
     manifest_digest = sha256_hex(("\n".join([info.selector, *info.node_ids])).encode("utf-8"))
     return pb.FlowInfoV2(
@@ -397,6 +410,9 @@ def node_snapshot_to_v2(
         ended_at=node.ended_at or 0.0,
         revision=node.revision,
     )
+    if node.map_parent is not None:
+        message.map_parent = node.map_parent
+        message.map_index = node.map_index
     if node.running_elapsed_seconds is not None:
         message.running_elapsed_seconds = node.running_elapsed_seconds
     if node.error is not None:
@@ -441,6 +457,7 @@ def run_snapshot_to_v2(
             for node in snapshot.nodes
         ],
         topology=workflow_topology_to_v2(snapshot.topology),
+        expansions=snapshot.expansions,
         latest_log_sequence=snapshot.latest_log_sequence,
         log_continuation=log_continuation,
     )
@@ -666,6 +683,27 @@ def update_envelope_to_v2(
                 topology=workflow_topology_to_v2(change.topology),
             )
         )
+    elif isinstance(change, RunNodesExpanded):
+        message.nodes_expanded.CopyFrom(
+            pb.RunNodesExpandedV2(
+                run_id=change.run_id,
+                nodes=[
+                    node_snapshot_to_v2(
+                        node,
+                        activity_continuation=(
+                            activity_continuation_for(
+                                change.run_id, node.node_id, node.event_page_token
+                            )
+                            if node.event_page_token
+                            else None
+                        ),
+                    )
+                    for node in change.nodes
+                ],
+                topology=workflow_topology_to_v2(change.topology),
+                expansions=change.expansions,
+            )
+        )
     elif isinstance(change, RunStatusChanged):
         message.run_status_changed.CopyFrom(
             pb.RunStatusChangedV2(
@@ -845,6 +883,19 @@ def workflow_topology_from_v2(msg: pb.WorkflowTopologyV2) -> WorkflowTopology:
             if node_id in msg.step_interface_json
         ),
         input_declaration_json=msg.input_declaration_json,
+        map_specs=tuple(
+            (
+                key,
+                MapSpec(
+                    mapped_args=tuple(spec.mapped_args),
+                    broadcast_args=tuple(spec.broadcast_args),
+                    max_items=spec.max_items,
+                    inherited=spec.inherited,
+                    fail_fast=spec.fail_fast,
+                ),
+            )
+            for key, spec in msg.map_specs.items()
+        ),
     )
 
 
@@ -870,6 +921,7 @@ def workflow_info_from_v2(msg: pb.FlowInfoV2) -> WorkflowInfo:
         evaluation_metadata_json=dict(msg.evaluation_metadata_json),
         standard_step_docstring_lines=dict(msg.topology.standard_step_docstring_lines),
         step_interface_json=dict(msg.topology.step_interface_json),
+        map_specs=dict(workflow_topology_from_v2(msg.topology).map_specs),
         cron=msg.cron or None,
         next_run_at=msg.next_run_at or None,
         last_run_at=msg.last_run_at or None,
@@ -1007,6 +1059,8 @@ def node_snapshot_from_v2(msg: pb.NodeSnapshotV2) -> NodeSnapshot:
         trace=trace_descriptor_from_v2(msg.trace) if msg.HasField("trace") else None,
         revision=msg.revision,
         event_page_token=msg.activity_continuation.continuation_id,
+        map_parent=msg.map_parent if msg.HasField("map_parent") else None,
+        map_index=msg.map_index if msg.HasField("map_index") else None,
         running_elapsed_seconds=(
             msg.running_elapsed_seconds if msg.HasField("running_elapsed_seconds") else None
         ),
@@ -1022,6 +1076,7 @@ def run_snapshot_from_v2(msg: pb.RunSnapshotV2) -> RunSnapshot:
         nodes=tuple(node_snapshot_from_v2(node) for node in msg.nodes),
         latest_log_sequence=msg.latest_log_sequence,
         log_page_token=msg.log_continuation.continuation_id,
+        expansions=dict(msg.expansions),
         topology=workflow_topology_from_v2(msg.topology),
         terminal_seal=(
             terminal_seal_descriptor_from_v2(msg.terminal_seal)
@@ -1171,6 +1226,14 @@ def operator_update_envelope_from_v2(
             summary=run_summary_from_v2(created.summary),
             nodes=tuple(node_snapshot_from_v2(node) for node in created.nodes),
             topology=workflow_topology_from_v2(created.topology),
+        )
+    elif payload == "nodes_expanded":
+        expanded = msg.nodes_expanded
+        change = RunNodesExpanded(
+            run_id=expanded.run_id,
+            nodes=tuple(node_snapshot_from_v2(node) for node in expanded.nodes),
+            topology=workflow_topology_from_v2(expanded.topology),
+            expansions=dict(expanded.expansions),
         )
     elif payload == "run_status_changed":
         summary = msg.run_status_changed.summary

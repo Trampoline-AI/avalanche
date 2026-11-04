@@ -91,6 +91,7 @@ export const DiscoveryDiagnosticMsg = {
 };
 
 export interface FlowInfoMsg {
+  mapSpecs: Record<string, MapSpecMsg>;
   /**
    * @generated from protobuf field: string name = 1
    */
@@ -200,6 +201,7 @@ export const FlowInfoMsg = {
     return {
       name: "",
       filePath: "",
+      mapSpecs: {},
       nodeIds: [],
       graph: {},
       nodeTypes: {},
@@ -337,6 +339,8 @@ export const RunSummaryMsg = {
 };
 
 export interface NodeSnapshotMsg {
+  mapParent?: string;
+  mapIndex?: number;
   /**
    * @generated from protobuf field: string node_id = 1
    */
@@ -551,7 +555,16 @@ export const TerminalSealMsg = {
   },
 };
 
+export interface MapSpecMsg {
+  mappedArgs: string[];
+  broadcastArgs: string[];
+  maxItems: number;
+  inherited: boolean;
+  failFast: boolean;
+}
+
 export interface WorkflowTopologyMsg {
+  mapSpecs: Record<string, MapSpecMsg>;
   /**
    * @generated from protobuf field: repeated string node_ids = 1
    */
@@ -607,6 +620,7 @@ export interface WorkflowTopologyMsg {
 export const WorkflowTopologyMsg = {
   create(value: DeepPartial<WorkflowTopologyMsg> = {}): WorkflowTopologyMsg {
     return {
+      mapSpecs: {},
       nodeIds: [],
       graph: {},
       nodeTypes: {},
@@ -625,6 +639,7 @@ export const WorkflowTopologyMsg = {
 };
 
 export interface RunSnapshotMsg {
+  expansions: Record<string, number>;
   /**
    * @generated from protobuf field: string operator_instance_id = 1
    */
@@ -675,6 +690,7 @@ export const RunSnapshotMsg = {
       asOfEventUlid: "",
       summary: undefined,
       nodes: [],
+      expansions: {},
       latestLogSequence: "0",
       logPageToken: "",
       topology: undefined,
@@ -1224,6 +1240,15 @@ export interface OperatorUpdate {
    * @generated from protobuf oneof: change
    */
   change:
+    | {
+        oneofKind: "nodesExpanded";
+        nodesExpanded: {
+          runId: string;
+          nodes: NodeSnapshotMsg[];
+          topology?: WorkflowTopologyMsg;
+          expansions: Record<string, number>;
+        };
+      }
     | {
         oneofKind: "runCreated";
         /**

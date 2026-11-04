@@ -26,6 +26,7 @@ class DagWidget(Static, can_focus=False):
         self._large_rows: list[DagNode | int] = []
         self._large_token: tuple | None = None
         self._node_lines: dict[str, tuple[tuple, Text]] = {}
+        self._map_view_token: tuple | None = None
 
     def _large_index(self, store) -> None:
         selected = store.selected_node
@@ -61,6 +62,7 @@ class DagWidget(Static, can_focus=False):
         self.refresh(layout=True)
 
     def _large_row(self, store, index: int) -> Text:
+        self._update_map_strips(store)
         self._large_index(store)
         if index < 0 or index >= len(self._large_rows):
             return Text()
@@ -78,14 +80,14 @@ class DagWidget(Static, can_focus=False):
         revision = state.revision if state else -1
         node_status = state.status if state else NodeStatus.PENDING
         animation = store.frame if node_status is NodeStatus.RUNNING else 0
-        token = (status, type(node_status), revision, selected, animation)
+        token = (status, type(node_status), revision, selected, animation, item.map_summary)
         cached = self._node_lines.get(item.name)
         if cached is not None and cached[0] == token:
             return cached[1]
         workflow = store.current_workflow
         children = workflow.graph.get(item.name, []) if workflow else []
         edges = ", ".join(children[:4]) + (" …" if len(children) > 4 else "")
-        line = Text(f"  {'▶' if selected else ' '} {item.display_name}  ")
+        line = Text(f"  {'▶' if selected else ' '} {item.label}  ")
         line.append(
             f"{marker_for(item, node_status, store.frame)} {status}",
             status_display(node_status, STATUS_STYLES, OTHER_STATUS_STYLE),
@@ -126,6 +128,7 @@ class DagWidget(Static, can_focus=False):
                 self._large_row(store, i)
                 for i in range(start, min(len(self._large_rows), start + height))
             )
+        self._update_map_strips(store)
         lines = render_dag_rich(
             store.dag,
             store.node_statuses,
@@ -182,6 +185,41 @@ class DagWidget(Static, can_focus=False):
                 result.append("\n")
             result.append_text(line)
         return result
+
+    def _update_map_strips(self, store) -> None:
+        workflow = store.current_workflow
+        run = store.current_run
+        if workflow is None or not workflow.map_specs:
+            return
+        token = (id(workflow), id(run))
+        if token == self._map_view_token:
+            return
+        self._map_view_token = token
+        for node in store.all_nodes:
+            node.map_summary = ""
+            if node.name not in workflow.map_specs:
+                continue
+            count = run.expansions.get(node.name) if run is not None else None
+            if count is None:
+                node.map_summary = " ×?"
+                continue
+            items = {
+                item.map_index: item
+                for item in run.nodes.values()
+                if item.map_parent == node.name
+            }
+            symbols = {
+                NodeStatus.SUCCESS: "✓",
+                NodeStatus.RUNNING: "▶",
+                NodeStatus.FAILED: "✗",
+                NodeStatus.SKIPPED: "·",
+                NodeStatus.PENDING: "·",
+            }
+            strip = " ".join(
+                symbols[items[i].status] if i in items else "·" for i in range(count)
+            )
+            done = sum(item.status is NodeStatus.SUCCESS for item in items.values())
+            node.map_summary = f" ×{count}  {strip}  ({done} done)"
 
     def _scroll_to_node(self, node: DagNode) -> None:
         """Scroll the parent container to center the given node."""

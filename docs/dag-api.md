@@ -57,6 +57,19 @@ result = document_flow().run(executor=ava.LocalExecutor()).result()
 Calls inside a workflow return deferred `NodeFuture` values. Passing one to a
 node creates a dependency; its result is supplied when the workflow runs.
 
+## Map a runtime list
+
+`step.map(items)` captures one group and creates one child per item at run time.
+Multiple positional lists are zipped; keyword arguments are broadcast. A chained
+map consumes upstream items individually, while an ordinary consumer receives the
+full ordered list. Empty lists produce no children. The default bound is 8 items,
+raisable with `max_items=` to 64; nothing is silently truncated.
+
+For the full API and configurable `fail_fast` behavior, see
+[runtime fan-out](api/workflows.md#runtime-fan-out-with-map). Run the offline proof
+with `uv run python examples/map_agent_fanout.py`. Browser and TUI groups provide
+per-item drill-down rather than drawing the maximum number of slots.
+
 ## Inspect step interfaces
 
 The browser inspector shows a **Step interface** panel for source, ordinary,
