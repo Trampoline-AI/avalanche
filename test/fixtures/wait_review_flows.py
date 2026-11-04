@@ -32,6 +32,13 @@ def timeout_failure():
 
 
 @ava.workflow
+def mapped_large_artifacts():
+    return ava.decision.map(
+        Approval, ["x" * (2 * 1024 * 1024), "small"], prompt="Review", timeout=None
+    )
+
+
+@ava.workflow
 def many_waits():
     for _ in range(70):
         ava.sleep(0)

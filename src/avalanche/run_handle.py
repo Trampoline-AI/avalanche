@@ -71,6 +71,14 @@ class RunHandle(Generic[T]):
             key, payload, idempotency_key=idempotency_key, principal=principal
         )
 
+    def canonical_node(self, node: str) -> str:
+        if node in self.node_aliases:
+            return self.node_aliases[node]
+        parent, separator, index = node.rpartition("[")
+        if separator and parent in self.node_aliases:
+            return f"{self.node_aliases[parent]}[{index}"
+        return node
+
     def decide(
         self,
         node: str,
@@ -81,7 +89,7 @@ class RunHandle(Generic[T]):
         principal: LocalPrincipal = LocalPrincipal(),
     ) -> WaitReceipt:
         return self.waits.decide(
-            self.node_aliases.get(node, node),
+            self.canonical_node(node),
             payload,
             idempotency_key=idempotency_key,
             principal=principal,

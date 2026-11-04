@@ -81,3 +81,7 @@ class WaitSpec(BaseModel):
     on_timeout: dict[str, JsonValue] | None = None
     assignees: tuple[str, ...] = ()
     approvers: tuple[str, ...] | None = None
+    map_items: list[JsonValue] | None = None
+    map_source_node_id: str | None = None
+    map_source_index: int | None = None
+    map_max_items: int | None = Field(default=None, ge=0, le=64, strict=True)

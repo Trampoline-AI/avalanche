@@ -44,7 +44,7 @@ observation writes. The SDK declaration alone does not implement that control
 plane. Embedded execution can classify explicitly raised `OutcomeUnknownError`;
 it cannot recover an interrupted process.
 
-`RunContext.step_key` is `run_id:invocation_id`: it stays the same across attempts
+`RunContext.step_key` is `run_id:invocation_id` (with `:index` for a mapped item): it stays the same across attempts
 and differs across runs. It is available only inside an invocation. Send unchanged
 action parameters and this key to a recipient that **enforces** deduplication;
 check its retention window. Use a business-operation key for deduplication across
@@ -221,9 +221,91 @@ operator's in-memory run; a forced coordinator kill cannot export a final snapsh
 
 Run the synthetic example with `uv run python examples/durable_waits.py`.
 
+## Per-item decisions and composition
+
+```python
+reviews = ava.decision.map(
+    Approval, drafts, prompt="Publish this article?",
+    timeout=timedelta(days=2), on_timeout=Approval(kind="reject"),
+    approvers=["reviewer"], max_items=8,
+)
+```
+
+`items` is a static list or a deferred node producing a list. Each item is the
+shown artifact. The default bound is 8, with a hard cap of 64; overflow fails
+before any item becomes addressable. Expansion publishes item identities and
+schemas together. An item is addressed as `decision_1[0]` (or the declared local
+slug plus `[0]`); its operation key is `run_id:invocation_id:index`. Each decision
+has its own permission check, resolution and audit receipt. One submission cannot
+resolve siblings. Rejection is typed data and does not cancel siblings. The group
+returns outcomes in input order after all items resolve, including typed timeout
+outcomes; an unhandled decision timeout fails the group/run.
+
+`decision.map` deliberately rejects `show=` at definition time:
+“each item is shown; to add context, map over items that carry it”. Build item
+models that include the necessary context. With the companion runtime `step.map`
+feature, that composition is:
+
+```python
+@ava.step
+def add_context(draft: Draft, *, policy: str) -> ReviewItem:
+    return ReviewItem(draft=draft, policy=policy)
+
+# Inside a workflow; keyword arguments are broadcast by step.map.
+items = add_context.map(drafts, policy="Publication policy v1")
+reviews = ava.decision.map(Approval, items, prompt="Publish?", timeout=None)
+```
+
+`step.map` belongs to the companion fan-out change; the decision-map follow-up
+commit is isolated so that the two runtime paths can be integrated before release.
+A plain source/step producing `list[ReviewItem]` also works on its own.
+
+### Quorum: fan in over decision results
+
+There is no quorum primitive. Define the business rule in a normal step:
+
+```python
+@ava.step
+async def quorum(reviews: list[Approval]) -> bool:
+    return sum(review.kind == "approve" for review in reviews) >= 2
+
+@ava.workflow
+def publication_vote():
+    reviews = ava.decision.map(
+        Approval, article_drafts(), prompt="Publish this article?", timeout=None,
+    )
+    return reviews >> quorum()
+```
+
+This fan-in observes the complete ordered result list; it does not implement an
+early quorum, cancel unreviewed items, or authorize one item from another's vote.
+Choose a typed `on_timeout` when the rule should count timed-out votes.
+
+### Approve all: one decision gating the entire list
+
+For one reviewer action covering the complete list, do not use an item map:
+
+```python
+@ava.step
+async def publish_all(drafts: list[str], approval: Approval) -> list[str]:
+    return drafts if approval.kind == "approve" else []
+
+@ava.workflow
+def approve_all():
+    drafts = article_drafts()
+    approval = ava.decision(
+        Approval, prompt="Publish this complete list?", show=drafts, timeout=None,
+    )
+    return approval >> publish_all(drafts, approval)
+```
+
+This creates one pinned artifact/schema and one audit decision for the whole list,
+not a bulk endpoint that silently resolves independent item cards. Both patterns
+are exercised in `examples/durable_waits.py` by the smoke gate.
+
 ## Hosting/discovery contract
 
-Discovery, cache schema 14 and `FlowInfoV2` carry `node_policies` and `node_waits`
+Discovery, cache schema 15 and `FlowInfoV2` carry `node_policies` and `node_waits`
 by **invocation ID**, separate from event topics. The subprocess payload and
 cache require these maps; old caches are invalidated and rebuilt, never assigned
 invented policy values. `WaitSpec` pins JSON Schema, deadline specification,

@@ -41,6 +41,7 @@ def run_local_schedule(
     pending: dict[Future[tuple[NodeFuture, T]], str] = {}
     parked: set[str] = set()
     holds: set[str] = set()
+    map_groups: dict[str, tuple[str, ...]] = {}
     attempts: dict[str, int] = dict.fromkeys(order, 0)
     failure: Exception | None = None
     cancelled = False
@@ -64,10 +65,10 @@ def run_local_schedule(
     with ThreadPoolExecutor(
         max_workers=capacity, thread_name_prefix=f"avalanche-local-{waits.run_id}"
     ) as pool:
-        while remaining or pending or parked:
+        while remaining or pending or parked or map_groups:
             with waits.condition:
                 if (
-                    (remaining or parked)
+                    (remaining or parked or map_groups)
                     and cancel_requested is not None
                     and cancel_requested()
                 ):
@@ -115,6 +116,21 @@ def run_local_schedule(
                         complete(node_id, node_ref, value)
                         completed.add(node_id)
 
+                for group, children in list(map_groups.items()):
+                    if not all(waits.resolved(child) for child in children):
+                        continue
+                    try:
+                        outputs = [waits.result(child) for child in children]
+                        complete(group, workflow.nodes[group], outputs)
+                    except Exception as exc:
+                        failure = exc
+                        if hooks and hooks.on_node_failure:
+                            hooks.on_node_failure(group, exc)
+                        break
+                    completed.add(group)
+                    del map_groups[group]
+                    progressed = True
+
                 for node_id in list(parked):
                     if not waits.resolved(node_id):
                         continue
@@ -161,8 +177,31 @@ def run_local_schedule(
                     if isinstance(ref.node, WaitNode):
                         if hooks and hooks.on_node_start:
                             hooks.on_node_start(node_id)
-                        waits.arm(node_id, reviewed(node_id))
-                        parked.add(node_id)
+                        spec = ref.node.spec
+                        if spec.map_max_items is not None:
+                            from .dag import _unwrap_lineaged_tree
+
+                            if spec.map_source_node_id is not None:
+                                source = ref.kwargs["items"]
+                                items = _unwrap_lineaged_tree(results[source.future_id])
+                                if source.tuple_index is not None:
+                                    items = items[source.tuple_index]
+                                if not isinstance(items, list):
+                                    raise TypeError("decision.map input must resolve to a list")
+                                wire = [
+                                    item.model_dump(mode="json")
+                                    if isinstance(item, BaseModel)
+                                    else item
+                                    for item in items
+                                ]
+                            else:
+                                assert spec.map_items is not None
+                                wire = spec.map_items
+                            validated = TypeAdapter(list[JsonValue]).validate_python(wire)
+                            map_groups[node_id] = waits.expand_decisions(node_id, validated)
+                        else:
+                            waits.arm(node_id, reviewed(node_id))
+                            parked.add(node_id)
                     else:
                         if len(pending) >= capacity:
                             continue
@@ -178,7 +217,7 @@ def run_local_schedule(
                     progressed = True
                 if cancelled:
                     break
-                if not progressed and (remaining or pending or parked):
+                if not progressed and (remaining or pending or parked or map_groups):
                     waits.condition.wait(timeout=waits.next_deadline())
 
     if failure is not None:

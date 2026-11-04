@@ -166,6 +166,80 @@ def test_controlled_deadlines_preloads_and_cancellation():
     assert event.result(timeout=5) is None
 
 
+def test_mapped_decisions_are_independent_bounded_and_fan_in():
+    @ava.source
+    async def drafts() -> list[str]:
+        return ["article-a", "article-b"]
+
+    @ava.step
+    async def quorum(reviews: list[Approval]) -> bool:
+        return sum(review.kind == "approve" for review in reviews) >= 1
+
+    @ava.workflow
+    def flow():
+        reviews = ava.decision.map(
+            Approval,
+            drafts(),
+            prompt="Publish?",
+            timeout=None,
+            approvers=["reviewer"],
+            max_items=2,
+            slug="reviews",
+        )
+        return reviews >> quorum()
+
+    run = flow().run()
+    assert run.wait_until_waiting(timeout=5)
+    cards = run.waits.snapshot()
+    assert {card["node_id"] for card in cards} == {"decision_1[0]", "decision_1[1]"}
+    first = run.decide(
+        "reviews[0]",
+        {"kind": "reject"},
+        principal=REVIEWER,
+        reason="reject only this item",
+        idempotency_key="item-0",
+    )
+    assert first.reviewed == "article-a"
+    assert not run.done()
+    second = run.decide(
+        "reviews[1]",
+        {"kind": "approve"},
+        principal=REVIEWER,
+        reason="checked second article",
+        idempotency_key="item-1",
+    )
+    assert second.reviewed == "article-b"
+    assert first.address != second.address
+    assert run.result(timeout=5) is True
+
+    preloaded = flow().run(
+        decisions={
+            "reviews[0]": Approval(kind="approve"),
+            "reviews[1]": Approval(kind="reject"),
+        },
+        principal=REVIEWER,
+    )
+    assert preloaded.result(timeout=5) is True
+
+    @ava.workflow
+    def invalid_show():
+        return ava.decision.map(Approval, ["a"], prompt="Invalid", timeout=None, show="context")
+
+    with pytest.raises(
+        TypeError, match="each item is shown; to add context, map over items that carry it"
+    ):
+        invalid_show()
+
+    @ava.workflow
+    def too_large():
+        return ava.decision.map(
+            Approval, ["a", "b", "c"], prompt="Too many", timeout=None, max_items=2
+        )
+
+    with pytest.raises(ValueError, match="map_overflow"):
+        too_large().run().result(timeout=5)
+
+
 def test_nullable_event_timeout_flows_through_implicit_composition():
     @ava.step(retries=0)
     def handle_timeout(value: Signed | None) -> str:

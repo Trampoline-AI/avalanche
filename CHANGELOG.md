@@ -6,7 +6,9 @@
   `NonRetryableError`, `OutcomeUnknownError` and a stable `RunContext.step_key`.
   Add typed graph decisions, event waits and sleep, including local buffering,
   retained acceptance receipts, reconciliation, controlled deadlines and CLI
-  event/decision submission. Wait nodes park without occupying a worker. Local
+  event/decision submission. `ava.decision.map` provides bounded independent item
+  decisions; quorum and approve-all are compositions, not bulk resolution.
+  Wait nodes park without occupying a worker. Local
   state remains process-local; durable hosts must enforce crash recovery and
   authorization. Nullable timeouts and execution-service receipts propagate
   through waits. Bound reviewed previews and control responses, page wait lists,

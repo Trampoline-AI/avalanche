@@ -2164,7 +2164,7 @@ class Workflow:
         slug_to_id = {slug: nid for nid, slug in self.node_slugs.items()}
         handle.node_aliases = slug_to_id
         for node, value in (decisions or {}).items():
-            node_id = slug_to_id.get(node, node)
+            node_id = handle.canonical_node(node)
             handle.waits.preload_decision(node_id, value, principal)
 
         cancel_requested = handle._compose_cancel_requested(

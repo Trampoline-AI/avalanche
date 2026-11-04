@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import time
 from collections import deque
 from collections.abc import Mapping
@@ -192,11 +193,56 @@ class LocalWaits:
     def preload_decision(
         self, node: str, value: BaseModel | dict[str, JsonValue], principal: LocalPrincipal
     ) -> None:
-        slot = self._waits[node]
+        slot = self._waits.get(node)
+        if slot is not None and slot.spec.map_max_items is not None:
+            raise WaitRefusalError("map_requires_item_identity", 422)
+        if slot is None:
+            identity = re.fullmatch(r"(.+)\[(0|[1-9][0-9]*)\]", node)
+            if identity is None or identity.group(1) not in self._waits:
+                raise WaitRefusalError("unknown_decision", 404)
+            slot = self._waits[identity.group(1)]
+            if (
+                slot.spec.map_max_items is None
+                or int(identity.group(2)) >= slot.spec.map_max_items
+            ):
+                raise WaitRefusalError("unknown_map_item", 404)
         self._authorize(slot, principal, "run:decide")
         if slot.model is None or slot.spec.kind != "decision":
             raise WaitRefusalError("not_a_decision", 422)
         self._preloads[node] = (self._validate(slot, value), principal)
+
+    def expand_decisions(self, node: str, items: list[JsonValue]) -> tuple[str, ...]:
+        with self.condition:
+            parent = self._waits[node]
+            maximum = parent.spec.map_max_items
+            assert maximum is not None
+            if len(items) > maximum:
+                raise ValueError(
+                    f"map_overflow: {len(items)} items exceeds max_items={maximum}"
+                )
+            children = tuple(f"{node}[{index}]" for index in range(len(items)))
+            if any(
+                address.startswith(f"{node}[") and address not in children
+                for address in self._preloads
+            ):
+                raise WaitRefusalError("unknown_map_item", 404)
+            # Publish all identities/schemas before any child can accept a decision.
+            for child, item in zip(children, items):
+                spec = parent.spec.model_copy(
+                    update={
+                        "map_max_items": None,
+                        "map_items": None,
+                        "map_source_node_id": None,
+                        "show_node_id": None,
+                        "show_index": None,
+                        "show": deepcopy(item),
+                    },
+                    deep=True,
+                )
+                self._waits[child] = _Wait(spec, parent.model)
+            for child in children:
+                self.arm(child)
+            return children
 
     def add_hold(self, node: str, output_adapter: TypeAdapter) -> None:
         with self.condition:
@@ -373,7 +419,7 @@ class LocalWaits:
     ) -> WaitReceipt:
         with self.condition:
             slot = self._waits[node]
-            if slot.spec.kind != "decision":
+            if slot.spec.kind != "decision" or slot.spec.map_max_items is not None:
                 raise WaitRefusalError("not_a_decision", 422)
             self._authorize(slot, principal, "run:decide")
             if not reason.strip():
@@ -453,6 +499,7 @@ class LocalWaits:
             return [
                 self._card(node, slot)
                 for node, slot in self._waits.items()
+                if slot.spec.map_max_items is None
             ]
 
     def next_deadline(self) -> float | None:

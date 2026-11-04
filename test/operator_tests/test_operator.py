@@ -350,6 +350,43 @@ def test_terminal_wait_history_retains_system_audit_and_withdrawn_cards(
     assert closed.value.code == "run_closed"
 
 
+def test_mapped_large_artifact_receipts_and_terminal_cards(wait_review_operator):
+    from runtime.operator.wait_control import WaitControlRequest
+
+    op = wait_review_operator
+    info = next(item for item in op.list_workflows() if item.name == "mapped_large_artifacts")
+    run_id = op.start_run(info.selector)
+    cards = wait_for_review(op, run_id)
+    assert [card["node_id"] for card in cards] == ["decision_1[0]", "decision_1[1]"]
+    assert cards[0]["show"]["truncated"] is True
+    assert cards[1]["show"] == "small"
+    accepted = []
+    for index in range(2):
+        response = op.wait_control(
+            run_id,
+            WaitControlRequest(
+                kind="decision",
+                address=f"decision_1[{index}]",
+                payload={"kind": "approve"},
+                reason="checked item",
+                idempotency_key=f"item-{index}",
+            ),
+        )
+        assert response.receipt is not None
+        accepted.append(response.receipt)
+        if index == 0:
+            middle = op.wait_control(run_id, WaitControlRequest(kind="list")).waits
+            assert [card["state"] for card in middle] == ["resolved", "waiting"]
+    assert wait_terminal(op, run_id).status == RunStatus.SUCCESS
+    final = op.wait_control(run_id, WaitControlRequest(kind="list")).waits
+    assert [card["state"] for card in final] == ["resolved", "resolved"]
+    assert [card["audit"]["receipt_id"] for card in final] == [
+        receipt.receipt_id for receipt in accepted
+    ]
+    assert final[0]["show"] == accepted[0].reviewed
+    assert final[1]["show"] == accepted[1].reviewed
+
+
 def test_terminal_wait_pages_cross_spawn_grpc_and_rest(wait_review_operator):
     import http.client
     import socket

@@ -73,7 +73,7 @@ def wait_for_event(
     return WaitNode(spec, model, slug=slug)()
 
 
-def decision(
+def _decision_node(
     outcome: type[Outcome],
     *,
     prompt: str,
@@ -83,7 +83,7 @@ def decision(
     assignees: list[str] | tuple[str, ...] | None = None,
     approvers: list[str] | tuple[str, ...] | None = None,
     slug: str | None = None,
-) -> NodeFuture:
+) -> tuple[WaitNode, NodeFuture | None]:
     """Typed human decision. Missing on_timeout means decision_timeout failure."""
     if not isinstance(outcome, type) or not issubclass(outcome, Outcome):
         raise TypeError("decision requires an ava.Outcome subclass")
@@ -107,5 +107,85 @@ def decision(
         assignees=tuple(assignees) if assignees is not None else (),
         approvers=tuple(approvers) if approvers is not None else None,
     )
-    node = WaitNode(spec, outcome, slug=slug)
-    return node(show=show_ref) if show_ref is not None else node()
+    return WaitNode(spec, outcome, slug=slug), show_ref
+
+
+class DecisionFactory:
+    def __call__(
+        self,
+        outcome: type[Outcome],
+        *,
+        prompt: str,
+        timeout: timedelta | float | None,
+        show: NodeFuture | JsonValue | BaseModel = None,
+        on_timeout: Outcome | None = None,
+        assignees: list[str] | tuple[str, ...] | None = None,
+        approvers: list[str] | tuple[str, ...] | None = None,
+        slug: str | None = None,
+    ) -> NodeFuture:
+        node, show_ref = _decision_node(
+            outcome,
+            prompt=prompt,
+            timeout=timeout,
+            show=show,
+            on_timeout=on_timeout,
+            assignees=assignees,
+            approvers=approvers,
+            slug=slug,
+        )
+        return node(show=show_ref) if show_ref is not None else node()
+
+    def map(
+        self,
+        outcome: type[Outcome],
+        items: NodeFuture | list[JsonValue | BaseModel],
+        *,
+        prompt: str,
+        timeout: timedelta | float | None,
+        on_timeout: Outcome | None = None,
+        assignees: list[str] | tuple[str, ...] | None = None,
+        approvers: list[str] | tuple[str, ...] | None = None,
+        max_items: int = 8,
+        slug: str | None = None,
+        **unsupported: JsonValue,
+    ) -> NodeFuture:
+        if "show" in unsupported:
+            raise TypeError("each item is shown; to add context, map over items that carry it")
+        if unsupported:
+            raise TypeError(f"Unsupported decision.map argument: {next(iter(unsupported))}")
+        node, _ = _decision_node(
+            outcome,
+            prompt=prompt,
+            timeout=timeout,
+            on_timeout=on_timeout,
+            assignees=assignees,
+            approvers=approvers,
+            slug=slug,
+        )
+        if isinstance(items, NodeFuture):
+            node.spec = WaitSpec.model_validate(
+                {
+                    **node.spec.model_dump(by_alias=True),
+                    "map_max_items": max_items,
+                    "map_source_node_id": items.future_id,
+                    "map_source_index": items.tuple_index,
+                }
+            )
+            return node(items=items)
+        if not isinstance(items, list):
+            raise TypeError("decision.map items must be a list or NodeFuture list")
+        wire = [
+            item.model_dump(mode="json") if isinstance(item, BaseModel) else item
+            for item in items
+        ]
+        node.spec = WaitSpec.model_validate(
+            {
+                **node.spec.model_dump(by_alias=True),
+                "map_max_items": max_items,
+                "map_items": wire,
+            }
+        )
+        return node()
+
+
+decision = DecisionFactory()
