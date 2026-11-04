@@ -31,6 +31,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 from .._agent_evidence import emit_agent_evidence
 from ..dag import Node, NodeFuture, NodeType, _workflow_context
 from ..evaluations import Evaluations
+from ..policies import StepPolicy, UncertaintyPolicy
 from ..step_interface import (
     decoration_namespace,
     resolve_step_signature,
@@ -532,6 +533,8 @@ def agent_step(
     tools: Sequence[Callable[..., Any]] = (),
     skills: Sequence[Skill] = (),
     evaluations: Evaluations[InputT, OutputT] | None = None,
+    retries: int = 7,
+    on_uncertain: UncertaintyPolicy = "retry",
     **removed: object,
 ) -> Callable[[Callable[..., Any]], Node]:
     """Register a bodyful workflow step with an injected callable Agent.
@@ -588,6 +591,7 @@ def agent_step(
             wrapper,
             NodeType.STEP,
             num_returns=1,
+            policy=StepPolicy(retries=retries, on_uncertain=on_uncertain),
             step_interface=step_interface,
         )
 
@@ -634,6 +638,8 @@ def step(
     tools: Sequence[Callable[..., Any]] = (),
     skills: Sequence[Skill] = (),
     evaluations: Evaluations[InputT, OutputT] | None = None,
+    retries: int = 7,
+    on_uncertain: UncertaintyPolicy = "retry",
     **removed: object,
 ) -> NodeFuture | Callable[[Callable[..., Any]], Node]:
     """Invoke an inline agent in a workflow, or declare a bodyful agent outside it."""
@@ -646,6 +652,8 @@ def step(
             tools=tools,
             skills=skills,
             evaluations=evaluations,
+            retries=retries,
+            on_uncertain=on_uncertain,
             **removed,
         )
 
@@ -705,6 +713,7 @@ def step(
         invoke,
         NodeType.STEP,
         num_returns=len(output_fields),
+        policy=StepPolicy(retries=retries, on_uncertain=on_uncertain),
         slug=slug,
         step_interface=step_interface_from_signature(public_signature),
     )

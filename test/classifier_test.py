@@ -961,7 +961,7 @@ def test_body_transformation_or_failure_keeps_original_captured_answers(
     def load():
         return "private-ticket-state"
 
-    @ava.classifier_step(questions=questions)
+    @ava.classifier_step(questions=questions, retries=0)
     async def classify(ticket, *, classifier: ava.Classifier):
         result = await classifier(state=ticket)
         assert observed[-1].status == "success"

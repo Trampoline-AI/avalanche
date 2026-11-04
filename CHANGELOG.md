@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Steps accept bounded `retries` and an explicit `on_uncertain` policy, with
+  `NonRetryableError`, `OutcomeUnknownError` and a stable `RunContext.step_key`.
+  Add typed graph decisions, event waits and sleep, including local buffering,
+  retained acceptance receipts, reconciliation, controlled deadlines and CLI
+  event/decision submission. Wait nodes park without occupying a worker. Local
+  state remains process-local; durable hosts must enforce crash recovery and
+  authorization. See [Retries and waits](docs/retries-and-waits.md).
+
 - Breaking (0.18.0): removed the Ray executor, the `ray` extra, the `--ray`
   operator/dev flags, and the `RayExecutor` export. Operator construction no
   longer accepts `executor_factory`, `executor_backend`, `ray_runtime_env`, or

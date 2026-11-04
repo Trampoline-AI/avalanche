@@ -137,9 +137,9 @@ def typesafe_service(monkeypatch):
 def write_workflow(root: Path, body: str, *, questions=QUESTIONS) -> Path:
     workflow = root / "classifier_flow.py"
     decorator = (
-        "@ava.classifier_step()\n"
+        "@ava.classifier_step(retries=0)\n"
         if questions is None
-        else f"@ava.classifier_step(questions={questions!r})\n"
+        else f"@ava.classifier_step(questions={questions!r}, retries=0)\n"
     )
     workflow.write_text(
         "import asyncio\n"

@@ -20,6 +20,8 @@ from pydantic import (
     ValidationError,
 )
 
+from avalanche.policies import StepPolicy, WaitSpec
+
 if TYPE_CHECKING:
     from avalanche.agent.declaration import AgentDeclaration
     from avalanche.agent.live import AgentTraceFinished, AgentTraceUnavailable
@@ -802,7 +804,9 @@ class WorkflowInfo:
     file_path: str
     node_ids: list[str]  # topological order (future_ids, e.g. "fetch_orders_1")
     graph: dict[str, list[str]]  # adjacency list (parent -> children)
-    node_types: dict[str, str]  # node_id -> "source" | "step" | "dest"
+    node_types: dict[str, str]  # node_id -> "source" | "step" | "dest" | "wait"
+    node_policies: dict[str, StepPolicy] = field(default_factory=dict)
+    node_waits: dict[str, WaitSpec] = field(default_factory=dict)
     display_names: dict[str, str] = field(default_factory=dict)  # node_id -> display name
     agent_node_ids: list[str] = field(default_factory=list)
     agent_declarations: dict[str, AgentDeclaration] = field(default_factory=dict)
@@ -909,6 +913,8 @@ class WorkflowDescriptor:
     graph: tuple[tuple[str, tuple[str, ...]], ...]
     node_types: tuple[tuple[str, str], ...]
     display_names: tuple[tuple[str, str], ...]
+    node_policies: tuple[tuple[str, StepPolicy], ...] = ()
+    node_waits: tuple[tuple[str, WaitSpec], ...] = ()
     agent_node_ids: tuple[str, ...] = ()
     agent_declarations: tuple[tuple[str, AgentDeclaration], ...] = ()
     classifier_metadata_json: tuple[tuple[str, str], ...] = ()

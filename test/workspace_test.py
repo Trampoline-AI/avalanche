@@ -524,7 +524,7 @@ def test_workspace_invocation_cleanup_runs_after_failure(tmp_path):
     class Request(ava.BaseInput):
         workspace: ava.Workspace
 
-    @ava.source
+    @ava.source(retries=0)
     def fail(request: Request):
         materialized_paths.append(request.workspace.path)
         request.workspace.path.joinpath("transient.txt").write_text("transient")

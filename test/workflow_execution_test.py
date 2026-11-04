@@ -112,7 +112,7 @@ def test_single_local_worker_does_not_start_a_ready_sibling_after_cancellation()
 def test_single_local_worker_does_not_start_a_ready_sibling_after_failure():
     started: list[str] = []
 
-    @ava.source
+    @ava.source(retries=0)
     def fail():
         started.append("fail")
         raise ValueError("expected failure")

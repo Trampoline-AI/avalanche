@@ -14,6 +14,7 @@ from pydantic import JsonValue, TypeAdapter
 from avalanche.agent.declaration import AgentDeclaration
 from avalanche.agent.native import TraceHeaderNative
 from avalanche.agent.trace import AgentTraceStatus, TokenUsage
+from avalanche.policies import StepPolicy, WaitSpec
 
 from .models import (
     AgentEventAppended,
@@ -127,6 +128,12 @@ def workflow_info_to_v2(info: WorkflowInfo) -> pb.FlowInfoV2:
         file_path=info.source_file,
         topology=workflow_topology_to_v2(topology),
         agent_node_ids=info.agent_node_ids,
+        node_policies_json={
+            node: policy.model_dump_json() for node, policy in info.node_policies.items()
+        },
+        node_waits_json={
+            node: spec.model_dump_json(by_alias=True) for node, spec in info.node_waits.items()
+        },
         agent_declarations_json={
             node_id: declaration.model_dump_json()
             for node_id, declaration in info.agent_declarations.items()
@@ -860,6 +867,14 @@ def workflow_info_from_v2(msg: pb.FlowInfoV2) -> WorkflowInfo:
         node_ids=node_ids,
         graph=graph,
         node_types=dict(msg.topology.node_types),
+        node_policies={
+            node: StepPolicy.model_validate_json(value)
+            for node, value in msg.node_policies_json.items()
+        },
+        node_waits={
+            node: WaitSpec.model_validate_json(value)
+            for node, value in msg.node_waits_json.items()
+        },
         display_names=dict(msg.topology.display_names),
         agent_node_ids=list(msg.agent_node_ids),
         agent_declarations={

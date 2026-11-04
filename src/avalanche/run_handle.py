@@ -5,7 +5,12 @@ from __future__ import annotations
 import asyncio
 import threading
 from concurrent.futures import CancelledError, Future
+from datetime import timedelta
 from typing import Any, Callable, Generic, TypeVar
+
+from pydantic import BaseModel, JsonValue
+
+from .local_waits import LocalPrincipal, LocalWaits, WaitReceipt
 
 T = TypeVar("T")
 
@@ -20,6 +25,9 @@ class RunHandle(Generic[T]):
         self._cancel_event = threading.Event()
         self._state_lock = threading.Lock()
         self._started = False
+        self.waits = LocalWaits(run_id, {})
+        self.node_aliases: dict[str, str] = {}
+        self._future.add_done_callback(lambda _: self.waits.close())
 
     def running(self) -> bool:
         """Return whether the driver thread is active."""
@@ -48,7 +56,44 @@ class RunHandle(Generic[T]):
             if self._future.done() or self._cancel_event.is_set():
                 return False
             self._cancel_event.set()
+            self.waits.close()
             return True
+
+    def send_event(
+        self,
+        key: str,
+        payload: BaseModel | dict[str, JsonValue],
+        *,
+        idempotency_key: str,
+        principal: LocalPrincipal = LocalPrincipal(),
+    ) -> WaitReceipt:
+        return self.waits.send_event(
+            key, payload, idempotency_key=idempotency_key, principal=principal
+        )
+
+    def decide(
+        self,
+        node: str,
+        payload: BaseModel | dict[str, JsonValue],
+        *,
+        idempotency_key: str,
+        reason: str,
+        principal: LocalPrincipal = LocalPrincipal(),
+    ) -> WaitReceipt:
+        return self.waits.decide(
+            self.node_aliases.get(node, node),
+            payload,
+            idempotency_key=idempotency_key,
+            principal=principal,
+            reason=reason,
+        )
+
+    def advance_time(self, duration: timedelta) -> None:
+        """Test helper: advance wait deadlines, without auto-resolving approvals."""
+        self.waits.advance_time(duration)
+
+    def wait_until_waiting(self, timeout: float = 5.0) -> bool:
+        return self.waits.wait_until_waiting(timeout)
 
     def result(self, timeout: float | None = None) -> T:
         """Return the cached output, waiting up to ``timeout`` seconds."""

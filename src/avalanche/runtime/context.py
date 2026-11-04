@@ -67,6 +67,13 @@ class RunContext(BaseContext):
     lineage_vector: dict[str, str] = Field(default_factory=dict, exclude=True)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    @property
+    def step_key(self) -> str:
+        """Stable logical operation key; never contains an attempt/generation ID."""
+        if self.node_id is None:
+            raise ValueError("step_key is only available inside a node invocation")
+        return f"{self.run_id}:{self.node_id}"
+
     def for_node(self, *, node_id: str, node_name: str, node_slug: str) -> "RunContext":
         return self.model_copy(
             update={
