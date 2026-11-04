@@ -20,6 +20,8 @@ from pydantic import (
     ValidationError,
 )
 
+from avalanche.mapping import MapSpec
+
 if TYPE_CHECKING:
     from avalanche.agent.declaration import AgentDeclaration
     from avalanche.agent.live import AgentTraceFinished, AgentTraceUnavailable
@@ -255,6 +257,7 @@ class WorkflowTopology:
     classifier_metadata_json: tuple[tuple[str, str], ...] = ()
     evaluation_metadata_json: tuple[tuple[str, str], ...] = ()
     step_interface_json: tuple[tuple[str, str], ...] = ()
+    map_specs: tuple[tuple[str, MapSpec], ...] = ()
     # Serialized WorkflowInputDeclaration; empty when the workflow declares no input.
     input_declaration_json: str = ""
 
@@ -282,6 +285,8 @@ class NodeState:
     trace: TraceDescriptor | None = None
     revision: int = 0
     event_page_token: str = ""
+    map_parent: str | None = None
+    map_index: int | None = None
 
     @property
     def elapsed(self) -> float | None:
@@ -312,6 +317,7 @@ class RunState:
     details_hydrated: bool = True  # False only for summary-only list projections.
     terminal_seal: TerminalSealDescriptor | None = None
     input: RunInput | None = None
+    expansions: dict[str, int] = field(default_factory=dict)
 
     @property
     def elapsed(self) -> float | None:
@@ -396,6 +402,8 @@ class NodeSnapshot:
     trace: TraceDescriptor | None = None
     revision: int = 0
     event_page_token: str = ""
+    map_parent: str | None = None
+    map_index: int | None = None
     running_elapsed_seconds: float | None = None
 
 
@@ -430,6 +438,7 @@ class RunSnapshot:
     topology: WorkflowTopology = field(default_factory=WorkflowTopology)
     terminal_seal: TerminalSealDescriptor | None = None
     input: RunInput | None = None
+    expansions: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -690,6 +699,14 @@ class RunCreated:
 
 
 @dataclass(frozen=True)
+class RunNodesExpanded:
+    run_id: str
+    nodes: tuple[NodeSnapshot, ...]
+    topology: WorkflowTopology
+    expansions: dict[str, int]
+
+
+@dataclass(frozen=True)
 class RunStatusChanged:
     run_id: str
     status: RunStatus
@@ -753,6 +770,7 @@ class TerminalSealAppended:
 
 RunUpdateChange = (
     RunCreated
+    | RunNodesExpanded
     | RunStatusChanged
     | NodeStatusChanged
     | LogAppended
@@ -809,6 +827,7 @@ class WorkflowInfo:
     classifier_metadata_json: dict[str, str] = field(default_factory=dict)
     evaluation_metadata_json: dict[str, str] = field(default_factory=dict)
     step_interface_json: dict[str, str] = field(default_factory=dict)
+    map_specs: dict[str, MapSpec] = field(default_factory=dict)
     standard_step_docstring_lines: dict[str, str] = field(default_factory=dict)
     node_source_code: dict[str, str] = field(default_factory=dict)
     cron: str | None = None  # cron expression for scheduled execution
@@ -914,6 +933,7 @@ class WorkflowDescriptor:
     classifier_metadata_json: tuple[tuple[str, str], ...] = ()
     evaluation_metadata_json: tuple[tuple[str, str], ...] = ()
     step_interface_json: tuple[tuple[str, str], ...] = ()
+    map_specs: tuple[tuple[str, MapSpec], ...] = ()
     standard_step_docstring_lines: tuple[tuple[str, str], ...] = ()
     node_source_code: tuple[tuple[str, str], ...] = ()
     cron: str | None = None

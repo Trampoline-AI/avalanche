@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from avalanche import __version__ as avalanche_version
 from avalanche.agent.declaration import AgentDeclaration
+from avalanche.mapping import MapSpec
 
 from .discovery import ConfiguredRoot, FileDiscoveryResult
 from .models import WorkflowDescriptor, WorkflowDiscoveryDiagnostic, WorkflowLocator
@@ -22,7 +23,7 @@ from .source import iter_source_paths
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 12
+_CACHE_SCHEMA_VERSION = 13
 
 
 class _CacheModel(BaseModel):
@@ -77,6 +78,7 @@ class _CachedDescriptor(_CacheModel):
     classifier_metadata_json: tuple[tuple[str, str], ...]
     evaluation_metadata_json: tuple[tuple[str, str], ...]
     step_interface_json: tuple[tuple[str, str], ...]
+    map_specs: tuple[tuple[str, MapSpec], ...] = ()
     standard_step_docstring_lines: tuple[tuple[str, str], ...]
     node_source_code: tuple[tuple[str, str], ...]
     cron: str | None
@@ -100,6 +102,7 @@ class _CachedDescriptor(_CacheModel):
             classifier_metadata_json=descriptor.classifier_metadata_json,
             evaluation_metadata_json=descriptor.evaluation_metadata_json,
             step_interface_json=descriptor.step_interface_json,
+            map_specs=descriptor.map_specs,
             standard_step_docstring_lines=descriptor.standard_step_docstring_lines,
             node_source_code=descriptor.node_source_code,
             cron=descriptor.cron,
@@ -123,6 +126,7 @@ class _CachedDescriptor(_CacheModel):
             classifier_metadata_json=self.classifier_metadata_json,
             evaluation_metadata_json=self.evaluation_metadata_json,
             step_interface_json=self.step_interface_json,
+            map_specs=self.map_specs,
             standard_step_docstring_lines=self.standard_step_docstring_lines,
             node_source_code=self.node_source_code,
             cron=self.cron,
@@ -186,7 +190,7 @@ class _SourceStamp(_CacheModel):
 
 
 class _CacheDocument(_CacheModel):
-    schema_version: Literal[12]
+    schema_version: Literal[13]
     environment: str
     roots: tuple[_CachedRoot, ...]
     watch_roots: tuple[str, ...]

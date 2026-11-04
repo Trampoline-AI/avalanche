@@ -366,6 +366,37 @@ def assert_original_requests(service: EvaluationService) -> None:
     assert service.requests.empty()
 
 
+def test_mapped_agents_keep_independent_traces_and_evaluations(tmp_path, evaluation_service):
+    workflow = write_workflow(tmp_path)
+    workflow.write_text(
+        workflow.read_text().replace(
+            "return finish(research(load()))",
+            "return research.map([{'items': ['first']}, {'items': ['second']}])",
+        )
+    )
+    operator = Operator([str(workflow)], watch=False, schedule=False)
+    try:
+        run = wait_terminal(operator, operator.start_run("flow"))
+        assert run.status is RunStatus.SUCCESS
+        children = [node for node in run.nodes.values() if node.map_parent == "research_1"]
+        assert len(children) == 2
+        assert {node.map_index for node in children} == {0, 1}
+        assert all(node.trace.available for node in children)
+        deadline = time.monotonic() + 30
+        while True:
+            records = operator.list_evaluations(run.run_id)
+            if len(records) == 2 and all(record.status != "pending" for record in records):
+                break
+            assert time.monotonic() < deadline
+            time.sleep(0.03)
+        assert {record.node_id for record in records} == {node.node_id for node in children}
+        assert all(record.status == "completed" for record in records)
+        assert all(record.result.composites == {"quality": 0.8} for record in records)
+        assert not operator.list_evaluations(run.run_id, "research_1")
+    finally:
+        operator.close()
+
+
 def test_slow_evaluation_survives_terminal_and_keeps_owned_evidence(
     tmp_path, evaluation_service
 ):

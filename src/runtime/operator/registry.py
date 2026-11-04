@@ -40,6 +40,7 @@ from .source import resolve_watch_roots
 from .workflow_metadata import (
     agent_declarations_for_workflow,
     input_declaration_for_workflow,
+    map_specs_for_workflow,
     node_docstring_lines_for_workflow,
     node_source_code_for_workflow,
     step_interface_for_workflow,
@@ -153,6 +154,9 @@ def workflow_revision(info: WorkflowInfo) -> str:
         "webhook_active",
     ):
         fields.pop(key)
+    fields["map_specs"] = {
+        key: spec.model_dump(mode="json") for key, spec in info.map_specs.items()
+    }
     fields["agent_declarations"] = {
         node_id: declaration.model_dump(mode="json")
         for node_id, declaration in info.agent_declarations.items()
@@ -193,6 +197,7 @@ def workflow_to_info(
         classifier_metadata_json=classifier_metadata_for_workflow(workflow, node_ids),
         evaluation_metadata_json=evaluation_metadata_for_workflow(workflow, node_ids),
         step_interface_json=step_interface_for_workflow(workflow, node_ids),
+        map_specs=map_specs_for_workflow(workflow, node_ids),
         standard_step_docstring_lines=standard_step_docstring_lines,
         node_source_code=node_source_code,
         input_schema_json=workflow_input_schema(workflow),
@@ -222,6 +227,7 @@ def descriptor_to_info(descriptor: WorkflowDescriptor) -> WorkflowInfo:
         classifier_metadata_json=dict(descriptor.classifier_metadata_json),
         evaluation_metadata_json=dict(descriptor.evaluation_metadata_json),
         step_interface_json=dict(descriptor.step_interface_json),
+        map_specs=dict(descriptor.map_specs),
         standard_step_docstring_lines=dict(descriptor.standard_step_docstring_lines),
         node_source_code=dict(descriptor.node_source_code),
         input_schema_json=descriptor.input_schema_json,

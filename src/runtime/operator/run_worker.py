@@ -52,6 +52,7 @@ from .workflow_metadata import (
     MAX_PREPARED_INPUT_LENGTH,
     PreparedRunInput,
     input_declaration_for_workflow,
+    map_specs_for_workflow,
     node_docstring_lines_for_workflow,
     step_interface_for_workflow,
 )
@@ -188,6 +189,10 @@ def _run_worker(
 
         _put_run_event(event_queue, {"type": "running", "timestamp": time.monotonic()})
         hooks = RunHooks(
+            on_nodes_expanded=lambda expansion: _put_run_event(
+                event_queue,
+                {"type": "nodes_expanded", "expansion": expansion.model_dump_json()},
+            ),
             on_node_start=lambda node_id: _put_run_event(
                 event_queue,
                 {"type": "node_started", "node_id": node_id, "timestamp": time.monotonic()},
@@ -327,6 +332,10 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
         "classifier_metadata_json": classifier_metadata_for_workflow(workflow, node_ids),
         "evaluation_metadata_json": evaluation_metadata_for_workflow(workflow, node_ids),
         "step_interface_json": step_interface_for_workflow(workflow, node_ids),
+        "map_specs": {
+            key: spec.model_dump(mode="json")
+            for key, spec in map_specs_for_workflow(workflow, node_ids).items()
+        },
         "input_declaration_json": input_declaration_for_workflow(workflow, node_ids),
         "standard_step_docstring_lines": node_docstring_lines_for_workflow(workflow, node_ids),
     }

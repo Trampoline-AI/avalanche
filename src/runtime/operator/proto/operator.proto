@@ -185,6 +185,14 @@ message NodeEdgesV2 {
   repeated string children = 1;
 }
 
+message MapSpecV2 {
+  repeated string mapped_args = 1;
+  repeated string broadcast_args = 2;
+  uint32 max_items = 3;
+  bool inherited = 4;
+  bool fail_fast = 5;
+}
+
 message WorkflowTopologyV2 {
   repeated string node_ids = 1;
   map<string, NodeEdgesV2> graph = 2;
@@ -201,6 +209,7 @@ message WorkflowTopologyV2 {
   // The declared run input model, its JSON schema, and the steps that receive
   // it, as JSON. Empty when the workflow declares no input.
   string input_declaration_json = 12;
+  map<string, MapSpecV2> map_specs = 13;
 }
 
 message ScanTargetV2 {
@@ -364,6 +373,8 @@ message NodeSnapshotV2 {
   // Standard steps only: previews of the latest call's arguments and return value.
   // Unset until the step is called.
   StepIoV2 step_io = 12;
+  optional string map_parent = 13;
+  optional uint32 map_index = 14;
 }
 
 enum StepValuePreviewKindV2 {
@@ -465,6 +476,7 @@ message RunSnapshotV2 {
   RunActivityDescriptorV2 terminal_seal = 8;
   // Absent when the workflow declares no input.
   RunInputV2 input = 9;
+  map<string, uint32> expansions = 10;
 }
 
 // The validated input a run started with, after defaults were applied.
@@ -677,6 +689,13 @@ message RunCreatedV2 {
   WorkflowTopologyV2 topology = 3;
 }
 
+message RunNodesExpandedV2 {
+  string run_id = 1;
+  repeated NodeSnapshotV2 nodes = 2;
+  WorkflowTopologyV2 topology = 3;
+  map<string, uint32> expansions = 4;
+}
+
 message RunStatusChangedV2 {
   RunSummaryV2 summary = 1;
 }
@@ -726,6 +745,7 @@ message RunStatusEnvelopeV2 {
     FlowListChangedV2 flow_list_changed = 8;
     FlowReloadStatusV2 flow_reload_status = 9;
     CatalogReloadRequiredV2 catalog_reload_required = 11;
+    RunNodesExpandedV2 nodes_expanded = 12;
   }
   // Complete baseline position for this exact event; retain it to resume.
   LifecycleCursorV2 cursor = 5;
