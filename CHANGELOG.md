@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Toggle graph node descriptions between two-line previews and fully expanded
+  text with the information button beside Fit View. Descriptions appear from
+  65% zoom, and graph spacing adapts to taller cards.
+
 - Breaking (0.18.0): removed the Ray executor, the `ray` extra, the `--ray`
   operator/dev flags, and the `RayExecutor` export. Operator construction no
   longer accepts `executor_factory`, `executor_backend`, `ray_runtime_env`, or
