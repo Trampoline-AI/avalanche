@@ -8,9 +8,12 @@ import os
 import queue
 import shutil
 import socket
+import sqlite3
 import sys
 import threading
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,12 +25,14 @@ from runtime.operator import Operator
 from runtime.operator import operator as operator_module
 from runtime.operator import result_store as result_store_module
 from runtime.operator.client import GrpcStateProvider
-from runtime.operator.models import RunState, RunStatus
-from runtime.operator.operator import RunResultUnavailableError
+from runtime.operator.models import LogLevel, RunState, RunStatus
+from runtime.operator.operator import RunAlreadyExistsError, RunResultUnavailableError
 from runtime.operator.result_store import (
     MAX_RESULT_MANIFEST_BYTES,
+    ResultBundleMissingError,
     ResultPublicationCancelledError,
     ResultStore,
+    ResultStoreLockedError,
     StoredWorkflowResult,
     detach_transferred_bundle_descriptor,
     duplicate_bundle_descriptor_for_spawn,
@@ -40,6 +45,32 @@ from runtime.operator.results import (
     encode_workflow_result,
 )
 from runtime.operator.server import serve
+from runtime.operator.state import OperatorStateStore, StateRowError
+from runtime.operator.state.results import RunResultTable
+
+
+@contextmanager
+def _open_store(tmp_path: Path) -> Iterator[ResultStore]:
+    state_store = OperatorStateStore.open(tmp_path / "operator" / "state.db")
+    try:
+        store = ResultStore(state_store)
+        try:
+            yield store
+        finally:
+            store.close()
+    finally:
+        state_store.close()
+
+
+@pytest.fixture
+def result_store(tmp_path) -> Iterator[ResultStore]:
+    with _open_store(tmp_path) as store:
+        yield store
+
+
+def _indexed(operator: Operator, run_id: str) -> bool:
+    with operator._state_store.transaction() as connection:
+        return RunResultTable.get(connection, run_id) is not None
 
 
 def _attachment_payload(content: bytes, name: str | None = None):
@@ -265,7 +296,9 @@ def result_client(tmp_path):
         "@ava.source\ndef slow():\n    time.sleep(10)\n    return 'finished'\n"
         "@ava.workflow\ndef slow_result():\n    return slow()\n"
     )
-    operator = Operator([str(workflow)], watch=False, schedule=False, cancel_grace=0.1)
+    operator = Operator(
+        [str(workflow)], watch=False, schedule=False, cancel_grace=0.1, state_db=":memory:"
+    )
     port = _unused_port()
     server = serve(operator, port=port, block=False)
     client = GrpcStateProvider(f"localhost:{port}")
@@ -309,7 +342,7 @@ def test_spawned_results_materialize_nested_files_workspaces_and_large_payloads(
 
 def test_failed_and_cancelled_runs_never_expose_results_or_leave_pending_files(result_client):
     operator, client = result_client
-    before = set(operator._result_store.root.iterdir())
+    before = set(operator._result_store.root.rglob("*"))
     cancelled = client.start_run("slow_result")
     with pytest.raises(grpc.RpcError) as unavailable:
         client.get_run_result(cancelled)
@@ -323,7 +356,7 @@ def test_failed_and_cancelled_runs_never_expose_results_or_leave_pending_files(r
             client.get_run_result(run_id)
         assert unavailable.value.code() == grpc.StatusCode.FAILED_PRECONDITION
     deadline = time.monotonic() + 5
-    while set(operator._result_store.root.iterdir()) != before:
+    while set(operator._result_store.root.rglob("*")) != before:
         assert time.monotonic() < deadline, "Pending result files were not removed"
         time.sleep(0.03)
 
@@ -393,23 +426,22 @@ def test_result_codec_rejects_duplicate_unused_and_traversal_attachment_ids():
 
 
 def test_result_store_caps_manifest_read_at_max_plus_one(tmp_path):
-    store = ResultStore(tmp_path)
-    pending = store.prepare()
-    manifest_path = Path(pending.path) / "manifest.json"
-    manifest_bytes = b" " * (MAX_RESULT_MANIFEST_BYTES + 1)
-    manifest_path.write_bytes(manifest_bytes)
-    os.chmod(manifest_path, 0o600)
-    try:
-        with pytest.raises(ValueError, match="manifest.json exceeds"):
-            store.accept(pending, hashlib.sha256(manifest_bytes).hexdigest())
-    finally:
-        store.discard(pending)
-        store.close()
+    with _open_store(tmp_path) as store:
+        pending = store.prepare()
+        manifest_path = Path(pending.path) / "manifest.json"
+        manifest_bytes = b" " * (MAX_RESULT_MANIFEST_BYTES + 1)
+        manifest_path.write_bytes(manifest_bytes)
+        os.chmod(manifest_path, 0o600)
+        try:
+            with pytest.raises(ValueError, match="manifest.json exceeds"):
+                store.accept(pending, hashlib.sha256(manifest_bytes).hexdigest())
+        finally:
+            store.discard(pending)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX escaped descriptor attack")
-def test_accept_is_immutable_after_namespace_discovery_and_same_user_mutation(tmp_path):
-    store = ResultStore(tmp_path)
+def test_accept_is_immutable_after_namespace_discovery_and_same_user_mutation(result_store):
+    store = result_store
     pending = store.prepare()
     digest = publish_workflow_result(
         _attachment_payload(b"stable"),
@@ -434,7 +466,7 @@ def test_accept_is_immutable_after_namespace_discovery_and_same_user_mutation(tm
             pytest.skip("No descriptor-to-path discovery mechanism is available")
         assert status == "ready", detail
         _, recovered_root = detail
-        assert Path(recovered_root) == store.root
+        assert Path(recovered_root) == store.root / "pending"
 
         stored = store.accept(pending, digest)
         mutate.set()
@@ -443,7 +475,9 @@ def test_accept_is_immutable_after_namespace_discovery_and_same_user_mutation(tm
 
         assert (status, process.exitcode) == ("mutated", 0), discovered_names
         assert not Path(pending.path).exists()
-        assert discovered_names == [result_store_module._OWNER_MARKER]
+        # The accepted bundle is a new directory the escaped descriptor never reached.
+        assert discovered_names == []
+        assert stored.bundle_name != pending.name
         assert store.load(stored).files[0].content == b"stable"
     finally:
         mutate.set()
@@ -458,57 +492,10 @@ def test_accept_is_immutable_after_namespace_discovery_and_same_user_mutation(tm
         store.close()
 
 
-def test_result_store_enforces_aggregate_result_and_byte_caps(tmp_path, monkeypatch):
-    store = ResultStore(tmp_path)
-    encoded = encode_workflow_result(File(content=b"bounded"))
-    stored = []
-    monkeypatch.setattr(result_store_module, "MAX_RETAINED_RESULTS", 2)
-    try:
-        for _ in range(2):
-            pending = store.prepare()
-            digest = publish_workflow_result(
-                encoded,
-                pending.descriptor,
-                (pending.device, pending.inode),
-                _NeverCancelled(),
-            )
-            stored.append(store.accept(pending, digest))
-
-        pending = store.prepare()
-        digest = publish_workflow_result(
-            encoded,
-            pending.descriptor,
-            (pending.device, pending.inode),
-            _NeverCancelled(),
-        )
-        with pytest.raises(RuntimeError, match="retains at most 2 results"):
-            store.accept(pending, digest)
-        store.discard(pending)
-
-        store.discard(stored.pop())
-        monkeypatch.setattr(
-            result_store_module,
-            "MAX_RETAINED_RESULT_BYTES",
-            store._retained_result_bytes,
-        )
-        pending = store.prepare()
-        digest = publish_workflow_result(
-            encoded,
-            pending.descriptor,
-            (pending.device, pending.inode),
-            _NeverCancelled(),
-        )
-        with pytest.raises(RuntimeError, match="retained bytes would exceed"):
-            store.accept(pending, digest)
-        store.discard(pending)
-    finally:
-        for item in stored:
-            store.discard(item)
-        store.close()
-
-
-def test_result_store_uses_private_modes_and_rejects_symlink_substitution(tmp_path):
-    store = ResultStore(tmp_path)
+def test_result_store_uses_private_modes_and_rejects_symlink_substitution(
+    tmp_path, result_store
+):
+    store = result_store
     pending = store.prepare()
     encoded = _attachment_payload(b"safe", "safe.bin")
     digest = publish_workflow_result(
@@ -535,8 +522,10 @@ def test_result_store_uses_private_modes_and_rejects_symlink_substitution(tmp_pa
 
 
 @pytest.mark.parametrize("replace", ["root", "bundle"])
-def test_spawned_publication_cannot_be_relocated_by_path_replacement(tmp_path, replace):
-    store = ResultStore(tmp_path)
+def test_spawned_publication_cannot_be_relocated_by_path_replacement(
+    tmp_path, result_store, replace
+):
+    store = result_store
     pending = store.prepare()
     context = multiprocessing.get_context("spawn")
     ready = context.Event()
@@ -564,7 +553,7 @@ def test_spawned_publication_cannot_be_relocated_by_path_replacement(tmp_path, r
             status, detail = result_queue.get(timeout=10)
             process.join(timeout=10)
             assert (status, process.exitcode) == ("ok", 0), detail
-            published_bundle = moved / pending.name if replace == "root" else moved
+            published_bundle = moved / "pending" / pending.name if replace == "root" else moved
             assert (published_bundle / "attachment_00000000.bin").read_bytes() == b"inode-bound"
             assert list(original.iterdir()) == []
         finally:
@@ -579,8 +568,8 @@ def test_spawned_publication_cannot_be_relocated_by_path_replacement(tmp_path, r
         store.close()
 
 
-def test_result_publication_cancellation_never_publishes_partial_manifest(tmp_path):
-    store = ResultStore(tmp_path)
+def test_result_publication_cancellation_never_publishes_partial_manifest(result_store):
+    store = result_store
     pending = store.prepare()
     encoded = _attachment_payload(b"x" * (5 * 1024 * 1024))
     try:
@@ -598,7 +587,7 @@ def test_result_publication_cancellation_never_publishes_partial_manifest(tmp_pa
 
 
 def test_parent_cancellation_wins_after_success_bundle_validation(tmp_path, monkeypatch):
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run_id = "run_cancel_during_result_accept"
     pending = operator._result_store.prepare()
     digest = publish_workflow_result(
@@ -637,16 +626,16 @@ def test_parent_cancellation_wins_after_success_bundle_validation(tmp_path, monk
             },
         )
         assert operator.get_run(run_id).status == RunStatus.CANCELLED
-        assert run_id not in operator._stored_results
+        assert not _indexed(operator, run_id)
+        assert operator._result_store.check_index().consistent
         assert not Path(pending.path).exists()
     finally:
         operator.close()
 
 
 @pytest.mark.parametrize("rejection", ["unfinished-invocation", "publication-error"])
-def test_rejected_success_publications_release_result_quota(monkeypatch, rejection):
-    operator = Operator([], watch=False, schedule=False)
-    monkeypatch.setattr(result_store_module, "MAX_RETAINED_RESULTS", 1)
+def test_rejected_success_publications_leave_no_stored_result(monkeypatch, rejection):
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     monkeypatch.setattr(operator_module, "_teardown_process_group", lambda *_a, **_k: True)
     publish = operator._publish_run_locked
 
@@ -678,6 +667,8 @@ def test_rejected_success_publications_release_result_quota(monkeypatch, rejecti
                     operator._drain_run_events(run_id, handle, [event])
             with pytest.raises(RunResultUnavailableError):
                 operator.get_run_result(run_id)
+            assert not _indexed(operator, run_id)
+            assert operator._result_store.check_index().consistent
 
         run_id = "accepted-after-rejections"
         _, handle, event = _provisional_success_run(operator, run_id)
@@ -688,8 +679,33 @@ def test_rejected_success_publications_release_result_quota(monkeypatch, rejecti
         operator.close()
 
 
+def test_failed_result_index_write_fails_the_run_with_a_reason(monkeypatch):
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
+    monkeypatch.setattr(operator_module, "_teardown_process_group", lambda *_a, **_k: True)
+
+    def failing_insert(*_args, **_kwargs):
+        raise sqlite3.OperationalError("disk I/O error")
+
+    monkeypatch.setattr(operator_module.RunResultTable, "insert", failing_insert)
+    run_id = "run_index_write_fails"
+    _, handle, event = _provisional_success_run(operator, run_id)
+    try:
+        operator._drain_run_events(run_id, handle, [event])
+        assert operator.get_run(run_id).status == RunStatus.FAILED
+        assert any(
+            entry.node_id == "operator" and entry.level == LogLevel.ERROR
+            for entry in operator.get_run(run_id).logs
+        )
+        with pytest.raises(RunResultUnavailableError):
+            operator.get_run_result(run_id)
+        assert not _indexed(operator, run_id)
+        assert operator._result_store.check_index().consistent
+    finally:
+        operator.close()
+
+
 def test_provisional_success_waits_for_delayed_exit_before_notification(monkeypatch):
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run_id = "run_delayed_exit"
     _, handle, event = _provisional_success_run(operator, run_id)
     entered = threading.Event()
@@ -717,7 +733,7 @@ def test_provisional_success_waits_for_delayed_exit_before_notification(monkeypa
     try:
         assert entered.wait(timeout=2)
         assert operator.get_run(run_id).status == RunStatus.RUNNING
-        assert run_id not in operator._stored_results
+        assert not _indexed(operator, run_id)
         release.set()
         drain.join(timeout=5)
         assert not drain.is_alive()
@@ -729,116 +745,351 @@ def test_provisional_success_waits_for_delayed_exit_before_notification(monkeypa
         operator.close()
 
 
-def test_result_retention_and_close_remove_private_storage(tmp_path):
-    workflow = tmp_path / "retained.py"
-    workflow.write_text(
-        """
+_RESTART_WORKFLOW = """
 import avalanche as ava
 
 
 @ava.workflow
-def retained():
-    return ava.File(name="retained.bin", content=b"retained")
+def kept():
+    return {
+        "label": "kept",
+        "file": ava.File(name="kept.bin", content=b"kept-bytes", content_type="text/plain"),
+    }
 """
+
+
+def _wait_for_success(operator: Operator, run_id: str) -> None:
+    deadline = time.monotonic() + 15
+    while time.monotonic() < deadline:
+        run = operator.get_run(run_id)
+        if run is not None and run.status == RunStatus.SUCCESS:
+            return
+        assert run is None or run.status in {
+            RunStatus.REQUESTING,
+            RunStatus.PENDING,
+            RunStatus.RUNNING,
+        }, run
+        time.sleep(0.02)
+    pytest.fail(f"Run {run_id} did not succeed")
+
+
+def _accept(store: ResultStore, content: bytes) -> StoredWorkflowResult:
+    pending = store.prepare()
+    digest = publish_workflow_result(
+        _attachment_payload(content, "data.bin"),
+        pending.descriptor,
+        (pending.device, pending.inode),
+        _NeverCancelled(),
     )
-    operator = Operator(
-        [str(workflow)],
-        watch=False,
-        schedule=False,
-        result_retention_seconds=0.1,
-    )
+    return store.accept(pending, digest)
+
+
+def _index(store: ResultStore, run_id: str, stored: StoredWorkflowResult) -> None:
+    with store._state_store.transaction() as connection:
+        RunResultTable.insert(connection, run_id, stored)
+
+
+def test_results_survive_an_operator_restart_on_the_same_database(tmp_path):
+    workflow = tmp_path / "kept.py"
+    workflow.write_text(_RESTART_WORKFLOW)
+    state_db = tmp_path / "operator" / "state.db"
+
+    first = Operator([str(workflow)], watch=False, schedule=False, state_db=state_db)
+    try:
+        run_id = first.start_run("kept")
+        _wait_for_success(first, run_id)
+        before = first._get_run_result_payload(run_id)
+        assert first._result_store.root == tmp_path / "operator" / "results"
+    finally:
+        first.close()
+
+    second = Operator([str(workflow)], watch=False, schedule=False, state_db=state_db)
+    try:
+        # The run is stored too, so the restarted operator knows it succeeded.
+        assert second.get_run(run_id).status is RunStatus.SUCCESS
+        assert second._get_run_result_payload(run_id) == before
+        result = second.get_run_result(run_id)
+        assert result["label"] == "kept"
+        assert result["file"].read_bytes() == b"kept-bytes"
+        assert result["file"].name == "kept.bin"
+        with pytest.raises(KeyError):
+            second.get_run_result("run_unknown")
+        # The stored result keeps its run ID taken after the restart.
+        with pytest.raises(RunAlreadyExistsError):
+            second.start_run("kept", run_id=run_id)
+    finally:
+        second.close()
+
+
+def test_memory_database_results_live_in_a_temporary_root_removed_on_close(tmp_path):
+    workflow = tmp_path / "kept.py"
+    workflow.write_text(_RESTART_WORKFLOW)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     root = operator._result_store.root
     try:
-        run_id = operator.start_run("retained")
-        deadline = time.monotonic() + 10
-        while time.monotonic() < deadline:
-            run = operator.get_run(run_id)
-            if run is not None and run.status == RunStatus.SUCCESS:
-                break
-            time.sleep(0.02)
-        else:
-            pytest.fail("Run did not succeed")
-        assert operator.get_run_result(run_id).content == b"retained"
-
-        deadline = time.monotonic() + 3
-        while run_id in operator._stored_results and time.monotonic() < deadline:
-            time.sleep(0.02)
-        assert run_id not in operator._stored_results
-        with pytest.raises(RunResultUnavailableError, match="unavailable or expired"):
-            operator.get_run_result(run_id)
+        run_id = operator.start_run("kept")
+        _wait_for_success(operator, run_id)
+        assert operator.get_run_result(run_id)["file"].read_bytes() == b"kept-bytes"
+        assert root.is_dir() and not root.is_relative_to(tmp_path)
     finally:
         operator.close()
-
     assert not root.exists()
 
 
-def test_configured_result_storage_reaps_only_conclusively_stale_roots(tmp_path):
-    live = ResultStore(tmp_path)
-    live_root = live.root
-    observer = ResultStore(tmp_path)
+def test_result_root_survives_reopen_and_clears_unfinished_pending_bundles(tmp_path):
+    with _open_store(tmp_path) as store:
+        root = store.root
+        kept = _accept(store, b"kept")
+        _index(store, "run_kept", kept)
+        abandoned = store.prepare()
+    assert Path(abandoned.path).is_dir()
+
+    with _open_store(tmp_path) as reopened:
+        assert reopened.root == root
+        assert reopened.recovered_pending_bundles == 1
+        assert not Path(abandoned.path).exists()
+        assert reopened.load(kept).files[0].content == b"kept"
+        assert reopened.check_index().consistent
+
+
+def test_stale_pending_handle_never_touches_a_bundle_that_reused_its_fd(result_store):
+    first = result_store.prepare()
+    digest = publish_workflow_result(
+        _attachment_payload(b"first", "first.bin"),
+        first.descriptor,
+        (first.device, first.inode),
+        _NeverCancelled(),
+    )
+    stored = result_store.accept(first, digest)
+    second = result_store.prepare()
+    assert second.descriptor == first.descriptor  # the fd number was reused
+
+    result_store.discard(first)  # stale handle from a cleanup path
+    with pytest.raises(ValueError):
+        result_store.accept(first, digest)
+
+    assert Path(second.path).is_dir()
+    os.fstat(second.descriptor)
+    assert result_store.load(stored).files[0].content == b"first"
+    result_store.discard(second)
+    assert not Path(second.path).exists()
+
+
+def test_result_store_close_releases_every_descriptor_when_one_close_fails(tmp_path):
+    state_store = OperatorStateStore.open(tmp_path / "operator" / "state.db")
     try:
-        assert live_root.exists()
+        store = ResultStore(state_store)
+        broken = store.prepare()
+        healthy = store.prepare()
+        os.close(broken.descriptor)  # the store's own close of it now fails
+        with pytest.raises(OSError):
+            store.close()
+        with pytest.raises(OSError):
+            os.fstat(healthy.descriptor)
+        # The root lock was released too, so the folder can be opened again.
+        reopened = ResultStore(state_store)
+        assert reopened.recovered_pending_bundles == 2
+        reopened.close()
     finally:
-        observer.close()
+        state_store.close()
 
-    stale_root = live.root
-    os.close(live._owner_fd)
-    os.close(live._root_fd)
-    live._owner_fd = None
-    live._root_fd = None
-    live._closed = True
 
-    replacement = ResultStore(tmp_path)
+def test_failed_temporary_root_removal_still_closes_every_descriptor(monkeypatch):
+    state_store = OperatorStateStore.open(":memory:")
+    store = ResultStore(state_store)
+    root = store.root
     try:
-        assert not stale_root.exists()
-        assert replacement.root.exists()
+        pending = store.prepare()
+        root_descriptors = (store._root_fd, store._owner_fd, store._pending_fd)
+        removal_failure = OSError("injected removal failure")
+
+        def failing_removal():
+            raise removal_failure
+
+        monkeypatch.setattr(store, "_remove_temporary_root", failing_removal)
+        with pytest.raises(OSError) as raised:
+            store.close()
+        assert raised.value is removal_failure
+        for descriptor in (pending.descriptor, *root_descriptors):
+            with pytest.raises(OSError):
+                os.fstat(descriptor)
     finally:
-        replacement.close()
+        shutil.rmtree(root)
+        state_store.close()
 
 
-def test_configured_result_storage_leaves_tampered_stale_root_in_place(tmp_path):
-    stale = ResultStore(tmp_path)
-    stale_root = stale.root
-    os.close(stale._owner_fd)
-    os.close(stale._root_fd)
-    stale._owner_fd = None
-    stale._root_fd = None
-    stale._closed = True
-    marker = stale_root / result_store_module._OWNER_MARKER
-    marker.write_bytes(b"tampered\n")
+@pytest.mark.parametrize("database", ["file", "memory"])
+def test_failed_store_startup_releases_the_root_and_its_lock(tmp_path, monkeypatch, database):
+    state_store = OperatorStateStore.open(
+        tmp_path / "operator" / "state.db" if database == "file" else ":memory:"
+    )
+    created_roots: list[str] = []
+    make_temporary_root = result_store_module.tempfile.mkdtemp
 
-    replacement = ResultStore(tmp_path)
+    def recording_mkdtemp(*args, **kwargs):
+        created_roots.append(make_temporary_root(*args, **kwargs))
+        return created_roots[-1]
+
     try:
-        assert stale_root.exists()
-        assert marker.read_bytes() == b"tampered\n"
+        startup_failure = OSError("injected startup failure")
+
+        def failing_cleanup(*_args, **_kwargs):
+            raise startup_failure
+
+        with monkeypatch.context() as patched:
+            patched.setattr(result_store_module, "_remove_bundles_in", failing_cleanup)
+            patched.setattr(result_store_module.tempfile, "mkdtemp", recording_mkdtemp)
+            with pytest.raises(OSError) as raised:
+                ResultStore(state_store)
+        assert raised.value is startup_failure
+        if database == "memory":
+            # The private temporary root is removed with the failed store.
+            assert len(created_roots) == 1 and not Path(created_roots[0]).exists()
+        else:
+            # The failed store released its folder lock, so a new store opens it.
+            ResultStore(state_store).close()
     finally:
-        replacement.close()
-        shutil.rmtree(stale_root)
+        state_store.close()
 
 
-def test_configured_result_storage_never_follows_tampered_root_symlink(tmp_path):
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permissions and symlinks")
+def test_result_root_rejects_shared_broad_or_linked_roots(tmp_path):
+    with _open_store(tmp_path):
+        # Another database in the same folder would share results/.
+        other_state = OperatorStateStore.open(tmp_path / "operator" / "other.db")
+        try:
+            with pytest.raises(ResultStoreLockedError):
+                ResultStore(other_state)
+        finally:
+            other_state.close()
+
+    broad = tmp_path / "broad"
+    (broad / "results").mkdir(parents=True, mode=0o700)
+    os.chmod(broad / "results", 0o755)
+    linked = tmp_path / "linked"
+    linked.mkdir()
     external = tmp_path / "external"
-    external.mkdir()
-    sentinel = external / "keep.bin"
-    sentinel.write_bytes(b"external")
-    forged_root = tmp_path / "operator-results-forged"
-    forged_root.symlink_to(external, target_is_directory=True)
+    external.mkdir(mode=0o700)
+    (linked / "results").symlink_to(external, target_is_directory=True)
+    for folder, refusal in ((broad, ValueError), (linked, OSError)):
+        state_store = OperatorStateStore.open(folder / "state.db")
+        try:
+            with pytest.raises(refusal):
+                ResultStore(state_store)
+        finally:
+            state_store.close()
+    assert os.stat(broad / "results").st_mode & 0o777 == 0o755
+    assert list(external.iterdir()) == []
 
-    store = ResultStore(tmp_path)
+
+def test_inconsistent_result_index_is_reported_at_startup_and_never_served(tmp_path, caplog):
+    with _open_store(tmp_path) as store:
+        kept = _accept(store, b"kept")
+        _index(store, "run_kept", kept)
+        lost = _accept(store, b"lost")
+        _index(store, "run_lost", lost)
+        orphan = _accept(store, b"orphan")
+        root = store.root
+    shutil.rmtree(root / lost.bundle_name)
+    (root / "stray.txt").write_bytes(b"stray")
+
+    with caplog.at_level("WARNING", logger=result_store_module.__name__):
+        operator = Operator(
+            [], watch=False, schedule=False, state_db=tmp_path / "operator" / "state.db"
+        )
     try:
-        assert forged_root.is_symlink()
-        assert sentinel.read_bytes() == b"external"
-        assert list(external.iterdir()) == [sentinel]
+        assert caplog.records
+        report = operator._result_store.check_index()
+        assert not report.consistent
+        assert [row.run_id for row in report.missing_bundles] == ["run_lost"]
+        assert report.unindexed_bundles == (orphan.bundle_name,)
+        assert report.unexpected_entries == ("stray.txt",)
+        assert operator.get_run_result("run_kept").content == b"kept"
+        with pytest.raises(ResultBundleMissingError):
+            operator.get_run_result("run_lost")
+        assert (root / orphan.bundle_name).is_dir()
     finally:
-        store.close()
-        forged_root.unlink()
+        operator.close()
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [("bundle_name", "../escape"), ("manifest_sha256", "not-a-digest"), ("byte_size", -1)],
+)
+def test_malformed_result_rows_fail_loudly_instead_of_being_skipped(tmp_path, column, value):
+    with _open_store(tmp_path) as store:
+        stored = _accept(store, b"kept")
+        _index(store, "run_bad", stored)
+        connection = store._state_store._connection
+        # Bypass the table's CHECK only for the column it guards, as a corrupt file would.
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(
+            f"UPDATE run_results SET {column} = ? WHERE run_id = ?", (value, "run_bad")
+        )
+        connection.execute("PRAGMA ignore_check_constraints = OFF")
+        with pytest.raises(StateRowError):
+            store.check_index()
+        with store._state_store.transaction() as transaction, pytest.raises(StateRowError):
+            RunResultTable.get(transaction, "run_bad")
+
+
+def test_delete_run_result_removes_the_index_row_and_its_bundle(tmp_path):
+    with _open_store(tmp_path) as store:
+        stored = _accept(store, b"deleted")
+        _index(store, "run_deleted", stored)
+        lost = _accept(store, b"lost")
+        _index(store, "run_lost", lost)
+        shutil.rmtree(store.root / lost.bundle_name)
+
+        deleted = store.delete_run_result("run_deleted")
+        assert deleted is not None and deleted.run_id == "run_deleted"
+        assert deleted.bundle_name == stored.bundle_name
+        assert not (store.root / stored.bundle_name).exists()
+        with pytest.raises(ResultBundleMissingError):
+            store.load(stored)
+        assert store.delete_run_result("run_deleted") is None
+
+        # A row whose bundle is already gone is still deleted.
+        assert store.delete_run_result("run_lost") is not None
+        report = store.check_index()
+        assert report.consistent
+
+
+def test_forged_or_deleted_result_handles_are_rejected(result_client):
+    operator, client = result_client
+    run_id = client.start_run("result_bundle")
+    assert _wait_for_terminal(client, run_id).status == RunStatus.SUCCESS
+    with operator._state_store.transaction() as connection:
+        stored = RunResultTable.get(connection, run_id)
+    assert stored is not None
+    forged = stored.model_copy(update={"manifest_sha256": "0" * 64})
+
+    with pytest.raises(ValueError, match="sha256 does not match"):
+        operator._result_store.load(forged)
+
+    # A stored file changed on disk after acceptance is refused, never served.
+    value_path = operator._result_store.root / stored.bundle_name / "value.json"
+    original = value_path.read_bytes()
+    value_path.write_bytes(original.replace(b"weekly", b"WEEKLY"))
+    with pytest.raises(grpc.RpcError) as tampered:
+        client.get_run_result(run_id)
+    assert tampered.value.code() == grpc.StatusCode.DATA_LOSS
+    value_path.write_bytes(original)
+    assert client.get_run_result(run_id)["report"]["title"] == "weekly"
+
+    operator._result_store.delete_run_result(run_id)
+    with pytest.raises(ResultBundleMissingError):
+        operator._result_store.load(stored)
+    with pytest.raises(grpc.RpcError) as unavailable:
+        client.get_run_result(run_id)
+    assert unavailable.value.code() == grpc.StatusCode.FAILED_PRECONDITION
 
 
 @pytest.mark.parametrize(
     "outcome", ["mutation", "cancel", "unreaped", "late-event", "failed-exit"]
 )
 def test_provisional_success_is_not_authority_to_publish(monkeypatch, outcome):
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run_id = "run-untrusted-success"
     pending, handle, event = _provisional_success_run(operator, run_id)
 
@@ -871,26 +1122,6 @@ def test_provisional_success_is_not_authority_to_publish(monkeypatch, outcome):
         assert not Path(pending.path).exists()
     finally:
         operator.close()
-
-
-def test_forged_or_expired_opaque_result_handles_are_rejected(result_client):
-    operator, client = result_client
-    run_id = client.start_run("result_bundle")
-    assert _wait_for_terminal(client, run_id).status == RunStatus.SUCCESS
-    stored = operator._stored_results[run_id]
-    forged = StoredWorkflowResult(
-        storage_key=stored.storage_key,
-        manifest_sha256="0" * 64,
-        published_at=stored.published_at,
-        byte_size=stored.byte_size,
-    )
-
-    with pytest.raises(ValueError, match="handle is unavailable"):
-        operator._result_store.load(forged)
-
-    operator._result_store.discard(stored)
-    with pytest.raises(ValueError, match="handle is unavailable"):
-        operator._result_store.load(stored)
 
 
 def test_result_documents_reject_ambiguous_json_keys():

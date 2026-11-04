@@ -25,12 +25,15 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 from uuid import uuid4
 
+from ava_cli.state_commands import STATE_DESCRIPTION, STATE_HELP, add_state_commands
 from runtime.operator._signals import request_shutdown, shutdown_cleanup
 from runtime.operator.discovery import (
     DEFAULT_DISCOVERY_TIMEOUT,
     WorkflowDiscoveryError,
     validate_discovery_timeout,
 )
+from runtime.operator.state import StateStoreError
+from runtime.operator.state.cli import add_state_db_argument
 from runtime.operator.workspace_config import format_scan_targets, select_workflow_targets
 
 if TYPE_CHECKING:
@@ -138,8 +141,12 @@ def _build_parser() -> argparse.ArgumentParser:
     operator.add_argument(
         "--schedules-enabled",
         action="store_true",
-        help="start with every cron schedule enabled (schedules start disabled otherwise)",
+        help=(
+            "start with every cron schedule enabled, for this start only (otherwise "
+            "schedules start as last turned on or off)"
+        ),
     )
+    add_state_db_argument(operator)
     operator.set_defaults(handler=_run_operator)
 
     webhooks = subcommands.add_parser("webhooks", help="inspect local webhook routes")
@@ -156,8 +163,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help="inspect and control cron schedules on a running operator",
         description=(
             "List, enable, or disable discovered cron schedules. Schedules start "
-            "disabled; their state lives in the operator's memory and resets when it "
-            "restarts."
+            "disabled; whether each is on, and its input, are kept in the operator's "
+            "state database and apply again after it restarts."
         ),
     )
     schedule_commands = schedule.add_subparsers(
@@ -337,9 +344,16 @@ def _build_parser() -> argparse.ArgumentParser:
     dev.add_argument(
         "--schedules-enabled",
         action="store_true",
-        help="start with every cron schedule enabled (schedules start disabled otherwise)",
+        help=(
+            "start with every cron schedule enabled, for this start only (otherwise "
+            "schedules start as last turned on or off)"
+        ),
     )
+    add_state_db_argument(dev)
     dev.set_defaults(handler=_run_dev)
+
+    state = subcommands.add_parser("state", help=STATE_HELP, description=STATE_DESCRIPTION)
+    add_state_commands(state)
 
     return parser
 
@@ -371,6 +385,8 @@ def _run_operator(args: argparse.Namespace) -> int:
         args.log_level,
         "--discovery-timeout",
         str(args.discovery_timeout),
+        "--state-db",
+        args.state_db,
     ]
     if args.no_web:
         runtime_args.append("--no-web")
@@ -1621,11 +1637,13 @@ def _run_dev(args: argparse.Namespace) -> int:
         print("Avalanche dev")
         for line in format_scan_targets(args.flow_target_selection):
             print(line)
+        print(f"  State: {args.state_db}")
         print("  Discovering workflows...")
         operator = Operator(
             args.flows,
             discovery_timeout=args.discovery_timeout,
             schedules_enabled=args.schedules_enabled,
+            state_db=args.state_db,
         )
         workflow_count = len(operator.get_catalog().workflows)
         print(
@@ -1658,6 +1676,9 @@ def _run_dev(args: argparse.Namespace) -> int:
                 raise failure
     except KeyboardInterrupt:
         print("Stopping Avalanche dev...")
+    except StateStoreError as exc:
+        _report_dev_failure("state database startup", exc)
+        exit_code = 1
     except WorkflowDiscoveryError as exc:
         _report_dev_failure(stage, exc)
         exit_code = 1

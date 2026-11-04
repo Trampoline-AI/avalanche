@@ -68,7 +68,9 @@ def _serve(operator: Operator):
 
 @pytest.fixture
 def transport():
-    operator = Operator([], schedule=False, watch=False, stream_history_capacity=100)
+    operator = Operator(
+        [], schedule=False, watch=False, stream_history_capacity=100, state_db=":memory:"
+    )
     try:
         with _serve(operator) as (service, address):
             yield operator, service, address
@@ -332,19 +334,12 @@ def test_classifier_invocations_reject_non_question_definition_drift(transport, 
     assert operator.list_classifier_events(run.run_id, "classify").events == ()
 
 
-@pytest.mark.parametrize("evict_details", [False, True])
 @pytest.mark.parametrize("change", ["instructions", "options", "ids", "unresolved"])
-def test_classifier_terminal_events_cannot_change_call_questions(
-    transport, evict_details, change
-):
+def test_classifier_terminal_events_cannot_change_call_questions(transport, change):
     operator, _, _ = transport
     run = _seed_run(operator, "call-rubric-drift")
     running = _invocation(0, "running", choice="escalate")
     _publish(operator, run.run_id, running)
-    if evict_details:
-        with operator._lock:
-            operator._evict_classifier_details_locked(run)
-        assert not operator.list_classifier_events(run.run_id, "classify").events[0].body_token
     declaration = running.declaration.model_dump(mode="json")
     questions = declaration["questions"]
     if change == "instructions":
@@ -394,7 +389,9 @@ def test_unresolved_classifier_questions_cannot_become_successful(transport):
 
 @pytest.mark.parametrize("order", [pb.PAGE_ORDER_V2_FORWARD, pb.PAGE_ORDER_V2_NEWEST_FIRST])
 def test_classifier_snapshot_cursor_survives_retention_floor_advancement(order):
-    operator = Operator([], schedule=False, watch=False, stream_history_capacity=4)
+    operator = Operator(
+        [], schedule=False, watch=False, stream_history_capacity=4, state_db=":memory:"
+    )
     try:
         with _serve(operator) as (service, _):
             run = _seed_run(operator, "retained-cursor")
@@ -618,10 +615,9 @@ def test_live_classifier_details_advance_python_client_without_agent_traces(tran
         provider.close()
 
 
-def test_expired_classifier_details_preserve_paging_and_replay(transport, monkeypatch):
-    operator, service, address = transport
-    issued = service.ListRunSummaries(pb.ListRunSummariesRequestV2()).cursor
-    run = _seed_run(operator, "expired-run")
+def test_classifier_details_stay_readable_after_the_run_ends(transport):
+    operator, service, _ = transport
+    run = _seed_run(operator, "ended-run")
     records = []
     for index, status in enumerate(("success", "failed", "cancelled")):
         records.extend((_invocation(index, "running"), _invocation(index, status)))
@@ -639,99 +635,12 @@ def test_expired_classifier_details_preserve_paging_and_replay(transport, monkey
     )
     terminal = operator.get_run(run.run_id)
     assert terminal is not None and terminal.ended_at is not None
-    assert operator._result_retention_seconds is not None
-    expired_at = terminal.ended_at + operator._result_retention_seconds + 1
-    with monkeypatch.context() as clock:
-        clock.setattr(
-            "runtime.operator.operator.time",
-            SimpleNamespace(monotonic=lambda: expired_at),
-        )
-        operator._expire_results()
 
     forward = _page_history(service, run.run_id, continuation, pb.PAGE_ORDER_V2_FORWARD)
     reverse = _page_history(service, run.run_id, continuation, pb.PAGE_ORDER_V2_NEWEST_FIRST)
-    expected = []
-    for activity in original:
-        descriptor = pb.RunActivityDescriptorV2()
-        descriptor.CopyFrom(activity)
-        descriptor.ClearField("detail_ref")
-        expected.append(descriptor)
-    assert forward == expected
-    assert reverse == list(reversed(expected))
-    assert [item.event_kind for item in forward] == [record.status for record in records]
-    summaries = [classifier_event_descriptor_from_v2(item) for item in forward]
-    assert [item.invocation_index for item in summaries] == [0, 0, 1, 1, 2, 2]
-    assert [item.answers for item in summaries] == [(), _answers(), (), (), (), ()]
-    assert [item.error for item in summaries] == [False, False, False, True, False, True]
-    assert [item.duration_ms for item in summaries] == [None, 1000, None, 1000, None, 1000]
-    assert all(
-        not item.body_token
-        for item in operator.list_classifier_events(run.run_id, "classify").events
-    )
-    for activity in original:
-        with pytest.raises(grpc.RpcError) as error:
-            _read_invocation(service, activity.detail_ref)
-        assert error.value.code() is grpc.StatusCode.NOT_FOUND
-    forged = pb.ActivityDetailRefV2()
-    forged.CopyFrom(original[0].detail_ref)
-    forged.activity_id = "classifier:other:1"
-    with pytest.raises(grpc.RpcError) as error:
-        _read_invocation(service, forged)
-    assert error.value.code() is grpc.StatusCode.INVALID_ARGUMENT
-
-    latest = service.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=run.run_id))
-    replay = service.WatchRunStatus(pb.WatchRunStatusRequestV2(after_cursor=issued), timeout=5)
-    replayed = []
-    try:
-        for message in replay:
-            if (
-                message.WhichOneof("payload") == "activity_appended"
-                and message.activity_appended.activity.kind == "classifier_event"
-            ):
-                replayed.append(message.activity_appended.activity)
-            if message.cursor == latest.cursor:
-                break
-    finally:
-        replay.cancel()
-    assert replayed == expected
-
-    provider = GrpcStateProvider(address)
-    provider._install_structural_baseline(operator.operator_instance_id, issued.event_ulid, {})
-    provider._event_cursor = issued
-    details = []
-    completed = threading.Event()
-    provider.on_detail_update(
-        lambda detail: details.append(detail)
-        if isinstance(detail, ClassifierEventDetailAppended)
-        else None
-    )
-    provider.on_run_update(
-        lambda state: completed.set() if state.terminal_seal is not None else None
-    )
-    try:
-        provider.start_stream()
-        assert completed.wait(5)
-        assert provider.stream_state is StreamState.LIVE
-        assert provider._event_cursor == latest.cursor
-        assert [detail.event.event_kind for detail in details] == [
-            record.status for record in records
-        ]
-        assert all(not detail.event.event_json for detail in details)
-        assert [detail.event.invocation_index for detail in details] == [0, 0, 1, 1, 2, 2]
-        assert [detail.event.answers for detail in details] == [
-            (),
-            _answers(),
-            (),
-            (),
-            (),
-            (),
-        ]
-        retained = provider.get_run(run.run_id)
-        assert retained is not None and retained.status is RunStatus.FAILED
-        assert retained.nodes["classify"].agent_trace_json is None
-        assert retained.nodes["classify"].trace is None
-    finally:
-        provider.close()
+    assert forward == original
+    assert reverse == list(reversed(original))
+    assert [_read_invocation(service, item.detail_ref) for item in forward] == records
 
 
 def test_missing_classifier_body_is_not_treated_as_known_expiry(transport, monkeypatch):

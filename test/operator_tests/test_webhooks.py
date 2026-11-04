@@ -58,7 +58,9 @@ def ingress():
     return capture()
 """
     )
-    operator = Operator([str(workflow_path)], schedule=False, watch=False, webhook_port=0)
+    operator = Operator(
+        [str(workflow_path)], schedule=False, watch=False, webhook_port=0, state_db=":memory:"
+    )
     try:
         flow = operator.list_workflows()[0]
         address = urlsplit(flow.webhook_url)

@@ -77,7 +77,7 @@ def _write_standalone(root: Path, *, deferred: bool = False, body: str | None = 
 @pytest.mark.parametrize("deferred", [False, True])
 def test_current_and_later_runs_use_live_source(tmp_path, deferred):
     workflow = _write_standalone(tmp_path, deferred=deferred)
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     try:
         run_a = operator.start_run("flow")
         _edit_source(tmp_path / "helper.py", "VALUE = 2\n")
@@ -106,7 +106,7 @@ def test_concurrent_runs_have_isolated_module_globals(tmp_path):
         "import avalanche as ava\n", "import avalanche as ava\nCOUNTER = 0\n"
     )
     workflow.write_text(text)
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     try:
         run_ids = [operator.start_run("flow"), operator.start_run("flow")]
         runs = [_wait_terminal(operator, run_id) for run_id in run_ids]
@@ -118,7 +118,7 @@ def test_concurrent_runs_have_isolated_module_globals(tmp_path):
 
 def test_prepare_failure_publishes_failed_run(tmp_path):
     workflow = _write_standalone(tmp_path)
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     try:
         workflow.write_text("this is invalid Python !!!\n")
         run = _wait_terminal(operator, operator.start_run("flow"))
@@ -139,7 +139,7 @@ def test_coordinator_cleanup_on_terminal_paths(tmp_path, outcome):
     workflow = _write_standalone(tmp_path, body=bodies[outcome])
     if outcome == "crash":
         workflow.write_text("import os\n" + workflow.read_text())
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     try:
         run_id = operator.start_run("flow")
         if outcome == "cancel":
@@ -164,6 +164,7 @@ def test_cancel_request_is_non_terminal_until_coordinator_stops(tmp_path):
         watch=False,
         schedule=False,
         cancel_grace=0.15,
+        state_db=":memory:",
     )
     updates = operator.subscribe_operator_updates()
     try:
@@ -205,6 +206,7 @@ def test_close_cancels_run_after_start_returns_id(tmp_path):
         watch=False,
         schedule=False,
         cancel_grace=0.1,
+        state_db=":memory:",
     )
     run_id = operator.start_run("flow")
     handle = operator._active_runs[run_id]
@@ -214,7 +216,10 @@ def test_close_cancels_run_after_start_returns_id(tmp_path):
 
     assert time.monotonic() - started < 3.0
     assert not handle.process.is_alive()
-    assert operator.get_run(run_id).status == RunStatus.CANCELLED
+    snapshot = operator.get_latest_run_snapshot(
+        run_id, operator_instance_id=operator.operator_instance_id
+    )
+    assert snapshot is not None and snapshot.summary.status == RunStatus.CANCELLED
     assert operator._active_runs == {}
 
 
@@ -227,6 +232,7 @@ def test_preparation_timeout_kills_sigterm_ignoring_coordinator(tmp_path):
         watch=False,
         schedule=False,
         prepare_timeout=5.0,
+        state_db=":memory:",
     )
     try:
         workflow.write_text(
@@ -281,6 +287,7 @@ def test_running_cancellation_kills_sigterm_ignoring_coordinator(tmp_path):
         watch=False,
         schedule=False,
         cancel_grace=0.1,
+        state_db=":memory:",
     )
     try:
         run_id = operator.start_run("flow")
@@ -295,6 +302,49 @@ def test_running_cancellation_kills_sigterm_ignoring_coordinator(tmp_path):
         pid = int(pid_file.read_text())
         with pytest.raises(ProcessLookupError):
             os.kill(pid, 0)
+    finally:
+        operator.close()
+
+
+def test_a_state_database_inside_a_watched_folder_does_not_trigger_reloads(
+    tmp_path, monkeypatch
+):
+    workflow = tmp_path / "flow.py"
+    workflow.write_text(
+        "import avalanche as ava\n@ava.workflow\ndef flow():\n    return None\n"
+    )
+    refreshed: list[tuple[str, ...]] = []
+    refresh = Operator._refresh_workflows
+
+    def recording_refresh(self, changed_files=()):
+        refreshed.append(changed_files)
+        refresh(self, changed_files)
+
+    monkeypatch.setattr(Operator, "_refresh_workflows", recording_refresh)
+    operator = Operator(
+        [str(tmp_path)], watch=True, schedule=False, state_db=tmp_path / "state.db"
+    )
+    try:
+        for name in (
+            "state.db-wal",
+            "state.db-shm",
+            "state.db-journal",
+            "results/x.bin",
+            "input-files/x.py",
+            "schedule-inputs/x.txt",
+        ):
+            target = tmp_path / name
+            target.parent.mkdir(exist_ok=True)
+            target.write_text("written by the operator")
+        # A source change afterwards shows the watcher saw the earlier writes too.
+        workflow.write_text(workflow.read_text() + "# changed\n")
+        deadline = time.monotonic() + 5.0
+        while not refreshed:
+            assert time.monotonic() < deadline, "the source change was not seen"
+            time.sleep(0.05)
+        time.sleep(0.3)
+        changed = {Path(path).name for files in refreshed for path in files}
+        assert changed == {"flow.py"}
     finally:
         operator.close()
 
@@ -314,7 +364,7 @@ def test_watcher_refreshes_cron_imported_from_live_package_root(tmp_path):
         "def flow():\n"
         "    return None\n"
     )
-    operator = Operator([str(workflow)], watch=True, schedule=False)
+    operator = Operator([str(workflow)], watch=True, schedule=False, state_db=":memory:")
     try:
         assert operator.list_workflows()[0].cron == "3 * * * *"
         schedule.write_text('CRON = "4,5 * * * *"\n')
@@ -342,7 +392,7 @@ def test_watcher_refreshes_resource_derived_cron(tmp_path):
         "def flow():\n"
         "    return None\n"
     )
-    operator = Operator([str(tmp_path)], watch=True, schedule=False)
+    operator = Operator([str(tmp_path)], watch=True, schedule=False, state_db=":memory:")
     try:
         assert operator.list_workflows()[0].cron == "1 * * * *"
         config.write_text('{"cron": "2 * * * *"}')
@@ -373,6 +423,7 @@ def test_close_rejects_run_when_shutdown_precedes_preparation(tmp_path, monkeypa
         watch=False,
         schedule=False,
         cancel_grace=0.1,
+        state_db=":memory:",
     )
     publication_delivered = threading.Event()
     release_start = threading.Event()

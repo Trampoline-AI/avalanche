@@ -293,7 +293,12 @@ def assert_captured_step_values(run: RunState) -> None:
 def test_spawned_local_run_retains_step_inputs_and_outputs(tmp_path):
     workflow = tmp_path / "step_io_flow.py"
     workflow.write_text(WORKFLOW)
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator(
+        [str(workflow)],
+        watch=False,
+        schedule=False,
+        state_db=":memory:",
+    )
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status is RunStatus.FAILED
@@ -380,7 +385,7 @@ def protocol_operator(status: RunStatus = RunStatus.RUNNING):
 
     from runtime.operator.models import NodeState
 
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     run = RunState(run_id="run-io", flow_name="flow", status=status)
     run.nodes["step_1"] = NodeState("step_1", "step", "step", status=NodeStatus.RUNNING)
     operator._runs[run.run_id] = run

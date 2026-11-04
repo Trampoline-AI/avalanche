@@ -183,8 +183,9 @@ execution; step postprocessing failure does not cancel an already-submitted eval
 
 Selectors, Jev calls, and composites run independently of workflow scheduling.
 Their pending/results/errors neither gate downstream work nor change workflow
-status. Records remain available after the coordinator completes, but only in
-the running operator's memory; there is no restart recovery. Embedded `.run()`
+status. Records remain available after the coordinator completes and after an
+operator restart, from the operator's local state database; an evaluation still
+pending when the operator stops is marked failed on the next start, not resumed. Embedded `.run()`
 reports declarations as **not evaluated**. See
 [native evaluations](agent-steps.md#native-evaluations) for authoring, credentials,
 result accessors, and browser examples.

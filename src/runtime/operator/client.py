@@ -377,6 +377,9 @@ class GrpcStateProvider:
         self._hydrated_trace_revisions: dict[tuple[str, str], int] = {}
         self._activity_continuations: dict[tuple[str, str, str], pb.ContinuationRefV2] = {}
         self._detail_refs_by_key: dict[str, pb.ActivityDetailRefV2] = {}
+        # Operator instances this client moved away from after a reset; their late
+        # replies never replace a binding. Guarded by _state_lock.
+        self._retired_scopes: set[str] = set()
         self._trace_detail_refs: dict[tuple[str, str, int], pb.ActivityDetailRefV2] = {}
         self._agent_events: dict[tuple[str, str], list[AgentLiveEvent]] = {}
         self._trace_bodies: dict[tuple[str, str], AgentTraceTerminal] = {}
@@ -1241,7 +1244,20 @@ class GrpcStateProvider:
             raise _DetailHydrationRaceError("activity detail reference is incomplete")
         with self._state_lock:
             existing = self._detail_refs_by_key.get(reference.object_key)
-            if existing is not None and not self._same_detail_reference(existing, reference):
+            # A restarted operator serves its stored details under the same keys
+            # from a new scope, so its reference replaces an earlier operator's.
+            # Nothing else may replace a binding within one scope, and a late reply
+            # from an operator this client has moved away from is never bound, even
+            # after a new baseline has cleared the earlier bindings.
+            if reference.scope_ref.reference in self._retired_scopes:
+                raise _DetailHydrationRaceError(
+                    "activity detail reference comes from a retired operator"
+                )
+            if (
+                existing is not None
+                and not self._same_detail_reference(existing, reference)
+                and existing.scope_ref.reference == reference.scope_ref.reference
+            ):
                 raise _DetailHydrationRaceError(
                     "activity detail reference binding was replaced"
                 )
@@ -1652,11 +1668,16 @@ class GrpcStateProvider:
                 raise _DetailHydrationRaceError("client epoch changed during hydration")
 
             current = self._runs_by_id.get(hydrated.run_id)
+            if (
+                current is not None
+                and current.operator_instance_id != hydrated.operator_instance_id
+            ):
+                # Cached from an earlier operator, which the checks above show this
+                # client no longer follows. A restarted operator serves its stored
+                # runs again under the same ID, so the new snapshot replaces it.
+                current = None
             if current is not None:
-                if (
-                    current.operator_instance_id != hydrated.operator_instance_id
-                    or current.created_sequence != hydrated.created_sequence
-                ):
+                if current.created_sequence != hydrated.created_sequence:
                     raise _DetailHydrationRaceError("run identity changed during hydration")
                 if current.latest_log_sequence > hydrated.latest_log_sequence:
                     raise _DetailHydrationRaceError("logs advanced during hydration")
@@ -2548,6 +2569,7 @@ class GrpcStateProvider:
             self._validated_reset_baseline = None
             self.stream_state = StreamState.RESET_REQUIRED
             self._reset_acknowledged.clear()
+        self._retire_scope(operator_instance_id)
 
         self.tui_extensions.invalidate("*", operator_instance_id, reset=True)
         for callback in tuple(self._stream_reset_callbacks):
@@ -2997,6 +3019,13 @@ class GrpcStateProvider:
         for run in runs.values():
             self._notify_run_callbacks(run)
 
+    def _retire_scope(self, operator_instance_id: str) -> None:
+        """Record that the client moves to ``operator_instance_id`` from its current one."""
+        with self._state_lock:
+            if self.operator_instance_id and self.operator_instance_id != operator_instance_id:
+                self._retired_scopes.add(self.operator_instance_id)
+            self._retired_scopes.discard(operator_instance_id)
+
     def _replace_structural_baseline(
         self,
         operator_instance_id: str,
@@ -3004,6 +3033,7 @@ class GrpcStateProvider:
         runs: dict[str, RunState],
     ) -> None:
         """Replace reducer state without publishing duplicate UI updates."""
+        self._retire_scope(operator_instance_id)
         with self._state_lock:
             for run in runs.values():
                 run.details_hydrated = False

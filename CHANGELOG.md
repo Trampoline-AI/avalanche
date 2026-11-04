@@ -39,6 +39,59 @@
   without calling its agent logs a warning. Native evaluations now evaluate the
   step's one successful call. Steps that called their agent several times must be
   split into separate agent steps.
+- Operator: runs, their details, results and schedules now survive an operator
+  restart, including a crash or `kill -9`. `ava operator` and `ava dev` keep their
+  state in a local SQLite database, `.avalanche/operator/state.db` under the folder
+  they start in by default; pass `--state-db PATH` to choose another file, or
+  `--state-db :memory:` for a throwaway one. See "Where the operator keeps its
+  data" in the README.
+  - **What is kept:** each run with its step states and revisions and what it was
+    started with (input, context and the input files it used); its logs, agent
+    events and finished traces, classifier invocation snapshots and evaluation
+    records; the result index, so `ava result RUN_ID` and `GetRunResult` keep
+    working; and each cron schedule's on/off state, input and last started minute,
+    kept by workflow, so they also survive a changed cron expression and a workflow
+    that leaves discovery and comes back.
+    The Web UI, TUI and API show the same history after a restart, and an open
+    browser tab or TUI reconnects to the restarted operator on its own (the Web UI
+    used to keep retrying with "Response does not belong to the connected operator
+    scope" until the page was reloaded). Update sequence numbers keep increasing
+    across restarts; each start still gets a new operator instance ID.
+  - **What is not:** a run unfinished when the operator stopped is not resumed. On
+    the next start the operator stops its leftover run processes, then marks the
+    run and its unfinished steps failed with "Operator restarted before the run
+    finished; it was not resumed". Evaluations still pending are marked failed the
+    same way. `--schedules-enabled` still turns every schedule on, for that start
+    only; it is not saved.
+  - **Where files go:** result bundles in `results/`, uploaded input files in
+    `input-files/` (files a run used are kept, unused uploads are removed) and
+    copies of files a schedule's input uses in `schedule-inputs/`, all next to the
+    database. Schedule input can refer only to files attached for that schedule
+    (or kept from its previous input); other `ava.File` references are refused.
+    The database and folders are local and unencrypted and hold step inputs, tool
+    outputs and results as recorded.
+  - **Nothing expires anymore:** results no longer expire after 24 hours, the
+    1024-result and 256 MiB caps are gone, and classifier invocation bodies are no
+    longer dropped. Per-item size limits still apply. Nothing is deleted
+    automatically.
+  - **New `ava state` commands** inspect and clear it, with the operator stopped:
+    `ava state info` (database, runs by status, sizes of stored results and input
+    files, leftover files), `ava state delete RUN_ID...` (finished runs, with
+    everything that belongs to them), `ava state prune --before DATE` or
+    `--keep-last N` (old finished runs; never unfinished runs or schedules) and
+    `ava state clear` (every run and leftover file, after a confirmation that
+    `--yes` skips; schedules only with `--include-schedules`). Large deletions
+    reclaim disk space with `VACUUM`.
+  - **Startup checks:** only one operator, or one `ava state` command, can use a
+    database at a time; another fails with an error naming the file. A database
+    written by a newer Avalanche version is refused, and so is a stored schedule
+    whose input file is missing (`ava state clear --include-schedules` removes
+    it). A result bundle that does not match the index is logged as a warning and
+    never served.
+  - **Breaking for embedding hosts:** `Operator(...)` now requires a keyword-only
+    `state_db` argument (a path or `":memory:"`), and its
+    `result_storage_directory` and `result_retention_seconds` arguments are
+    removed.
 
 ## 0.17.3
 

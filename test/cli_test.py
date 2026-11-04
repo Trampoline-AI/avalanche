@@ -562,6 +562,8 @@ def test_http_start_failure_releases_operator_listener(monkeypatch, tmp_path, co
             "0",
             "--web-port",
             str(occupied.getsockname()[1]),
+            "--state-db",
+            str(tmp_path / "state.db"),
         ]
         if command == "dev":
             assert app.main(argv) == 1
@@ -625,6 +627,7 @@ def test_operator_fatal_error_closes_both_listeners_despite_http_cleanup_error(m
             webhook_port=0,
             watch=False,
             schedule=False,
+            state_db=":memory:",
         )
     assert caught.value is fatal_error
     assert endpoints[0].startswith("http://127.0.0.1:")
@@ -691,7 +694,16 @@ def test_signals_during_cleanup_release_listeners_and_restore_handlers(
     monkeypatch.setattr(Operator, "close", interrupted_operator_close)
     monkeypatch.setattr(Operator, "wait_for_failure", begin_shutdown)
     monkeypatch.setattr(app, "_open_browser", lambda _url: None)
-    argv = [command, str(tmp_path), "--port", "0", "--web-port", "0"]
+    argv = [
+        command,
+        str(tmp_path),
+        "--port",
+        "0",
+        "--web-port",
+        "0",
+        "--state-db",
+        str(tmp_path / "state.db"),
+    ]
     try:
         if command == "operator" and fatal:
             with pytest.raises(RuntimeError) as caught:
@@ -778,6 +790,8 @@ def ingress():
                 str(occupied.getsockname()[1]),
                 "--web-port",
                 "0",
+                "--state-db",
+                str(tmp_path / "state.db"),
             ]
             if command == "operator":
                 with pytest.raises(RuntimeError) as caught:
@@ -802,8 +816,6 @@ def ingress():
             operator._webhooks.close()
             if operator._watcher_thread is not None:
                 operator._watcher_thread.join(timeout=2.0)
-            if operator._result_cleanup_thread is not None:
-                operator._result_cleanup_thread.join(timeout=2.0)
             operator._stop_notification_dispatcher()
             operator._close_result_store()
 
@@ -872,6 +884,8 @@ def test_no_web_allows_an_occupied_http_port(monkeypatch, tmp_path):
                     "--no-web",
                     "--web-port",
                     str(occupied.getsockname()[1]),
+                    "--state-db",
+                    str(tmp_path / "state.db"),
                 ]
             )
             == 0
@@ -895,7 +909,9 @@ def test_ava_schedule_lists_enables_and_disables(tmp_path, capsys):
         "def adhoc():\n"
         "    return None\n"
     )
-    operator = Operator([str(flows)], watch=False, schedule=False, webhook_port=0)
+    operator = Operator(
+        [str(flows)], watch=False, schedule=False, webhook_port=0, state_db=":memory:"
+    )
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -959,8 +975,9 @@ def test_schedules_enabled_flag_reaches_the_operator(monkeypatch, tmp_path, comm
             raise KeyboardInterrupt
 
     monkeypatch.setattr(app, "_configure_terminal_logging", lambda _level: None)
-    monkeypatch.setattr(operator_module, "Operator", StoppedOperator)
+    # Patch the lazily loaded package name first, so undo restores the real class.
     monkeypatch.setattr("runtime.operator.Operator", StoppedOperator)
+    monkeypatch.setattr(operator_module, "Operator", StoppedOperator)
     app.main([command, str(flows), "--schedules-enabled"])
 
     assert created and created[0]["schedules_enabled"] is True
@@ -983,7 +1000,9 @@ def test_schedule_enable_requires_the_required_input(tmp_path, capsys):
         "def nightly():\n"
         "    return address()\n"
     )
-    operator = Operator([str(flows)], watch=False, schedule=False, webhook_port=0)
+    operator = Operator(
+        [str(flows)], watch=False, schedule=False, webhook_port=0, state_db=":memory:"
+    )
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -1001,3 +1020,76 @@ def test_schedule_enable_requires_the_required_input(tmp_path, capsys):
     finally:
         server.stop(grace=0).wait()
         operator.close()
+
+
+@pytest.mark.parametrize("command", ["operator", "dev"])
+@pytest.mark.parametrize(
+    ("extra", "expected"),
+    (
+        pytest.param([], ".avalanche/operator/state.db", id="default"),
+        pytest.param(["--state-db", ":memory:"], ":memory:", id="memory"),
+        pytest.param(["--state-db", "custom/state.db"], "custom/state.db", id="path"),
+    ),
+)
+def test_state_db_flag_reaches_the_operator(monkeypatch, tmp_path, command, extra, expected):
+    from ava_cli import app
+    from runtime.operator import operator as operator_module
+
+    flows = tmp_path / "flows.py"
+    flows.write_text("import avalanche as ava\n")
+    created = []
+
+    class StoppedOperator:
+        def __init__(self, *args, **kwargs):
+            created.append(kwargs)
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr(app, "_configure_terminal_logging", lambda _level: None)
+    # Patch the lazily loaded package name first, so undo restores the real class.
+    monkeypatch.setattr("runtime.operator.Operator", StoppedOperator)
+    monkeypatch.setattr(operator_module, "Operator", StoppedOperator)
+    app.main([command, str(flows), *extra])
+
+    assert created and created[0]["state_db"] == expected
+
+
+@pytest.mark.parametrize("command", ["operator", "dev"])
+@pytest.mark.parametrize("problem", ["locked", "newer schema"])
+def test_unusable_state_db_fails_startup_with_a_clear_error(
+    monkeypatch, tmp_path, capsys, command, problem
+):
+    import sqlite3
+
+    from ava_cli import app
+    from runtime.operator.state import LATEST_SCHEMA_VERSION, OperatorStateStore
+
+    path = tmp_path / "state.db"
+    holder = OperatorStateStore.open(path)
+    if problem == "newer schema":
+        holder.close()
+        connection = sqlite3.connect(path, autocommit=True)
+        connection.execute(
+            "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, 'future', 0)",
+            (LATEST_SCHEMA_VERSION + 1,),
+        )
+        connection.close()
+    monkeypatch.setattr(app, "_configure_terminal_logging", lambda _level: None)
+    try:
+        argv = [
+            command,
+            str(tmp_path),
+            "--port",
+            "0",
+            "--web-port",
+            "0",
+            "--state-db",
+            str(path),
+        ]
+        assert app.main(argv) == 1
+    finally:
+        holder.close()
+
+    error = capsys.readouterr().err
+    assert str(path.resolve()) in error
+    if problem == "newer schema":
+        assert str(LATEST_SCHEMA_VERSION + 1) in error

@@ -186,6 +186,47 @@ describe("operator transport boundary", () => {
     await expect(api.loadBaseline()).rejects.toThrow(/summary cursor changed/i);
   });
 
+  it("follows a restarted operator to its new scope on the next baseline", async () => {
+    let reference = "operator-1";
+    const page = () => ({
+      response: Promise.resolve(
+        RunSummaryPageV2.create({
+          scopeRef: { reference },
+          cursor: cursor(),
+          projectSummaryCursor: summaryCursor,
+          runs: [RunSummaryV2.create({ runId: "run-1", triggeredBy: "manual" })],
+        }),
+      ),
+    });
+    const api = apiWith({
+      discoverFlows: () => ({
+        response: Promise.resolve(
+          FlowListV2.create({ scopeRef: { reference }, cursor: cursor(), revision: "0" }),
+        ),
+      }),
+      listRunSummaries: page,
+      getRunSnapshot: () => ({
+        response: Promise.resolve(
+          RunSnapshotV2.create({
+            scopeRef: { reference: "operator-1" },
+            cursor: cursor(),
+            summary: { runId: "run-1", triggeredBy: "manual" },
+          }),
+        ),
+      }),
+    });
+    expect((await api.loadBaseline()).catalog.operatorInstanceId).toBe("operator-1");
+
+    reference = "operator-2";
+    const restarted = await api.loadBaseline();
+    expect(restarted.catalog.operatorInstanceId).toBe("operator-2");
+    expect(restarted.runs.map((run) => run.runId)).toEqual(["run-1"]);
+    // Outside a baseline, a response from another scope is still refused.
+    await expect(api.getLatestRunSnapshot("run-1", "operator-2")).rejects.toThrow(
+      /operator scope/i,
+    );
+  });
+
   it("reloads the baseline when the catalog is republished at the same revision", async () => {
     const api = apiWith({
       discoverFlows: vi

@@ -12,6 +12,8 @@ from .discovery import (
     WorkflowDiscoveryError,
     validate_discovery_timeout,
 )
+from .state import StateStoreError
+from .state.cli import add_state_db_argument
 from .workspace_config import format_scan_targets, select_workflow_targets
 
 
@@ -48,7 +50,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--schedules-enabled",
         action="store_true",
-        help="start with every cron schedule enabled (schedules start disabled otherwise)",
+        help=(
+            "start with every cron schedule enabled, for this start only (otherwise "
+            "schedules start as last turned on or off)"
+        ),
     )
     parser.add_argument(
         "--discovery-timeout",
@@ -57,6 +62,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         metavar="SECONDS",
         help=f"maximum seconds for one discovery scan (default: {DEFAULT_DISCOVERY_TIMEOUT:g})",
     )
+    add_state_db_argument(parser)
     parser.add_argument(
         "--log-level",
         type=str.upper,
@@ -86,6 +92,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for line in format_scan_targets(selection):
         print(line)
     print("  Executor: Local")
+    print(f"  State: {args.state_db}")
     print("  Discovering workflows...")
 
     from . import serve
@@ -99,7 +106,11 @@ def main(argv: Sequence[str] | None = None) -> int:
             web_port=None if args.no_web else args.web_port,
             discovery_timeout=args.discovery_timeout,
             schedules_enabled=args.schedules_enabled,
+            state_db=args.state_db,
         )
+    except StateStoreError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
     except WorkflowDiscoveryError as exc:
         print("error: Avalanche operator discovery failed", file=sys.stderr)
         for diagnostic in exc.diagnostics:

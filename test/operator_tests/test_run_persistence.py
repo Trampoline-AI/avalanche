@@ -1,0 +1,697 @@
+"""Runs, their nodes and sequences survive operator restarts; unfinished runs are failed."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import signal
+import socket
+import subprocess
+import sys
+import time
+from contextlib import closing
+from datetime import datetime
+from pathlib import Path
+
+import grpc
+import pytest
+
+from runtime.operator import run_processes
+from runtime.operator.client import GrpcStateProvider
+from runtime.operator.input_files import InputFileStaging, StagedInputFile
+from runtime.operator.models import (
+    NodeState,
+    NodeStatus,
+    RunInput,
+    RunState,
+    RunStatus,
+    TerminalSealDescriptor,
+    TriggerKind,
+    WorkflowTopology,
+)
+from runtime.operator.operator import OPERATOR_RESTARTED_REASON, Operator, RunAlreadyExistsError
+from runtime.operator.proto import operator_pb2 as pb
+from runtime.operator.proto import operator_pb2_grpc as pb_grpc
+from runtime.operator.run_processes import (
+    RunProcess,
+    RunProcessLookupError,
+    RunProcessStopError,
+    identify_run_process,
+    stop_run_process,
+)
+from runtime.operator.server import serve as serve_operator
+from runtime.operator.state import OperatorStateStore, StateRowError, StateStoreError
+from runtime.operator.state.metadata import OperatorMetadataTable
+from runtime.operator.state.runs import RunRequest, RunsTable, StoredRun
+from runtime.operator.step_io import StepIo, StepValuePreview, StepValuePreviewKind
+
+_FLOWS = """import time
+
+import avalanche as ava
+
+
+class Greeting(ava.BaseInput):
+    name: str = "world"
+
+
+class Tenant(ava.RunContext):
+    tenant: str = "none"
+
+
+@ava.source
+def greet(payload: Greeting, ctx: Tenant) -> str:
+    return f"hello {payload.name} from {ctx.tenant}"
+
+
+@ava.step
+def shout(text: str) -> str:
+    return text.upper()
+
+
+@ava.workflow(input=Greeting, context=Tenant)
+def quick():
+    return shout(greet())
+
+
+class Document(ava.BaseInput):
+    document: ava.File
+
+
+@ava.source
+def read_document(payload: Document) -> str:
+    return payload.document.read_bytes().decode()
+
+
+@ava.workflow(input=Document)
+def documents():
+    return read_document()
+
+
+@ava.source
+def wait_long() -> int:
+    time.sleep(300)
+    return 1
+
+
+@ava.step
+def after_wait(value: int) -> int:
+    return value
+
+
+@ava.workflow
+def sleepy():
+    return after_wait(wait_long())
+"""
+
+# Runs an operator in its own process, starts the sleepy workflow and reports the run
+# once its first step is running, then waits to be killed.
+_KILLED_OPERATOR = """
+import json, sys, time
+from runtime.operator.models import NodeStatus
+from runtime.operator.operator import Operator
+
+operator = Operator(
+    [sys.argv[1]], watch=False, schedule=False, state_db=sys.argv[2], prepare_timeout=120
+)
+run_id = operator.start_run("sleepy")
+deadline = time.monotonic() + 120
+while operator.get_run(run_id).nodes.get("wait_long_1") is None or (
+    operator.get_run(run_id).nodes["wait_long_1"].status is not NodeStatus.RUNNING
+):
+    assert time.monotonic() < deadline, "sleepy run did not start"
+    time.sleep(0.05)
+print(json.dumps({
+    "run_id": run_id,
+    "coordinator": operator._active_runs[run_id].process.pid,
+    "sequence": operator.current_sequence,
+}), flush=True)
+sys.stdin.read()
+"""
+
+_TERMINAL = {RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED}
+
+
+@pytest.fixture
+def flows(tmp_path) -> Path:
+    path = tmp_path / "flows.py"
+    path.write_text(_FLOWS)
+    return path
+
+
+def _operator(flows: Path, state_db: Path) -> Operator:
+    # A generous preparation timeout keeps these tests steady on a busy machine.
+    return Operator(
+        [str(flows)],
+        watch=False,
+        schedule=False,
+        webhook_port=0,
+        state_db=state_db,
+        prepare_timeout=120,
+    )
+
+
+def _wait_terminal(operator: Operator, run_id: str) -> RunState:
+    deadline = time.monotonic() + 120
+    while time.monotonic() < deadline:
+        run = operator.get_run(run_id)
+        if run is not None and run.status in _TERMINAL:
+            return run
+        time.sleep(0.03)
+    pytest.fail(f"Run {run_id} did not finish")
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def _process_alive(pid: int) -> bool:
+    state = subprocess.run(
+        ["/bin/ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True
+    ).stdout.strip()
+    return bool(state) and not state.startswith("Z")
+
+
+def _wait_until(predicate, seconds: float = 30) -> None:
+    deadline = time.monotonic() + seconds
+    while not predicate():
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+
+
+def _node_view(run: RunState) -> list[tuple]:
+    return [
+        (node.node_id, node.status, node.started_at, node.ended_at, node.error, node.step_io)
+        for node in run.nodes.values()
+    ]
+
+
+# ── Adapter ──────────────────────────────────────────────
+
+
+def _stored_run() -> StoredRun:
+    run = RunState(
+        run_id="run-1",
+        flow_name="Quick",
+        status=RunStatus.RUNNING,
+        triggered_at=1_700_000_000.5,
+        started_at=12.25,
+        triggered_by=TriggerKind.API,
+        workflow_id="flows.py::quick",
+        workflow_display_name="Quick",
+        topology=WorkflowTopology(
+            node_ids=("a", "b"),
+            graph=(("a", ()), ("b", ("a",))),
+            node_types=(("a", "source"), ("b", "step")),
+            display_names=(("a", "A"), ("b", "B")),
+            input_declaration_json='{"fields": []}',
+        ),
+        input=RunInput(values_json='{"name": "x"}', supplied_fields=("name",)),
+    )
+    run.nodes["a"] = NodeState(
+        "a",
+        "A",
+        "source",
+        status=NodeStatus.SUCCESS,
+        started_at=12.5,
+        ended_at=13.0,
+        step_io=StepIo(
+            inputs=(),
+            output=StepValuePreview(
+                kind=StepValuePreviewKind.JSON,
+                type_name="str",
+                preview_json='"x"',
+                truncated=False,
+            ),
+        ),
+    )
+    run.nodes["b"] = NodeState("b", "B", "step", status=NodeStatus.RUNNING, started_at=13.0)
+    return StoredRun(
+        run=run,
+        created_sequence=4,
+        revision=9,
+        activity_sequence=2,
+        node_revisions={"a": 8, "b": 9},
+    )
+
+
+def test_runs_table_round_trips_runs_nodes_requests_and_processes():
+    stored = _stored_run()
+    request = RunRequest(
+        input={"name": "x", "file": {"kind": "file", "size": 3}},
+        context={"tenant": "local"},
+        input_files=(StagedInputFile("a" * 32 + "/notes.txt", "notes.txt", "", "b" * 64, 3),),
+    )
+    process = RunProcess(
+        process_group=4321,
+        started="Mon Nov  2 10:00:00 2026",
+        booted="Thu Oct  8 03:04:29 2026",
+    )
+    store = OperatorStateStore.open(":memory:")
+    try:
+        with store.transaction() as connection:
+            RunsTable.create(connection, stored, request, process)
+        run = stored.run
+        run.status = RunStatus.FAILED
+        run.ended_at = 14.0
+        run.nodes["b"].status = NodeStatus.FAILED
+        run.nodes["b"].error = "boom"
+        run.terminal_seal = TerminalSealDescriptor(
+            activity_id="terminal_seal:run-1:3",
+            run_sequence=3,
+            timestamp=datetime(2026, 11, 2, 10, 0, 1),
+            terminal_status=RunStatus.FAILED,
+            reason="why",
+        )
+        updated = StoredRun(
+            run=run,
+            created_sequence=4,
+            revision=11,
+            activity_sequence=3,
+            node_revisions={"a": 8, "b": 11},
+        )
+        with store.transaction() as connection:
+            RunsTable.update(connection, updated, ("b",))
+        with store.transaction() as connection:
+            (loaded,) = RunsTable.load_all(connection)
+            stored_request = RunsTable.read_request(connection, "run-1")
+    finally:
+        store.close()
+
+    assert loaded.stored.run == run
+    assert list(loaded.stored.run.nodes) == ["a", "b"]
+    assert (loaded.stored.created_sequence, loaded.stored.revision) == (4, 11)
+    assert loaded.stored.activity_sequence == 3
+    assert dict(loaded.stored.node_revisions) == {"a": 8, "b": 11}
+    assert loaded.process == process
+    assert stored_request == request
+
+
+def test_a_stored_run_that_does_not_match_its_model_is_an_error_not_skipped():
+    store = OperatorStateStore.open(":memory:")
+    try:
+        with store.transaction() as connection:
+            RunsTable.create(connection, _stored_run(), RunRequest(), None)
+            connection.execute("UPDATE runs SET topology_json = '{\"graph\": 3}'")
+        with pytest.raises(StateRowError), store.transaction() as connection:
+            RunsTable.load_all(connection)
+    finally:
+        store.close()
+
+
+# ── Restart ──────────────────────────────────────────────
+
+
+def test_finished_runs_survive_a_restart_with_their_state_revisions_and_sequences(
+    flows, tmp_path
+):
+    state_db = tmp_path / "state" / "state.db"
+    first = _operator(flows, state_db)
+    try:
+        run_id = first.start_run("quick", input={"name": "ada"}, context={"tenant": "t"})
+        before = _wait_terminal(first, run_id)
+        summaries = first.list_run_summaries().runs
+        snapshot = first.get_latest_run_snapshot(
+            run_id, operator_instance_id=first.operator_instance_id
+        )
+        sequence = first.current_sequence
+        old_instance = first.operator_instance_id
+    finally:
+        first.close()
+
+    second = _operator(flows, state_db)
+    try:
+        assert second.operator_instance_id != old_instance
+        assert second.current_sequence >= sequence
+        after = second.get_run(run_id)
+        assert after.status is RunStatus.SUCCESS
+        assert _node_view(after) == _node_view(before)
+        assert after.input == before.input
+        assert after.topology == before.topology
+        assert after.terminal_seal == before.terminal_seal
+        assert second.list_run_summaries().runs == summaries
+        restored = second.get_latest_run_snapshot(
+            run_id, operator_instance_id=second.operator_instance_id
+        )
+        assert restored.summary == snapshot.summary
+        assert [
+            (node.node_id, node.status, node.revision, node.step_io) for node in restored.nodes
+        ] == [
+            (node.node_id, node.status, node.revision, node.step_io) for node in snapshot.nodes
+        ]
+        assert restored.as_of_sequence >= snapshot.as_of_sequence
+
+        # New publications continue after every sequence the first operator used.
+        next_id = second.start_run("quick")
+        _wait_terminal(second, next_id)
+        assert second.list_run_summaries().runs[0].created_sequence > sequence
+        with pytest.raises(RunAlreadyExistsError):
+            second.start_run("quick", run_id=run_id)
+        with second._state_store.transaction() as connection:
+            request = RunsTable.read_request(connection, run_id)
+        assert request == RunRequest(input={"name": "ada"}, context={"tenant": "t"})
+    finally:
+        second.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_a_run_left_running_by_a_killed_operator_is_stopped_and_failed(flows, tmp_path):
+    state_db = tmp_path / "state.db"
+    killed = subprocess.Popen(
+        [sys.executable, "-c", _KILLED_OPERATOR, str(flows), str(state_db)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        report = json.loads(killed.stdout.readline())
+        coordinator = report["coordinator"]
+        assert _process_alive(coordinator)
+        killed.send_signal(signal.SIGKILL)
+        killed.wait(timeout=10)
+        # The coordinator runs in its own session, so it outlives the operator.
+        assert _process_alive(coordinator)
+
+        operator = _operator(flows, state_db)
+        try:
+            assert not _process_alive(coordinator)
+            run = operator.get_run(report["run_id"])
+            assert run.status is RunStatus.FAILED
+            assert run.terminal_seal.reason == OPERATOR_RESTARTED_REASON
+            assert {node.status for node in run.nodes.values()} == {NodeStatus.FAILED}
+            assert {node.error for node in run.nodes.values()} == {OPERATOR_RESTARTED_REASON}
+            summary = operator.list_run_summaries().runs[0]
+            assert summary.status is RunStatus.FAILED
+            assert summary.revision > report["sequence"]
+            assert operator.current_sequence > report["sequence"]
+        finally:
+            operator.close()
+
+        # The failure is stored, so the next restart neither stops nor fails it again.
+        operator = _operator(flows, state_db)
+        try:
+            assert operator.get_run(report["run_id"]).terminal_seal == run.terminal_seal
+        finally:
+            operator.close()
+    finally:
+        if killed.poll() is None:
+            killed.kill()
+        killed.stdout.close()
+        killed.stdin.close()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_stopping_a_recorded_process_group_leaves_unrelated_processes_alone():
+    sleeper = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        recorded = identify_run_process(sleeper.pid)
+        assert recorded is not None
+        reused = recorded.model_copy(update={"started": "Thu Jan  1 00:00:00 1970"})
+        rebooted = recorded.model_copy(update={"booted": "Thu Jan  1 00:00:00 1970"})
+
+        # Another process with the recorded ID, or any process after a restart of
+        # the machine, is not the run's.
+        assert stop_run_process(reused, grace=1.0) is False
+        assert stop_run_process(rebooted, grace=1.0) is False
+        assert sleeper.poll() is None
+
+        assert stop_run_process(recorded, grace=1.0) is True
+        assert sleeper.wait(timeout=5) == -signal.SIGTERM
+        assert stop_run_process(recorded, grace=1.0) is False
+    finally:
+        if sleeper.poll() is None:
+            sleeper.kill()
+
+
+# ── Clients after a restart ──────────────────────────────
+
+
+def test_v2_cursors_after_a_restart_start_at_the_stored_sequence(flows, tmp_path):
+    state_db = tmp_path / "state.db"
+    store = OperatorStateStore.open(state_db)
+    try:
+        with store.transaction() as connection:
+            OperatorMetadataTable.write_sequences(
+                connection, update_sequence=50_000_000, catalog_sequence=50_000_000
+            )
+    finally:
+        store.close()
+    operator = _operator(flows, state_db)
+    port = _free_port()
+    server = serve_operator(operator, port=port, block=False)
+    try:
+        with closing(grpc.insecure_channel(f"127.0.0.1:{port}")) as channel:
+            stub = pb_grpc.OperatorServiceV2Stub(channel)
+            # Naming fifty million earlier sequences would exceed this deadline.
+            page = stub.ListRunSummaries(pb.ListRunSummariesRequestV2(), timeout=10)
+            catalog = stub.DiscoverFlows(pb.DiscoverFlowsRequestV2(), timeout=10)
+        assert page.cursor.event_ulid
+        assert catalog.cursor.event_ulid
+        assert operator.current_sequence >= 50_000_000
+    finally:
+        server.stop(grace=0).wait()
+        operator.close()
+
+
+def test_a_connected_client_reads_stored_runs_from_the_restarted_operator(flows, tmp_path):
+    state_db = tmp_path / "state.db"
+    port = _free_port()
+    first = _operator(flows, state_db)
+    server = serve_operator(first, port=port, block=False)
+    provider = GrpcStateProvider(f"127.0.0.1:{port}", unary_timeout=5)
+    try:
+        run_id = provider.start_run("quick", input={"name": "ada"})
+        _wait_terminal(first, run_id)
+        before = provider.get_run(run_id)
+        old_instance = before.operator_instance_id
+        server.stop(grace=0).wait()
+        first.close()
+
+        second = _operator(flows, state_db)
+        server = serve_operator(second, port=port, block=False)
+        try:
+            _wait_until(lambda: provider.ping())
+            after = provider.get_run(run_id)
+            assert after.operator_instance_id == second.operator_instance_id != old_instance
+            assert after.status is RunStatus.SUCCESS
+            assert _node_view(after) == _node_view(before)
+            assert [run.run_id for run in provider.list_runs("quick")] == [run_id]
+            # The result stored before the restart is served for the stored run.
+            assert provider.get_run_result(run_id) == "HELLO ADA FROM NONE"
+        finally:
+            server.stop(grace=0).wait()
+            second.close()
+    finally:
+        provider.close()
+
+
+# ── Input files ──────────────────────────────────────────
+
+
+def test_files_a_run_used_stay_next_to_the_database_and_unused_ones_go(flows, tmp_path):
+    state_db = tmp_path / "state" / "state.db"
+    port = _free_port()
+    operator = _operator(flows, state_db)
+    server = serve_operator(operator, port=port, block=False)
+    try:
+        with closing(grpc.insecure_channel(f"127.0.0.1:{port}")) as channel:
+            stub = pb_grpc.OperatorServiceV2Stub(channel)
+
+            def stage(name: str, content: bytes) -> pb.FileAttachmentV2:
+                return stub.StageInputFile(
+                    pb.StageInputFileRequestV2(
+                        workflow_selector="documents",
+                        field_name="document",
+                        name=name,
+                        media_type="text/plain",
+                        content=content,
+                    )
+                )
+
+            used = stage("used.txt", b"kept")
+            unused = stage("unused.txt", b"dropped")
+            stub.StartRun(
+                pb.StartRunRequestV2(
+                    run_id="run_files", workflow_selector="documents", input_files=[used]
+                )
+            )
+        _wait_terminal(operator, "run_files")
+    finally:
+        server.stop(grace=0).wait()
+        operator.close()
+
+    folder = state_db.parent / "input-files"
+    assert (folder / used.object_key).read_bytes() == b"kept"
+    assert not (folder / unused.object_key).parent.exists()
+    operator = _operator(flows, state_db)
+    try:
+        assert operator.get_run("run_files").status is RunStatus.SUCCESS
+        with operator._state_store.transaction() as connection:
+            request = RunsTable.read_request(connection, "run_files")
+        assert request.input_files == (
+            StagedInputFile(
+                object_key=used.object_key,
+                name="used.txt",
+                media_type="text/plain",
+                sha256=used.sha256,
+                size_bytes=4,
+            ),
+        )
+        assert request.input is not None and "document" in request.input
+    finally:
+        operator.close()
+
+
+def test_closing_a_lasting_staging_folder_keeps_only_used_files(tmp_path):
+    staging = InputFileStaging(tmp_path, keep_used_files=True)
+    used = staging.stage("used.txt", "", b"u")
+    unused = staging.stage("unused.txt", "", b"x")
+    with staging.claims() as claims:
+        claims.file(used.object_key, sha256=used.sha256, size_bytes=1)
+        assert claims.files == (used,)
+
+    staging.close()
+
+    assert (tmp_path / used.object_key).read_bytes() == b"u"
+    assert not (tmp_path / unused.object_key).parent.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_a_group_that_cannot_be_stopped_fails_startup_with_its_id(flows, tmp_path, monkeypatch):
+    sleeper = subprocess.Popen(["sleep", "60"], start_new_session=True)
+    try:
+        recorded = identify_run_process(sleeper.pid)
+        store = OperatorStateStore.open(tmp_path / "state.db")
+        try:
+            stored = _stored_run()
+            with store.transaction() as connection:
+                RunsTable.create(connection, stored, RunRequest(), recorded)
+                OperatorMetadataTable.write_sequences(
+                    connection, update_sequence=11, catalog_sequence=11
+                )
+        finally:
+            store.close()
+
+        def refuse(process_group, signal_number):
+            raise PermissionError("operation not permitted")
+
+        monkeypatch.setattr(run_processes.os, "killpg", refuse)
+        with pytest.raises(RunProcessStopError, match=str(sleeper.pid)):
+            _operator(flows, tmp_path / "state.db")
+        assert sleeper.poll() is None
+        # Nothing was marked failed: the run is still unfinished for the next start.
+        store = OperatorStateStore.open(tmp_path / "state.db")
+        try:
+            with store.transaction() as connection:
+                (loaded,) = RunsTable.load_all(connection)
+        finally:
+            store.close()
+        assert loaded.stored.run.status is RunStatus.RUNNING
+    finally:
+        sleeper.kill()
+        sleeper.wait(timeout=5)
+
+
+def test_a_run_whose_first_write_fails_can_be_started_again_with_its_id(
+    flows, tmp_path, monkeypatch
+):
+    operator = _operator(flows, tmp_path / "state.db")
+    try:
+        create = RunsTable.create
+        calls = []
+
+        def fail_once(*args, **kwargs):
+            calls.append(None)
+            if len(calls) == 1:
+                raise StateStoreError("disk full")
+            return create(*args, **kwargs)
+
+        monkeypatch.setattr(RunsTable, "create", staticmethod(fail_once))
+        sequence = operator.current_sequence
+        with pytest.raises(StateStoreError):
+            operator.start_run("quick", run_id="retried")
+        assert operator.get_run("retried") is None
+        assert operator.current_sequence == sequence
+
+        run_id = operator.start_run("quick", run_id="retried")
+        assert _wait_terminal(operator, run_id).status is RunStatus.SUCCESS
+    finally:
+        operator.close()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
+def test_run_processes_are_identified_from_proc_without_ps(monkeypatch):
+    monkeypatch.setenv("PATH", "")
+    sleeper = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
+    try:
+        recorded = identify_run_process(sleeper.pid)
+        assert recorded is not None
+        assert recorded.process_group == sleeper.pid
+        assert stop_run_process(recorded, grace=1.0) is True
+        assert sleeper.wait(timeout=5) == -signal.SIGTERM
+    finally:
+        if sleeper.poll() is None:
+            sleeper.kill()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
+def test_a_run_process_is_still_stopped_after_the_clock_steps(monkeypatch):
+    sleeper = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
+    try:
+        recorded = identify_run_process(sleeper.pid)
+        assert recorded is not None
+        # A wall-clock step (NTP, a VM time sync) moves the kernel's reported boot
+        # time without a reboot.
+        read_proc = run_processes._read_proc
+
+        def stepped(path):
+            text = read_proc(path)
+            if path == run_processes._PROC / "stat":
+                text = re.sub(
+                    r"^btime (\d+)$",
+                    lambda match: f"btime {int(match[1]) + 3600}",
+                    text,
+                    flags=re.MULTILINE,
+                )
+            return text
+
+        monkeypatch.setattr(run_processes, "_read_proc", stepped)
+        assert stop_run_process(recorded, grace=1.0) is True
+        assert sleeper.wait(timeout=5) == -signal.SIGTERM
+    finally:
+        if sleeper.poll() is None:
+            sleeper.kill()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="reads /proc")
+def test_a_run_process_recorded_in_another_boot_is_not_stopped(monkeypatch):
+    sleeper = subprocess.Popen(["/bin/sleep", "60"], start_new_session=True)
+    try:
+        recorded = identify_run_process(sleeper.pid)
+        assert recorded is not None
+        # After a reboot the kernel reports a new boot ID, and a process with the
+        # recorded ID and start time would be an unrelated one.
+        read_proc = run_processes._read_proc
+        boot_id = run_processes._PROC / "sys" / "kernel" / "random" / "boot_id"
+
+        def rebooted(path):
+            if path == boot_id:
+                return "00000000-0000-4000-8000-000000000000\n"
+            return read_proc(path)
+
+        monkeypatch.setattr(run_processes, "_read_proc", rebooted)
+        assert stop_run_process(recorded, grace=1.0) is False
+        assert sleeper.poll() is None
+    finally:
+        sleeper.kill()
+        sleeper.wait(timeout=5)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_a_missing_ps_command_is_a_lookup_error(monkeypatch):
+    monkeypatch.setattr(run_processes.sys, "platform", "darwin")
+    monkeypatch.setattr(run_processes.shutil, "which", lambda name: None)
+    with pytest.raises(RunProcessLookupError, match="ps"):
+        identify_run_process(os.getpid())

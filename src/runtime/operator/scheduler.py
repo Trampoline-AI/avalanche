@@ -1,10 +1,11 @@
 """Cron scheduler with explicit descriptor reconciliation.
 
-Whether a schedule is enabled, and the input its runs start with, live only in
-this process. Schedules start disabled, with the workflow's default input, unless
-the operator was started with every schedule enabled. Both choices are kept by
-canonical workflow ID across rediscovery and source reload, and reset to the
-startup default when the operator restarts.
+Whether a schedule is enabled, the input its runs start with and the minute it
+last started a run are kept in the operator state database by canonical workflow
+ID, so they survive rediscovery, source reload, cron changes and restarts. A
+schedule nobody has turned on or off starts disabled, unless the operator was
+started with every schedule enabled, which also overrides stored choices for
+that process.
 """
 
 from __future__ import annotations
@@ -21,6 +22,9 @@ from croniter import CroniterBadDateError, croniter
 from pydantic import JsonValue
 
 from .models import TriggerKind, WorkflowDescriptor
+from .state.errors import StateStoreError
+from .state.schedule_input_files import ScheduleInputFile
+from .state.schedules import ScheduleState
 
 if TYPE_CHECKING:
     from .operator import Operator
@@ -54,24 +58,37 @@ class Scheduler:
         self,
         operator: Operator,
         *,
+        state: ScheduleState,
         enabled_by_default: bool = False,
         clock: Callable[[], datetime] = datetime.now,
     ) -> None:
         self._operator = operator
+        self._state = state
         self._enabled_by_default = enabled_by_default
         self._clock = clock
         # Explicit enable/disable choices outlive reconciliation so a workflow that
         # disappears during a reload comes back in the state the user chose.
         self._enabled: dict[str, bool] = {}
         self._inputs: dict[str, dict[str, JsonValue]] = {}
+        self._last_triggered: dict[str, float] = {}
         # Minute in which a schedule was turned on. Its first run is the next cron
         # occurrence after that minute, matching the next run time it reported.
         self._enabled_minute: dict[str, float] = {}
+        for stored in state.load():
+            # Starting with every schedule enabled overrides stored choices.
+            if stored.enabled is not None and not enabled_by_default:
+                self._enabled[stored.workflow_id] = stored.enabled
+            if stored.input is not None:
+                self._inputs[stored.workflow_id] = stored.input
+            if stored.last_triggered is not None:
+                # A restart within a minute that already started a run waits for the next.
+                self._last_triggered[stored.workflow_id] = stored.last_triggered
+            if stored.enabled_minute is not None:
+                self._enabled_minute[stored.workflow_id] = stored.enabled_minute
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self._dispatch_lock = threading.RLock()
         self._registrations: dict[str, WorkflowDescriptor] = {}
-        self._last_triggered: dict[str, float] = {}
         self._revision = 0
         self._thread: threading.Thread | None = None
 
@@ -85,13 +102,10 @@ class Scheduler:
         with self._dispatch_lock:
             with self._lock:
                 self._revision += 1
+                # Last started minutes stay, like enable choices and inputs: a workflow
+                # that leaves and returns within a minute it already ran in waits for
+                # the next one.
                 self._registrations = dict(sorted(registrations.items()))
-                current_ids = set(self._registrations)
-                self._last_triggered = {
-                    workflow_id: timestamp
-                    for workflow_id, timestamp in self._last_triggered.items()
-                    if workflow_id in current_ids
-                }
 
     @contextmanager
     def reconciliation_boundary(self) -> Iterator[None]:
@@ -139,6 +153,9 @@ class Scheduler:
                             last = self._last_triggered.get(descriptor.workflow_id, 0)
                             if last >= current_ts:
                                 continue
+                            # Stored before the run starts: a crash in between skips
+                            # this occurrence rather than starting it twice.
+                            self._state.save_last_triggered(descriptor.workflow_id, current_ts)
                             self._last_triggered[descriptor.workflow_id] = current_ts
                             run_input = deepcopy(self._inputs.get(descriptor.workflow_id))
                         self._operator.start_run(
@@ -153,6 +170,9 @@ class Scheduler:
                         descriptor.workflow_id,
                         descriptor.cron,
                     )
+            except StateStoreError:
+                # The schedules' stored state can no longer be trusted: stop scheduling.
+                raise
             except Exception as exc:
                 logger.warning("Scheduler error for %s: %s", descriptor.workflow_id, exc)
 
@@ -173,18 +193,43 @@ class Scheduler:
             return deepcopy(self._inputs.get(workflow_id))
 
     def set_enabled(
-        self, workflow_id: str, enabled: bool, run_input: dict[str, JsonValue] | None = None
+        self,
+        workflow_id: str,
+        enabled: bool,
+        run_input: dict[str, JsonValue] | None = None,
+        input_files: tuple[ScheduleInputFile, ...] = (),
     ) -> None:
-        """Enable or disable one workflow's schedule for the life of this process.
+        """Enable or disable one workflow's schedule and store the choice.
 
         A given input replaces the stored one; otherwise the stored input is kept,
         including while the schedule is disabled, so enabling it again reuses it.
+        ``input_files`` are the files just copied for a given input.
         """
+        if input_files and run_input is None:
+            raise ValueError("Schedule input files require schedule input")
         # The dispatch lock orders this change with any due-run claim in progress.
         with self._dispatch_lock:
             with self._lock:
-                if enabled and not self._is_enabled_locked(workflow_id):
-                    self._enabled_minute[workflow_id] = self._current_minute().timestamp()
+                enabled_minute = (
+                    self._current_minute().timestamp()
+                    if enabled and not self._is_enabled_locked(workflow_id)
+                    else None
+                )
+                # Stored first, so a failed write leaves the schedule as it was.
+                if run_input is None:
+                    self._state.save_enabled(
+                        workflow_id, enabled, enabled_minute=enabled_minute
+                    )
+                else:
+                    self._state.save_input(
+                        workflow_id,
+                        enabled=enabled,
+                        enabled_minute=enabled_minute,
+                        run_input=run_input,
+                        input_files=input_files,
+                    )
+                if enabled_minute is not None:
+                    self._enabled_minute[workflow_id] = enabled_minute
                 self._enabled[workflow_id] = enabled
                 if run_input is not None:
                     self._inputs[workflow_id] = deepcopy(run_input)

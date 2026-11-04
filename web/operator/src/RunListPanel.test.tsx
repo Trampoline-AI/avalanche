@@ -760,7 +760,13 @@ it.each([
   [142.3, "2m 22s"],
   [4140.1, "1h 9m 0s"],
 ])("shows a %s second run duration as %s with total seconds on hover", (seconds, label) => {
-  const run = RunSummaryMsg.create({ ...summary, startedAt: 100, endedAt: 100 + seconds });
+  // Run times are monotonic clock readings; only triggeredAt is a date.
+  const run = RunSummaryMsg.create({
+    ...summary,
+    startedAt: 100,
+    endedAt: 100 + seconds,
+    triggeredAt: new Date(2026, 10, 3, 9, 30).getTime() / 1000,
+  });
   render(
     <RunListPanel
       workflowId={workflow.workflowId}
@@ -778,7 +784,7 @@ it.each([
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(new Date(run.startedAt * 1000));
+  }).format(new Date(run.triggeredAt * 1000));
   expect(row.querySelector(".run-triggered-at")?.parentElement).toHaveTextContent(
     `${timestamp} · ${label}`,
   );

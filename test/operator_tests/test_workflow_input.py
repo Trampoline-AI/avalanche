@@ -79,7 +79,9 @@ def _write_workflows(root: Path) -> Path:
 
 @pytest.fixture
 def operator(tmp_path):
-    instance = Operator([str(_write_workflows(tmp_path))], watch=False, schedule=False)
+    instance = Operator(
+        [str(_write_workflows(tmp_path))], watch=False, schedule=False, state_db=":memory:"
+    )
     try:
         yield instance
     finally:

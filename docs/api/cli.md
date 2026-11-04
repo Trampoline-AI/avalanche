@@ -33,7 +33,8 @@ default serve the browser UI and REST API.
 | `--no-web` | Off | Disable the browser/REST listener, leaving gRPC and webhook operation. |
 | `--log-level` | `WARNING` | Terminal log threshold: `DEBUG`, `INFO`, `WARNING`, `ERROR`; input is case-normalized. |
 | `--discovery-timeout SECONDS` | `60.0` | Positive finite maximum duration of a discovery scan. |
-| `--schedules-enabled` | Off | Start with every discovered cron schedule enabled. Schedules otherwise start disabled; the state is in memory only. |
+| `--schedules-enabled` | Off | Start with every discovered cron schedule enabled, for this start only. Otherwise each schedule starts as it was last turned on or off, kept in the state database; a schedule never turned on starts disabled. |
+| `--state-db PATH` | `.avalanche/operator/state.db` | SQLite file that holds the operator's state (runs, step states, logs, events, traces, evaluations, the result index and schedules), relative to the folder the command starts in; result bundles and input files go in folders next to it. `:memory:` uses a throwaway database. Only one operator can use a file at a time; a second one fails at startup. A file written by a newer Avalanche version is refused. See [what survives a restart](#what-the-operator-keeps-across-restarts). |
 
 ### Target configuration
 
@@ -63,12 +64,41 @@ execution as `operator`.
 | `--web-port` | `7435` | Local browser/REST port. |
 | `--log-level` | `WARNING` | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. |
 | `--discovery-timeout SECONDS` | `60.0` | Positive finite discovery deadline. |
-| `--schedules-enabled` | Off | Start with every cron schedule enabled. |
+| `--schedules-enabled` | Off | Start with every cron schedule enabled, for this start only; not saved in the state database. |
+| `--state-db PATH` | `.avalanche/operator/state.db` | SQLite file that holds the operator's state (runs, step states, logs, events, traces, evaluations, the result index and schedules), relative to the folder the command starts in; result bundles and input files go in folders next to it. `:memory:` uses a throwaway database. Only one operator can use a file at a time; a second one fails at startup. A file written by a newer Avalanche version is refused. See [what survives a restart](#what-the-operator-keeps-across-restarts). |
 
 Unlike `operator`, `dev` has no `--host`, `--webhook-port`, or `--no-web` options.
 Its local webhook port is `7434`. Startup reports discovery, gRPC readiness, and
 browser/REST endpoints. Ctrl-C initiates cleanup of owned services. Startup or
 shutdown failure returns a nonzero status.
+
+### What the operator keeps across restarts
+
+`ava operator` and `ava dev` keep their state in the `--state-db` file and three
+folders next to it: `results/` (result bundles), `input-files/` (uploaded run input
+files; the ones a run used are kept with it) and `schedule-inputs/` (copies of files
+a schedule's input uses). After a restart, including a crash or `kill -9`, the run
+list, each run's step states, logs, agent and classifier events, traces and
+evaluations, `ava result RUN_ID`, and each schedule's on/off state, input and last
+trigger are as they were. Connected clients reload them on their own.
+
+A run that was unfinished when the operator stopped is **not resumed**: the next
+start stops any of its processes still running, then marks the run and its
+unfinished steps failed with "Operator restarted before the run finished; it was
+not resumed". An evaluation still pending is marked failed the same way.
+`--schedules-enabled` applies to one start only and is not saved.
+
+Startup fails with an error when another operator uses the database, when the
+database was written by a newer Avalanche version, or when a stored schedule's
+input file is missing (restore the file, or run
+`ava state clear --include-schedules` to forget the schedules). It only warns
+about result bundles that do not match the index, and never serves them.
+
+Nothing expires: no time limit and no size limit. Use [`ava state`](#ava-state-command-options---state-db-path)
+to see and clear what is kept. The database and folders are local, unencrypted
+files that hold step inputs, tool outputs, logs and results as recorded; keep
+them on a local disk and out of version control. There is one operator per
+database, with no authentication or shared store.
 
 ## `ava web [options]`
 
@@ -152,11 +182,50 @@ Inspect and control cron schedules on a running operator. Default connection is
 | `ava schedule disable SELECTOR` | Stops that workflow's cron schedule from starting runs; prints its JSON record. |
 
 Schedules start disabled, and a disabled schedule has no next run time. Whether a
-schedule is enabled, and its input, live only in the operator's memory: they
-survive rediscovery and source reload, and reset when the operator restarts. The
+schedule is enabled, and its input, are kept in the operator's state database
+(`--state-db`): they survive rediscovery, source reload, and operator restarts. The
 input is validated against the workflow's input model when each run starts. To run a scheduled
 workflow by hand, use `ava run` as for any other workflow. Targeting a workflow without a cron expression, or an unknown selector,
 prints the operator error to stderr and returns `1`.
+
+## `ava state COMMAND [options] [--state-db PATH]`
+
+Inspect and clear what the local operator keeps in its state database and the
+folders next to it (`results/`, `input-files/`, `schedule-inputs/`). The operator
+never deletes any of it automatically. Every command takes `--state-db PATH`, with
+the same default as `ava operator` (`.avalanche/operator/state.db` under the
+current folder), and needs an existing database file. They do not run discovery,
+so they work on a database whose workflows are gone or whose operator will not
+start. Like the operator, they are unavailable on Windows, where the result store
+reports "Secure workflow result storage is unavailable".
+
+The commands refuse to run while an operator uses the database: they print an
+error naming the database file and return `1`. Stop the operator first. While a
+command runs, no operator can start on that database.
+
+| Command | Effect |
+| --- | --- |
+| `ava state info` | Prints the database path and size, the number of runs by status, the number of schedules, and the number and size of stored results, staged input-file folders and schedule input-file folders. Also lists leftovers: files nothing refers to anymore, such as those left by an interrupted delete, and a stored result whose bundle is missing. |
+| `ava state delete RUN_ID...` | Deletes those runs with their steps, logs, agent and classifier events, traces, evaluations, result bundle, and the input files only they used. An unknown run ID, or a run that did not finish before its operator stopped, refuses the whole command before anything is deleted. |
+| `ava state prune --before DATE` | Deletes finished runs triggered before `DATE`, an ISO 8601 date or date-time such as `2026-11-01` or `2026-11-01T09:30`, read as local time unless it names a time zone. |
+| `ava state prune --keep-last N` | Keeps the `N` most recent finished runs and deletes the other finished runs. |
+| `ava state clear [--yes] [--include-schedules]` | Asks for confirmation, then deletes every run with everything that belongs to it, and every leftover file. `--yes` skips the question. Schedules (on/off state, input and its files) are kept unless `--include-schedules` is given. |
+
+`prune` never deletes unfinished runs (requesting, pending or running) or schedules.
+Runs that were unfinished when an operator stopped are marked failed the next time
+an operator starts on the database. `clear` first stops any process such a run left
+running, as an operator start does.
+
+Each run is deleted in one database transaction, so an interruption never leaves
+half a run. Its result bundle and input files are removed right after that
+transaction; if this fails, the run is already gone and `ava state info` lists the
+files left behind. Only `ava state clear` removes those leftovers.
+
+After deleting, the commands write the database's pending changes back into the
+file and say how its size changed. `clear` always rebuilds the file with SQLite's
+`VACUUM` to return the freed space to the disk; `delete` and `prune` do so once at
+least 25% of the file is free space, and otherwise leave the free space in the file
+for new data.
 
 ## `ava tui [FLOW[/NODE]] [options]`
 
@@ -205,8 +274,8 @@ child processes are not captured by the Python stream adapter.
 
 Reachability is cached from the transport. An idle UI sends no health/run polling
 requests; reconnect uses bounded backoff and the existing baseline/reset/ACK
-handshake. The local operator is ephemeral: restarting it resets history instead
-of pretending it recovered old runs.
+handshake. After the local operator restarts, clients reload the history it kept in
+its state database; runs that were unfinished are shown failed, never resumed.
 
 These are client transport options, not evidence that the local operator provides
 a production authentication service. Do not expose a local operator solely on

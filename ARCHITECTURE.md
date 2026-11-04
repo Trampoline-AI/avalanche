@@ -4,7 +4,10 @@ Avalanche is a local-first system for defining typed Python workflow DAGs,
 executing them locally, and controlling those runs through a
 local operator. The system has explicit authoring, execution, control-plane,
 and presentation boundaries. It does not provide production authentication,
-multi-tenancy, durable recovery, or a deployment control plane.
+multi-tenancy, durable recovery, or a deployment control plane. The local
+operator keeps its run history, details, results and schedules in a local SQLite
+file so they survive a restart, but it never resumes a run a restart interrupted
+(see [Operator state](#operator-state)).
 
 ## System at a glance
 
@@ -23,7 +26,7 @@ multi-tenancy, durable recovery, or a deployment control plane.
 ┌──────────────────────────────────────────────────────────────────────────┐
 │ Local operator                                                           │
 │  WorkflowRegistry · discovery cache · Python source watcher · scheduler   │
-│  webhook ingress · gRPC server · bounded run/log/detail state             │
+│  webhook ingress · gRPC server · SQLite state store (state.db)            │
 │          │                                                                │
 │          ├── spawn one coordinator process per run                        │
 │          │       └── Workflow.run() → LocalExecutor                      │
@@ -40,7 +43,7 @@ multi-tenancy, durable recovery, or a deployment control plane.
 ```
 
 The operator is the control plane. It owns discovery, run coordination,
-operator-visible state, result retention, scheduling, webhook routing, and
+operator-visible state and its storage, results, scheduling, webhook routing, and
 updates. Executors are the execution plane. The browser UI and TUI are clients;
 neither imports workflow modules or executes user tasks itself.
 
@@ -292,9 +295,12 @@ metadata.
 The scheduler reconciles discovered `cron` declarations with the catalog. It
 starts runs through the same operator lifecycle as manual requests, but only for
 schedules that are enabled. Schedules start disabled (or all enabled with
-`--schedules-enabled`); enable/disable choices and the input each schedule's runs
-start with are kept in memory by workflow ID across reconciliation and reset on
-restart. The input is validated by the run worker, as for any other run. Workflow
+`--schedules-enabled`, which overrides stored choices for that start only);
+enable/disable choices, the input each schedule's runs start with, and the minute
+each last started a run are kept in the `schedules` table of the state database by
+workflow ID, so they survive reconciliation, cron changes and restarts. The last
+started minute is stored before the run starts, so a crash skips that occurrence
+rather than starting it twice after a restart. The input is validated by the run worker, as for any other run. Workflow
 descriptors can also declare webhook routes. When routes exist, the operator
 starts a loopback HTTP ingress on port `7434` by default; valid JSON POST bodies
 become workflow input and return an accepted run ID.
@@ -302,9 +308,11 @@ become workflow input and return an accepted run ID.
 ### Run coordination
 
 The operator parent owns the authoritative local projection of each run:
-`RunState`, per-node `NodeState`, retained logs, agent-event descriptors, trace
-descriptors, update sequences, and a bounded structural baseline. It launches
-each run using the `spawn` multiprocessing context.
+`RunState`, per-node `NodeState`, logs, agent and classifier events, traces,
+evaluations, update sequences, and a bounded structural baseline. Everything but
+the baseline and the live stream buffers is written to the state database
+([Operator state](#operator-state)). It launches each run using the `spawn`
+multiprocessing context.
 
 ```text
 1. Client calls StartRun.
@@ -315,7 +323,7 @@ each run using the `spawn` multiprocessing context.
 6. Coordinator runs Workflow.run(...).result() with lifecycle hooks.
 7. Queue events update parent-side node/run state, logs, agent events, and traces.
 8. Coordinator publishes an encoded terminal result into the private bundle.
-9. Parent validates, retains, and serves that result until expiry or cleanup.
+9. Parent validates the bundle, stores a copy it owns, indexes it, and serves it.
 ```
 
 Preparation, runtime, and terminal events are serializable queue messages. The
@@ -330,17 +338,102 @@ Cancellation sets the child cancellation event and eventually tears down the
 owned process group. It remains cooperative at the workflow-node level, while
 the operator owns final process cleanup.
 
-### Results and retention
+### Results
 
 A successful coordinator result is encoded into JSON plus separate `File`
-attachments. The parent-owned `ResultStore` stores it in a private local result
-bundle, validates the manifest and attachment limits, and exposes it through
-`GetRunResult`. `ava result RUN_ID --output-dir PATH` retrieves the result into
-a new caller-owned directory.
+attachments. The parent-owned `ResultStore` validates the worker's bundle
+(manifest, digests and per-result size limits), writes a copy into a new
+owner-only bundle under `results/` next to the operator state database
+(`.avalanche/operator/results/` by default), and records it in the database's
+`run_results` table once the run has succeeded. `GetRunResult` and
+`ava result RUN_ID --output-dir PATH` serve it from there, re-validating it on
+every read, so results survive an operator restart. Nothing expires by time.
+With `--state-db :memory:` the bundles live in a private temporary folder that
+is removed when the operator stops.
 
-This store is local, bounded, and retention-limited. It is not durable workflow
-state or crash recovery. Application-owned tables and output destinations remain
-outside it.
+At startup the operator warns about bundles without an index row and index rows
+without their bundle, and serves neither. The result folder is local and
+unencrypted and can hold any value a workflow returns. Application-owned tables
+and output destinations remain outside it.
+
+### Operator state
+
+`ava operator` and `ava dev` store everything they know in one SQLite file,
+opened with Python's built-in `sqlite3` before discovery starts. `--state-db PATH`
+chooses it; the default is `.avalanche/operator/state.db` under the folder the
+command starts in, and `:memory:` gives a throwaway database (used by tests).
+The code lives in `src/runtime/operator/state/`, one typed adapter module per
+table. Rows are read back into the operator's typed models; a row that does not
+validate is an error, never skipped.
+
+```text
+.avalanche/operator/
+├── state.db          runs, steps, logs, events, traces, evaluations,
+│                     result index, schedules, sequence counters
+├── results/          accepted result bundles (owner-only)
+├── input-files/      uploaded run input files; used ones are kept
+└── schedule-inputs/  copies of files that schedule inputs use
+```
+
+What is stored:
+
+- runs, with their step states and revisions and what they were started with
+  (input, context and the input files they used);
+- logs, agent events, classifier invocation snapshots, traces and evaluation
+  records, written in the same transaction as the run publication that
+  announces them, before any client is told about them;
+- the result index (bundles stay as files in `results/`);
+- each schedule's on/off state, input and last started minute;
+- the update and catalog sequence counters.
+
+Live-only state stays in memory: update-stream subscribers and their replay
+buffer, structural baselines, active run process handles, and the workflow
+registry, which discovery rebuilds on every start.
+
+On a restart, including after a crash or `kill -9`:
+
+- Sequence numbers continue from the stored counters and are never reused. Each
+  start still gets a new `operator_instance_id`, so a client holding an older
+  stream token is told to reload its baseline, and it reloads the stored history.
+- Runs that were requesting, pending or running are **not resumed**. Before
+  anything else can start a run, the operator stops any process group such a run
+  left behind (recorded when the run started, with checks against process ID
+  reuse and machine reboots), then marks the run and its unfinished steps failed
+  with "Operator restarted before the run finished; it was not resumed". A trace
+  still recording is closed with the same error. On Windows no process group is
+  recorded: the run processes belong to the operator's kill-on-close Job Object
+  and end with it.
+- Evaluations still pending are marked failed with the same reason.
+- Schedules come back as they were last turned on or off, with their input.
+  `--schedules-enabled` turns all of them on for that start only and is not
+  saved. A schedule's last started minute is written before its run starts, so a
+  crash skips that occurrence rather than running it twice.
+
+Startup refuses, with an error, a database already held by another operator, a
+database written by a newer Avalanche version (schema versions are recorded in
+`schema_migrations` and migrations only move forward), and a stored schedule
+whose input file is missing (restore it or run
+`ava state clear --include-schedules`). Result bundles that disagree with the
+index are warnings, as described under [Results](#results).
+
+One operator owns a database at a time. The database is opened in SQLite's
+exclusive locking mode, so the lock comes from SQLite's own file locking and is
+released by the OS when the process dies; a second operator, or an `ava state`
+command, fails at once with an error naming the file. Locks are unreliable on
+network filesystems, so keep the file on a local disk. The folders next to the
+database belong to it alone; two databases in one folder are refused through
+the `results/` lock. CI exercises the lock on Linux only.
+
+Nothing is deleted by time or size. Per-item limits that protect transport
+(bytes per log, agent event, trace body and run detail, and per-result limits)
+still apply. `ava state info`, `delete`, `prune` and `clear` (see
+[CLI reference](docs/api/cli.md#ava-state-command-options---state-db-path)) are
+the only way to remove data; they run only while no operator holds the database.
+`delete` refuses a run that did not finish before its operator stopped; `clear`
+stops such a run's leftover processes first and also removes leftover files.
+
+The database and the folders are local and **unencrypted**. They hold step
+inputs, tool outputs, logs, traces and results exactly as they were recorded.
 
 ## Transport and clients
 
@@ -371,10 +464,16 @@ operator accepts inline bodies and `object_key` values that its own
 `StageInputFile` issued, and rejects object URIs and any other key. Each
 attachment names a field the input schema declares; a list field collects its
 attachments in order, and any other field takes exactly one. Staged files
-live in a private folder the operator creates for itself; each run gets an
+live in `input-files/<token>/<name>` next to the state database; each run gets an
 `ava.File` built with `File.from_path` over the staged copy. Files no run or
-schedule used expire after 24 hours, and the folder is removed when the operator
-stops.
+schedule used expire after 24 hours and are removed when the operator stops;
+files a run used stay with that run until `ava state` deletes it. With
+`--state-db :memory:` the folder is temporary and removed when the operator
+stops. Files a schedule input uses are copied into `schedule-inputs/<token>/<name>`
+next to the state database, each with its own host-local workspace reference that
+the operator registers again at startup. Once a new schedule input no longer refers
+to a copy, it is removed when the operator closes, after its runs have stopped.
+Schedule input that refers to any other `ava.File` is refused.
 
 The default ports are:
 
@@ -490,8 +589,15 @@ object sharing, and UI-owned execution.
 ## Current limits
 
 - Avalanche is intended for local development and experimentation.
-- The operator retains bounded local state; it does not provide durable recovery
-  across operator restarts.
+- The operator keeps run history, details, results and schedules in a local,
+  unencrypted SQLite file, and nothing expires automatically. It does not provide
+  durable recovery: a run interrupted by a restart is failed, never resumed.
+- One operator per database file; there is no shared, multi-operator or remote
+  store, and no backup or replication.
+- The result store, and so the operator and `ava state`, refuse Windows with
+  "Secure workflow result storage is unavailable", as before this storage
+  existed. Database locking on macOS and Windows relies on SQLite and is not
+  covered by CI.
 - Loopback defaults and the browser trusted-proxy acknowledgement are not a
   production authentication model.
 - Source discovery imports configured Python and therefore requires narrow,

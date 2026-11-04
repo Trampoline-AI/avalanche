@@ -569,9 +569,10 @@ styled top-level sections without boxes. Choice options list their percentages
 once, with only the winner bold and turquoise; other choice percentages,
 score-level probabilities, and confidence stay neutral. Noul values and bars
 keep the value gradient. Composite tab values match the node/header percentage
-format and gradient. Reruns have separate results on their own run snapshots. Work survives
-coordinator completion, but records live only in the running operator's memory
-and disappear on restart.
+format and gradient. Reruns have separate results on their own run snapshots. Records are kept in
+the operator's local state database, so they survive coordinator completion and
+an operator restart; an evaluation still pending at a restart is marked failed,
+not resumed.
 Do not promise durable recovery or claim workflow success proves evaluation
 success. Verify real judgments only with actual credentials; controlled SDK
 fixture responses can verify UI behavior but are not live Jev evidence.

@@ -39,7 +39,12 @@ from .convert_v2 import (
     update_envelope_to_v2,
     workflow_info_to_v2,
 )
-from .input_files import InputFileClaims, InputFileStorageError, StagedInputFileError
+from .input_files import (
+    InputFileClaims,
+    InputFileSource,
+    InputFileStorageError,
+    StagedInputFileError,
+)
 from .models import (
     CatalogSnapshot,
     InputFileFields,
@@ -49,7 +54,6 @@ from .models import (
     TriggerKind,
 )
 from .operator import (
-    ClassifierDetailExpiredError,
     InvalidRunIdError,
     NoScheduleError,
     Operator,
@@ -143,7 +147,10 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         self._issued_cursors: OrderedDict[_CursorIdentity, pb.LifecycleCursorV2] = OrderedDict()
         self._event_ulids_by_sequence: dict[int, str] = {}
         self._sequences_by_event_ulid: dict[str, int] = {}
-        self._next_event_sequence = 0
+        # Sequences keep growing across operator restarts; this instance only ever
+        # names its own, so event ULIDs start at its first sequence, not at zero.
+        self._first_event_sequence = operator.instance_first_sequence
+        self._next_event_sequence = self._first_event_sequence
         self._continuations: OrderedDict[_ContinuationRegistryKey, _ContinuationBinding] = (
             OrderedDict()
         )
@@ -190,6 +197,11 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
     def _event_ulid_for_sequence(self, sequence: int) -> str:
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
             raise ValueError("lifecycle sequence must be a non-negative integer")
+        if sequence < self._first_event_sequence:
+            raise ValueError(
+                f"lifecycle sequence {sequence} predates this operator instance, "
+                f"which started at {self._first_event_sequence}"
+            )
         with self._binding_lock:
             while self._next_event_sequence <= sequence:
                 previous = self._event_ulids_by_sequence.get(self._next_event_sequence - 1)
@@ -558,8 +570,6 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                     operator_instance_id=self._op.operator_instance_id,
                     revision=binding.trace_revision,
                 ).data
-        except ClassifierDetailExpiredError:
-            raise
         except StructuralBaselineUnavailableError as exc:
             context.abort(grpc.StatusCode.FAILED_PRECONDITION, str(exc))
         except KeyError:
@@ -639,13 +649,9 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
     ) -> pb.ActivityDetailRefV2 | None:
         if not body_token:
             return None
-        try:
-            return self._body_detail_ref(
-                run_id, activity_id, body_token, run_sequence, size_bytes, context
-            )
-        except ClassifierDetailExpiredError:
-            # Queued live/replay descriptors may predate retention cleanup.
-            return None
+        return self._body_detail_ref(
+            run_id, activity_id, body_token, run_sequence, size_bytes, context
+        )
 
     def _trace_detail_ref(
         self,
@@ -688,10 +694,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 grpc.StatusCode.INVALID_ARGUMENT,
                 "Activity detail reference does not match its immutable descriptor",
             )
-        try:
-            data = self._read_activity_binding(entry.binding, context)
-        except ClassifierDetailExpiredError:
-            context.abort(grpc.StatusCode.NOT_FOUND, "Classifier invocation detail has expired")
+        data = self._read_activity_binding(entry.binding, context)
         derived = self._canonical_activity_reference(entry.binding, data)
         if not self._same_activity_reference(entry.reference, derived):
             context.abort(
@@ -982,6 +985,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                     input=run_input,
                     context=run_context,
                     expected_version=request.expected_version,
+                    input_files=claims.files,
                 )
                 return pb.StartRunResponseV2(run_id=run_id)
             except (InvalidRunIdError, MissingRunInputError) as exc:
@@ -1006,11 +1010,13 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 run_input = json.loads(request.input_json)
                 if run_input is None:
                     raise ValueError("input_json must be a JSON object, not null")
-            with self._op.input_files.claims() as claims:
+            with self._op.schedule_input_file_claims() as claims:
+                input_files = None
                 if request.input_files:
                     if not isinstance(run_input, dict):
                         raise ValueError("Schedule input files require an input_json object")
-                    # The schedule keeps JSON, so each file is stored as its reference.
+                    # The schedule keeps JSON, so each file is stored as its reference
+                    # to a copy in the schedule input folder.
                     run_input = to_jsonable_python(
                         _attach_input_files(
                             run_input,
@@ -1019,8 +1025,9 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                             claims,
                         )
                     )
+                    input_files = claims
                 info = self._op.set_schedule_enabled(
-                    request.workflow_selector, request.enabled, run_input
+                    request.workflow_selector, request.enabled, run_input, input_files
                 )
         except AmbiguousWorkflow as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
@@ -1307,6 +1314,12 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         )
         return snapshot.summary.created_sequence if snapshot is not None else 0
 
+    def _result_cursor(self, run_sequence: int) -> pb.LifecycleCursorV2:
+        # A run stored before this operator started has its result as of this
+        # operator's first sequence: a stored result does not change, and this
+        # operator names no earlier sequence.
+        return self._cursor(max(run_sequence, self._first_event_sequence))
+
     @staticmethod
     def _set_file_metadata(descriptor, item) -> None:
         if item.name is not None:
@@ -1319,7 +1332,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         run_sequence = self._run_sequence(request.run_id)
         value_bytes = payload.value_json.encode("utf-8")
         return pb.RunResultV2(
-            cursor=self._cursor(run_sequence),
+            cursor=self._result_cursor(run_sequence),
             run_id=request.run_id,
             scope_ref=self._scope(),
             value=pb.ResultValueV2(
@@ -1367,7 +1380,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         size = _bounded_page_size(request.page_size)
         page = payload.files[offset : offset + size]
         next_offset = offset + len(page)
-        cursor = self._cursor(run_sequence)
+        cursor = self._result_cursor(run_sequence)
         message = pb.RunOutputArtifactPageV2(
             cursor=cursor,
             run_id=request.run_id,
@@ -1551,7 +1564,7 @@ def _attach_input_files(
     payload: dict[str, Any],
     attachments: Iterable[pb.FileAttachmentV2],
     fields: InputFileFields,
-    claims: InputFileClaims,
+    claims: InputFileSource,
 ) -> dict[str, Any]:
     """Set each attachment's field, as declared by the workflow's input schema.
 
@@ -1580,7 +1593,7 @@ def _attach_input_files(
     return payload
 
 
-def _attachment_file(attachment: pb.FileAttachmentV2, claims: InputFileClaims) -> File:
+def _attachment_file(attachment: pb.FileAttachmentV2, claims: InputFileSource) -> File:
     if attachment.object_uri:
         raise ValueError("object_uri attachments are not supported by the local operator")
     if attachment.object_key:

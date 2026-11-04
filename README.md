@@ -230,6 +230,51 @@ The operator defaults to `127.0.0.1:7433` and the Web UI/REST listener to
 `http://127.0.0.1:7435`. Use `--web-port` with `ava operator` or `ava dev`
 to change the HTTP port; `ava web` uses `--port` instead.
 
+### Where the operator keeps its data
+
+`ava operator` and `ava dev` keep what they know in a SQLite database, by default
+`.avalanche/operator/state.db` under the folder you start them in (pass
+`--state-db PATH` to choose another file, or `--state-db :memory:` for a throwaway
+one). Next to it are three folders:
+
+| Path | Holds |
+| --- | --- |
+| `state.db` | Runs and their step states, logs, agent and classifier events, traces, evaluations, the result index, and each schedule's on/off state, input and last trigger |
+| `results/` | Result bundles of successful runs, served by `ava result RUN_ID` |
+| `input-files/` | Uploaded run input files; the ones a run used are kept with it |
+| `schedule-inputs/` | Copies of the files a schedule's input uses |
+
+So run history, traces, logs, evaluations, results and schedules survive an
+operator restart, including a crash or `kill -9`. What does not survive:
+
+- A run that was still running when the operator stopped is **not resumed**. The
+  next start stops any of its processes still alive, then marks it and its
+  unfinished steps failed with "Operator restarted before the run finished; it was
+  not resumed". An evaluation still pending is marked failed the same way.
+- `--schedules-enabled` applies to one start only; it is not saved.
+
+One database serves one operator at a time: a second operator, or an `ava state`
+command, on a database in use fails with an error naming the file. Use one folder
+per database, since the folders next to it belong to it alone. A database written
+by a newer Avalanche version is refused. The database and folders are local and
+**not encrypted**, and they hold step inputs, tool outputs, logs and results as
+they were. Keep them on a local disk (not a network share), out of version control
+(`.avalanche/` is a good line for `.gitignore`), and out of anything you share.
+
+Nothing is deleted automatically: no time limit and no size limit. Use
+[`ava state`](docs/api/cli.md#ava-state-command-options---state-db-path) with the
+operator stopped to see and clear it:
+
+```bash
+uv run ava state info                    # location, sizes, runs by status, leftovers
+uv run ava state prune --keep-last 20    # delete older finished runs
+uv run ava state delete RUN_ID           # delete one finished run and its files
+uv run ava state clear                   # delete every run (asks first)
+```
+
+This is local development storage, not durable recovery: there is no shared or
+multi-operator database, no authentication, and no backup.
+
 ### Development REST API
 
 The built-in API is available under `/api/v1` on the same listener as the Web UI.
@@ -258,9 +303,9 @@ authentication; do not expose it to an untrusted network. A separately launched
 Percent-encode run IDs and workflow selectors when placing them in URL paths.
 Each flow reports `schedule_enabled` and, once set, `schedule_input_json`;
 schedules start disabled with the workflow's default input, and a disabled
-schedule has no `next_run_at`. Whether a schedule is enabled, and its input, live
-in the operator's memory only: it survives rediscovery and source reload, and resets when the operator
-restarts. Each run summary's `triggered_by` is `scheduled`, `manual` (the Web UI or TUI),
+schedule has no `next_run_at`. Whether a schedule is enabled, and its input, are
+kept in the operator's [state database](#where-the-operator-keeps-its-data): they
+survive rediscovery, source reload and operator restarts. Each run summary's `triggered_by` is `scheduled`, `manual` (the Web UI or TUI),
 `webhook`, or `api` (REST, gRPC, and `ava run` callers). Application errors use a
 JSON `error` object with `code` and `message`; malformed HTTP framing can be
 rejected by Uvicorn before the request reaches the API.

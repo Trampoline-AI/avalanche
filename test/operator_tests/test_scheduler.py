@@ -12,6 +12,23 @@ from runtime.operator.models import (
 )
 from runtime.operator.operator import Operator
 from runtime.operator.scheduler import Scheduler
+from runtime.operator.state import OperatorStateStore, StateStoreError
+from runtime.operator.state.schedule_input_files import ScheduleInputFileFolder
+from runtime.operator.state.schedules import ScheduleState
+
+
+@pytest.fixture
+def state_store():
+    store = OperatorStateStore.open(":memory:")
+    try:
+        yield store
+    finally:
+        store.close()
+
+
+@pytest.fixture
+def schedule_state(state_store, tmp_path):
+    return ScheduleState(state_store, ScheduleInputFileFolder(tmp_path, temporary=False))
 
 
 def _descriptor(workflow_id: str, cron: str | None = "* * * * *") -> WorkflowDescriptor:
@@ -54,9 +71,9 @@ class _Clock:
         self.now += timedelta(minutes=1)
 
 
-def test_reconcile_is_keyed_by_canonical_id_and_fires_id():
+def test_reconcile_is_keyed_by_canonical_id_and_fires_id(schedule_state):
     operator = _Operator()
-    scheduler = Scheduler(operator, enabled_by_default=True)
+    scheduler = Scheduler(operator, state=schedule_state, enabled_by_default=True)
     scheduler.reconcile(
         [_descriptor("left/flow.py::shared"), _descriptor("right/flow.py::shared")]
     )
@@ -79,10 +96,12 @@ def test_reconcile_is_keyed_by_canonical_id_and_fires_id():
 
 
 @pytest.mark.parametrize("enabled_by_default", [False, True])
-def test_disabled_schedule_starts_no_runs_until_enabled(enabled_by_default):
+def test_disabled_schedule_starts_no_runs_until_enabled(enabled_by_default, schedule_state):
     operator = _Operator()
     clock = _Clock()
-    scheduler = Scheduler(operator, enabled_by_default=enabled_by_default, clock=clock)
+    scheduler = Scheduler(
+        operator, state=schedule_state, enabled_by_default=enabled_by_default, clock=clock
+    )
     scheduler.reconcile([_descriptor("flow.py::shared")])
     scheduler.set_enabled("flow.py::shared", False)
 
@@ -96,10 +115,10 @@ def test_disabled_schedule_starts_no_runs_until_enabled(enabled_by_default):
     assert operator.started == [("flow.py::shared", TriggerKind.SCHEDULED)]
 
 
-def test_due_runs_start_with_the_stored_input():
+def test_due_runs_start_with_the_stored_input(schedule_state):
     operator = _Operator()
     clock = _Clock()
-    scheduler = Scheduler(operator, clock=clock)
+    scheduler = Scheduler(operator, state=schedule_state, clock=clock)
     scheduler.reconcile([_descriptor("flow.py::a"), _descriptor("flow.py::b")])
     scheduler.set_enabled("flow.py::a", True, {"region": "eu"})
     scheduler.set_enabled("flow.py::b", True)
@@ -111,10 +130,10 @@ def test_due_runs_start_with_the_stored_input():
     assert scheduler.input_for("flow.py::a") == {"region": "eu"}
 
 
-def test_stored_input_is_not_shared_with_callers():
+def test_stored_input_is_not_shared_with_callers(schedule_state):
     operator = _Operator()
     clock = _Clock()
-    scheduler = Scheduler(operator, clock=clock)
+    scheduler = Scheduler(operator, state=schedule_state, clock=clock)
     scheduler.reconcile([_descriptor("flow.py::a")])
     regions = ["eu"]
     scheduler.set_enabled("flow.py::a", True, {"regions": regions})
@@ -132,10 +151,10 @@ def test_stored_input_is_not_shared_with_callers():
     assert scheduler.input_for("flow.py::a") == {"regions": ["eu"]}
 
 
-def test_enabling_during_a_due_minute_waits_for_the_next_occurrence():
+def test_enabling_during_a_due_minute_waits_for_the_next_occurrence(schedule_state):
     operator = _Operator()
     clock = _Clock()
-    scheduler = Scheduler(operator, clock=clock)
+    scheduler = Scheduler(operator, state=schedule_state, clock=clock)
     scheduler.reconcile([_descriptor("flow.py::daily", cron="0 9 * * *")])
 
     scheduler.set_enabled("flow.py::daily", True)
@@ -148,9 +167,11 @@ def test_enabling_during_a_due_minute_waits_for_the_next_occurrence():
     assert operator.started == [("flow.py::daily", TriggerKind.SCHEDULED)]
 
 
-def test_each_scheduled_start_republishes_the_schedule_state():
+def test_each_scheduled_start_republishes_the_schedule_state(schedule_state):
     operator = _Operator()
-    scheduler = Scheduler(operator, enabled_by_default=True, clock=_Clock())
+    scheduler = Scheduler(
+        operator, state=schedule_state, enabled_by_default=True, clock=_Clock()
+    )
     scheduler.reconcile([_descriptor("flow.py::a"), _descriptor("flow.py::b")])
 
     scheduler._check_schedules()
@@ -159,9 +180,9 @@ def test_each_scheduled_start_republishes_the_schedule_state():
     assert operator.published == 2
 
 
-def test_schedules_start_disabled_until_toggled():
+def test_schedules_start_disabled_until_toggled(schedule_state):
     clock = _Clock()
-    scheduler = Scheduler(_Operator(), clock=clock)
+    scheduler = Scheduler(_Operator(), state=schedule_state, clock=clock)
     scheduler.reconcile([_descriptor("flow.py::a"), _descriptor("flow.py::b")])
     scheduler.set_enabled("flow.py::b", True)
 
@@ -173,9 +194,9 @@ def test_schedules_start_disabled_until_toggled():
     }
 
 
-def test_disable_survives_reconciliation_and_temporary_removal():
+def test_disable_survives_reconciliation_and_temporary_removal(schedule_state):
     operator = _Operator()
-    scheduler = Scheduler(operator, enabled_by_default=True)
+    scheduler = Scheduler(operator, state=schedule_state, enabled_by_default=True)
     scheduler.reconcile([_descriptor("flow.py::shared")])
     scheduler.set_enabled("flow.py::shared", False)
 
@@ -187,9 +208,9 @@ def test_disable_survives_reconciliation_and_temporary_removal():
     assert scheduler.is_enabled("flow.py::shared") is False
 
 
-def test_reconcile_invalidates_descriptor_copied_before_due_claim(monkeypatch):
+def test_reconcile_invalidates_descriptor_copied_before_due_claim(monkeypatch, schedule_state):
     operator = _Operator()
-    scheduler = Scheduler(operator, enabled_by_default=True)
+    scheduler = Scheduler(operator, state=schedule_state, enabled_by_default=True)
     old = _descriptor("flow.py::shared")
     scheduler.reconcile([old])
     entered = threading.Event()
@@ -213,7 +234,9 @@ def test_reconcile_invalidates_descriptor_copied_before_due_claim(monkeypatch):
     assert operator.started == []
 
 
-def test_reconcile_waits_for_claimed_dispatch_to_start_before_replacing_registration():
+def test_reconcile_waits_for_claimed_dispatch_to_start_before_replacing_registration(
+    schedule_state,
+):
     entered_start = threading.Event()
     release_start = threading.Event()
     reconciled = threading.Event()
@@ -227,7 +250,7 @@ def test_reconcile_waits_for_claimed_dispatch_to_start_before_replacing_registra
             super().start_run(workflow_id, triggered_by, input)
 
     operator = BlockingOperator()
-    scheduler = Scheduler(operator, enabled_by_default=True)
+    scheduler = Scheduler(operator, state=schedule_state, enabled_by_default=True)
     scheduler.reconcile([_descriptor("flow.py::shared")])
     checker = threading.Thread(target=scheduler._check_schedules)
     checker.start()
@@ -251,7 +274,9 @@ def test_reconcile_waits_for_claimed_dispatch_to_start_before_replacing_registra
 
 
 def test_operator_refresh_serializes_catalog_publication_with_schedule_replacement():
-    operator = Operator([], watch=False, schedule=False, schedules_enabled=True)
+    operator = Operator(
+        [], watch=False, schedule=False, schedules_enabled=True, state_db=":memory:"
+    )
     operator._scheduler.reconcile([_descriptor("flow.py::shared")])
     catalog_published = threading.Event()
     finish_rescan = threading.Event()
@@ -288,8 +313,72 @@ def test_operator_refresh_serializes_catalog_publication_with_schedule_replaceme
     assert started == []
 
 
-def test_next_run_time_is_none_for_a_cron_that_never_occurs():
-    scheduler = Scheduler(_Operator(), clock=_Clock())
+def test_next_run_time_is_none_for_a_cron_that_never_occurs(schedule_state):
+    scheduler = Scheduler(_Operator(), state=schedule_state, clock=_Clock())
 
     assert scheduler.next_run_time("0 0 31 2 *") is None
     assert scheduler.next_run_time("0 9 * * *") == datetime(2026, 10, 30, 9, 0)
+
+
+def test_a_failed_state_write_leaves_the_schedule_unchanged(schedule_state, monkeypatch):
+    operator = _Operator()
+    clock = _Clock()
+    scheduler = Scheduler(operator, state=schedule_state, clock=clock)
+    scheduler.reconcile([_descriptor("root/a.py::shared")])
+    scheduler.set_enabled("root/a.py::shared", True, {"name": "first"})
+
+    def fail(*args, **kwargs):
+        raise StateStoreError("disk full")
+
+    monkeypatch.setattr(schedule_state, "save_input", fail)
+    monkeypatch.setattr(schedule_state, "save_enabled", fail)
+    with pytest.raises(StateStoreError):
+        scheduler.set_enabled("root/a.py::shared", True, {"name": "second"})
+    with pytest.raises(StateStoreError):
+        scheduler.set_enabled("root/a.py::shared", False)
+
+    assert scheduler.is_enabled("root/a.py::shared") is True
+    assert scheduler.input_for("root/a.py::shared") == {"name": "first"}
+
+
+def test_a_due_run_whose_last_start_cannot_be_stored_does_not_start(
+    schedule_state, monkeypatch
+):
+    operator = _Operator()
+    clock = _Clock()
+    scheduler = Scheduler(operator, state=schedule_state, clock=clock)
+    scheduler.reconcile([_descriptor("root/a.py::shared")])
+    scheduler.set_enabled("root/a.py::shared", True)
+    clock.next_minute()
+
+    def fail(*args, **kwargs):
+        raise StateStoreError("disk full")
+
+    monkeypatch.setattr(schedule_state, "save_last_triggered", fail)
+    with pytest.raises(StateStoreError):
+        scheduler._check_schedules()
+
+    assert operator.started == []
+    assert scheduler.last_triggered("root/a.py::shared") is None
+
+
+def test_a_workflow_that_returns_within_a_minute_it_ran_in_does_not_run_again(
+    schedule_state,
+):
+    operator = _Operator()
+    clock = _Clock()
+    scheduler = Scheduler(operator, state=schedule_state, clock=clock)
+    scheduler.reconcile([_descriptor("root/a.py::shared")])
+    scheduler.set_enabled("root/a.py::shared", True)
+    clock.next_minute()
+    scheduler._check_schedules()
+
+    # A dev reload drops the workflow from discovery and finds it again.
+    scheduler.reconcile([])
+    scheduler.reconcile([_descriptor("root/a.py::shared")])
+    scheduler._check_schedules()
+    assert operator.started == [("root/a.py::shared", TriggerKind.SCHEDULED)]
+
+    clock.next_minute()
+    scheduler._check_schedules()
+    assert len(operator.started) == 2

@@ -55,7 +55,18 @@ def test_terminal_runs_discovered_workflow(tmp_path):
             "-y",
             "50",
             shlex.join(
-                ["uv", "run", "ava", "operator", str(workflow), "--port", str(port), "--no-web"]
+                [
+                    "uv",
+                    "run",
+                    "ava",
+                    "operator",
+                    str(workflow),
+                    "--port",
+                    str(port),
+                    "--no-web",
+                    "--state-db",
+                    str(tmp_path / "state.db"),
+                ]
             ),
         )
         deadline = time.monotonic() + 20
@@ -236,6 +247,8 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
         "--webhook-port",
         "0",
         "--no-web",
+        "--state-db",
+        str(tmp_path / "state.db"),
     ]
 
     def launch():
@@ -606,7 +619,14 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
                 seconds=45,
             )
             assert notices
-            assert app.store.current_run is None
+            # The run is stored, so the TUI shows it again from the new operator.
+            await wait_for(
+                pilot,
+                lambda: app.store.current_run is not None
+                and app.store.current_run.operator_instance_id == provider.operator_instance_id,
+            )
+            assert app.store.current_run.run_id == agent_run_id
+            assert app.store.current_run.status == RunStatus.SUCCESS
             cut = len(callbacks)
             await pilot.pause(0.3)
             assert all(epoch != old_epoch for epoch, _ in callbacks[cut:])

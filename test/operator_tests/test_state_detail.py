@@ -163,7 +163,7 @@ class _OrderedDeliveryOperator(Operator):
 
 
 def test_newest_first_pages_reconstruct_filtered_snapshot_without_duplicates():
-    operator = Operator(watch=False, schedule=False)
+    operator = Operator(watch=False, schedule=False, state_db=":memory:")
     try:
         run = _add_run(operator, "run-newest")
         with operator._lock:
@@ -271,6 +271,7 @@ def test_summary_pages_and_snapshots_remain_exact_during_continuous_updates():
         watch=False,
         schedule=False,
         structural_baseline_capacity=2,
+        state_db=":memory:",
     )
     try:
         runs = {
@@ -325,7 +326,7 @@ def test_summary_pages_and_snapshots_remain_exact_during_continuous_updates():
 
 
 def test_agent_detail_and_watermarks_become_visible_in_one_transaction():
-    operator = _BarrierOperator(watch=False, schedule=False)
+    operator = _BarrierOperator(watch=False, schedule=False, state_db=":memory:")
     run = _add_run(operator, "run-atomic")
     apply_errors = []
     reader_done = threading.Event()
@@ -388,7 +389,7 @@ def test_agent_detail_and_watermarks_become_visible_in_one_transaction():
 
 
 def test_concurrent_publishers_dispatch_detail_callbacks_and_updates_in_order():
-    operator = _OrderedDeliveryOperator(watch=False, schedule=False)
+    operator = _OrderedDeliveryOperator(watch=False, schedule=False, state_db=":memory:")
     run = _add_run(operator, "run-ordered")
     subscription = operator.subscribe_operator_updates(
         operator.operator_instance_id, operator.current_sequence
@@ -471,7 +472,7 @@ def test_concurrent_publishers_dispatch_detail_callbacks_and_updates_in_order():
 
 
 def test_close_keeps_dispatcher_alive_for_notification_from_delayed_drain():
-    operator = Operator(watch=False, schedule=False, cancel_grace=0)
+    operator = Operator(watch=False, schedule=False, cancel_grace=0, state_db=":memory:")
     run = _add_run(operator, "run-delayed-close")
     subscription = operator.subscribe_operator_updates(
         operator.operator_instance_id, operator.current_sequence
@@ -537,8 +538,8 @@ def test_close_keeps_dispatcher_alive_for_notification_from_delayed_drain():
 
 
 def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
-    first = Operator(watch=False, schedule=False)
-    second = Operator(watch=False, schedule=False)
+    first = Operator(watch=False, schedule=False, state_db=":memory:")
+    second = Operator(watch=False, schedule=False, state_db=":memory:")
     server = None
     channel = None
 
@@ -598,7 +599,7 @@ def test_read_trace_rejects_reused_identity_from_previous_operator_epoch():
 
 @pytest.mark.parametrize(("status", "complete"), [("failed", True), ("cancelled", False)])
 def test_unavailable_trace_retains_pre_trace_evidence(status, complete):
-    operator = Operator(watch=False, schedule=False)
+    operator = Operator(watch=False, schedule=False, state_db=":memory:")
     run = _add_run(operator, "run-pre-trace")
     unavailable = _unavailable(
         invocation_id="pre-trace-invocation", status=status, complete=complete
@@ -624,7 +625,7 @@ def test_unavailable_trace_retains_pre_trace_evidence(status, complete):
 
 
 def test_a_repeated_final_trace_is_ignored_and_a_different_one_is_a_protocol_error():
-    operator = Operator(watch=False, schedule=False)
+    operator = Operator(watch=False, schedule=False, state_db=":memory:")
     run = _add_run(operator, "run-final-once")
     try:
         operator._apply_event(run.run_id, _event_handle(), _wire(_finished(complete=False)))
@@ -649,7 +650,7 @@ def test_a_turn_of_another_runtime_is_a_protocol_error_without_a_native_event():
     from avalanche.agent.native.claude_agent import SessionInitialized
     from avalanche.runtimes.predict_rlm.events import project_event
 
-    operator = Operator(watch=False, schedule=False)
+    operator = Operator(watch=False, schedule=False, state_db=":memory:")
     run = _add_run(operator, "run-foreign-turn")
     step = IterationStep(
         iteration=1, reasoning="r", code="x", output="", untruncated_output="", duration_ms=1
@@ -681,7 +682,9 @@ def test_a_turn_of_another_runtime_is_a_protocol_error_without_a_native_event():
 def test_terminal_detail_byte_limit_counts_the_whole_body(kind):
     terminal = _finished() if kind == "trace_finished" else _unavailable()
     limit = len(terminal.model_dump_json().encode()) - 1
-    operator = Operator(watch=False, schedule=False, max_trace_body_bytes=limit)
+    operator = Operator(
+        watch=False, schedule=False, max_trace_body_bytes=limit, state_db=":memory:"
+    )
     run = _add_run(operator, "run-terminal-limit")
     try:
         with pytest.raises(_CoordinatorProtocolError, match="exceeds"):
@@ -731,7 +734,7 @@ def agent_text_event(request):
 
 
 def test_unencodable_agent_detail_is_a_protocol_fault(agent_text_event):
-    operator = Operator(watch=False, schedule=False)
+    operator = Operator(watch=False, schedule=False, state_db=":memory:")
     run = _add_run(operator, "run-unencodable")
     try:
         with pytest.raises(_CoordinatorProtocolError) as error:
@@ -754,7 +757,7 @@ def test_unencodable_agent_detail_drain_terminalizes_run(agent_text_event, monke
         def close(self):
             pass
 
-    operator = Operator(watch=False, schedule=False)
+    operator = Operator(watch=False, schedule=False, state_db=":memory:")
     run = _add_run(operator, "run-unencodable-drain")
     handle = _event_handle()
     handle.result_bundle = operator._result_store.prepare()
@@ -792,7 +795,7 @@ def test_unencodable_agent_detail_drain_terminalizes_run(agent_text_event, monke
 
 
 def test_agent_detail_retains_valid_unicode(agent_text_event):
-    operator = Operator(watch=False, schedule=False)
+    operator = Operator(watch=False, schedule=False, state_db=":memory:")
     run = _add_run(operator, "run-unicode")
     text = "日本語 café \U0001d11e"
     event = agent_text_event(text)
@@ -882,7 +885,7 @@ def _patched(evidence: BaseModel, path: tuple[str, ...], value: object) -> str:
     ],
 )
 def test_malformed_agent_evidence_is_a_protocol_error(body):
-    operator = Operator(watch=False, schedule=False)
+    operator = Operator(watch=False, schedule=False, state_db=":memory:")
     run = _add_run(operator, "run-malformed-evidence")
     try:
         with pytest.raises(_CoordinatorProtocolError, match="invalid agent evidence body"):
@@ -893,7 +896,7 @@ def test_malformed_agent_evidence_is_a_protocol_error(body):
 
 
 def test_agent_evidence_must_be_a_json_string():
-    operator = Operator(watch=False, schedule=False)
+    operator = Operator(watch=False, schedule=False, state_db=":memory:")
     run = _add_run(operator, "run-dict-evidence")
     try:
         with pytest.raises(_CoordinatorProtocolError, match="JSON string"):
@@ -936,7 +939,7 @@ def test_agent_event_publication_failure_reaches_the_workflow(asynchronous):
 
 @pytest.mark.parametrize("failed", [False, True])
 def test_empty_exception_message_remains_a_failure_not_a_success(failed):
-    operator = Operator(watch=False, schedule=False)
+    operator = Operator(watch=False, schedule=False, state_db=":memory:")
     run = _add_run(operator, "run-empty-exception")
     event = AgentLiveEvent(
         invocation_id="test-invocation",

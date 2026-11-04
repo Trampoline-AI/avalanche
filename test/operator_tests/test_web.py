@@ -18,6 +18,7 @@ from runtime.operator.operator import Operator
 from runtime.operator.proto import operator_pb2 as pb
 from runtime.operator.results import EncodedWorkflowResult, decode_workflow_result
 from runtime.operator.server import serve as serve_operator
+from runtime.operator.state.logs import RunLogsTable
 from runtime.operator.web import start_browser_server
 
 _SERVICE = "/avalanche.operator.OperatorServiceV2/"
@@ -79,7 +80,7 @@ def _post(server, method: str, request) -> tuple[int, str, bytes]:
 @pytest.fixture
 def proxy(tmp_path):
     (tmp_path / "index.html").write_text("<main>Avalanche</main>")
-    operator = Operator([], watch=False, schedule=False)
+    operator = Operator([], watch=False, schedule=False, state_db=":memory:")
     grpc_server = serve_operator(operator, port=(port := _free_port()), block=False)
     server = start_browser_server(f"127.0.0.1:{port}", port=0, asset_root=tmp_path)
     try:
@@ -381,8 +382,11 @@ def _seed_rest_run(operator: Operator, run_id: str, log_count: int = 0):
     run.latest_log_sequence = log_count
     with operator._lock:
         operator._runs[run_id] = run
-        operator._logs[run_id] = entries
     operator._notify_run(run)
+    with operator._lock, operator._state_store.transaction() as connection:
+        for item in entries:
+            RunLogsTable.insert(connection, run_id, item)
+        operator._last_log_sequences[run_id] = len(entries)
 
 
 def test_rest_encoded_run_identifier_remains_one_path_segment(proxy):
@@ -465,7 +469,9 @@ def test_rest_live_run_output_cancellation_and_conflicts(tmp_path):
         "@ava.source\ndef slow():\n    time.sleep(60)\n    return 'finished'\n"
         "@ava.workflow\ndef cancellable():\n    return slow()\n"
     )
-    operator = Operator([str(workflow)], watch=False, schedule=False, cancel_grace=0.1)
+    operator = Operator(
+        [str(workflow)], watch=False, schedule=False, cancel_grace=0.1, state_db=":memory:"
+    )
     grpc_server = serve_operator(operator, port=(port := _free_port()), block=False)
     server = start_browser_server(f"127.0.0.1:{port}", port=0, asset_root=tmp_path)
     try:

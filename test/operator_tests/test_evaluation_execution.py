@@ -34,6 +34,9 @@ from runtime.operator import Operator
 from runtime.operator.evaluation_models import EvaluationRecord
 from runtime.operator.evaluation_worker import EvaluationWorkers, snapshot_evaluation
 from runtime.operator.models import RunState, RunStatus
+from runtime.operator.state import OperatorStateStore
+from runtime.operator.state.evaluations import RunEvaluationsTable
+from runtime.operator.state.runs import RunsTable
 
 _NO_USAGE = PredictRLMUsage(
     main=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
@@ -328,6 +331,31 @@ def wait_evaluation(operator: Operator, run_id: str, timeout: float = 30) -> Eva
     raise AssertionError(f"Evaluation for {run_id} did not finish")
 
 
+def stored_evaluations(state_db: Path) -> list[EvaluationRecord]:
+    """Every evaluation record a closed operator left in its state database."""
+    store = OperatorStateStore.open(state_db)
+    try:
+        with store.transaction() as connection:
+            return [
+                record
+                for (run_id,) in connection.execute("SELECT run_id FROM runs")
+                for record in RunEvaluationsTable.list_run(connection, run_id)
+            ]
+    finally:
+        store.close()
+
+
+def stored_run_status(state_db: Path, run_id: str) -> RunStatus:
+    store = OperatorStateStore.open(state_db)
+    try:
+        with store.transaction() as connection:
+            loaded = RunsTable.load_all(connection)
+    finally:
+        store.close()
+    [run] = [item.stored.run for item in loaded if item.stored.run.run_id == run_id]
+    return run.status
+
+
 def evaluation_node(run: RunState) -> str:
     return next(node_id for node_id, node in run.nodes.items() if node.name == "research")
 
@@ -371,7 +399,7 @@ def test_slow_evaluation_survives_terminal_and_keeps_owned_evidence(
 ):
     workflow = write_workflow(tmp_path)
     evaluation_service.release.clear()
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.SUCCESS
@@ -407,7 +435,7 @@ def test_owned_source_definitions_and_separate_reruns(tmp_path, evaluation_servi
     evaluation_service.release.clear()
     module_names = set(sys.modules)
     cwd = Path.cwd()
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     try:
         runs = []
         # Occupy both evaluators so the third snapshot cannot deserialize until
@@ -582,7 +610,7 @@ def test_evaluation_errors_do_not_fail_workflows(
     tmp_path, evaluation_service, changes, expected_error
 ):
     workflow = write_workflow(tmp_path, **changes)
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.SUCCESS
@@ -663,7 +691,7 @@ def test_evaluation_result_survives_process_exit_between_poll_and_liveness():
 def test_service_failure_is_an_evaluation_error(tmp_path, evaluation_service):
     evaluation_service.fail = True
     workflow = write_workflow(tmp_path)
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.SUCCESS
@@ -688,7 +716,7 @@ def test_project_dotenv_credentials_are_not_loaded_into_operator(
     )
     workflow = write_workflow(tmp_path)
     cwd = Path.cwd()
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.SUCCESS
@@ -709,7 +737,7 @@ def test_failure_before_successful_agent_has_no_evaluation_record(
     tmp_path, evaluation_service, before_calls
 ):
     workflow = write_workflow(tmp_path, before_calls=before_calls)
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.FAILED
@@ -731,7 +759,7 @@ def test_step_without_agent_call_has_no_evaluation_record(tmp_path, evaluation_s
             "producer_pid=os.getpid(), answers=[])"
         ),
     )
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.SUCCESS
@@ -745,7 +773,7 @@ def test_step_without_agent_call_has_no_evaluation_record(tmp_path, evaluation_s
 def test_successful_agent_evaluation_survives_later_step_failure(tmp_path, evaluation_service):
     evaluation_service.release.clear()
     workflow = write_workflow(tmp_path, body='raise ValueError("postprocessing failed")')
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.FAILED
@@ -831,7 +859,8 @@ def test_capacity_errors_do_not_backpressure_workflow(tmp_path, evaluation_servi
             return value
     """)
     )
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    state_db = tmp_path / "state.db"
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=state_db)
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.SUCCESS
@@ -844,9 +873,7 @@ def test_capacity_errors_do_not_backpressure_workflow(tmp_path, evaluation_servi
         assert all("Evaluation queue is full" in record.error for record in failed)
         assert any(record.status == "pending" for record in records)
         operator.close()
-        assert all(
-            record.status == "failed" for record in operator.list_evaluations(run.run_id)
-        )
+        assert all(record.status == "failed" for record in stored_evaluations(state_db))
     finally:
         evaluation_service.release.set()
         operator.close()
@@ -855,7 +882,8 @@ def test_capacity_errors_do_not_backpressure_workflow(tmp_path, evaluation_servi
 def test_close_interrupts_evaluations_without_leaking_processes(tmp_path, evaluation_service):
     workflow = write_workflow(tmp_path)
     evaluation_service.release.clear()
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    state_db = tmp_path / "state.db"
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=state_db)
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status == RunStatus.SUCCESS
@@ -864,11 +892,11 @@ def test_close_interrupts_evaluations_without_leaking_processes(tmp_path, evalua
         started = time.monotonic()
         operator.close()
         assert time.monotonic() - started < 10
-        record = wait_evaluation(operator, run.run_id)
+        [record] = stored_evaluations(state_db)
         assert record.status == "failed"
         assert "closed" in record.error
         assert operator.current_sequence == before_close
-        assert operator.get_run(run.run_id).status == RunStatus.SUCCESS
+        assert stored_run_status(state_db, run.run_id) == RunStatus.SUCCESS
         assert not any(
             process.name == "avalanche-evaluator"
             for process in multiprocessing.active_children()
@@ -935,7 +963,7 @@ def flow():
 def test_inline_agent_evaluation_runs_in_operator(tmp_path, evaluation_service):
     workflow = tmp_path / "inline_evaluation_flow.py"
     workflow.write_text(dedent(_INLINE_WORKFLOW_SOURCE))
-    operator = Operator([str(workflow)], watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
     try:
         [info] = operator.list_workflows()
         [draft_node] = info.agent_node_ids
