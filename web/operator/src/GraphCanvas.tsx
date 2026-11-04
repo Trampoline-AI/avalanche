@@ -423,7 +423,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
                 onClick={item.onOpen}
                 aria-label={`Inspect ${item.id}`}
                 title={`${item.id}: ${item.status}`}
-                className="rounded border px-2 py-1"
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded border"
               >
                 {item.status === "success"
                   ? "✓"
@@ -437,7 +437,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
               <span
                 key={item.id}
                 title={data.placeholderHint ?? "not started"}
-                className="px-2 py-1"
+                className="flex h-8 w-8 shrink-0 items-center justify-center"
               >
                 ·
               </span>
