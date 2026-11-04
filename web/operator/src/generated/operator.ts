@@ -41,6 +41,14 @@ export interface ControlWaitRequestV2 {
      * @generated from protobuf field: string reason = 6
      */
     reason: string;
+    /**
+     * @generated from protobuf field: uint32 offset = 7
+     */
+    offset: number;
+    /**
+     * @generated from protobuf field: optional uint32 limit = 8
+     */
+    limit?: number;
 }
 /**
  * @generated from protobuf message avalanche.operator.ControlWaitResponseV2
@@ -54,6 +62,10 @@ export interface ControlWaitResponseV2 {
      * @generated from protobuf field: repeated string waits_json = 2
      */
     waitsJson: string[];
+    /**
+     * @generated from protobuf field: optional uint32 next_offset = 3
+     */
+    nextOffset?: number;
 }
 /**
  * @generated from protobuf message avalanche.operator.ReadTuiResourceRequestV2
@@ -2028,7 +2040,9 @@ class ControlWaitRequestV2$Type extends MessageType<ControlWaitRequestV2> {
             { no: 3, name: "address", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 4, name: "payload_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 5, name: "idempotency_key", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 6, name: "reason", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+            { no: 6, name: "reason", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 7, name: "offset", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 8, name: "limit", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ }
         ]);
     }
     create(value?: PartialMessage<ControlWaitRequestV2>): ControlWaitRequestV2 {
@@ -2039,6 +2053,7 @@ class ControlWaitRequestV2$Type extends MessageType<ControlWaitRequestV2> {
         message.payloadJson = "";
         message.idempotencyKey = "";
         message.reason = "";
+        message.offset = 0;
         if (value !== undefined)
             reflectionMergePartial<ControlWaitRequestV2>(this, message, value);
         return message;
@@ -2065,6 +2080,12 @@ class ControlWaitRequestV2$Type extends MessageType<ControlWaitRequestV2> {
                     break;
                 case /* string reason */ 6:
                     message.reason = reader.string();
+                    break;
+                case /* uint32 offset */ 7:
+                    message.offset = reader.uint32();
+                    break;
+                case /* optional uint32 limit */ 8:
+                    message.limit = reader.uint32();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -2096,6 +2117,12 @@ class ControlWaitRequestV2$Type extends MessageType<ControlWaitRequestV2> {
         /* string reason = 6; */
         if (message.reason !== "")
             writer.tag(6, WireType.LengthDelimited).string(message.reason);
+        /* uint32 offset = 7; */
+        if (message.offset !== 0)
+            writer.tag(7, WireType.Varint).uint32(message.offset);
+        /* optional uint32 limit = 8; */
+        if (message.limit !== undefined)
+            writer.tag(8, WireType.Varint).uint32(message.limit);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -2111,7 +2138,8 @@ class ControlWaitResponseV2$Type extends MessageType<ControlWaitResponseV2> {
     constructor() {
         super("avalanche.operator.ControlWaitResponseV2", [
             { no: 1, name: "receipt_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 2, name: "waits_json", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ }
+            { no: 2, name: "waits_json", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "next_offset", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ }
         ]);
     }
     create(value?: PartialMessage<ControlWaitResponseV2>): ControlWaitResponseV2 {
@@ -2133,6 +2161,9 @@ class ControlWaitResponseV2$Type extends MessageType<ControlWaitResponseV2> {
                 case /* repeated string waits_json */ 2:
                     message.waitsJson.push(reader.string());
                     break;
+                case /* optional uint32 next_offset */ 3:
+                    message.nextOffset = reader.uint32();
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -2151,6 +2182,9 @@ class ControlWaitResponseV2$Type extends MessageType<ControlWaitResponseV2> {
         /* repeated string waits_json = 2; */
         for (let i = 0; i < message.waitsJson.length; i++)
             writer.tag(2, WireType.LengthDelimited).string(message.waitsJson[i]);
+        /* optional uint32 next_offset = 3; */
+        if (message.nextOffset !== undefined)
+            writer.tag(3, WireType.Varint).uint32(message.nextOffset);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

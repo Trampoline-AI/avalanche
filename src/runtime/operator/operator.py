@@ -128,7 +128,12 @@ from .results import EncodedWorkflowResult, decode_workflow_result
 from .run_worker import run_worker
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
 from .step_io import StepInputs, StepIo, StepValuePreview
-from .wait_control import RunControls, WaitControlRequest, WaitControlResponse
+from .wait_control import (
+    FinalWaitSnapshot,
+    RunControls,
+    WaitControlRequest,
+    WaitControlResponse,
+)
 from .webhooks import DEFAULT_WEBHOOK_PORT, WebhookServer, routes_for
 from .windows_job import WindowsJob, assign_process, close_job, create_kill_on_close_job
 from .workflow_metadata import (
@@ -2404,6 +2409,15 @@ class Operator:
         event: dict[str, Any],
     ) -> bool:
         event_type = _validate_run_event(event, validate_result=False)
+        if event_type == "wait_snapshot":
+            snapshot = FinalWaitSnapshot.model_validate_json(event["snapshot"])
+            with self._lock:
+                controls = self._wait_controls[run_id]
+                with controls.lock:
+                    if controls.final_snapshot is not None:
+                        raise _CoordinatorProtocolError("duplicate final wait snapshot")
+                    controls.final_snapshot = snapshot
+            return False
         if event_type == "evaluation_submitted":
             self._submit_evaluation(
                 run_id, event["node_id"], EvaluationRequest.model_validate(event["submission"])
@@ -3780,6 +3794,7 @@ _RUN_EVENT_TYPES = {
     "step_output",
     "log",
     "terminal",
+    "wait_snapshot",
 }
 _NODE_EVENT_TYPES = {"node_started", "node_succeeded", "node_failed"}
 _TERMINAL_STATUSES = {"success", "failed", "cancelled"}
@@ -4143,7 +4158,13 @@ def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
     event_type = _event_type(event)
     if event_type not in _RUN_EVENT_TYPES:
         raise _CoordinatorProtocolError(f"unknown run event type {_bounded_ascii(event_type)}")
-    if event_type == "running":
+    if event_type == "wait_snapshot":
+        _require_exact_event_keys(event, {"type", "snapshot"})
+        try:
+            FinalWaitSnapshot.model_validate_json(_required_field(event, "snapshot"))
+        except (ValueError, TypeError) as exc:
+            raise _CoordinatorProtocolError("invalid final wait snapshot") from exc
+    elif event_type == "running":
         _require_exact_event_keys(event, {"type", "timestamp"})
         _timestamp_field(event, "timestamp")
     elif event_type in _NODE_EVENT_TYPES:

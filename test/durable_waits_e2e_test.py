@@ -166,6 +166,27 @@ def test_controlled_deadlines_preloads_and_cancellation():
     assert event.result(timeout=5) is None
 
 
+def test_nullable_event_timeout_flows_through_implicit_composition():
+    @ava.step(retries=0)
+    def handle_timeout(value: Signed | None) -> str:
+        return "timeout" if value is None else value.envelope_id
+
+    @ava.step(retries=0)
+    def after_sleep() -> str:
+        return "awake"
+
+    @ava.workflow
+    def flow():
+        return ava.wait_for_event(Signed, key="message", timeout=0) >> handle_timeout()
+
+    @ava.workflow
+    def ordering():
+        return ava.sleep(0) >> after_sleep()
+
+    assert flow().run().result(timeout=5) == "timeout"
+    assert ordering().run().result(timeout=5) == "awake"
+
+
 def test_shared_retry_budget_terminal_errors_and_reconciliation():
     keys = []
 

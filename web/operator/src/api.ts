@@ -681,15 +681,25 @@ export class GrpcWebOperatorApi implements OperatorApi {
   }
 
   async listRunWaits(runId: string): Promise<WaitCard[]> {
-    const response = await this.client.controlWait({
-      runId,
-      kind: "list",
-      address: "",
-      payloadJson: "{}",
-      idempotencyKey: "",
-      reason: "",
-    }).response;
-    return response.waitsJson.map((wire) => {
+    const wires: string[] = [];
+    let offset = 0;
+    for (;;) {
+      const response = await this.client.controlWait({
+        runId,
+        kind: "list",
+        address: "",
+        payloadJson: "{}",
+        idempotencyKey: "",
+        reason: "",
+        offset,
+        limit: 64,
+      }).response;
+      wires.push(...response.waitsJson);
+      if (response.nextOffset === undefined) break;
+      if (response.nextOffset <= offset) throw new Error("Invalid wait page offset");
+      offset = response.nextOffset;
+    }
+    return wires.map((wire) => {
       const card: unknown = JSON.parse(wire);
       if (
         !isUnknownRecord(card) ||
@@ -726,6 +736,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
     await this.client.controlWait({
       runId,
       kind: "decision",
+      offset: 0,
       address: nodeId,
       payloadJson: JSON.stringify(outcome),
       idempotencyKey,

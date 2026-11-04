@@ -84,6 +84,19 @@ def _digest(value: JsonValue) -> str:
     ).hexdigest()
 
 
+def reviewed_preview(value: JsonValue) -> JsonValue:
+    """Pin large reviewed JSON by digest, with a bounded, explicitly partial preview."""
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    if len(encoded) <= 4096:
+        return deepcopy(value)
+    return {
+        "sha256": hashlib.sha256(encoded).hexdigest(),
+        "bytes": len(encoded),
+        "preview": encoded[:1024].decode("utf-8", "ignore"),
+        "truncated": True,
+    }
+
+
 class LocalWaits:
     def __init__(
         self,
@@ -189,7 +202,7 @@ class LocalWaits:
             if slot.armed:
                 return
             slot.armed = True
-            slot.reviewed = deepcopy(
+            slot.reviewed = reviewed_preview(
                 reviewed if slot.spec.show_node_id is not None else slot.spec.show
             )
             if slot.spec.until is not None:
@@ -274,7 +287,7 @@ class LocalWaits:
             principal=principal.name,
             accepted_at=datetime.now(UTC),
             reason=reason,
-            reviewed=deepcopy(reviewed),
+            reviewed=reviewed_preview(reviewed),
             schema_digest=_digest(schema),
             payload_digest=_digest(payload),
         )
