@@ -2698,10 +2698,16 @@ class Workflow:
                     "map",
                     self.name,
                 )
-                resolved = _unwrap_lineaged_tree(resolved_args[0])
-                if not isinstance(resolved, list):
+                value_ref = resolved_args[0]
+                values = _unwrap_lineaged_tree(value_ref)
+                if not isinstance(values, list):
                     raise TypeError("map positional inputs must resolve to lists")
-                return resolved
+                # Keep the ordinary projection envelopes so each item's context
+                # receives its producer's lineage before user arguments unwrap.
+                return [
+                    _indexed_parent_result(value_ref, index, executor)
+                    for index in range(len(values))
+                ]
 
             def gather_map(parent: str, children: tuple[str, ...]) -> None:
                 map_receipt_sources[parent] = children or tuple(

@@ -152,6 +152,21 @@ def verify() -> None:
 
     assert implicit_gather().run().result() == [4, 6]
 
+    @ava.source
+    def versioned() -> list[int]:
+        return [1, 2]
+
+    @ava.step
+    def observe_lineage(value: int, context: ava.RunContext) -> int:
+        assert context.lineage_vector["versioned"] == context.run_id
+        return value
+
+    @ava.workflow
+    def mapped_lineage():
+        return observe_lineage.map(versioned())
+
+    assert mapped_lineage().run().result() == [1, 2]
+
     for left, right, maximum, expected in [
         ([1], [], None, "map_length_mismatch"),
         (list(range(9)), list(range(9)), None, "map_overflow"),
