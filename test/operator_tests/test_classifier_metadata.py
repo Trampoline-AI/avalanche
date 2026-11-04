@@ -234,7 +234,7 @@ def _assert_revised_schema(declaration: ClassifierDeclaration) -> None:
 @pytest.mark.usefixtures("typesafe_service")
 def test_historical_questions_and_answers_survive_reload_and_source_removal(tmp_path):
     workflow = _write_schema_workflow(tmp_path)
-    operator = Operator([str(workflow)], executor_backend="local", watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         original = wait_terminal(operator, operator.start_run("flow"))
         assert original.status == RunStatus.SUCCESS
@@ -312,7 +312,7 @@ def test_historical_questions_and_answers_survive_reload_and_source_removal(tmp_
 @pytest.mark.usefixtures("typesafe_service")
 def test_prepared_run_uses_executed_declaration_not_stale_catalog(tmp_path):
     workflow = _write_schema_workflow(tmp_path)
-    operator = Operator([str(workflow)], executor_backend="local", watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         _write_schema_workflow(tmp_path, revised=True)
         run = wait_terminal(operator, operator.start_run("flow"))

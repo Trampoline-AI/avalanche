@@ -307,7 +307,7 @@ async def run(
             )
             raise AgentStepExecutionError(
                 f"agent step {request.step_name!r}: the Claude CLI is not installed where "
-                "this step runs; install Claude Code on every machine and Ray worker that "
+                "this step runs; install Claude Code on every machine that "
                 "runs ClaudeAgent steps"
             ) from exc
         except Exception as exc:

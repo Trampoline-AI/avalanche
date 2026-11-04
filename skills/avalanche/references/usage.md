@@ -422,7 +422,7 @@ require `Content-Type: application/json`. The API has no built-in authentication
 keep it local or behind a trusted, authenticated proxy.
 
 ```text
-uv run ava dev [FLOW [FLOW ...]] [--port PORT] [--web-port PORT] [--ray]
+uv run ava dev [FLOW [FLOW ...]] [--port PORT] [--web-port PORT]
 ```
 
 - `FLOW [FLOW ...]`: optional flow files or clean flow-only directories. When
@@ -433,7 +433,6 @@ uv run ava dev [FLOW [FLOW ...]] [--port PORT] [--web-port PORT] [--ray]
 - `--port PORT`: operator gRPC port, default `7433`.
 - `--web-port PORT`: browser UI and REST API HTTP port, default `7435`. It must
   differ from `--port`.
-- `--ray`: use the Ray executor.
 
 Use separate commands instead when the browser listener's host must change or
 the services need independent lifecycles.
@@ -458,7 +457,7 @@ The separate `ava web` listener also serves the REST API.
 ```text
 uv run ava operator [FLOW [FLOW ...]] [--host HOST] [--port PORT]
                         [--webhook-port PORT] [--web-port PORT] [--no-web]
-                        [--log-level LEVEL] [--ray]
+                        [--log-level LEVEL]
 ```
 
 - `FLOW [FLOW ...]`: optional flow discovery targets. Without them, the command
@@ -472,7 +471,6 @@ uv run ava operator [FLOW [FLOW ...]] [--host HOST] [--port PORT]
 - `--no-web`: disable that HTTP listener; gRPC and webhooks remain available.
 - `--log-level LEVEL`: one of `DEBUG`, `INFO`, `WARNING`, or `ERROR`; default
   `WARNING`.
-- `--ray`: use the Ray executor.
 
 ```text
 uv run ava web [--connect HOST:PORT] [--host HOST] [--port PORT]

@@ -207,13 +207,10 @@ def test_reference_workspace_local_workflow_preserves_host_directory(tmp_path, f
 
 
 def test_unbound_reference_passes_return_capture_without_binding():
-    from runtime.executor import _normalize_distributed_result
-
     workspace = ava.Workspace.model_validate({"version": 1, "reference": "remote:example"})
     assert (
         workspace_module.run_workspace_invocation(lambda value: value, workspace) is workspace
     )
-    assert _normalize_distributed_result(workspace) is workspace
 
 
 def test_workspace_rejects_source_and_child_symlinks(tmp_path):
@@ -448,17 +445,9 @@ def test_workspace_rejects_corrupt_constructed_tree_before_materialization(monke
         run_workspace_invocation(lambda workspace: workspace.path, corrupt)
 
 
-@pytest.fixture(params=["local", pytest.param("ray", marks=pytest.mark.ray)])
-def executor(request):
-    if request.param == "local":
-        yield ava.LocalExecutor()
-        return
-    ray = pytest.importorskip("ray")
-    ray.init(address="local", num_cpus=2, include_dashboard=False)
-    try:
-        yield ava.RayExecutor()
-    finally:
-        ray.shutdown()
+@pytest.fixture
+def executor():
+    return ava.LocalExecutor()
 
 
 def test_workspace_transport_isolates_siblings_propagates_returns_and_cleans(

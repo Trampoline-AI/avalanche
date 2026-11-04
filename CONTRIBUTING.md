@@ -17,10 +17,9 @@ Run the core regression collection with one command (requires `tmux`):
 make test
 ```
 
-This runs local Python scenarios, then isolated Ray and real-terminal scenarios,
-then browser tests. Ordinary Python scenarios run concurrently; Ray and tmux
-remain serial because they own process-global resources. CI runs these same
-groups in separate jobs.
+This runs local Python scenarios, then real-terminal scenarios and browser tests.
+Ordinary Python scenarios run concurrently; tmux scenarios remain serial because
+they own process-global resources. CI runs these same groups in separate jobs.
 
 Keep this collection focused on:
 
@@ -86,5 +85,5 @@ uv build
 ## Optional Components
 
 The default development sync installs the dependencies needed for the current
-test suite. Optional package extras are `ray` and `lance`; document new optional
-dependencies in `pyproject.toml` and `README.md` together.
+test suite. Optional package extras are `lance`, `claude`, and `openai`; document
+new optional dependencies in `pyproject.toml` and `README.md` together.

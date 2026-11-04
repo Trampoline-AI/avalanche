@@ -2,12 +2,12 @@
 
 ## Project Overview
 
-Avalanche is a local-first Python toolkit for defining and running data-flow DAGs. It combines a small decorator-based workflow API, Iceberg and Lance storage helpers, Local and Ray execution, an optional operator/gRPC control plane, and a Textual TUI. The project is an early release candidate: keep operational claims local-development focused and do not imply production auth, multi-tenancy, deployment, or durable recovery that does not exist.
+Avalanche is a local-first Python toolkit for defining and running data-flow DAGs. It combines a small decorator-based workflow API, Iceberg and Lance storage helpers, local execution, an optional operator/gRPC control plane, and a Textual TUI. The project is an early release candidate: keep operational claims local-development focused and do not imply production auth, multi-tenancy, deployment, or durable recovery that does not exist.
 
 ## Architecture & Data Flow
 
 1. **DAG authoring:** `src/avalanche/dag.py` captures decorated node calls inside a `ContextVar`-scoped `@workflow`. `NodeFuture`, `>>`, and `&` describe dependencies; workflow bodies should define graph edges rather than perform runtime work.
-2. **Embedded execution:** `Workflow.run()` creates an awaitable `RunHandle` and starts a driver thread. The driver schedules nodes topologically, resolves annotated runtime providers and dependency references, submits work to `LocalExecutor` or `RayExecutor`, and fetches only final outputs. Payloads, status, lineage, and execution receipts remain separate channels.
+2. **Embedded execution:** `Workflow.run()` creates an awaitable `RunHandle` and starts a driver thread. The driver schedules nodes topologically, resolves annotated runtime providers and dependency references, submits work to `LocalExecutor`, and fetches only final outputs. Payloads, status, lineage, and execution receipts remain separate channels.
 3. **Runtime injection and storage:** providers in `src/avalanche/runtime/providers/` inject streams, models, logging, run input, and context. Backend-neutral contracts live in `src/avalanche/storage.py`; Iceberg and Lance implementations preserve snapshot and rerun lineage.
 4. **Operator mode:** `src/runtime/operator/` discovers workflow descriptors, runs each workflow in a spawned coordinator process, and exchanges serializable lifecycle events over queues. The gRPC server exposes discovery, run control, logs, and update streams.
 5. **TUI:** `GrpcStateProvider` implements the `StateProvider` boundary. `src/tui/ui_store.py` is the single mutable UI state owner; background threads enqueue guarded updates that the Textual UI applies on its own thread.
@@ -90,7 +90,6 @@ narrow file or directory.
 - Respect sync/async interoperability. Use the existing `call_sync_or_async` path instead of blindly nesting `asyncio.run()`. Preserve `ContextVar` state when work crosses threads.
 - Prefer immutable descriptors (`frozen=True`, mapping proxies) and locks around shared mutable runtime state. TUI worker threads must enqueue updates rather than mutate widgets.
 - Runtime dependency injection is annotation/provider based. Extend the binding plan or `ParameterProvider` patterns instead of adding special-case argument plumbing.
-- Preserve Ray object references and transport envelopes until a consumer requires materialization; avoid unnecessary copies or eager fetches.
 - Generated protobuf files under `src/runtime/operator/proto/` have dedicated Ruff ignores; regenerate them through the Make target rather than hand-editing.
 
 ## Important Files
@@ -99,7 +98,7 @@ narrow file or directory.
 - `src/avalanche/dag.py`: graph model, decorators, binding, scheduling, and `Workflow.run()`.
 - `src/avalanche/run_handle.py`: thread-backed awaitable run lifecycle and cancellation.
 - `src/avalanche/storage.py`: backend-neutral namespace/table contracts.
-- `src/runtime/executor.py`: Local/Ray executor protocol and result normalization.
+- `src/runtime/executor.py`: Executor protocol, `LocalExecutor`, and result normalization.
 - `src/runtime/operator/operator.py`: operator state and run-process orchestration.
 - `src/runtime/operator/run_worker.py`: spawn-safe workflow execution worker.
 - `src/runtime/operator/server.py` and `client.py`: gRPC boundary and TUI provider.
@@ -107,22 +106,22 @@ narrow file or directory.
 - `pyproject.toml`: dependencies, extras, packaging, pytest, Ruff, and coverage configuration.
 - `Makefile`: canonical development and maintenance commands.
 - `ARCHITECTURE.md`: operator, executor, TUI, and execution-services design.
-- `.github/workflows/ci.yml`: standard, Ray, and tmux CI gates.
+- `.github/workflows/ci.yml`: standard and tmux CI gates.
 
 ## Runtime/Tooling Preferences
 
 - Use **uv** for dependency management and command execution; keep `uv.lock` synchronized. Do not introduce pip/Poetry workflows.
 - Packaging uses Hatchling with a `src/` layout containing four import roots: `avalanche`, `ava_cli`, `runtime`, and `tui`.
 - The supported CLI is `ava`; do not document an `avalanche` command or unimplemented initialization flow.
-- Optional extras are `ray` and `lance`. When adding an extra, synchronize
+- Optional extras include `lance`, `claude`, and `openai`. When adding an extra, synchronize
   `pyproject.toml`, README, and getting-started documentation.
-- Ray tests require a local Ray runtime. Real-terminal TUI tests require the `tmux` executable. Operator integration uses local processes and gRPC ports.
+- Real-terminal TUI tests require the `tmux` executable. Operator integration uses local processes and gRPC ports.
 - Use `AVALANCHE_EXAMPLE_ROOT` to isolate example storage artifacts when needed.
 
 ## Testing & QA
 
 - Pytest is the test framework. Async tests must use `@pytest.mark.asyncio`; strict asyncio mode is enabled.
-- Mark Ray tests with `@pytest.mark.ray` and gate optional packages with `pytest.importorskip`. Mark real-terminal tests with `@pytest.mark.tmux`.
+- Gate optional packages with `pytest.importorskip`. Mark real-terminal tests with `@pytest.mark.tmux`.
 - Add behavior-level regression tests near the affected subsystem. Prefer `tmp_path`, explicit fakes/recording services, `pytest.raises`, and meaningful parametrized matrices over source-text or plumbing assertions.
 - Do not add standalone logging tests or assert exact log-message text. When
   logging matters to an existing behavior contract, verify that logging occurs
@@ -137,8 +136,8 @@ narrow file or directory.
   regressions. Run it only for an explicitly requested or approved large-scale
   refactor or migration.
 - TUI behavior normally needs both headless Textual coverage (`test/tui_test.py`) and tmux coverage (`test/tui_tmux_test.py`) when terminal rendering, sizing, or input behavior changes.
-- CI installs all extras, runs Ruff, then separates ordinary tests (`not tmux and not ray`), Ray tests, and tmux tests into distinct jobs.
-- Branch coverage is configured for `src/avalanche`; `make test-cov` reports missing lines. Do not treat a focused green test as proof for unrelated runtime, Ray, or tmux paths.
+- CI installs all extras, runs Ruff, then separates ordinary tests (`not tmux`) and tmux tests into distinct jobs.
+- Branch coverage is configured for `src/avalanche`; `make test-cov` reports missing lines. Do not treat a focused green test as proof for unrelated runtime or tmux paths.
 - Run `make smoke-test` for changes affecting documented examples or the main user path, and `uv build` for metadata or entry-point changes.
 
 ## Commit Messages
@@ -176,7 +175,7 @@ Explain in plain words what changed. Assume the reader has no prior conversation
 
 ## Test Plan
 - [ ] List the exact commands or manual scenarios used for verification.
-- [ ] Include specialized Ray, tmux, packaging, or smoke checks when relevant.
+- [ ] Include specialized tmux, packaging, or smoke checks when relevant.
 ```
 
 Do not begin with implementation details or refer to earlier conversations, prompts, or commits as context.

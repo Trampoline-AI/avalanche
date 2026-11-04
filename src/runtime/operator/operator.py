@@ -14,16 +14,14 @@ import signal
 import subprocess
 import threading
 import time
-import warnings
 from bisect import bisect_right
 from collections import OrderedDict, deque
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
-from functools import partial
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Callable, Literal, TypeAlias, TypeVar
+from typing import TYPE_CHECKING, Any, Callable, TypeVar
 from uuid import uuid4
 
 from pydantic import JsonValue
@@ -37,7 +35,6 @@ from avalanche.classifier.models import (
 from avalanche.evaluations import EvaluationDeclaration
 from avalanche.step_interface import StepInterface
 
-from ..executor import LocalExecutor, RayExecutor
 from ._signals import shutdown_cleanup
 from .discovery import (
     DEFAULT_DISCOVERY_TIMEOUT,
@@ -149,7 +146,6 @@ _LEVEL_MAP = {
 }
 logger = logging.getLogger(__name__)
 
-ExecutorBackend: TypeAlias = Literal["local", "ray"]
 STREAM_HISTORY_CAPACITY = 1024
 DEFAULT_RESULT_RETENTION_SECONDS = 24 * 60 * 60
 _PROCESS_GROUP_POLL_INTERVAL_SECONDS = 0.02
@@ -173,9 +169,6 @@ MAX_RUN_LOG_ENTRIES = 100_000
 MAX_RUN_DETAIL_BYTES = 128 * 1024 * 1024
 MAX_AGENT_DETAIL_DEPTH = 64
 _MISSING_WORKFLOW_ID = "\0"
-DeprecatedExecutorFactory: TypeAlias = (
-    type[LocalExecutor] | type[RayExecutor] | partial[RayExecutor]
-)
 
 
 class InvalidRunIdError(ValueError):
@@ -204,13 +197,6 @@ class StructuralBaselineUnavailableError(RuntimeError):
 
 class NoScheduleError(ValueError):
     """Raised when a schedule control targets a workflow that declares no cron."""
-
-
-class _ExecutorBackendOmitted:
-    pass
-
-
-_EXECUTOR_BACKEND_OMITTED = _ExecutorBackendOmitted()
 
 
 class _CoordinatorProtocolError(RuntimeError):
@@ -311,16 +297,10 @@ class Operator:
     def __init__(
         self,
         workflow_paths: list[str] | None = None,
-        executor_factory: DeprecatedExecutorFactory | None = None,
         watch: bool = True,
         schedule: bool = True,
         *,
         schedules_enabled: bool = False,
-        executor_backend: ExecutorBackend | _ExecutorBackendOmitted = (
-            _EXECUTOR_BACKEND_OMITTED
-        ),
-        ray_runtime_env: Mapping[str, Any] | None = None,
-        ray_init_kwargs: Mapping[str, Any] | None = None,
         prepare_timeout: float = 15.0,
         discovery_timeout: float = DEFAULT_DISCOVERY_TIMEOUT,
         cancel_grace: float = 5.0,
@@ -337,23 +317,12 @@ class Operator:
         max_run_log_entries: int = MAX_RUN_LOG_ENTRIES,
         max_run_detail_bytes: int = MAX_RUN_DETAIL_BYTES,
     ) -> None:
-        """Create an operator with spawn-safe executor configuration.
-
-        ``executor_factory`` is deprecated and only accepts the exact
-        ``LocalExecutor`` or ``RayExecutor`` classes, or a keyword-only
-        ``functools.partial(RayExecutor, ...)``. Use ``executor_backend`` and
-        the Ray configuration mappings for new code.
+        """Create an operator with local execution in spawned coordinators.
 
         Discovered cron schedules start disabled; ``schedules_enabled`` starts
         them all enabled instead. Enable and disable choices are kept in memory
         only and reset on restart.
         """
-        self._executor_config = _resolve_executor_config(
-            executor_backend=executor_backend,
-            ray_runtime_env=ray_runtime_env,
-            ray_init_kwargs=ray_init_kwargs,
-            executor_factory=executor_factory,
-        )
         if not 0 <= webhook_port <= 65535:
             raise ValueError("Webhook port must be between 0 and 65535")
         if cancel_grace < 0:
@@ -1643,7 +1612,6 @@ class Operator:
                         workflow_relative_module_file,
                         descriptor.locator.builder_symbol,
                         run_id,
-                        self._executor_config,
                         assignment_event,
                         input,
                         context,
@@ -4448,73 +4416,6 @@ def _protocol_fault_message(
         event_label = type(event).__name__
     message = f"Malformed coordinator event {event_label}: {exc}"
     return message if len(message) <= limit else message[: limit - 3] + "..."
-
-
-def _resolve_executor_config(
-    *,
-    executor_backend: ExecutorBackend | _ExecutorBackendOmitted,
-    ray_runtime_env: Mapping[str, Any] | None,
-    ray_init_kwargs: Mapping[str, Any] | None,
-    executor_factory: DeprecatedExecutorFactory | None,
-) -> dict[str, Any]:
-    backend_was_provided = not isinstance(executor_backend, _ExecutorBackendOmitted)
-    backend: ExecutorBackend = "local" if not backend_was_provided else executor_backend
-    if executor_factory is not None:
-        warnings.warn(
-            "executor_factory is deprecated; use executor_backend and the "
-            "ray_runtime_env/ray_init_kwargs configuration instead",
-            DeprecationWarning,
-            stacklevel=3,
-        )
-        if backend_was_provided or ray_runtime_env is not None or ray_init_kwargs is not None:
-            raise TypeError(
-                "executor_factory cannot be combined with executor_backend or "
-                "Ray configuration"
-            )
-        return _deprecated_executor_config(executor_factory)
-
-    if backend not in {"local", "ray"}:
-        raise ValueError(f"Unsupported executor_backend {backend!r}; expected 'local' or 'ray'")
-    if backend == "local":
-        if ray_runtime_env is not None or ray_init_kwargs is not None:
-            raise ValueError(
-                "ray_runtime_env and ray_init_kwargs require executor_backend='ray'"
-            )
-        return {"backend": "local"}
-    return {
-        "backend": "ray",
-        "runtime_env": dict(ray_runtime_env or {}),
-        "ray_init_kwargs": dict(ray_init_kwargs or {}),
-    }
-
-
-def _deprecated_executor_config(
-    factory: DeprecatedExecutorFactory,
-) -> dict[str, Any]:
-    if factory is LocalExecutor:
-        return {"backend": "local"}
-    if factory is RayExecutor:
-        return {"backend": "ray", "runtime_env": {}, "ray_init_kwargs": {}}
-    if isinstance(factory, partial) and factory.func is RayExecutor:
-        if factory.args:
-            raise TypeError("RayExecutor partial must use keyword arguments only")
-        unsupported = set(factory.keywords or {}) - {"runtime_env", "ray_init_kwargs"}
-        if unsupported:
-            raise TypeError(
-                "Unsupported RayExecutor partial arguments: " + ", ".join(sorted(unsupported))
-            )
-        return {
-            "backend": "ray",
-            "runtime_env": dict((factory.keywords or {}).get("runtime_env") or {}),
-            "ray_init_kwargs": dict((factory.keywords or {}).get("ray_init_kwargs") or {}),
-        }
-    raise TypeError(
-        "Unsupported executor_factory. Per-run spawn requires serializable backend "
-        "configuration; use executor_backend='local' or executor_backend='ray' with "
-        "ray_runtime_env/ray_init_kwargs. The deprecated compatibility parameter only "
-        "accepts exact LocalExecutor, exact RayExecutor, or a keyword-only "
-        "functools.partial(RayExecutor, ...)."
-    )
 
 
 def _teardown_process_group(

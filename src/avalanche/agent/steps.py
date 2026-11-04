@@ -401,7 +401,7 @@ class _AgentStepSpec(Generic[InputT, OutputT]):
         owned_classifier_defaults = dict(classifier_defaults or {})
 
         async def bound(*args: Any, **kwargs: Any) -> Any:
-            # Resolve process-local state on execution; Ray serializes this closure by value.
+            # Resolve process-local state when the step executes.
             from avalanche.agent.steps import _WORKFLOW_AGENT_DEFAULTS
             from avalanche.classifier.classifier_step import _WORKFLOW_CLASSIFIER_DEFAULTS
 

@@ -15,7 +15,7 @@ jobs:
       - run: uv lock --check
       - run: uv sync --all-extras
       - run: uv run ruff check src/ test/
-      - run: uv run pytest -m "not tmux and not ray"
+      - run: uv run pytest -m "not tmux"
         env:
           PYTHONFAULTHANDLER: "1"
 
@@ -43,15 +43,6 @@ jobs:
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
       - run: git diff --exit-code -- src/runtime/operator/proto web/operator/src/generated
-
-  ray:
-    name: Ray tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v7
-      - run: uv sync --all-extras
-      - run: uv run pytest -m ray
 
   tmux:
     name: Tmux TUI tests

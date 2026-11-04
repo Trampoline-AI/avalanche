@@ -902,7 +902,7 @@ async def test_a_missing_claude_cli_names_what_to_install(replay):
     replay([], error=CLINotFoundError("claude not found"))
     observed = []
     with capture_agent_evidence(observed.append, errors="raise"):
-        with pytest.raises(AgentStepExecutionError, match="Ray worker"):
+        with pytest.raises(AgentStepExecutionError, match="Claude Code"):
             await _agent()(a=2, b=3)
 
     assert observed[-1].kind == "trace_unavailable"

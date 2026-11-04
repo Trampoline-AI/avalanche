@@ -1,11 +1,11 @@
 """Bounded, display-only previews of what a standard step received and returned.
 
 Previews are built inside the task that runs the step, where its arguments and
-return value already exist, so capture never fetches a Ray object or copies a
-payload to the coordinator. Each preview walks at most a fixed number of values
-and characters; anything cut is replaced by an explicit ``…`` marker and the
-preview is flagged ``truncated``. Values that are not plain data (data frames,
-arrays, custom objects) are shown as a bounded ``repr`` instead of serialized.
+return value already exist, so capture does not copy a payload across processes.
+Each preview walks at most a fixed number of values and characters; anything cut
+is replaced by an explicit ``…`` marker and the preview is flagged ``truncated``.
+Values that are not plain data (data frames, arrays, custom objects) are shown
+as a bounded ``repr`` instead of serialized.
 
 Previews are display-only, so building one never changes a step's outcome: a value
 whose preview cannot be built (for example because its ``__repr__`` raises) gets an

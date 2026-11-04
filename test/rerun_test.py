@@ -15,9 +15,6 @@ from avalanche._testing.rerun_helpers import (
     explicit_selector_load_left,
     explicit_selector_load_right,
     explicit_selector_split,
-    lineage_load_data,
-    lineage_process_data,
-    lineage_sink,
 )
 from avalanche.iceberg import IcebergNs, IcebergNsConfig, IcebergTable
 from runtime.operator.hooks import RunHooks
@@ -270,53 +267,3 @@ def test_rerun_cannot_replay_a_table_without_row_lineage(rerun_ns):
             executor=ava.LocalExecutor(),
             rerun=ava.Rerun(run_id="source-run", start=["consume"]),
         ).result()
-
-
-@pytest.mark.ray
-def test_ray_rerun_lineage_survives_hook_replacement_and_worker_commits(rerun_ns):
-    ray = pytest.importorskip("ray")
-    owns_runtime = not ray.is_initialized()
-    if owns_runtime:
-        ray.init(num_cpus=2, include_dashboard=False)
-    ns = rerun_ns
-    load = ava.source(slug="load")(lineage_load_data)
-    process = ava.step(slug="process")(lineage_process_data)
-    sink = ava.dest(slug="sink")(lineage_sink)
-
-    @ava.workflow
-    def flow():
-        produced = load(source=ns.source)
-        processed = process(df=ava.Stream(ns.source))
-        produced >> processed
-        return sink(processed, output=ns.output)
-
-    def replace_processed(node_id, value):
-        if node_id == "lineage_process_data_1":
-            return value.with_columns(pl.lit("hooked").alias("value"))
-        return value
-
-    try:
-        executor = ava.RayExecutor()
-        assert flow().run(executor=executor, run_id="source-run").result(timeout=30) == "ok"
-        assert (
-            flow()
-            .run(
-                executor=executor,
-                run_id="rerun",
-                hooks=RunHooks(unwrap_result=replace_processed),
-                rerun=ava.Rerun(run_id="source-run", start=["process"], mode="autorun"),
-            )
-            .result(timeout=30)
-            == "ok"
-        )
-        rows = ns.output.read().filter(pl.col("_ava_run_id") == "rerun")
-        assert rows["value"].to_list() == ["hooked"]
-        assert json.loads(rows["_ava_lineage_vector"][0]) == {
-            "load": "source-run",
-            "process": "rerun",
-            "sink": "rerun",
-        }
-        assert ns.source.read()["value"].to_list() == ["alpha"]
-    finally:
-        if owns_runtime:
-            ray.shutdown()

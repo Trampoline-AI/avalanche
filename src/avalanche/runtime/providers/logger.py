@@ -35,7 +35,7 @@ class Logger(ParameterProvider):
     The framework injects:
     - Node name (which function is logging)
     - Execution ID (unique ID for this workflow run)
-    - Worker ID (for distributed execution with Ray)
+    - Worker ID (local execution)
     - Timestamp and log level
 
     Example:
@@ -100,12 +100,7 @@ class Logger(ParameterProvider):
         if logger_marker.level is not None:
             base_logger.setLevel(logger_marker.level)
 
-        if param_context.executor_type == "ray":
-            import ray
-
-            worker_id = ray.get_runtime_context().get_worker_id()
-        else:
-            worker_id = "local"
+        worker_id = "local"
 
         context = {
             "node": node_name,

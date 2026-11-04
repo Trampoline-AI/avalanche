@@ -293,7 +293,7 @@ def assert_captured_step_values(run: RunState) -> None:
 def test_spawned_local_run_retains_step_inputs_and_outputs(tmp_path):
     workflow = tmp_path / "step_io_flow.py"
     workflow.write_text(WORKFLOW)
-    operator = Operator([str(workflow)], executor_backend="local", watch=False, schedule=False)
+    operator = Operator([str(workflow)], watch=False, schedule=False)
     try:
         run = wait_terminal(operator, operator.start_run("flow"))
         assert run.status is RunStatus.FAILED
@@ -308,27 +308,6 @@ def test_spawned_local_run_retains_step_inputs_and_outputs(tmp_path):
         assert {node.name: node.step_io for node in snapshot.nodes} == {
             node.name: node.step_io for node in run.nodes.values()
         }
-    finally:
-        operator.close()
-
-
-@pytest.mark.ray
-def test_ray_run_previews_step_values_inside_the_task(tmp_path):
-    pytest.importorskip("ray")
-    workflow = tmp_path / "step_io_flow.py"
-    workflow.write_text(WORKFLOW)
-    operator = Operator(
-        [str(workflow)],
-        executor_backend="ray",
-        ray_init_kwargs={"address": "local", "num_cpus": 2, "include_dashboard": False},
-        prepare_timeout=30.0,
-        watch=False,
-        schedule=False,
-    )
-    try:
-        run = wait_terminal(operator, operator.start_run("flow"), timeout=90)
-        assert run.status is RunStatus.FAILED
-        assert_captured_step_values(run)
     finally:
         operator.close()
 

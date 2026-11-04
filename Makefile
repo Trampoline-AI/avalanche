@@ -2,10 +2,9 @@
 PYTEST_WORKERS ?= 4
 
 
-# Run ordinary tests concurrently; Ray and tmux own process-global resources.
+# Run ordinary tests concurrently; tmux owns process-global resources.
 test:
-	uv run --all-extras pytest -n $(PYTEST_WORKERS) -m "not ray and not tmux"
-	uv run --all-extras pytest -m ray
+	uv run --all-extras pytest -n $(PYTEST_WORKERS) -m "not tmux"
 	uv run --all-extras pytest -m tmux
 	$(MAKE) web-test
 

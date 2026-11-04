@@ -8,8 +8,8 @@ works in a folder through the SDK's
 [sandbox](https://openai.github.io/openai-agents-python/sandbox_agents/): it
 edits files and runs commands, in place in the step's `ava.Workspace`.
 
-Install it with `uv add 'avalanche-ai[openai]'` wherever the step runs, Ray
-workers included. Each call creates its own OpenAI client, which reads
+Install it with `uv add 'avalanche-ai[openai]'` wherever the step runs. Each call
+creates its own OpenAI client, which reads
 `OPENAI_API_KEY`, and `OPENAI_BASE_URL`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID`
 when set, from the environment of the process that runs the step. Client
 settings made in code with the SDK's `set_default_openai_key` or
@@ -134,8 +134,7 @@ the step runs otherwise. A step's settings replace the workflow default's
 setting by setting.
 
 Model settings are never published or recorded: they are not part of the step's
-declaration, its live events or its trace. With `RayExecutor`, the runtime
-travels to the worker, so every value must pickle with `cloudpickle`.
+declaration, its live events or its trace.
 
 ## Trace example
 

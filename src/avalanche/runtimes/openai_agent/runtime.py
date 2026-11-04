@@ -61,7 +61,7 @@ class OpenAIAgent(BaseModel):
     each call to OpenAI; it is off by default.
 
     The SDK reads ``OPENAI_API_KEY`` (and ``OPENAI_BASE_URL``) from the environment
-    of the process that runs the step, Ray workers included.
+    of the process that runs the step.
 
     Any other keyword is an ``agents.ModelSettings`` field passed to the SDK, such
     as ``temperature``, ``reasoning`` or ``max_tokens``. An unknown name fails here

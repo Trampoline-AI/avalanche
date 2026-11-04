@@ -244,14 +244,14 @@ executing process. Calls in one execution of a step share that client. Avalanche
 closes it when the step exits, including on error or cancellation, and cancels
 outstanding calls during cleanup. Await all calls inside the step; do not retain
 the injected classifier for later use. Another step execution gets its own
-client. This lifecycle also applies when execution crosses a Ray worker boundary.
+client.
 
 Credentials come from runtime `TYPESAFE_API_KEY`, not decorator configuration,
 workflow defaults, or serialized declarations. If the variable is absent when
 the first call creates a client, Avalanche loads the nearest `.env` found from
 the executing process's working directory upward. Existing environment variables
-are never overwritten. Operator workers search from their workflow import root;
-Ray workers need either exported credentials or an accessible `.env` file.
+are never overwritten. Operator coordinators search from their workflow import
+root and need either exported credentials or an accessible `.env` file.
 Importing a workflow, building its DAG, and discovering its questions do not load
 `.env`, create a client, or make a model request. The requested model name is
 retained in the declaration; TypeSafe's resolved model is retained in the result.

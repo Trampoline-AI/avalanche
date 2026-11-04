@@ -70,8 +70,8 @@ class ClaudeAgent(BaseModel):
     appended to it.
 
     Steps run the Claude Code CLI that ships with the Claude Agent SDK package
-    (the ``claude`` extra), which must be installed wherever the step runs, Ray
-    workers included; a separately installed ``claude`` is used only when the
+    (the ``claude`` extra), which must be installed wherever the step runs;
+    a separately installed ``claude`` is used only when the
     package has none. It authenticates as it does in a terminal: with a ``claude``
     login, ``CLAUDE_CODE_OAUTH_TOKEN`` from ``claude setup-token``, or
     ``ANTHROPIC_API_KEY``.

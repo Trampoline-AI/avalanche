@@ -1,15 +1,15 @@
-"""Agent callables cross the same cloudpickle boundary used by Ray tasks."""
+"""Agent callables retain their behavior across cloudpickle serialization."""
 
 from __future__ import annotations
 
 import asyncio
 import importlib
 
+import cloudpickle
 import dspy
 import pytest
 from dspy import Prediction
 from predict_rlm import RunEvidence, RunTrace
-from ray import cloudpickle
 
 import avalanche as ava
 from avalanche.agent.defaults import AgentDefaults

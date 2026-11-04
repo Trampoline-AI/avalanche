@@ -35,7 +35,7 @@ A platform starts the same workflow with an execution-services request:
 
 ```python
 handle = document_flow().run(
-    executor=ava.RayExecutor(),
+    executor=ava.LocalExecutor(),
     input={"source_path": {"artifact_id": "artifact_123"}},
     execution_services=ava.ExecutionServicesSpec(
         service=platform_services,
@@ -92,7 +92,7 @@ Driver
   |
   | Workflow.run(execution_services=spec)
   v
-LocalExecutor or RayExecutor
+LocalExecutor
   |
   | submit service request + task identity + parent receipts
   v
@@ -140,7 +140,7 @@ Its version is currently `avalanche.execution-services/v1`.
 - workflow name;
 - node ID and function name;
 - stable node slug;
-- executor type (`local` or `ray`).
+- executor type (`local`).
 
 `ava.ExecutionServiceReceipt` exposes one deterministic terminal receipt through the
 run handle. It contains the terminal node ID, node slug, and provider-returned value.
@@ -160,18 +160,12 @@ The provider acquires credentials and process-local capabilities after the execu
 placed the task. `open` returns the task-scoped session used by the remaining lifecycle
 methods. Sessions never cross from one task attempt to another.
 
-### Local and Ray execution
+### Local execution
 
 `LocalExecutor` runs each node's lifecycle synchronously within that node's
 worker thread and carries values directly. Independent node lifecycles may
 overlap, while a dependent lifecycle receives completed parent receipts in DAG
 order.
-
-`RayExecutor` runs the complete lifecycle inside one Ray task. The task returns three
-separate channels: user payloads, one small receipt, and one status marker. The driver
-fetches status markers to observe progress and failure. Receipt references remain in the
-DAG as worker-side dependencies and are fetched only for terminal publication, so
-intermediate receipts and user payloads are not materialized on the driver.
 
 For a fan-in node, `open(..., upstream_receipts=...)` receives parent receipts in DAG
 dependency order. Only terminal-node receipts are fetched and exposed through
@@ -180,7 +174,7 @@ dependency order. Only terminal-node receipts are fetched and exposed through
 ### Native agent-step evaluations
 
 Evaluation observation is separate from the execution-service lifecycle and its
-commit receipts. In operator-managed Local and Ray execution, each agent step's one
+commit receipts. In operator-managed execution, each agent step's one
 agent call, when it succeeds, submits its actual call arguments, validated
 outputs, and full trace for background evaluation. The step's own return value
 remains separate. Evidence is snapshotted before the result returns to the step body, so later mutations cannot change the observed execution.
@@ -216,7 +210,7 @@ Avalanche does not reuse a partially opened or finalized session. Providers shou
 requests idempotent and use attempt-specific ownership or winner fencing where multiple
 attempts can race.
 
-Cancellation is cooperative between node submissions. An already running Local or Ray
+Cancellation is cooperative between node submissions. An already running local
 task may finish its lifecycle. Completed receipts remain valid, while unscheduled
 downstream tasks do not open sessions.
 
@@ -233,7 +227,7 @@ Before enabling a provider, verify that it:
 7. aborts partial publication or preserves explicit recovery state, then tears down every
    opened session exactly once;
 8. restarts cleanly under retries and preserves winner fencing;
-9. behaves equivalently under Local and Ray execution;
+9. preserves dependency order under serial and concurrent local execution;
 10. documents whether its materialization is eager or lazy.
 
 ## Current boundary

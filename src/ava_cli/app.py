@@ -128,7 +128,6 @@ def _build_parser() -> argparse.ArgumentParser:
         default="WARNING",
         help="terminal log level (default: WARNING)",
     )
-    operator.add_argument("--ray", action="store_true", help="use the Ray executor")
     operator.add_argument(
         "--discovery-timeout",
         type=float,
@@ -321,7 +320,6 @@ def _build_parser() -> argparse.ArgumentParser:
     dev.add_argument(
         "--web-port", type=int, default=7435, help="browser UI and REST API HTTP port"
     )
-    dev.add_argument("--ray", action="store_true", help="use the Ray executor")
     dev.add_argument(
         "--log-level",
         type=str.upper,
@@ -374,8 +372,6 @@ def _run_operator(args: argparse.Namespace) -> int:
         "--discovery-timeout",
         str(args.discovery_timeout),
     ]
-    if args.ray:
-        runtime_args.append("--ray")
     if args.no_web:
         runtime_args.append("--no-web")
     if args.schedules_enabled:
@@ -1629,7 +1625,6 @@ def _run_dev(args: argparse.Namespace) -> int:
         operator = Operator(
             args.flows,
             discovery_timeout=args.discovery_timeout,
-            executor_backend="ray" if args.ray else "local",
             schedules_enabled=args.schedules_enabled,
         )
         workflow_count = len(operator.get_catalog().workflows)

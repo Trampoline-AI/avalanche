@@ -6,8 +6,8 @@ drives the Claude Code CLI. Claude works in a folder, calls your step's tools an
 any Claude Code tools you enable, such as `Read` or `Bash`, and answers with JSON
 that matches the signature's outputs.
 
-Install it with `uv add 'avalanche-ai[claude]'` wherever the step runs, Ray
-workers included. The Claude Agent SDK package ships the Claude Code CLI, so
+Install it with `uv add 'avalanche-ai[claude]'` wherever the step runs. The
+Claude Agent SDK package ships the Claude Code CLI, so
 nothing else needs installing; a `claude` CLI you installed yourself is used only
 where the SDK package has no CLI of its own. The CLI signs in as it does in a
 terminal: a `claude` login, `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`,
@@ -130,10 +130,7 @@ A step's options replace the workflow default's option by option: a step's
 
 SDK options are never published or recorded: they are not part of the step's
 declaration, its live events or its trace, so `env` values and MCP server
-credentials stay in the process that runs the step. With `RayExecutor`, the
-runtime travels to the worker, so every option value must pickle with
-`cloudpickle`. Hooks and in-process MCP servers from `create_sdk_mcp_server` do,
-but they run as copies on the worker: state they change stays there. Prefer the
+credentials stay in the process that runs the step. Prefer the
 step's `tools=` for Python tools.
 
 ## Trace example

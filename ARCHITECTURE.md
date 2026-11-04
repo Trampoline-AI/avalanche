@@ -1,7 +1,7 @@
 # Architecture
 
 Avalanche is a local-first system for defining typed Python workflow DAGs,
-executing them locally or through Ray, and controlling those runs through a
+executing them locally, and controlling those runs through a
 local operator. The system has explicit authoring, execution, control-plane,
 and presentation boundaries. It does not provide production authentication,
 multi-tenancy, durable recovery, or a deployment control plane.
@@ -14,7 +14,7 @@ multi-tenancy, durable recovery, or a deployment control plane.
 │ Python workflow module                                                    │
 │  @workflow + @source/@step/@agent_step/@dest                              │
 │          │                                                                │
-│          ├── embedded: Workflow.run() → RunHandle → LocalExecutor/Ray     │
+│          ├── embedded: Workflow.run() → RunHandle → LocalExecutor        │
 │          │                                                                │
 │          └── operator: discovery worker → descriptor catalog              │
 └──────────┼───────────────────────────────────────────────────────────────┘
@@ -26,7 +26,7 @@ multi-tenancy, durable recovery, or a deployment control plane.
 │  webhook ingress · gRPC server · bounded run/log/detail state             │
 │          │                                                                │
 │          ├── spawn one coordinator process per run                        │
-│          │       └── Workflow.run() → LocalExecutor or RayExecutor        │
+│          │       └── Workflow.run() → LocalExecutor                      │
 │          │                                                                │
 │          └── gRPC OperatorServiceV2                                       │
 └───────┬───────────────────────────────────────────────────────┬──────────┘
@@ -59,7 +59,7 @@ result = run.result()
 non-daemon driver thread schedules the DAG. `.result()` blocks in synchronous
 code; `await run` waits without blocking an event loop. Cancellation is
 cooperative: the driver stops submitting later work after cancellation, but it
-does not forcibly interrupt an active local function or Ray task.
+does not forcibly interrupt an active local function.
 
 No operator, gRPC service, browser UI, or TUI participates in embedded mode.
 The handle is not a durable run registry or recovery mechanism.
@@ -185,20 +185,16 @@ pool inside the local coordinator process. Its worker bound is configurable;
 one worker uses synchronous serial admission, checking cancellation before each
 node and leaving later ready siblings unqueued after cancellation or failure.
 Node arguments and fan-in receipts retain DAG declaration order even when sibling
-completion order differs. `RayExecutor`
-submits work to Ray when selected. The DAG runtime, not the UI or operator
-parent, controls dependency order and binding. Ray object references remain
-distributed until a consumer needs materialization; the operator parent
-receives lifecycle events and encoded terminal results rather than live task
-objects.
+completion order differs. The DAG runtime, not the UI or operator
+parent, controls dependency order and binding. The operator parent receives
+lifecycle events and encoded terminal results rather than live task objects.
 
 For an operator run, executor construction happens in the spawned coordinator:
 
 ```text
 Operator parent
   └── coordinator imports one workflow module and builds one Workflow
-        ├── LocalExecutor: dependency-ready thread-pool nodes + queue observers
-        └── RayExecutor: Ray tasks + Ray log queue
+        └── LocalExecutor: dependency-ready thread-pool nodes + queue observers
 ```
 
 The coordinator tears down its executor after a terminal outcome. The parent
@@ -328,8 +324,7 @@ stderr, logging, and agent evidence through the event channel. Agent evidence
 crosses as JSON and is validated once, in strict mode, against the live event
 and final event models. Malformed or out-of-order agent evidence, such as a
 second final event for one call, or native parts from two runtimes in one call,
-fails the run as a protocol error. For Ray runs, a
-Ray queue carries worker log events back to the coordinator and then the parent.
+fails the run as a protocol error.
 
 Cancellation sets the child cancellation event and eventually tears down the
 owned process group. It remains cooperative at the workflow-node level, while
@@ -448,7 +443,7 @@ updates for the Textual event loop; they do not mutate widgets directly.
 
 `ava tui` without `--connect` uses `MockStateProvider` for local UI work.
 `ava tui --connect localhost:7433` controls a real operator. The TUI does not
-perform workflow discovery, execute nodes, or manage Ray.
+perform workflow discovery or execute nodes.
 
 ### CLI
 
@@ -471,7 +466,6 @@ The `ava` CLI is a thin front door:
 | Embedded execution | calling process | process-local `RunHandle` |
 | Operator catalog | operator parent | live `Workflow` objects and imported modules |
 | Operator run | spawned coordinator | workflow/executor instances and worker-local capabilities |
-| Executor / Ray | executor and workers | Ray object references until materialization is required |
 | UI state | browser/TUI client | operator state mutation and workflow execution |
 | Result transport | result store + gRPC | arbitrary live Python values; results are encoded values + files |
 
@@ -483,7 +477,7 @@ object sharing, and UI-owned execution.
 | Area | Primary locations |
 | --- | --- |
 | Public DAG, runtime, storage, agent APIs | `src/avalanche/` |
-| Local and Ray executors | `src/runtime/executor.py` |
+| Local executor | `src/runtime/executor.py` |
 | Operator lifecycle, registry, transport, worker | `src/runtime/operator/` |
 | Browser UI source | `web/operator/` |
 | Packaged browser assets | `src/runtime/operator/web_assets/` |
@@ -504,7 +498,7 @@ object sharing, and UI-owned execution.
   trusted flow paths.
 - Live reload follows Python source changes only; restart for non-Python
   import-time configuration changes.
-- Ray is optional and only participates when `RayExecutor` is selected.
+- `LocalExecutor` is the only in-repository executor.
 
 ## Related documents
 
