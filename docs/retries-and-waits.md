@@ -44,7 +44,7 @@ observation writes. The SDK declaration alone does not implement that control
 plane. Embedded execution can classify explicitly raised `OutcomeUnknownError`;
 it cannot recover an interrupted process.
 
-`RunContext.step_key` is `run_id:invocation_id`: it stays the same across attempts
+`RunContext.step_key` is `run_id:invocation_id` (with `:index` for a mapped item): it stays the same across attempts
 and differs across runs. It is available only inside an invocation. Send unchanged
 action parameters and this key to a recipient that **enforces** deduplication;
 check its retention window. Use a business-operation key for deduplication across
@@ -221,9 +221,102 @@ operator's in-memory run; a forced coordinator kill cannot export a final snapsh
 
 Run the synthetic example with `uv run python examples/durable_waits.py`.
 
+## Per-item decisions and composition
+
+```python
+reviews = ava.decision.map(
+    Approval, drafts, prompt="Publish this article?",
+    timeout=timedelta(days=2), on_timeout=Approval(kind="reject"),
+    approvers=["reviewer"], max_items=8,
+)
+```
+
+`items` is a static list or a deferred node producing a list. By default each
+item is the shown artifact. Optional `show=fn` receives one item and returns a
+Pydantic model to show instead. The default bound is 8, with a hard cap of 64; overflow fails
+before any item becomes addressable. Expansion publishes item identities and
+schemas together. An item is addressed as `decision_1[0]` (or the declared local
+slug plus `[0]`); its operation key is `run_id:invocation_id:index`. Each decision
+has its own permission check, resolution and audit receipt. One submission cannot
+resolve siblings. Rejection is typed data and does not cancel siblings. The group
+returns outcomes in input order after all items resolve, including typed timeout
+outcomes; an unhandled decision timeout fails the group/run.
+
+Use a closure to include shared context without changing the input items:
+
+```python
+publication_policy = "Publication policy v1"
+
+def show_review(draft: Draft) -> ReviewItem:
+    return ReviewItem(draft=draft, policy=publication_policy)
+
+# Inside a workflow. show is a function, not a template string.
+reviews = ava.decision.map(
+    Approval, drafts, prompt="Publish?", show=show_review, timeout=None,
+)
+```
+
+`show` runs as an implicit pure step for each item, on the flow worker, never in
+the operator/control plane. It shares the normal step retry contract (including
+`NonRetryableError`) and bounded worker pool. Its stable step identity is
+`decision_1.show[0]`; the associated decision remains `decision_1[0]`. Hosts journal
+the step output through the same execution/hook boundary as other steps, then
+replay that output rather than re-evaluating `show`. Embedded execution remains
+process-local and does not add a persistent journal of its own. The console card
+and acceptance receipt use that same output, subject to the existing bounded
+artifact previews. The development operator graph keeps the declared map group
+as one node and attaches step previews to it; individual cards keep their item
+identities. A rendering error exhausts that item's normal retry budget,
+reports a step/decision failure and fails the run; it is not a rejection outcome.
+Overflow is checked before any `show` invocation or addressable child is created.
+A decision's timeout starts only once its shown output is ready.
+
+### Quorum: fan in over decision results
+
+There is no quorum primitive. Define the business rule in a normal step:
+
+```python
+@ava.step
+async def quorum(reviews: list[Approval]) -> bool:
+    return sum(review.kind == "approve" for review in reviews) >= 2
+
+@ava.workflow
+def publication_vote():
+    reviews = ava.decision.map(
+        Approval, article_drafts(), prompt="Publish this article?", timeout=None,
+    )
+    return reviews >> quorum()
+```
+
+This fan-in observes the complete ordered result list; it does not implement an
+early quorum, cancel unreviewed items, or authorize one item from another's vote.
+Choose a typed `on_timeout` when the rule should count timed-out votes.
+
+### Approve all: one decision gating the entire list
+
+For one reviewer action covering the complete list, do not use an item map:
+
+```python
+@ava.step
+async def publish_all(drafts: list[str], approval: Approval) -> list[str]:
+    return drafts if approval.kind == "approve" else []
+
+@ava.workflow
+def approve_all():
+    drafts = article_drafts()
+    approval = ava.decision(
+        Approval, prompt="Publish this complete list?", show=drafts, timeout=None,
+    )
+    return approval >> publish_all(drafts, approval)
+```
+
+This creates one pinned artifact/schema and one audit decision for the whole list,
+not a bulk endpoint that silently resolves independent item cards. Both patterns
+are exercised in `examples/durable_waits.py` by the smoke gate.
+
 ## Hosting/discovery contract
 
-Discovery, cache schema 14 and `FlowInfoV2` carry `node_policies` and `node_waits`
+Discovery, cache schema 15 and `FlowInfoV2` carry `node_policies` and `node_waits`
 by **invocation ID**, separate from event topics. The subprocess payload and
 cache require these maps; old caches are invalidated and rebuilt, never assigned
 invented policy values. `WaitSpec` pins JSON Schema, deadline specification,

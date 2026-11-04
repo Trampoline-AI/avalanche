@@ -23,7 +23,7 @@ from .source import iter_source_paths
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 14
+_CACHE_SCHEMA_VERSION = 15
 
 
 class _CacheModel(BaseModel):
@@ -193,7 +193,7 @@ class _SourceStamp(_CacheModel):
 
 
 class _CacheDocument(_CacheModel):
-    schema_version: Literal[14]
+    schema_version: Literal[15]
     environment: str
     roots: tuple[_CachedRoot, ...]
     watch_roots: tuple[str, ...]

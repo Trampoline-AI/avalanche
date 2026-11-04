@@ -193,24 +193,48 @@ def _run_worker(
     try:
         executor = LocalExecutor()
 
+        # The operator graph displays a decision map as one declared node.
+        # Keep worker/journal identities per item, but scope operator previews
+        # and lifecycle observations to that group. Never relax the operator
+        # protocol's rejection of genuinely unpublished node identities.
+        item_groups = {
+            f"{node_id}[{index}]": node_id
+            for node_id, spec in workflow.node_waits.items()
+            if spec.map_max_items is not None
+            for index in range(spec.map_max_items)
+        }
+        show_groups = {
+            f"{node_id}.show[{index}]": node_id
+            for node_id, spec in workflow.node_waits.items()
+            if spec.map_max_items is not None
+            for index in range(spec.map_max_items)
+        }
+
         def wrap_fn(node_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
-            return _with_local_node_observers(node_id, fn, stdout, stderr, event_queue)
+            owner = show_groups.get(node_id, node_id)
+            return _with_local_node_observers(owner, fn, stdout, stderr, event_queue)
 
         _put_run_event(event_queue, {"type": "running", "timestamp": time.monotonic()})
         hooks = RunHooks(
-            on_node_start=lambda node_id: _put_run_event(
+            on_node_start=lambda node_id: None
+            if node_id in show_groups or node_id in item_groups
+            else _put_run_event(
                 event_queue,
                 {"type": "node_started", "node_id": node_id, "timestamp": time.monotonic()},
             ),
-            on_node_success=lambda node_id: _put_run_event(
+            on_node_success=lambda node_id: None
+            if node_id in show_groups or node_id in item_groups
+            else _put_run_event(
                 event_queue,
                 {"type": "node_succeeded", "node_id": node_id, "timestamp": time.monotonic()},
             ),
-            on_node_failure=lambda node_id, exc: _put_run_event(
+            on_node_failure=lambda node_id, exc: None
+            if node_id in item_groups
+            else _put_run_event(
                 event_queue,
                 {
                     "type": "node_failed",
-                    "node_id": node_id,
+                    "node_id": show_groups.get(node_id, node_id),
                     "timestamp": time.monotonic(),
                     "error": _bounded_event_text(
                         f"{type(exc).__name__}: {exc}",

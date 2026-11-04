@@ -41,6 +41,8 @@ def run_local_schedule(
     pending: dict[Future[tuple[NodeFuture, T]], str] = {}
     parked: set[str] = set()
     holds: set[str] = set()
+    map_groups: dict[str, tuple[str, ...]] = {}
+    show_decisions: dict[str, str] = {}
     attempts: dict[str, int] = dict.fromkeys(order, 0)
     failure: Exception | None = None
     cancelled = False
@@ -64,10 +66,10 @@ def run_local_schedule(
     with ThreadPoolExecutor(
         max_workers=capacity, thread_name_prefix=f"avalanche-local-{waits.run_id}"
     ) as pool:
-        while remaining or pending or parked:
+        while remaining or pending or parked or map_groups:
             with waits.condition:
                 if (
-                    (remaining or parked)
+                    (remaining or parked or map_groups)
                     and cancel_requested is not None
                     and cancel_requested()
                 ):
@@ -110,10 +112,39 @@ def run_local_schedule(
                             failure = exc
                             if hooks and hooks.on_node_failure:
                                 hooks.on_node_failure(node_id, exc)
+                                if node_id in show_decisions:
+                                    hooks.on_node_failure(show_decisions[node_id], exc)
                             break
                     else:
                         complete(node_id, node_ref, value)
                         completed.add(node_id)
+                        if node_id in show_decisions:
+                            from .dag import _unwrap_lineaged_tree
+
+                            shown = _unwrap_lineaged_tree(results[node_id])
+                            if not isinstance(shown, BaseModel):
+                                raise TypeError(
+                                    "decision.map show must return a Pydantic model"
+                                )
+                            child = show_decisions[node_id]
+                            if hooks and hooks.on_node_start:
+                                hooks.on_node_start(child)
+                            waits.arm_shown_decision(child, shown.model_dump(mode="json"))
+
+                for group, children in list(map_groups.items()):
+                    if not all(waits.resolved(child) for child in children):
+                        continue
+                    try:
+                        outputs = [waits.result(child) for child in children]
+                        complete(group, workflow.nodes[group], outputs)
+                    except Exception as exc:
+                        failure = exc
+                        if hooks and hooks.on_node_failure:
+                            hooks.on_node_failure(group, exc)
+                        break
+                    completed.add(group)
+                    del map_groups[group]
+                    progressed = True
 
                 for node_id in list(parked):
                     if not waits.resolved(node_id):
@@ -161,8 +192,58 @@ def run_local_schedule(
                     if isinstance(ref.node, WaitNode):
                         if hooks and hooks.on_node_start:
                             hooks.on_node_start(node_id)
-                        waits.arm(node_id, reviewed(node_id))
-                        parked.add(node_id)
+                        spec = ref.node.spec
+                        if spec.map_max_items is not None:
+                            from .dag import _unwrap_lineaged_tree
+
+                            if spec.map_source_node_id is not None:
+                                source = ref.kwargs["items"]
+                                items = _unwrap_lineaged_tree(results[source.future_id])
+                                if source.tuple_index is not None:
+                                    items = items[source.tuple_index]
+                                if not isinstance(items, list):
+                                    raise TypeError("decision.map input must resolve to a list")
+                                wire = [
+                                    item.model_dump(mode="json")
+                                    if isinstance(item, BaseModel)
+                                    else item
+                                    for item in items
+                                ]
+                            else:
+                                assert spec.map_items is not None
+                                wire = spec.map_items
+                                items = ref.node.map_values
+                            validated = TypeAdapter(list[JsonValue]).validate_python(wire)
+                            children = waits.expand_decisions(
+                                node_id, validated, arm=ref.node.show_step is None
+                            )
+                            map_groups[node_id] = children
+                            if ref.node.show_step is not None:
+                                from .dag import NodeFuture
+
+                                assert items is not None
+                                parents = list(dependencies.get(node_id, []))
+                                if children:
+                                    dependencies[node_id] = []
+                                for index, (child, item) in enumerate(zip(children, items)):
+                                    show_id = f"{node_id}.show[{index}]"
+                                    show_slug = f"{ref.node_slug}.show[{index}]"
+                                    workflow.nodes[show_id] = NodeFuture(
+                                        ref.node.show_step,
+                                        show_id,
+                                        ref.graph_ref,
+                                        args=(item,),
+                                        node_slug=show_slug,
+                                    )
+                                    workflow.node_slugs[show_id] = show_slug
+                                    dependencies[show_id] = parents
+                                    dependencies.setdefault(node_id, []).append(show_id)
+                                    show_decisions[show_id] = child
+                                    attempts[show_id] = 0
+                                    remaining.append(show_id)
+                        else:
+                            waits.arm(node_id, reviewed(node_id))
+                            parked.add(node_id)
                     else:
                         if len(pending) >= capacity:
                             continue
@@ -178,7 +259,7 @@ def run_local_schedule(
                     progressed = True
                 if cancelled:
                     break
-                if not progressed and (remaining or pending or parked):
+                if not progressed and (remaining or pending or parked or map_groups):
                     waits.condition.wait(timeout=waits.next_deadline())
 
     if failure is not None:

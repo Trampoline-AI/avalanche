@@ -65,6 +65,20 @@ def test_durable_waits_admission_survives_subprocess_and_cache(tmp_path, monkeyp
     assert invalid.list_workflows() == []
     assert invalid.view.diagnostics
 
+    mapped_fixture = fixture.with_name("decision_map_flow.py")
+    mapped_target = tmp_path / "decision_map_flow.py"
+    shutil.copyfile(mapped_fixture, mapped_target)
+    mapped = WorkflowRegistry()
+    mapped.scan([str(mapped_target)])
+    (mapped_info,) = mapped.list_workflows()
+    mapped_spec = mapped_info.node_waits["decision_1"]
+    assert mapped_spec.map_source_node_id == "drafts_1"
+    assert mapped_spec.map_max_items == 2
+    mapped_cache = DiscoveryCache(configure_roots([str(mapped_target)]))
+    mapped_files = mapped_cache.load()
+    assert mapped_files is not None
+    assert dict(mapped_files[0].descriptors[0].node_waits)["decision_1"] == mapped_spec
+
 
 def test_directory_scan_ignores_excluded_directories(tmp_path):
     visible_flow = tmp_path / "flow.py"
