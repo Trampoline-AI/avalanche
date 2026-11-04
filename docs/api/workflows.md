@@ -92,6 +92,68 @@ Operators accept only deferred node calls/chains and parallel groups (`TypeError
 
 Independent branches may overlap; fan-in values follow declaration order, not completion order. See [LocalExecutor](runs.md#local-executor) for concurrency.
 
+## Runtime fan-out with `map`
+
+```python
+node.map(*mapped, max_items: int | None = None, fail_fast: bool = True, **broadcast)
+```
+
+`map` is available on decorated nodes, including agent steps and destinations.
+Each positional input must resolve to a list; inputs are zipped strictly.
+Keyword arguments are broadcast to each item unchanged. For example:
+
+```python
+@ava.workflow
+def articles():
+    jobs = select_jobs()
+    drafts = write_article.map(jobs, ws=workspace())
+    edited = edit_article.map(jobs, drafts)
+    return publish_batch(edited)
+```
+
+Here each article step handles one job, while `publish_batch` receives the full
+ordered list. The returned `ava.MapFuture` is a deferred list value. Empty input
+creates no children and resolves to `[]`. Gathering is argument resolution, not
+another step execution. Maps also preserve their list when passed through `>>`.
+An inline agent uses `ava.agent.step.map(Signature, *mapped, **broadcast)`; input
+fields bind positionally in signature order, with `runtime=`, `tools=`, `skills=`,
+`evaluations=` and `slug=` retaining their usual configuration meanings.
+
+- The default maximum is `ava.DEFAULT_MAX_ITEMS = 8`; `max_items=` can raise it
+  to `ava.HARD_CAP = 64`. Invalid limits fail during capture and name the step.
+- A chained map inherits its sources' maximum and failure policy. Its own maximum
+  can only lower that bound. Sources with different failure policies cannot be zipped.
+- Unequal lengths fail with `map_length_mismatch`. Excess length fails with
+  `map_overflow`, naming the step, actual length, maximum and `max_items=` hint.
+  Inputs are never truncated.
+- `fail_fast=True`: the first terminal item error fails the map and run, and stops
+  admission. Queued futures are cancelled. The local executor **cannot interrupt
+  already-running Python calls**; those calls finish before the run returns.
+- `fail_fast=False`: every item runs to completion or failure before the map fails
+  with `ava.MapItemsFailed`. Its `failures` contains each index, `child_id` and
+  original exception. Successful children retain their ordinary outputs/evidence.
+  Neither policy sends partial results downstream.
+
+The deployment graph contains one group per map. A run creates children named
+`<map_node_id>[i]` only when their inputs are ready. In a chain, item `i` can run
+as soon as all mapped source items at `i` succeed and all plain list sources finish;
+it does not wait for other indices. Run-scoped expansions are published before
+any child lifecycle event, and do not mutate the captured workflow.
+
+The browser graph and TUI show one group (`write_article ×4`), with actual item
+status strips and per-item drill-down. Chained groups learn the full actual count
+from root expansion: uncreated indices are UI-only `·` placeholders, not nodes or
+failures. Before expansion the count is `×?`. Each real item uses the unchanged
+per-node trace and evaluation views. A broadcast workspace uses the existing join
+rules; write per-item paths to avoid conflicting edits.
+
+Local items use the existing local execution policy: one call, without an automatic
+retry ladder. Local stream reruns (`run(rerun=...)`) are not supported for map
+workflows. With execution services, a mapped managed input must first be returned
+by a source step, rather than mapping a direct `ava.input` selector on the driver. Remote scheduling, durable retry generations and Delta integration are
+separate from this local implementation. See the offline executable
+[`map_agent_fanout.py`](../../examples/map_agent_fanout.py).
+
 ## Return contract
 
 The workflow builder declares the value returned by `handle.result()` or `await handle`:
