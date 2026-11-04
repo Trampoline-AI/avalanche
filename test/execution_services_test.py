@@ -141,9 +141,77 @@ def test_local_service_input_lifecycle_receipts_and_fan_in(max_workers: int | No
         ]
 
 
-@pytest.mark.parametrize("shape", ["only", "terminal", "between", "diamond"])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "only",
+        "terminal",
+        "between",
+        "diamond",
+        "hold_terminal",
+        "hold_between",
+        "upstream_hold_terminal",
+        "upstream_hold_between",
+    ],
+)
 def test_waits_preserve_service_receipt_frontiers(shape):
     services = RecordingServices()
+    if "hold" in shape:
+        calls = []
+
+        @ava.source(retries=0)
+        def upstream() -> str:
+            return "loaded"
+
+        @ava.step(on_uncertain="hold")
+        def ambiguous(value: str = "standalone") -> str:
+            calls.append(value)
+            raise ava.OutcomeUnknownError("external outcome unknown")
+
+        @ava.step(retries=0)
+        def downstream(value: str) -> str:
+            return f"after:{value}"
+
+        @ava.workflow(input=ManagedInput)
+        def reconciled():
+            held = upstream() >> ambiguous() if shape.startswith("upstream") else ambiguous()
+            return held >> downstream() if shape.endswith("between") else held
+
+        handle = reconciled().run(execution_services=_spec(services), input=_raw_input())
+        try:
+            assert handle.wait_until_waiting(timeout=5)
+            accepted = handle.decide(
+                "ambiguous_1",
+                {"kind": "done", "output": "confirmed"},
+                reason="confirmed external result",
+                idempotency_key="reconcile",
+            )
+            assert accepted.address == "decision:ambiguous_1"
+            between = shape.endswith("between")
+            assert handle.result(timeout=5) == ("after:confirmed" if between else "confirmed")
+            receipts = handle.execution_receipts(timeout=5)
+            ancestors = ["upstream_1"] if shape.startswith("upstream") else []
+            expected = ["downstream_1"] if between else ancestors
+            assert [receipt.node_id for receipt in receipts] == expected
+            assert [receipt.value["node"] for receipt in receipts] == expected
+            opens = [event for event in services.events if event[1] == "open"]
+            assert [event[0] for event in opens] == (
+                ancestors + ["ambiguous_1"] + (["downstream_1"] if between else [])
+            )
+            if between:
+                assert [receipt["node"] for receipt in opens[-1][3]] == ancestors
+            assert calls == (["loaded"] if ancestors else ["standalone"])
+            assert [event[1] for event in services.events if event[0] == "ambiguous_1"] == [
+                "probe",
+                "negotiate",
+                "open",
+                "materialize",
+                "abort",
+                "teardown",
+            ]
+        finally:
+            handle.cancel()
+        return
 
     @ava.source(retries=0)
     def load() -> str:

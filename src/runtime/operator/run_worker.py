@@ -280,14 +280,36 @@ def _run_worker(
         stderr.flush()
         if terminal_event is not None:
             if run_handle is not None:
-                run_handle.waits.close()
-                _put_run_event(
-                    event_queue,
-                    {
-                        "type": "wait_snapshot",
-                        "snapshot": FinalWaitSnapshot.capture(run_handle).model_dump_json(),
-                    },
-                )
+                try:
+                    run_handle.waits.close()
+                    _put_run_event(
+                        event_queue,
+                        {
+                            "type": "wait_snapshot",
+                            "snapshot": FinalWaitSnapshot.capture(run_handle).model_dump_json(),
+                        },
+                    )
+                except Exception as exc:
+                    # Export is a required protocol boundary, not best-effort
+                    # display data. Report its failure and the original outcome
+                    # explicitly instead of exiting without a terminal event.
+                    error = _bounded_event_text(
+                        f"Wait snapshot export failed after {terminal_event['status']}: "
+                        f"{type(exc).__name__}: {exc}; "
+                        f"original error: {terminal_event.get('error', '')}",
+                        65_536,
+                    )
+                    _put_run_event(
+                        event_queue,
+                        {
+                            "type": "log",
+                            "timestamp": time.time(),
+                            "level": logging.ERROR,
+                            "node_id": "operator",
+                            "message": error,
+                        },
+                    )
+                    terminal_event = {"type": "terminal", "status": "failed", "error": error}
             _put_terminal_run_event(event_queue, terminal_event)
 
 

@@ -238,6 +238,7 @@ def test_large_review_artifact_preserves_lists_and_acceptance_receipts(
 
 
 def test_oversized_control_response_does_not_poison_channel(wait_review_operator):
+    from avalanche.local_waits import WaitRefusalError
     from runtime.operator.wait_control import WaitControlRequest
 
     op = wait_review_operator
@@ -252,6 +253,21 @@ def test_oversized_control_response_does_not_poison_channel(wait_review_operator
         time.sleep(0.03)
     else:
         pytest.fail("decision did not start after oversized response refusal")
+    with pytest.raises(WaitRefusalError) as oversized_audit:
+        op.wait_control(
+            run_id,
+            WaitControlRequest(
+                kind="decision",
+                address="decision_1",
+                payload={"kind": "approve"},
+                # Individually valid fields can exceed the final card's aggregate
+                # budget once JSON escaping and both reviewed copies are included.
+                reason="\x00" * 4096,
+                idempotency_key="approval",
+            ),
+        )
+    assert oversized_audit.value.code == "wait_card_too_large"
+    assert oversized_audit.value.status == 413
     accepted = op.wait_control(
         run_id,
         WaitControlRequest(
@@ -266,7 +282,9 @@ def test_oversized_control_response_does_not_poison_channel(wait_review_operator
     assert wait_terminal(op, run_id).status == RunStatus.SUCCESS
 
 
-@pytest.mark.parametrize("name", ["timeout_outcome", "timeout_failure", "pending"])
+@pytest.mark.parametrize(
+    "name", ["timeout_outcome", "timeout_failure", "pending", "unicode_approval"]
+)
 def test_terminal_wait_history_retains_system_audit_and_withdrawn_cards(
     wait_review_operator, name
 ):
@@ -274,8 +292,21 @@ def test_terminal_wait_history_retains_system_audit_and_withdrawn_cards(
     from runtime.operator.wait_control import WaitControlRequest
 
     op = wait_review_operator
-    info = next(item for item in op.list_workflows() if item.name == name)
+    workflow_name = "pending" if name == "unicode_approval" else name
+    info = next(item for item in op.list_workflows() if item.name == workflow_name)
     run_id = op.start_run(info.selector)
+    if name == "unicode_approval":
+        assert wait_for_review(op, run_id)[0]["state"] == "waiting"
+        decision = WaitControlRequest(
+            kind="decision",
+            address="decision_1",
+            payload={"kind": "approve"},
+            reason="🙂" * 3000,
+            idempotency_key="unicode-approval",
+        )
+        accepted = op.wait_control(run_id, decision)
+        assert accepted.receipt is not None
+        assert accepted.receipt.reason == decision.reason
     if name == "pending":
         assert wait_for_review(op, run_id)[0]["state"] == "waiting"
         op.cancel_run(run_id)
@@ -284,12 +315,18 @@ def test_terminal_wait_history_retains_system_audit_and_withdrawn_cards(
         "timeout_outcome": RunStatus.SUCCESS,
         "timeout_failure": RunStatus.FAILED,
         "pending": RunStatus.CANCELLED,
+        "unicode_approval": RunStatus.SUCCESS,
     }
     assert terminal.status == expected[name]
     first = op.wait_control(run_id, WaitControlRequest(kind="list"))
     assert len(first.waits) == 1
     card = first.waits[0]
-    if name == "pending":
+    if name == "unicode_approval":
+        assert card["state"] == "resolved"
+        assert card["audit"] == accepted.receipt.model_dump(mode="json")
+        assert card["audit"]["reason"] == "🙂" * 3000
+        assert op.wait_control(run_id, decision) == accepted
+    elif name == "pending":
         assert card["state"] == "withdrawn"
         assert card["audit"] is None
     else:

@@ -2631,9 +2631,13 @@ class Workflow:
                     if hooks.on_node_success:
                         hooks.on_node_success(node_id)
                 result_refs[node_id] = result
-                if execution_services is not None and node_ref.node.node_type == NodeType.WAIT:
+                if execution_services is not None:
                     with receipt_refs_lock:
-                        receipt_frontiers[node_id] = parent_receipt_frontier(node_id)
+                        if node_id not in receipt_frontiers:
+                            # Waits and human reconcile-done complete without a
+                            # finalized service receipt. Preserve real ancestry;
+                            # never re-open the uncertain invocation to invent one.
+                            receipt_frontiers[node_id] = parent_receipt_frontier(node_id)
             except Exception as exc:
                 if hooks and hooks.on_node_failure:
                     hooks.on_node_failure(node_id, exc)
