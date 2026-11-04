@@ -48,11 +48,16 @@ project with the Avalanche skill installed and an example workflow:
 uvx avalanche-ai@latest init
 ```
 
-Follow the instructions to set up your LLM provider. Then finally, run the demo:
+The starter workflow's agent step uses `openai/gpt-5.5` by default, so if you have an
+OpenAI key you can run the demo as is:
 
 ```bash
+export OPENAI_API_KEY=...
 uv run ava dev
 ```
+
+To use another provider, change `lm` and `sub_lm` in `src/start_flow/flow.py` and set
+that provider's key instead. The starter project's `README.md` explains how.
 
 This starts the operator and opens the browser UI at `http://127.0.0.1:7435`.
 
@@ -99,9 +104,11 @@ step. Its key structure is:
 └── uv.lock
 ```
 
-To run it, set `OPENAI_API_KEY`, then run `uv run ava dev`. The starter project's
-`README.md` lists the agent runtimes, what models each one supports, and how to give
-it credentials.
+Its agent step uses `openai/gpt-5.5` by default, so to run it as is, set
+`OPENAI_API_KEY`, then run `uv run ava dev`. To use another provider, change `lm` and
+`sub_lm` in `src/start_flow/flow.py` and set that provider's key instead. The starter
+project's `README.md` explains how, and lists the agent runtimes, what models each one
+supports, and how to give it credentials.
 
 #### Local checkout dependencies
 

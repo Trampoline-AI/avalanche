@@ -134,24 +134,42 @@ starter flow with a plain Python step and an agent step.
 
 ## Run start_flow
 
-`start_flow` calls a real model, so it needs that model's API key. Avalanche does not
-load this key from a file: set it in the terminal where you start Avalanche.
+`start_flow` calls a real model. Its agent step uses `openai/gpt-5.5` by default, so if
+you have an OpenAI key you can run it as is:
 
 ```bash
 export OPENAI_API_KEY=...
 uv run ava dev
 ```
 
-To keep the key in a file instead, put it in `.env`, which Git ignores, and pass that
-file to `uv run`. A plain `uv run ava dev` does not read `.env` for agent steps.
+`OPENAI_API_KEY` is only needed because of that default. To use another provider, open
+`src/start_flow/flow.py`, find `runtime=` on `write_greeting`, and change the provider
+and model in `lm` and `sub_lm`:
+
+```python
+runtime=ava.runtimes.PredictRLM(
+    lm="anthropic/claude-sonnet-5", sub_lm="anthropic/claude-sonnet-5", max_iterations=5
+),
+```
+
+Then set that provider's key instead, and run it the same way:
+
+```bash
+export ANTHROPIC_API_KEY=...
+uv run ava dev
+```
+
+[PredictRLM](#predictrlm) lists the other providers and their keys.
+
+To keep a key in a file, put it in `.env`, which Git ignores, and pass that file to
+`uv run`. A plain `uv run ava dev` does not read `.env` for agent steps.
 
 ```bash
 uv run --env-file .env ava dev
 ```
 
 Open the browser UI at the address the command prints, select `start_flow` and click
-**Run**. You can look at the flow without a key, but a run stops at the agent step. To
-use another provider, see [Choose a runtime and model](#choose-a-runtime-and-model).
+**Run**. You can look at the flow without a key, but a run stops at the agent step.
 
 Zoom in on the graph until the node cards show their details. Each card then says what
 kind of node it is and what it does. That text is the first line of the function's
@@ -170,7 +188,8 @@ node's output as its first argument.
 ## Choose a runtime and model
 
 An agent step runs on one of three runtimes. To change what `start_flow` uses, edit
-`runtime=` on `write_greeting` and set that provider's key instead of `OPENAI_API_KEY`.
+`runtime=` on `write_greeting` in `src/start_flow/flow.py` and set the credentials that
+runtime needs.
 
 | Runtime | Install | Models | Credentials |
 | --- | --- | --- | --- |
@@ -457,10 +476,11 @@ report_success() {
   else
     printf 'Avalanche dependency: published avalanche-ai\n'
   fi
-  printf '\nThe starter flow calls a real model. Set its key, then select start_flow in the browser UI:\n'
+  printf '\nThe starter flow uses openai/gpt-5.5 by default. With an OpenAI key, run it as is, then select start_flow in the browser UI:\n'
   printf '  export OPENAI_API_KEY=...\n'
   printf '  uv run ava dev\n'
-  printf 'README.md explains the flow and how to choose another runtime or model.\n'
+  printf "To use another provider, change lm and sub_lm in src/start_flow/flow.py and set that provider's key.\n"
+  printf 'README.md explains how, and how to choose another runtime.\n'
 }
 
 main() {
