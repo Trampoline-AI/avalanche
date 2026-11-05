@@ -258,6 +258,15 @@ MIGRATIONS: tuple[Migration, ...] = (
             "CREATE INDEX run_evaluations_by_status ON run_evaluations (status)",
         ),
     ),
+    Migration(
+        version=6,
+        name="runtime map expansion",
+        statements=(
+            "ALTER TABLE runs ADD COLUMN expansions_json TEXT NOT NULL DEFAULT '{}'",
+            "ALTER TABLE run_nodes ADD COLUMN map_parent TEXT",
+            "ALTER TABLE run_nodes ADD COLUMN map_index INTEGER CHECK (map_index >= 0)",
+        ),
+    ),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version

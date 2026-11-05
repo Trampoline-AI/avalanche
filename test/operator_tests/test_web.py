@@ -446,15 +446,18 @@ def test_rest_activity_continuations_bind_run_and_node(proxy):
     assert [item["run_sequence"] for item in reverse["activities"]] == ["3", "2"]
 
 
-def _wait_for_rest_status(server, run_id: str, expected: str):
-    deadline = time.monotonic() + 15
+def _wait_for_rest_status(server, run_id: str, expected: str, timeout: float = 15):
+    deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         status, snapshot = _rest(server, "GET", f"/api/v1/runs/{run_id}")
         assert status == 200
         actual = snapshot["summary"]["status"]
         if actual == expected:
             return snapshot
-        assert actual not in {"success", "failed", "cancelled"}, snapshot
+        assert actual not in {"success", "failed", "cancelled"}, [
+            (node["node_id"], node.get("error")) for node in snapshot["nodes"]
+            if node.get("error")
+        ]
         time.sleep(0.05)
     pytest.fail(f"Run {run_id} did not reach {expected}")
 
@@ -539,12 +542,65 @@ def test_rest_live_run_output_cancellation_and_conflicts(tmp_path):
         operator.close()
 
 
+def test_rest_runtime_map_children_are_published_before_evidence(tmp_path):
+    workflow = Path(__file__).resolve().parents[2] / "examples/map_agent_fanout.py"
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
+    grpc_server = serve_operator(operator, port=(port := _free_port()), block=False)
+    server = start_browser_server(f"127.0.0.1:{port}", port=0, asset_root=tmp_path)
+    try:
+        status, created = _rest(
+            server, "POST", "/api/v1/runs", b'{"workflow_selector":"map_agent_fanout"}'
+        )
+        assert status == 202, created
+        run_id = created["run_id"]
+        snapshot = _wait_for_rest_status(server, run_id, "success", timeout=90)
+        nodes = snapshot["nodes"]
+        items = [node for node in nodes if node.get("map_parent")]
+        assert len(items) == 8
+        assert len(nodes) == 12  # No records for placeholders or gather.
+        assert snapshot["expansions"] == {"add_1": 4, "write_article_1": 4}
+        assert all(node["status"] == "success" for node in items)
+        agents = [node for node in items if node["map_parent"] == "write_article_1"]
+        assert len(agents) == 4
+        assert all(node["trace"]["available"] for node in agents)
+        run = operator.get_run(run_id)
+        assert not any("unpublished" in entry.message for entry in run.logs)
+        status, result = _rest(server, "GET", f"/api/v1/runs/{run_id}/output")
+        assert status == 200
+        assert decode_workflow_result(
+            EncodedWorkflowResult(value_json=result["value"]["value_json"])
+        ) == [1, 3, 5, 7]
+        status, created = _rest(
+            server, "POST", "/api/v1/runs", b'{"workflow_selector":"map_mismatch"}'
+        )
+        assert status == 202
+        failure = _wait_for_rest_status(server, created["run_id"], "failed")
+        group = next(node for node in failure["nodes"] if node["node_id"] == "add_3")
+        assert "map_length_mismatch" in group["error"]
+    finally:
+        server.close()
+        grpc_server.stop(grace=0).wait()
+        operator.close()
+
+
 def test_rest_maps_unavailable_grpc_operator_to_service_unavailable(tmp_path):
+    import threading
+
     with socket.socket() as upstream:
         upstream.bind(("127.0.0.1", 0))
+        upstream.listen(1)
+        upstream.settimeout(10)
         port = upstream.getsockname()[1]
+
+        def reject_connection():
+            connection, _ = upstream.accept()
+            connection.close()
+
+        rejecting = threading.Thread(target=reject_connection)
+        rejecting.start()
         server = start_browser_server(f"127.0.0.1:{port}", port=0, asset_root=tmp_path)
         try:
             _assert_rest_error(_rest(server, "GET", "/api/v1/flows"), 503, "UNAVAILABLE")
         finally:
             server.close()
+            rejecting.join(timeout=10)

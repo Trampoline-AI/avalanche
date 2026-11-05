@@ -50,6 +50,7 @@ from .models import (
     InputFileFields,
     MissingRunInputError,
     RunCreated,
+    RunNodesExpanded,
     RunSnapshot,
     TriggerKind,
 )
@@ -1509,7 +1510,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 change = envelope.update.change if envelope.update is not None else None
                 classifier_nodes = (
                     {node_id for node_id, _ in change.topology.classifier_metadata_json}
-                    if isinstance(change, RunCreated)
+                    if isinstance(change, (RunCreated, RunNodesExpanded))
                     else ()
                 )
                 message = update_envelope_to_v2(

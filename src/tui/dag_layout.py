@@ -44,6 +44,12 @@ class DagNode:
     node_type: str  # "source" | "step" | "dest" | "virtual"
     display_name: str = ""  # human-readable label (e.g. "fetch_orders")
     is_agent: bool = False
+    map_summary: str = ""
+
+    @property
+    def label(self) -> str:
+        return self.display_name + self.map_summary
+
     col: int = 0
     row: int = 0
     render_row: int | None = None
@@ -662,7 +668,7 @@ def _render_cross_track_skip_edges(
     node_positions = {
         node.name: (
             node.render_row,
-            node.render_col + 1 + len(node.display_name) // 2,
+            node.render_col + 1 + len(node.label) // 2,
         )
         for node in nodes
         if not node.virtual and node.render_row is not None and node.render_col is not None
@@ -710,7 +716,7 @@ def plain_node_width(
     if node.virtual:
         return len(VIRTUAL_LABELS.get(node.name, node.name))
     dur = _duration_label(elapsed, status)
-    primary_width = 4 + len(node.display_name) + len(dur) + 3  # " ○ name (dur) "
+    primary_width = 4 + len(node.label) + len(dur) + 3  # " ○ name (dur) "
     if node.is_agent:
         return max(primary_width, 3 + len("(agent)"))
     return primary_width
@@ -778,11 +784,11 @@ def append_node(
     dur = _duration_label(elapsed, status)
     if node is selected:
         sel = Style(bgcolor=ICE_STEEL, bold=True)
-        label = f" {m} {node.display_name} ({dur}) " if dur else f" {m} {node.display_name} "
+        label = f" {m} {node.label} ({dur}) " if dur else f" {m} {node.label} "
         text.append(label, Style(color=ICE_FROST) + sel)
     else:
         text.append(f" {m}", style)
-        text.append(f" {node.display_name} ", Style(color=ICE_FROST))
+        text.append(f" {node.label} ", Style(color=ICE_FROST))
         if dur:
             text.append(f"({dur}) ", DIM_STYLE)
 
@@ -1132,7 +1138,7 @@ def render_dag_rich(
         node_positions = {
             node.name: (
                 node.render_row,
-                node.render_col + 1 + len(node.display_name) // 2,
+                node.render_col + 1 + len(node.label) // 2,
             )
             for node in _collect_nodes(dag.steps)
             if not node.virtual and node.render_row is not None and node.render_col is not None

@@ -477,6 +477,31 @@ export interface NodeEdgesV2 {
     children: string[];
 }
 /**
+ * @generated from protobuf message avalanche.operator.MapSpecV2
+ */
+export interface MapSpecV2 {
+    /**
+     * @generated from protobuf field: repeated string mapped_args = 1
+     */
+    mappedArgs: string[];
+    /**
+     * @generated from protobuf field: repeated string broadcast_args = 2
+     */
+    broadcastArgs: string[];
+    /**
+     * @generated from protobuf field: uint32 max_items = 3
+     */
+    maxItems: number;
+    /**
+     * @generated from protobuf field: bool inherited = 4
+     */
+    inherited: boolean;
+    /**
+     * @generated from protobuf field: bool fail_fast = 5
+     */
+    failFast: boolean;
+}
+/**
  * @generated from protobuf message avalanche.operator.WorkflowTopologyV2
  */
 export interface WorkflowTopologyV2 {
@@ -553,6 +578,12 @@ export interface WorkflowTopologyV2 {
      * @generated from protobuf field: string input_declaration_json = 12
      */
     inputDeclarationJson: string;
+    /**
+     * @generated from protobuf field: map<string, avalanche.operator.MapSpecV2> map_specs = 13
+     */
+    mapSpecs: {
+        [key: string]: MapSpecV2;
+    };
 }
 /**
  * @generated from protobuf message avalanche.operator.ScanTargetV2
@@ -983,6 +1014,14 @@ export interface NodeSnapshotV2 {
      * @generated from protobuf field: avalanche.operator.StepIoV2 step_io = 12
      */
     stepIo?: StepIoV2;
+    /**
+     * @generated from protobuf field: optional string map_parent = 13
+     */
+    mapParent?: string;
+    /**
+     * @generated from protobuf field: optional uint32 map_index = 14
+     */
+    mapIndex?: number;
 }
 /**
  * A bounded, display-only rendering of one value, never the value itself. Cut
@@ -1227,6 +1266,12 @@ export interface RunSnapshotV2 {
      * @generated from protobuf field: avalanche.operator.RunInputV2 input = 9
      */
     input?: RunInputV2;
+    /**
+     * @generated from protobuf field: map<string, uint32> expansions = 10
+     */
+    expansions: {
+        [key: string]: number;
+    };
 }
 /**
  * The validated input a run started with, after defaults were applied.
@@ -1765,6 +1810,29 @@ export interface RunCreatedV2 {
     topology?: WorkflowTopologyV2;
 }
 /**
+ * @generated from protobuf message avalanche.operator.RunNodesExpandedV2
+ */
+export interface RunNodesExpandedV2 {
+    /**
+     * @generated from protobuf field: string run_id = 1
+     */
+    runId: string;
+    /**
+     * @generated from protobuf field: repeated avalanche.operator.NodeSnapshotV2 nodes = 2
+     */
+    nodes: NodeSnapshotV2[];
+    /**
+     * @generated from protobuf field: avalanche.operator.WorkflowTopologyV2 topology = 3
+     */
+    topology?: WorkflowTopologyV2;
+    /**
+     * @generated from protobuf field: map<string, uint32> expansions = 4
+     */
+    expansions: {
+        [key: string]: number;
+    };
+}
+/**
  * @generated from protobuf message avalanche.operator.RunStatusChangedV2
  */
 export interface RunStatusChangedV2 {
@@ -1909,6 +1977,12 @@ export interface RunStatusEnvelopeV2 {
          * @generated from protobuf field: avalanche.operator.CatalogReloadRequiredV2 catalog_reload_required = 11
          */
         catalogReloadRequired: CatalogReloadRequiredV2;
+    } | {
+        oneofKind: "nodesExpanded";
+        /**
+         * @generated from protobuf field: avalanche.operator.RunNodesExpandedV2 nodes_expanded = 12
+         */
+        nodesExpanded: RunNodesExpandedV2;
     } | {
         oneofKind: undefined;
     };
@@ -3388,6 +3462,85 @@ class NodeEdgesV2$Type extends MessageType<NodeEdgesV2> {
  */
 export const NodeEdgesV2 = new NodeEdgesV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class MapSpecV2$Type extends MessageType<MapSpecV2> {
+    constructor() {
+        super("avalanche.operator.MapSpecV2", [
+            { no: 1, name: "mapped_args", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "broadcast_args", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "max_items", kind: "scalar", T: 13 /*ScalarType.UINT32*/ },
+            { no: 4, name: "inherited", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 5, name: "fail_fast", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+    create(value?: PartialMessage<MapSpecV2>): MapSpecV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.mappedArgs = [];
+        message.broadcastArgs = [];
+        message.maxItems = 0;
+        message.inherited = false;
+        message.failFast = false;
+        if (value !== undefined)
+            reflectionMergePartial<MapSpecV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: MapSpecV2): MapSpecV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* repeated string mapped_args */ 1:
+                    message.mappedArgs.push(reader.string());
+                    break;
+                case /* repeated string broadcast_args */ 2:
+                    message.broadcastArgs.push(reader.string());
+                    break;
+                case /* uint32 max_items */ 3:
+                    message.maxItems = reader.uint32();
+                    break;
+                case /* bool inherited */ 4:
+                    message.inherited = reader.bool();
+                    break;
+                case /* bool fail_fast */ 5:
+                    message.failFast = reader.bool();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: MapSpecV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* repeated string mapped_args = 1; */
+        for (let i = 0; i < message.mappedArgs.length; i++)
+            writer.tag(1, WireType.LengthDelimited).string(message.mappedArgs[i]);
+        /* repeated string broadcast_args = 2; */
+        for (let i = 0; i < message.broadcastArgs.length; i++)
+            writer.tag(2, WireType.LengthDelimited).string(message.broadcastArgs[i]);
+        /* uint32 max_items = 3; */
+        if (message.maxItems !== 0)
+            writer.tag(3, WireType.Varint).uint32(message.maxItems);
+        /* bool inherited = 4; */
+        if (message.inherited !== false)
+            writer.tag(4, WireType.Varint).bool(message.inherited);
+        /* bool fail_fast = 5; */
+        if (message.failFast !== false)
+            writer.tag(5, WireType.Varint).bool(message.failFast);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.MapSpecV2
+ */
+export const MapSpecV2 = new MapSpecV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
     constructor() {
         super("avalanche.operator.WorkflowTopologyV2", [
@@ -3402,7 +3555,8 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
             { no: 9, name: "step_interface_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 10, name: "evaluation_metadata_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 11, name: "agent_runtime_kinds", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
-            { no: 12, name: "input_declaration_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+            { no: 12, name: "input_declaration_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 13, name: "map_specs", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "message", T: () => MapSpecV2 } }
         ]);
     }
     create(value?: PartialMessage<WorkflowTopologyV2>): WorkflowTopologyV2 {
@@ -3419,6 +3573,7 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         message.evaluationMetadataJson = {};
         message.agentRuntimeKinds = {};
         message.inputDeclarationJson = "";
+        message.mapSpecs = {};
         if (value !== undefined)
             reflectionMergePartial<WorkflowTopologyV2>(this, message, value);
         return message;
@@ -3463,6 +3618,9 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
                     break;
                 case /* string input_declaration_json */ 12:
                     message.inputDeclarationJson = reader.string();
+                    break;
+                case /* map<string, avalanche.operator.MapSpecV2> map_specs */ 13:
+                    this.binaryReadMap13(message.mapSpecs, reader, options);
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -3635,6 +3793,22 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         }
         map[key ?? ""] = val ?? "";
     }
+    private binaryReadMap13(map: WorkflowTopologyV2["mapSpecs"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof WorkflowTopologyV2["mapSpecs"] | undefined, val: WorkflowTopologyV2["mapSpecs"][any] | undefined;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case 1:
+                    key = reader.string();
+                    break;
+                case 2:
+                    val = MapSpecV2.internalBinaryRead(reader, reader.uint32(), options);
+                    break;
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.WorkflowTopologyV2.map_specs");
+            }
+        }
+        map[key ?? ""] = val ?? MapSpecV2.create();
+    }
     internalBinaryWrite(message: WorkflowTopologyV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
         /* repeated string node_ids = 1; */
         for (let i = 0; i < message.nodeIds.length; i++)
@@ -3676,6 +3850,13 @@ class WorkflowTopologyV2$Type extends MessageType<WorkflowTopologyV2> {
         /* string input_declaration_json = 12; */
         if (message.inputDeclarationJson !== "")
             writer.tag(12, WireType.LengthDelimited).string(message.inputDeclarationJson);
+        /* map<string, avalanche.operator.MapSpecV2> map_specs = 13; */
+        for (let k of globalThis.Object.keys(message.mapSpecs)) {
+            writer.tag(13, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k);
+            writer.tag(2, WireType.LengthDelimited).fork();
+            MapSpecV2.internalBinaryWrite(message.mapSpecs[k], writer, options);
+            writer.join().join();
+        }
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -4764,7 +4945,9 @@ class NodeSnapshotV2$Type extends MessageType<NodeSnapshotV2> {
             { no: 9, name: "running_elapsed_seconds", kind: "scalar", opt: true, T: 1 /*ScalarType.DOUBLE*/ },
             { no: 10, name: "trace", kind: "message", T: () => TraceDescriptorV2 },
             { no: 11, name: "activity_continuation", kind: "message", T: () => ContinuationRefV2 },
-            { no: 12, name: "step_io", kind: "message", T: () => StepIoV2 }
+            { no: 12, name: "step_io", kind: "message", T: () => StepIoV2 },
+            { no: 13, name: "map_parent", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
+            { no: 14, name: "map_index", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ }
         ]);
     }
     create(value?: PartialMessage<NodeSnapshotV2>): NodeSnapshotV2 {
@@ -4821,6 +5004,12 @@ class NodeSnapshotV2$Type extends MessageType<NodeSnapshotV2> {
                 case /* avalanche.operator.StepIoV2 step_io */ 12:
                     message.stepIo = StepIoV2.internalBinaryRead(reader, reader.uint32(), options, message.stepIo);
                     break;
+                case /* optional string map_parent */ 13:
+                    message.mapParent = reader.string();
+                    break;
+                case /* optional uint32 map_index */ 14:
+                    message.mapIndex = reader.uint32();
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -4869,6 +5058,12 @@ class NodeSnapshotV2$Type extends MessageType<NodeSnapshotV2> {
         /* avalanche.operator.StepIoV2 step_io = 12; */
         if (message.stepIo)
             StepIoV2.internalBinaryWrite(message.stepIo, writer.tag(12, WireType.LengthDelimited).fork(), options).join();
+        /* optional string map_parent = 13; */
+        if (message.mapParent !== undefined)
+            writer.tag(13, WireType.LengthDelimited).string(message.mapParent);
+        /* optional uint32 map_index = 14; */
+        if (message.mapIndex !== undefined)
+            writer.tag(14, WireType.Varint).uint32(message.mapIndex);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -5432,13 +5627,15 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
             { no: 6, name: "latest_log_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
             { no: 7, name: "log_continuation", kind: "message", T: () => ContinuationRefV2 },
             { no: 8, name: "terminal_seal", kind: "message", T: () => RunActivityDescriptorV2 },
-            { no: 9, name: "input", kind: "message", T: () => RunInputV2 }
+            { no: 9, name: "input", kind: "message", T: () => RunInputV2 },
+            { no: 10, name: "expansions", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 13 /*ScalarType.UINT32*/ } }
         ]);
     }
     create(value?: PartialMessage<RunSnapshotV2>): RunSnapshotV2 {
         const message = globalThis.Object.create((this.messagePrototype!));
         message.nodes = [];
         message.latestLogSequence = "0";
+        message.expansions = {};
         if (value !== undefined)
             reflectionMergePartial<RunSnapshotV2>(this, message, value);
         return message;
@@ -5475,6 +5672,9 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
                 case /* avalanche.operator.RunInputV2 input */ 9:
                     message.input = RunInputV2.internalBinaryRead(reader, reader.uint32(), options, message.input);
                     break;
+                case /* map<string, uint32> expansions */ 10:
+                    this.binaryReadMap10(message.expansions, reader, options);
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -5485,6 +5685,22 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
             }
         }
         return message;
+    }
+    private binaryReadMap10(map: RunSnapshotV2["expansions"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof RunSnapshotV2["expansions"] | undefined, val: RunSnapshotV2["expansions"][any] | undefined;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case 1:
+                    key = reader.string();
+                    break;
+                case 2:
+                    val = reader.uint32();
+                    break;
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.RunSnapshotV2.expansions");
+            }
+        }
+        map[key ?? ""] = val ?? 0;
     }
     internalBinaryWrite(message: RunSnapshotV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
         /* avalanche.operator.LifecycleCursorV2 cursor = 1; */
@@ -5514,6 +5730,9 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
         /* avalanche.operator.RunInputV2 input = 9; */
         if (message.input)
             RunInputV2.internalBinaryWrite(message.input, writer.tag(9, WireType.LengthDelimited).fork(), options).join();
+        /* map<string, uint32> expansions = 10; */
+        for (let k of globalThis.Object.keys(message.expansions))
+            writer.tag(10, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.Varint).uint32(message.expansions[k]).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -7046,6 +7265,92 @@ class RunCreatedV2$Type extends MessageType<RunCreatedV2> {
  */
 export const RunCreatedV2 = new RunCreatedV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class RunNodesExpandedV2$Type extends MessageType<RunNodesExpandedV2> {
+    constructor() {
+        super("avalanche.operator.RunNodesExpandedV2", [
+            { no: 1, name: "run_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "nodes", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => NodeSnapshotV2 },
+            { no: 3, name: "topology", kind: "message", T: () => WorkflowTopologyV2 },
+            { no: 4, name: "expansions", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 13 /*ScalarType.UINT32*/ } }
+        ]);
+    }
+    create(value?: PartialMessage<RunNodesExpandedV2>): RunNodesExpandedV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.runId = "";
+        message.nodes = [];
+        message.expansions = {};
+        if (value !== undefined)
+            reflectionMergePartial<RunNodesExpandedV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: RunNodesExpandedV2): RunNodesExpandedV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string run_id */ 1:
+                    message.runId = reader.string();
+                    break;
+                case /* repeated avalanche.operator.NodeSnapshotV2 nodes */ 2:
+                    message.nodes.push(NodeSnapshotV2.internalBinaryRead(reader, reader.uint32(), options));
+                    break;
+                case /* avalanche.operator.WorkflowTopologyV2 topology */ 3:
+                    message.topology = WorkflowTopologyV2.internalBinaryRead(reader, reader.uint32(), options, message.topology);
+                    break;
+                case /* map<string, uint32> expansions */ 4:
+                    this.binaryReadMap4(message.expansions, reader, options);
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    private binaryReadMap4(map: RunNodesExpandedV2["expansions"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof RunNodesExpandedV2["expansions"] | undefined, val: RunNodesExpandedV2["expansions"][any] | undefined;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case 1:
+                    key = reader.string();
+                    break;
+                case 2:
+                    val = reader.uint32();
+                    break;
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.RunNodesExpandedV2.expansions");
+            }
+        }
+        map[key ?? ""] = val ?? 0;
+    }
+    internalBinaryWrite(message: RunNodesExpandedV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string run_id = 1; */
+        if (message.runId !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.runId);
+        /* repeated avalanche.operator.NodeSnapshotV2 nodes = 2; */
+        for (let i = 0; i < message.nodes.length; i++)
+            NodeSnapshotV2.internalBinaryWrite(message.nodes[i], writer.tag(2, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.WorkflowTopologyV2 topology = 3; */
+        if (message.topology)
+            WorkflowTopologyV2.internalBinaryWrite(message.topology, writer.tag(3, WireType.LengthDelimited).fork(), options).join();
+        /* map<string, uint32> expansions = 4; */
+        for (let k of globalThis.Object.keys(message.expansions))
+            writer.tag(4, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.Varint).uint32(message.expansions[k]).join();
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.RunNodesExpandedV2
+ */
+export const RunNodesExpandedV2 = new RunNodesExpandedV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class RunStatusChangedV2$Type extends MessageType<RunStatusChangedV2> {
     constructor() {
         super("avalanche.operator.RunStatusChangedV2", [
@@ -7405,6 +7710,7 @@ class RunStatusEnvelopeV2$Type extends MessageType<RunStatusEnvelopeV2> {
             { no: 8, name: "flow_list_changed", kind: "message", oneof: "payload", T: () => FlowListChangedV2 },
             { no: 9, name: "flow_reload_status", kind: "message", oneof: "payload", T: () => FlowReloadStatusV2 },
             { no: 11, name: "catalog_reload_required", kind: "message", oneof: "payload", T: () => CatalogReloadRequiredV2 },
+            { no: 12, name: "nodes_expanded", kind: "message", oneof: "payload", T: () => RunNodesExpandedV2 },
             { no: 5, name: "cursor", kind: "message", T: () => LifecycleCursorV2 },
             { no: 10, name: "scope_ref", kind: "message", T: () => ScopeReferenceV2 }
         ]);
@@ -7473,6 +7779,12 @@ class RunStatusEnvelopeV2$Type extends MessageType<RunStatusEnvelopeV2> {
                         catalogReloadRequired: CatalogReloadRequiredV2.internalBinaryRead(reader, reader.uint32(), options, (message.payload as any).catalogReloadRequired)
                     };
                     break;
+                case /* avalanche.operator.RunNodesExpandedV2 nodes_expanded */ 12:
+                    message.payload = {
+                        oneofKind: "nodesExpanded",
+                        nodesExpanded: RunNodesExpandedV2.internalBinaryRead(reader, reader.uint32(), options, (message.payload as any).nodesExpanded)
+                    };
+                    break;
                 case /* avalanche.operator.LifecycleCursorV2 cursor */ 5:
                     message.cursor = LifecycleCursorV2.internalBinaryRead(reader, reader.uint32(), options, message.cursor);
                     break;
@@ -7524,6 +7836,9 @@ class RunStatusEnvelopeV2$Type extends MessageType<RunStatusEnvelopeV2> {
         /* avalanche.operator.CatalogReloadRequiredV2 catalog_reload_required = 11; */
         if (message.payload.oneofKind === "catalogReloadRequired")
             CatalogReloadRequiredV2.internalBinaryWrite(message.payload.catalogReloadRequired, writer.tag(11, WireType.LengthDelimited).fork(), options).join();
+        /* avalanche.operator.RunNodesExpandedV2 nodes_expanded = 12; */
+        if (message.payload.oneofKind === "nodesExpanded")
+            RunNodesExpandedV2.internalBinaryWrite(message.payload.nodesExpanded, writer.tag(12, WireType.LengthDelimited).fork(), options).join();
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

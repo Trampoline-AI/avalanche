@@ -25,6 +25,23 @@ PredictRLM has no separate number. Delta reaches it only through Avalanche
 Avalanche keeps its `predict-rlm` range to one minor. A PredictRLM change Delta
 would notice needs an Avalanche protocol bump.
 
+## Protocol 2.1: runtime maps
+
+Runtime-map metadata was introduced in protocol **2.1**, extending 2.0. The
+combined retries-and-waits and step-map SDK uses **3.0** for every workflow,
+including mapped children: `workflow.required_protocol` follows
+`avalanche.PROTOCOL_VERSION`. Protocol 2.x deployments must be redeployed; there
+is no compatibility adapter. Package versions are not changed by this PR.
+
+The additive operator fields are `WorkflowTopologyV2.map_specs` (`MapSpecV2` with
+mapped/broadcast argument names, effective maximum, inheritance and `fail_fast`),
+`RunSnapshotV2.expansions`, and `NodeSnapshotV2.map_parent` / `map_index`.
+`RunStatusEnvelopeV2.nodes_expanded` publishes run-scoped topology and actual
+expected counts before any new child event. A chained group's not-yet-created
+items have no node records. Traces and evaluations retain their existing schema.
+Older clients may ignore the additive fields, but need the expansion event to
+render live map children. Delta's map scheduler integration is not included here.
+
 ## Avalanche 0.18.0
 
 Ray execution is removed: the `ray` extra, `RayExecutor` export, `--ray`
@@ -36,7 +53,7 @@ not use the removed backend or its configuration.
 
 ## Retries-and-waits: retries and graph waits
 
-Protocol **3.0** replaces the previous 2.0 worker contract: discovery carries
+Protocol **3.0** replaces the previous 2.x worker contract: discovery carries
 per-invocation retry/uncertainty policies, worker exceptions carry terminal and
 unknown-outcome flags, and `RunContext.step_key` uses the deployed invocation
 identity. This requires redeployment, not a compatibility adapter. Delta's

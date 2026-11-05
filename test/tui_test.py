@@ -2070,8 +2070,13 @@ async def test_schedules_panel_offers_no_controls_for_an_unscheduled_workflow():
 
     def schedules_panel_advertised() -> bool:
         description = app.extension_session.description
-        return description is not None and any(
-            panel.resource == "schedules" for panel in description.panels
+        # Initial run hydration changes context and clears the first description.
+        # Send the key only after capabilities belong to the hydrated selection.
+        return (
+            app.store.current_run is not None
+            and description is not None
+            and description.context == app.extension_context
+            and any(panel.resource == "schedules" for panel in description.panels)
         )
 
     async with app.run_test(size=(120, 40)) as pilot:

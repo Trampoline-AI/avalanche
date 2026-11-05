@@ -46,6 +46,7 @@ _RUNS = "runs"
 _NODES = "run_nodes"
 _INPUT_FILES = "run_input_files"
 _TOPOLOGY = TypeAdapter(WorkflowTopology)
+_EXPANSIONS = TypeAdapter(dict[str, int])
 _RUN_INPUT = TypeAdapter(RunInput)
 _TERMINAL_SEAL = TypeAdapter(TerminalSealDescriptor)
 
@@ -120,6 +121,7 @@ class _RunRow(BaseModel):
     workflow_id: str
     workflow_display_name: str
     topology_json: str
+    expansions_json: str
     input_json: str | None
     terminal_seal_json: str | None
     created_sequence: PositiveInt
@@ -155,6 +157,8 @@ class _NodeRow(BaseModel):
     ended_at: float | None
     error: str | None
     step_io_json: str | None
+    map_parent: str | None
+    map_index: NonNegativeInt | None
     revision: PositiveInt
 
 
@@ -179,6 +183,7 @@ _STATE_COLUMNS = (
     "workflow_id",
     "workflow_display_name",
     "topology_json",
+    "expansions_json",
     "input_json",
     "terminal_seal_json",
     "created_sequence",
@@ -196,6 +201,8 @@ _NODE_COLUMNS = (
     "ended_at",
     "error",
     "step_io_json",
+    "map_parent",
+    "map_index",
     "revision",
 )
 _INSERT_RUN = (
@@ -322,7 +329,8 @@ class RunsTable:
         nodes: dict[str, list[_NodeRow]] = {}
         for row in connection.execute(
             "SELECT run_id, node_id, name, node_type, status, started_at, ended_at, error, "
-            f"step_io_json, revision FROM {_NODES} ORDER BY run_id, position"
+            f"step_io_json, map_parent, map_index, revision FROM {_NODES} "
+            "ORDER BY run_id, position"
         ):
             node = row_model(_NodeRow, row, table=_NODES)
             nodes.setdefault(node.run_id, []).append(node)
@@ -372,6 +380,7 @@ def _state_values(stored: StoredRun) -> tuple[str | float | int | None, ...]:
         run.workflow_id,
         run.workflow_display_name,
         _TOPOLOGY.dump_json(run.topology).decode(),
+        _EXPANSIONS.dump_json(run.expansions).decode(),
         None if run.input is None else _RUN_INPUT.dump_json(run.input).decode(),
         None
         if run.terminal_seal is None
@@ -405,6 +414,8 @@ def _node_values(
             node.ended_at,
             node.error,
             None if node.step_io is None else node.step_io.model_dump_json(),
+            node.map_parent,
+            node.map_index,
             stored.node_revisions[node.node_id],
         )
 
@@ -421,6 +432,9 @@ def _loaded_run(row: _RunRow, node_rows: Collection[_NodeRow]) -> LoadedRun:
         workflow_id=row.workflow_id,
         workflow_display_name=row.workflow_display_name,
         topology=json_value(_TOPOLOGY, row.topology_json, table=_RUNS, column="topology_json"),
+        expansions=json_value(
+            _EXPANSIONS, row.expansions_json, table=_RUNS, column="expansions_json"
+        ),
         input=None
         if row.input_json is None
         else json_value(_RUN_INPUT, row.input_json, table=_RUNS, column="input_json"),
@@ -436,6 +450,8 @@ def _loaded_run(row: _RunRow, node_rows: Collection[_NodeRow]) -> LoadedRun:
             node_id=node.node_id,
             name=node.name,
             node_type=node.node_type,
+            map_parent=node.map_parent,
+            map_index=node.map_index,
             status=node.status,
             started_at=node.started_at,
             ended_at=node.ended_at,

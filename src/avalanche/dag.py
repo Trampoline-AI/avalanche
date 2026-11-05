@@ -64,7 +64,9 @@ from ulid import ULID
 
 from .input_ref import InputRef
 from .local_waits import LocalPrincipal, LocalWaits
+from .mapping import DEFAULT_MAX_ITEMS, HARD_CAP, MapSpec
 from .policies import StepPolicy, UncertaintyPolicy
+from .protocol import PROTOCOL_VERSION, ProtocolVersion
 from .run_handle import RunHandle
 from .step_interface import (
     StepInterface,
@@ -233,6 +235,64 @@ class Node:
             if isinstance(kwarg_val, NodeFuture):
                 _add_graph_edge(ctx.graph, kwarg_val.future_id, future_id)
 
+        return result
+
+    def map[T, B](
+        self,
+        *mapped: list[T] | NodeFuture | InputRef,
+        max_items: int | None = None,
+        fail_fast: bool = True,
+        **broadcast: B,
+    ) -> MapFuture:
+        """Zip positional lists at runtime; keyword arguments are broadcast unchanged."""
+        if not mapped:
+            raise ValueError(f"{self.name}: map requires at least one mapped argument")
+        if max_items is not None and (
+            type(max_items) is not int or not 0 <= max_items <= HARD_CAP
+        ):
+            raise ValueError(f"{self.name}: max_items must be between 0 and {HARD_CAP}")
+        if type(fail_fast) is not bool:
+            raise TypeError(f"{self.name}: fail_fast must be bool")
+        sources = [arg for arg in mapped if isinstance(arg, MapFuture)]
+        inherited = bool(sources)
+        maximum = (
+            min(source.map_spec.max_items for source in sources)
+            if sources
+            else DEFAULT_MAX_ITEMS
+        )
+        if sources:
+            policies = {source.map_spec.fail_fast for source in sources}
+            if len(policies) != 1:
+                raise ValueError(
+                    f"{self.name}: mapped sources have different fail_fast policies"
+                )
+            fail_fast = sources[0].map_spec.fail_fast
+            if max_items is not None and max_items > maximum:
+                raise ValueError(
+                    f"{self.name}: chained max_items may only lower inherited {maximum}"
+                )
+        if max_items is not None:
+            maximum = max_items
+        future = self(*mapped, **broadcast)
+        result = MapFuture(
+            node=self,
+            future_id=future.future_id,
+            node_slug=future.node_slug,
+            graph_ref=future.graph_ref,
+            args=future.args,
+            kwargs=future.kwargs,
+        )
+        parameters = tuple(parameter.name for parameter in self.step_interface.step_inputs)
+        result.map_spec = MapSpec(
+            mapped_args=parameters[: len(mapped)],
+            broadcast_args=tuple(broadcast),
+            max_items=maximum,
+            inherited=inherited,
+            fail_fast=fail_fast,
+        )
+        ctx = _workflow_context.get()
+        assert ctx is not None  # __call__ already validated capture context.
+        ctx.node_instances[result.future_id] = result
         return result
 
     def _make_future(
@@ -478,6 +538,12 @@ class NodeFuture:
             return ParallelTasks([self] + other.branches, graph_ref=self.graph_ref)
         else:
             return ParallelTasks([self, other], graph_ref=self.graph_ref)
+
+
+class MapFuture(NodeFuture):
+    """A run-scoped ordered gather, not a second execution after the children."""
+
+    map_spec: MapSpec
 
 
 class ParallelTasks:
@@ -1775,7 +1841,7 @@ def _fetch_node_result(
         selected = _indexed_parent_result(ref, fetch_target.tuple_index, executor)
         selected = executor.get([selected])[0]
         return _unwrap_lineaged_tree(selected)
-    elif node.node.num_returns > 1:
+    elif node.node.num_returns > 1 and not isinstance(node, MapFuture):
         # Multi-return node: ref is tuple/list of refs
         refs_to_fetch = list(ref)
         fetched = executor.get(refs_to_fetch)
@@ -1878,7 +1944,9 @@ def _collect_implicit_parent_results(
                 auto_values.append(
                     _indexed_parent_result(presult, incoming.tuple_index, executor)
                 )
-            elif incoming.node.num_returns == 1 and not incoming.node._expand_single_return:
+            elif isinstance(nodes[incoming.future_id], MapFuture) or (
+                incoming.node.num_returns == 1 and not incoming.node._expand_single_return
+            ):
                 auto_values.append(presult)
             else:
                 auto_values.extend(_implicit_items_from_parent_result(presult))
@@ -2089,7 +2157,7 @@ class Workflow:
         if missing:
             known = ", ".join(sorted(slug_to_node_id))
             raise ValueError(
-                f"Unknown rerun start slug(s): {', '.join(missing)}. " f"Known slugs: {known}"
+                f"Unknown rerun start slug(s): {', '.join(missing)}. Known slugs: {known}"
             )
 
         start_node_ids = {slug_to_node_id[slug] for slug in rerun.start}
@@ -2191,6 +2259,10 @@ class Workflow:
         )
         return handle
 
+    @property
+    def required_protocol(self) -> ProtocolVersion:
+        return PROTOCOL_VERSION
+
     def _run_driver(
         self,
         executor: "Executor | None" = None,
@@ -2224,6 +2296,8 @@ class Workflow:
         self = copy(self)
         self.nodes = dict(self.nodes)
         self.node_slugs = dict(self.node_slugs)
+        nodes = self.nodes
+        node_slugs = self.node_slugs
 
         # Topological sort
         execution_order = self._topological_sort()
@@ -2291,7 +2365,7 @@ class Workflow:
             *,
             emit_hooks: bool = True,
         ) -> tuple[NodeFuture, Any]:
-            node_ref = self.nodes[node_id]
+            node_ref = nodes[node_id]
 
             if emit_hooks and hooks and hooks.on_node_start:
                 hooks.on_node_start(node_id)
@@ -2365,9 +2439,9 @@ class Workflow:
                 original_parent_ids = original_dependencies_map.get(node_id, [])
                 provider_parent_results = [result_refs.get(pid) for pid in original_parent_ids]
                 upstream_node_slugs = [
-                    self.node_slugs[parent_id]
+                    node_slugs[parent_id]
                     for parent_id in original_parent_ids
-                    for _ in range(self.nodes[parent_id].node.num_returns)
+                    for _ in range(nodes[parent_id].node.num_returns)
                 ]
 
                 for param_name, param_value in inspected_params.items():
@@ -2385,7 +2459,7 @@ class Workflow:
                             )
                         parent_results = [selected_result]
                         param_position = 0
-                        parent_slugs = [self.node_slugs[selector.future_id]]
+                        parent_slugs = [node_slugs[selector.future_id]]
                     else:
                         parent_results = provider_parent_results
                         param_position = _data_param_position(
@@ -2466,7 +2540,7 @@ class Workflow:
             if not node_ref.args and not binding_plan.has_explicit_provider_selectors:
                 upstream_values = _collect_implicit_parent_results(
                     node_ref,
-                    self.nodes,
+                    nodes,
                     result_refs,
                     dependencies_map,
                     node_id,
@@ -2606,7 +2680,7 @@ class Workflow:
                 tuple(
                     ExecutionServiceReceipt(
                         node_id=node_id,
-                        node_slug=self.node_slugs[node_id],
+                        node_slug=node_slugs[node_id],
                         value=value,
                     )
                     for node_id, value in zip(terminal_receipt_ids, values)
@@ -2653,6 +2727,42 @@ class Workflow:
 
         is_local_executor = isinstance(executor, LocalExecutor)
 
+        def resolve_mapped_list[T](value: list[T] | NodeFuture | InputRef) -> list[T]:
+            if execution_services is not None and isinstance(value, InputRef):
+                raise TypeError(
+                    "map over service-managed input requires a source step returning the list"
+                )
+            resolved = executor.get([_resolve_to_ref(value, result_refs, executor)])[0]
+            resolved_args, _ = _resolve_input_refs([resolved], {}, run_input, "map", self.name)
+            value_ref = resolved_args[0]
+            values = _unwrap_lineaged_tree(value_ref)
+            if not isinstance(values, list):
+                raise TypeError("map positional inputs must resolve to lists")
+            return [
+                _indexed_parent_result(value_ref, index, executor)
+                for index in range(len(values))
+            ]
+
+        def gather_map(parent: str, children: tuple[str, ...]) -> None:
+            result_refs[parent] = [
+                resolve_submitted_result(nodes[child], result_refs[child]) for child in children
+            ]
+            if execution_services is not None:
+                with receipt_refs_lock:
+                    receipt_frontiers[parent] = tuple(
+                        dict.fromkeys(
+                            ancestor
+                            for child in (children or tuple(dependencies_map.get(parent, ())))
+                            for ancestor in receipt_frontiers[child]
+                        )
+                    )
+
+        has_maps = any(isinstance(node, MapFuture) for node in nodes.values())
+        if has_maps and rerun_spec is not None:
+            raise ValueError("runtime map reruns are not supported by the local driver")
+        if has_maps and not is_local_executor:
+            raise TypeError("runtime maps require LocalExecutor")
+
         if is_local_executor:
             if local_waits is None:
                 local_waits = LocalWaits(run_id, {})
@@ -2669,6 +2779,8 @@ class Workflow:
                 complete_node,
                 hooks,
                 cancel_requested,
+                resolve_mapped_list,
+                gather_map,
             )
         else:
             for node_id in execution_order:
@@ -2714,7 +2826,7 @@ class Workflow:
             return _fetch_node_result(
                 self.returns,
                 result_refs,
-                self.nodes,
+                nodes,
                 executor,
                 scheduled_node_ids if rerun_spec is not None else None,
             )
@@ -2724,7 +2836,7 @@ class Workflow:
                 _fetch_node_result(
                     nf,
                     result_refs,
-                    self.nodes,
+                    nodes,
                     executor,
                     scheduled_node_ids if rerun_spec is not None else None,
                 )
@@ -2738,7 +2850,7 @@ class Workflow:
 
     def __repr__(self) -> str:
         edge_count = sum(len(v) for v in self.graph.values())
-        return f"Workflow(name={self.name!r}, " f"nodes={len(self.nodes)}, edges={edge_count})"
+        return f"Workflow(name={self.name!r}, nodes={len(self.nodes)}, edges={edge_count})"
 
 
 # Backward-compatible vocabulary aliases.

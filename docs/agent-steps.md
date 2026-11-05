@@ -9,6 +9,17 @@ function when you need custom preparation, transformation, or persistence.
 Both run on [PredictRLM](https://github.com/Trampoline-AI/predict-rlm); model calls
 happen during execution, not workflow construction.
 
+## One agent per mapped item
+
+Use `write_article.map(jobs, ws=ws)` instead of looping over jobs inside an agent
+step. Every child gets a fresh agent and may call it once; traces and evaluations
+remain ordinary per-node records. Chain mapped outputs with
+`edit_article.map(jobs, drafts)` and pass the resulting ordered list to an unchanged
+batch consumer. Inline agents support `ava.agent.step.map(Signature, jobs)`.
+See [runtime fan-out](api/workflows.md#runtime-fan-out-with-map) for strict zip,
+broadcast keywords, bounds, failure policies and the local cancellation limitation.
+The offline [map example](../examples/map_agent_fanout.py) runs without API keys.
+
 ## Inline typed extraction
 
 ```python

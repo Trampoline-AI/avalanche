@@ -17,7 +17,17 @@ from importlib import import_module
 # Execution engines
 from runtime.executor import Executor, LocalExecutor, get_default_executor
 
-from .dag import Pipeline, Workflow, dest, pipeline, source, step, transform, workflow
+from .dag import (
+    MapFuture,
+    Pipeline,
+    Workflow,
+    dest,
+    pipeline,
+    source,
+    step,
+    transform,
+    workflow,
+)
 from .execution_services import (
     EXECUTION_SERVICES_V1,
     ExecutionServiceReceipt,
@@ -26,6 +36,7 @@ from .execution_services import (
     ExecutionTaskSpec,
 )
 from .input_ref import INPUT as input  # noqa: N811
+from .mapping import DEFAULT_MAX_ITEMS, HARD_CAP, MapItemFailure, MapItemsFailed
 from .model_frame import Json
 from .policies import NonRetryableError, Outcome, OutcomeUnknownError
 
@@ -118,6 +129,11 @@ def __dir__() -> list[str]:
 
 
 __all__ = [
+    "MapFuture",
+    "MapItemFailure",
+    "MapItemsFailed",
+    "DEFAULT_MAX_ITEMS",
+    "HARD_CAP",
     "PROTOCOL_VERSION",
     "ProtocolVersion",
     "ReferenceBinder",

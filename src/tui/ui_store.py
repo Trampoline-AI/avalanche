@@ -549,7 +549,13 @@ class UIStore:
     def selected_agent_node_id(self) -> str | None:
         workflow = self.current_workflow
         node = self.selected_node
-        if workflow is None or node is None or node.name not in workflow.agent_node_ids:
+        if workflow is None or node is None:
+            return None
+        state = self.current_run.nodes.get(node.name) if self.current_run else None
+        declaration_id = (
+            state.map_parent if state is not None and state.map_parent else node.name
+        )
+        if declaration_id not in workflow.agent_node_ids:
             return None
         return node.name
 
@@ -559,7 +565,9 @@ class UIStore:
         node_id = self.selected_agent_node_id
         if workflow is None or node_id is None:
             return None
-        return workflow.agent_declarations.get(node_id)
+        state = self.current_run.nodes.get(node_id) if self.current_run else None
+        declaration_id = state.map_parent if state is not None and state.map_parent else node_id
+        return workflow.agent_declarations.get(declaration_id)
 
     @property
     def selected_agent_metadata_content_token(self) -> str:

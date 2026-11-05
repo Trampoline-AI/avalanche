@@ -15,6 +15,7 @@ CANONICAL_EXAMPLES = [
     Path("examples/cursor_pattern.py"),
     Path("examples/operator_workflow.py"),
     Path("examples/scripted_agent.py"),
+    Path("examples/map_agent_fanout.py"),
     Path("examples/durable_waits.py"),
 ]
 
@@ -31,7 +32,7 @@ def test_canonical_example_executes(example_path: Path, tmp_path: Path):
         env=env,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=90 if example_path.stem == "map_agent_fanout" else 30,
         check=False,
     )
 

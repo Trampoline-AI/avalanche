@@ -1312,6 +1312,8 @@ class AvalancheApp(App):
             self.store.toggle_trace_turn()
             self._refresh_widgets()
             self._scroll_trace_selection_into_view()
+        elif self.store.focused_pane == "dag" and self._open_map_group():
+            return
         elif self.store.focused_pane == "dag" and self.store.open_trace_inspector():
             self._hydrate_selected_trace()
             self._refresh_widgets()
@@ -1319,6 +1321,36 @@ class AvalancheApp(App):
                 self._screen.query_one("#agent-trace-inspector").scroll_end(animate=False)
             except Exception:
                 pass
+
+    def _open_map_group(self) -> bool:
+        from .widgets.map_items import MapItemsScreen
+
+        node = self.store.selected_node
+        workflow = self.store.current_workflow
+        if node is None or workflow is None or node.name not in workflow.map_specs:
+            return False
+        self.push_screen(MapItemsScreen(node.name), self._open_map_item)
+        return True
+
+    def _open_map_item(self, child_id: str | None) -> None:
+        from .dag_layout import DagNode
+
+        if child_id is None:
+            return
+        run = self.store.current_run
+        workflow = self.store.current_workflow
+        if run is None or workflow is None:
+            return
+        item = run.nodes[child_id]
+        self.store.selected_node = DagNode(
+            name=child_id, display_name=item.name, node_type=item.node_type,
+            is_agent=item.map_parent in workflow.agent_node_ids,
+        )
+        if not self.store.open_trace_inspector():
+            self.action_inspect_node()
+        else:
+            self._hydrate_selected_trace()
+            self._refresh_widgets()
 
     def action_expand_trace_hierarchy(self) -> None:
         if self.store.focused_pane == "dag" and self._screen is not None:

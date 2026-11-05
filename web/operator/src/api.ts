@@ -976,6 +976,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
       asOfEventUlid: this.rememberCursor(snapshot.cursor),
       nodes: snapshot.nodes.map((node) => this.mapNodeSnapshot(runId, node)),
       latestLogSequence: snapshot.latestLogSequence,
+      expansions: snapshot.expansions,
       logPageToken: this.registerContinuation(snapshot.logContinuation, runId, ""),
     };
     if (snapshot.summary) mapped.summary = mapRunSummary(snapshot.summary);
@@ -995,6 +996,8 @@ export class GrpcWebOperatorApi implements OperatorApi {
   private mapNodeSnapshot(runId: string, node: NodeSnapshotV2): NodeSnapshotMsg {
     const mapped: NodeSnapshotMsg = {
       nodeId: node.nodeId,
+      mapParent: node.mapParent,
+      mapIndex: node.mapIndex,
       name: node.name,
       nodeType: node.nodeType,
       status: node.status,
@@ -1213,6 +1216,18 @@ export class GrpcWebOperatorApi implements OperatorApi {
             nodes: created.nodes.map((node) => this.mapNodeSnapshot(runId, node)),
             ...(created.summary ? { summary: mapRunSummary(created.summary) } : {}),
             ...(created.topology ? { topology: created.topology } : {}),
+          },
+        });
+      }
+      case "nodesExpanded": {
+        const expanded = payload.nodesExpanded;
+        return update({
+          oneofKind: "nodesExpanded",
+          nodesExpanded: {
+            runId: expanded.runId,
+            nodes: expanded.nodes.map((node) => this.mapNodeSnapshot(expanded.runId, node)),
+            topology: expanded.topology,
+            expansions: expanded.expansions,
           },
         });
       }
@@ -1440,6 +1455,7 @@ function mapFlowInfo(flow: FlowInfoV2): FlowInfoMsg {
     classifierMetadataJson: flow.classifierMetadataJson,
     evaluationMetadataJson: flow.evaluationMetadataJson,
     stepInterfaceJson: flow.topology?.stepInterfaceJson ?? {},
+    mapSpecs: flow.topology?.mapSpecs ?? {},
     inputDeclarationJson: flow.topology?.inputDeclarationJson ?? "",
     webhookPath: flow.webhookPath,
     webhookUrl: flow.webhookUrl,

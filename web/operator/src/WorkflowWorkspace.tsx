@@ -456,6 +456,7 @@ export function WorkflowWorkspaceSurface({
                     workflow={!run || previewWorkflow ? workflow : undefined}
                     runTopology={previewWorkflow ? undefined : run?.topology}
                     runNodes={requestingRun ? undefined : run?.nodes}
+                    expansions={run?.expansions}
                     runTriggeredBy={previewWorkflow ? undefined : run?.summary?.triggeredBy}
                     inspectionDisabled={requestingRun}
                     evaluations={evaluationState.records}

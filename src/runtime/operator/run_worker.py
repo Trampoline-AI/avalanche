@@ -55,6 +55,7 @@ from .workflow_metadata import (
     MAX_PREPARED_INPUT_LENGTH,
     PreparedRunInput,
     input_declaration_for_workflow,
+    map_specs_for_workflow,
     node_docstring_lines_for_workflow,
     step_interface_for_workflow,
 )
@@ -210,12 +211,24 @@ def _run_worker(
             for index in range(spec.map_max_items)
         }
 
+        show_groups.update({
+            f"{node_id}.show": node_id
+            for node_id, spec in workflow.node_waits.items()
+            if spec.map_max_items is not None
+        })
+
         def wrap_fn(node_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
             owner = show_groups.get(node_id, node_id)
             return _with_local_node_observers(owner, fn, stdout, stderr, event_queue)
 
         _put_run_event(event_queue, {"type": "running", "timestamp": time.monotonic()})
         hooks = RunHooks(
+            on_nodes_expanded=lambda expansion: None
+            if expansion.parent in show_groups
+            else _put_run_event(
+                event_queue,
+                {"type": "nodes_expanded", "expansion": expansion.model_dump_json()},
+            ),
             on_node_start=lambda node_id: None
             if node_id in show_groups or node_id in item_groups
             else _put_run_event(
@@ -395,6 +408,10 @@ def _workflow_metadata(workflow: Workflow) -> dict[str, Any]:
         "classifier_metadata_json": classifier_metadata_for_workflow(workflow, node_ids),
         "evaluation_metadata_json": evaluation_metadata_for_workflow(workflow, node_ids),
         "step_interface_json": step_interface_for_workflow(workflow, node_ids),
+        "map_specs": {
+            key: spec.model_dump(mode="json")
+            for key, spec in map_specs_for_workflow(workflow, node_ids).items()
+        },
         "input_declaration_json": input_declaration_for_workflow(workflow, node_ids),
         "standard_step_docstring_lines": node_docstring_lines_for_workflow(workflow, node_ids),
     }

@@ -11,7 +11,9 @@ from typing import TYPE_CHECKING, TypeVar
 
 from pydantic import BaseModel, JsonValue, TypeAdapter
 
+from .input_ref import InputRef
 from .local_waits import LocalWaits, Reconcile
+from .mapping import MapSpec
 from .policies import MAX_GENERATION, NonRetryableError, OutcomeUnknownError
 from .waits import WaitNode
 
@@ -34,10 +36,13 @@ def run_local_schedule(
     complete: Callable[[str, NodeFuture, T], None],
     hooks: RunHooks | None,
     cancel_requested: Callable[[], bool] | None,
+    resolve_list: Callable[[list[T] | NodeFuture | InputRef], list[T]],
+    gather: Callable[[str, tuple[str, ...]], None],
 ) -> None:
     capacity = max_workers if max_workers is not None else min(32, (os.cpu_count() or 1) + 4)
     remaining = list(order)
     completed: set[str] = set()
+    failed: set[str] = set()
     pending: dict[Future[tuple[NodeFuture, T]], str] = {}
     parked: set[str] = set()
     holds: set[str] = set()
@@ -46,6 +51,23 @@ def run_local_schedule(
     attempts: dict[str, int] = dict.fromkeys(order, 0)
     failure: Exception | None = None
     cancelled = False
+
+    from runtime.operator.map_driver import DynamicMaps
+
+    from .dag import MapFuture
+
+    maps = DynamicMaps(
+        run_id=waits.run_id,
+        nodes=workflow.nodes,
+        node_slugs=workflow.node_slugs,
+        dependencies=dependencies,
+        ready=remaining,
+        completed=completed,
+        failed=failed,
+        resolve_list=resolve_list,
+        gather=gather,
+        hooks=hooks,
+    )
 
     def notify(_future: Future[tuple[NodeFuture, T]]) -> None:
         waits.notify()
@@ -66,7 +88,13 @@ def run_local_schedule(
     with ThreadPoolExecutor(
         max_workers=capacity, thread_name_prefix=f"avalanche-local-{waits.run_id}"
     ) as pool:
-        while remaining or pending or parked or map_groups:
+        while (
+            remaining
+            or pending
+            or parked
+            or map_groups
+            or any(not group.finished for group in maps.groups.values())
+        ):
             with waits.condition:
                 if (
                     (remaining or parked or map_groups)
@@ -109,12 +137,13 @@ def run_local_schedule(
                         ):
                             remaining.append(node_id)
                         else:
-                            failure = exc
                             if hooks and hooks.on_node_failure:
                                 hooks.on_node_failure(node_id, exc)
                                 if node_id in show_decisions:
                                     hooks.on_node_failure(show_decisions[node_id], exc)
-                            break
+                            if node_id in show_decisions or not maps.item_failed(node_id, exc):
+                                failure = exc
+                                break
                     else:
                         complete(node_id, node_ref, value)
                         completed.add(node_id)
@@ -173,15 +202,21 @@ def run_local_schedule(
                             holds.remove(node_id)
                         complete(node_id, workflow.nodes[node_id], value)
                     except Exception as exc:
-                        failure = exc
                         if hooks and hooks.on_node_failure:
                             hooks.on_node_failure(node_id, exc)
-                        break
+                        parked.remove(node_id)
+                        holds.discard(node_id)
+                        if node_id in show_decisions or not maps.item_failed(node_id, exc):
+                            failure = exc
+                            break
+                        continue
                     completed.add(node_id)
                     parked.remove(node_id)
 
                 if failure is not None:
                     break
+                while maps.expand():
+                    progressed = True
                 for node_id in list(remaining):
                     if cancel_requested is not None and cancel_requested():
                         cancelled = True
@@ -219,28 +254,33 @@ def run_local_schedule(
                             )
                             map_groups[node_id] = children
                             if ref.node.show_step is not None:
-                                from .dag import NodeFuture
-
                                 assert items is not None
                                 parents = list(dependencies.get(node_id, []))
                                 if children:
                                     dependencies[node_id] = []
-                                for index, (child, item) in enumerate(zip(children, items)):
-                                    show_id = f"{node_id}.show[{index}]"
-                                    show_slug = f"{ref.node_slug}.show[{index}]"
-                                    workflow.nodes[show_id] = NodeFuture(
-                                        ref.node.show_step,
-                                        show_id,
-                                        ref.graph_ref,
-                                        args=(item,),
-                                        node_slug=show_slug,
-                                    )
-                                    workflow.node_slugs[show_id] = show_slug
-                                    dependencies[show_id] = parents
+                                show_group_id = f"{node_id}.show"
+                                show_group = MapFuture(
+                                    ref.node.show_step,
+                                    show_group_id,
+                                    ref.graph_ref,
+                                    args=(list(items),),
+                                    node_slug=f"{ref.node_slug}.show",
+                                )
+                                show_group.map_spec = MapSpec(
+                                    mapped_args=("item",),
+                                    broadcast_args=(),
+                                    max_items=spec.map_max_items,
+                                    inherited=False,
+                                    fail_fast=True,
+                                )
+                                workflow.nodes[show_group_id] = show_group
+                                workflow.node_slugs[show_group_id] = show_group.node_slug
+                                dependencies[show_group_id] = parents
+                                maps.add(show_group)
+                                for index, child in enumerate(children):
+                                    show_id = f"{show_group_id}[{index}]"
                                     dependencies.setdefault(node_id, []).append(show_id)
                                     show_decisions[show_id] = child
-                                    attempts[show_id] = 0
-                                    remaining.append(show_id)
                         else:
                             waits.arm(node_id, reviewed(node_id))
                             parked.add(node_id)
@@ -249,7 +289,7 @@ def run_local_schedule(
                             continue
                         if hooks and hooks.on_node_start:
                             hooks.on_node_start(node_id)
-                        attempts[node_id] += 1
+                        attempts[node_id] = attempts.get(node_id, 0) + 1
                         task = pool.submit(
                             copy_context().run, submit, node_id, emit_hooks=False
                         )
@@ -259,6 +299,10 @@ def run_local_schedule(
                     progressed = True
                 if cancelled:
                     break
+                if not progressed and not pending and not parked and not map_groups:
+                    maps.raise_failures()
+                    if remaining or any(not group.finished for group in maps.groups.values()):
+                        raise RuntimeError("Local workflow scheduler has no runnable nodes")
                 if not progressed and (remaining or pending or parked or map_groups):
                     waits.condition.wait(timeout=waits.next_deadline())
 
@@ -266,3 +310,4 @@ def run_local_schedule(
         raise failure
     if cancelled:
         raise CancelledError()
+    maps.raise_failures()

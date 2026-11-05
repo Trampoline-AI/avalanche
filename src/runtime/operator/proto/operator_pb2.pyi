@@ -323,8 +323,22 @@ class NodeEdgesV2(_message.Message):
     children: _containers.RepeatedScalarFieldContainer[str]
     def __init__(self, children: _Optional[_Iterable[str]] = ...) -> None: ...
 
+class MapSpecV2(_message.Message):
+    __slots__ = ("mapped_args", "broadcast_args", "max_items", "inherited", "fail_fast")
+    MAPPED_ARGS_FIELD_NUMBER: _ClassVar[int]
+    BROADCAST_ARGS_FIELD_NUMBER: _ClassVar[int]
+    MAX_ITEMS_FIELD_NUMBER: _ClassVar[int]
+    INHERITED_FIELD_NUMBER: _ClassVar[int]
+    FAIL_FAST_FIELD_NUMBER: _ClassVar[int]
+    mapped_args: _containers.RepeatedScalarFieldContainer[str]
+    broadcast_args: _containers.RepeatedScalarFieldContainer[str]
+    max_items: int
+    inherited: bool
+    fail_fast: bool
+    def __init__(self, mapped_args: _Optional[_Iterable[str]] = ..., broadcast_args: _Optional[_Iterable[str]] = ..., max_items: _Optional[int] = ..., inherited: bool = ..., fail_fast: bool = ...) -> None: ...
+
 class WorkflowTopologyV2(_message.Message):
-    __slots__ = ("node_ids", "graph", "node_types", "display_names", "agent_field_schemas_json", "agent_instruction_lines", "standard_step_docstring_lines", "classifier_metadata_json", "step_interface_json", "evaluation_metadata_json", "agent_runtime_kinds", "input_declaration_json")
+    __slots__ = ("node_ids", "graph", "node_types", "display_names", "agent_field_schemas_json", "agent_instruction_lines", "standard_step_docstring_lines", "classifier_metadata_json", "step_interface_json", "evaluation_metadata_json", "agent_runtime_kinds", "input_declaration_json", "map_specs")
     class GraphEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -395,6 +409,13 @@ class WorkflowTopologyV2(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class MapSpecsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: MapSpecV2
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[MapSpecV2, _Mapping]] = ...) -> None: ...
     NODE_IDS_FIELD_NUMBER: _ClassVar[int]
     GRAPH_FIELD_NUMBER: _ClassVar[int]
     NODE_TYPES_FIELD_NUMBER: _ClassVar[int]
@@ -407,6 +428,7 @@ class WorkflowTopologyV2(_message.Message):
     EVALUATION_METADATA_JSON_FIELD_NUMBER: _ClassVar[int]
     AGENT_RUNTIME_KINDS_FIELD_NUMBER: _ClassVar[int]
     INPUT_DECLARATION_JSON_FIELD_NUMBER: _ClassVar[int]
+    MAP_SPECS_FIELD_NUMBER: _ClassVar[int]
     node_ids: _containers.RepeatedScalarFieldContainer[str]
     graph: _containers.MessageMap[str, NodeEdgesV2]
     node_types: _containers.ScalarMap[str, str]
@@ -419,7 +441,8 @@ class WorkflowTopologyV2(_message.Message):
     evaluation_metadata_json: _containers.ScalarMap[str, str]
     agent_runtime_kinds: _containers.ScalarMap[str, str]
     input_declaration_json: str
-    def __init__(self, node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdgesV2]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., agent_field_schemas_json: _Optional[_Mapping[str, str]] = ..., agent_instruction_lines: _Optional[_Mapping[str, str]] = ..., standard_step_docstring_lines: _Optional[_Mapping[str, str]] = ..., classifier_metadata_json: _Optional[_Mapping[str, str]] = ..., step_interface_json: _Optional[_Mapping[str, str]] = ..., evaluation_metadata_json: _Optional[_Mapping[str, str]] = ..., agent_runtime_kinds: _Optional[_Mapping[str, str]] = ..., input_declaration_json: _Optional[str] = ...) -> None: ...
+    map_specs: _containers.MessageMap[str, MapSpecV2]
+    def __init__(self, node_ids: _Optional[_Iterable[str]] = ..., graph: _Optional[_Mapping[str, NodeEdgesV2]] = ..., node_types: _Optional[_Mapping[str, str]] = ..., display_names: _Optional[_Mapping[str, str]] = ..., agent_field_schemas_json: _Optional[_Mapping[str, str]] = ..., agent_instruction_lines: _Optional[_Mapping[str, str]] = ..., standard_step_docstring_lines: _Optional[_Mapping[str, str]] = ..., classifier_metadata_json: _Optional[_Mapping[str, str]] = ..., step_interface_json: _Optional[_Mapping[str, str]] = ..., evaluation_metadata_json: _Optional[_Mapping[str, str]] = ..., agent_runtime_kinds: _Optional[_Mapping[str, str]] = ..., input_declaration_json: _Optional[str] = ..., map_specs: _Optional[_Mapping[str, MapSpecV2]] = ...) -> None: ...
 
 class ScanTargetV2(_message.Message):
     __slots__ = ("alias", "target_path", "kind")
@@ -604,7 +627,7 @@ class GetRunSnapshotRequestV2(_message.Message):
     def __init__(self, run_id: _Optional[str] = ...) -> None: ...
 
 class NodeSnapshotV2(_message.Message):
-    __slots__ = ("node_id", "name", "node_type", "status", "started_at", "ended_at", "revision", "error", "running_elapsed_seconds", "trace", "activity_continuation", "step_io")
+    __slots__ = ("node_id", "name", "node_type", "status", "started_at", "ended_at", "revision", "error", "running_elapsed_seconds", "trace", "activity_continuation", "step_io", "map_parent", "map_index")
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     NAME_FIELD_NUMBER: _ClassVar[int]
     NODE_TYPE_FIELD_NUMBER: _ClassVar[int]
@@ -617,6 +640,8 @@ class NodeSnapshotV2(_message.Message):
     TRACE_FIELD_NUMBER: _ClassVar[int]
     ACTIVITY_CONTINUATION_FIELD_NUMBER: _ClassVar[int]
     STEP_IO_FIELD_NUMBER: _ClassVar[int]
+    MAP_PARENT_FIELD_NUMBER: _ClassVar[int]
+    MAP_INDEX_FIELD_NUMBER: _ClassVar[int]
     node_id: str
     name: str
     node_type: str
@@ -629,7 +654,9 @@ class NodeSnapshotV2(_message.Message):
     trace: TraceDescriptorV2
     activity_continuation: ContinuationRefV2
     step_io: StepIoV2
-    def __init__(self, node_id: _Optional[str] = ..., name: _Optional[str] = ..., node_type: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., revision: _Optional[int] = ..., error: _Optional[str] = ..., running_elapsed_seconds: _Optional[float] = ..., trace: _Optional[_Union[TraceDescriptorV2, _Mapping]] = ..., activity_continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., step_io: _Optional[_Union[StepIoV2, _Mapping]] = ...) -> None: ...
+    map_parent: str
+    map_index: int
+    def __init__(self, node_id: _Optional[str] = ..., name: _Optional[str] = ..., node_type: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., revision: _Optional[int] = ..., error: _Optional[str] = ..., running_elapsed_seconds: _Optional[float] = ..., trace: _Optional[_Union[TraceDescriptorV2, _Mapping]] = ..., activity_continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., step_io: _Optional[_Union[StepIoV2, _Mapping]] = ..., map_parent: _Optional[str] = ..., map_index: _Optional[int] = ...) -> None: ...
 
 class StepValuePreviewV2(_message.Message):
     __slots__ = ("kind", "type_name", "preview_json", "truncated")
@@ -730,7 +757,14 @@ class TerminalSealV2(_message.Message):
     def __init__(self, terminal_status: _Optional[str] = ..., reason: _Optional[str] = ...) -> None: ...
 
 class RunSnapshotV2(_message.Message):
-    __slots__ = ("cursor", "summary", "nodes", "topology", "scope_ref", "latest_log_sequence", "log_continuation", "terminal_seal", "input")
+    __slots__ = ("cursor", "summary", "nodes", "topology", "scope_ref", "latest_log_sequence", "log_continuation", "terminal_seal", "input", "expansions")
+    class ExpansionsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: int
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     SUMMARY_FIELD_NUMBER: _ClassVar[int]
     NODES_FIELD_NUMBER: _ClassVar[int]
@@ -740,6 +774,7 @@ class RunSnapshotV2(_message.Message):
     LOG_CONTINUATION_FIELD_NUMBER: _ClassVar[int]
     TERMINAL_SEAL_FIELD_NUMBER: _ClassVar[int]
     INPUT_FIELD_NUMBER: _ClassVar[int]
+    EXPANSIONS_FIELD_NUMBER: _ClassVar[int]
     cursor: LifecycleCursorV2
     summary: RunSummaryV2
     nodes: _containers.RepeatedCompositeFieldContainer[NodeSnapshotV2]
@@ -749,7 +784,8 @@ class RunSnapshotV2(_message.Message):
     log_continuation: ContinuationRefV2
     terminal_seal: RunActivityDescriptorV2
     input: RunInputV2
-    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., summary: _Optional[_Union[RunSummaryV2, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotV2, _Mapping]]] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., latest_log_sequence: _Optional[int] = ..., log_continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., terminal_seal: _Optional[_Union[RunActivityDescriptorV2, _Mapping]] = ..., input: _Optional[_Union[RunInputV2, _Mapping]] = ...) -> None: ...
+    expansions: _containers.ScalarMap[str, int]
+    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., summary: _Optional[_Union[RunSummaryV2, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotV2, _Mapping]]] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., latest_log_sequence: _Optional[int] = ..., log_continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., terminal_seal: _Optional[_Union[RunActivityDescriptorV2, _Mapping]] = ..., input: _Optional[_Union[RunInputV2, _Mapping]] = ..., expansions: _Optional[_Mapping[str, int]] = ...) -> None: ...
 
 class RunInputV2(_message.Message):
     __slots__ = ("values_json", "supplied_fields")
@@ -1017,6 +1053,25 @@ class RunCreatedV2(_message.Message):
     topology: WorkflowTopologyV2
     def __init__(self, summary: _Optional[_Union[RunSummaryV2, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotV2, _Mapping]]] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ...) -> None: ...
 
+class RunNodesExpandedV2(_message.Message):
+    __slots__ = ("run_id", "nodes", "topology", "expansions")
+    class ExpansionsEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: int
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[int] = ...) -> None: ...
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    NODES_FIELD_NUMBER: _ClassVar[int]
+    TOPOLOGY_FIELD_NUMBER: _ClassVar[int]
+    EXPANSIONS_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    nodes: _containers.RepeatedCompositeFieldContainer[NodeSnapshotV2]
+    topology: WorkflowTopologyV2
+    expansions: _containers.ScalarMap[str, int]
+    def __init__(self, run_id: _Optional[str] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotV2, _Mapping]]] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., expansions: _Optional[_Mapping[str, int]] = ...) -> None: ...
+
 class RunStatusChangedV2(_message.Message):
     __slots__ = ("summary",)
     SUMMARY_FIELD_NUMBER: _ClassVar[int]
@@ -1066,7 +1121,7 @@ class ResetRequiredV2(_message.Message):
     def __init__(self, history_floor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., latest_cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ...) -> None: ...
 
 class RunStatusEnvelopeV2(_message.Message):
-    __slots__ = ("event_ulid", "run_created", "run_status_changed", "reset_required", "node_status_changed", "activity_appended", "flow_list_changed", "flow_reload_status", "catalog_reload_required", "cursor", "scope_ref")
+    __slots__ = ("event_ulid", "run_created", "run_status_changed", "reset_required", "node_status_changed", "activity_appended", "flow_list_changed", "flow_reload_status", "catalog_reload_required", "nodes_expanded", "cursor", "scope_ref")
     EVENT_ULID_FIELD_NUMBER: _ClassVar[int]
     RUN_CREATED_FIELD_NUMBER: _ClassVar[int]
     RUN_STATUS_CHANGED_FIELD_NUMBER: _ClassVar[int]
@@ -1076,6 +1131,7 @@ class RunStatusEnvelopeV2(_message.Message):
     FLOW_LIST_CHANGED_FIELD_NUMBER: _ClassVar[int]
     FLOW_RELOAD_STATUS_FIELD_NUMBER: _ClassVar[int]
     CATALOG_RELOAD_REQUIRED_FIELD_NUMBER: _ClassVar[int]
+    NODES_EXPANDED_FIELD_NUMBER: _ClassVar[int]
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     SCOPE_REF_FIELD_NUMBER: _ClassVar[int]
     event_ulid: str
@@ -1087,6 +1143,7 @@ class RunStatusEnvelopeV2(_message.Message):
     flow_list_changed: FlowListChangedV2
     flow_reload_status: FlowReloadStatusV2
     catalog_reload_required: CatalogReloadRequiredV2
+    nodes_expanded: RunNodesExpandedV2
     cursor: LifecycleCursorV2
     scope_ref: ScopeReferenceV2
-    def __init__(self, event_ulid: _Optional[str] = ..., run_created: _Optional[_Union[RunCreatedV2, _Mapping]] = ..., run_status_changed: _Optional[_Union[RunStatusChangedV2, _Mapping]] = ..., reset_required: _Optional[_Union[ResetRequiredV2, _Mapping]] = ..., node_status_changed: _Optional[_Union[NodeStatusChangedV2, _Mapping]] = ..., activity_appended: _Optional[_Union[ActivityAppendedV2, _Mapping]] = ..., flow_list_changed: _Optional[_Union[FlowListChangedV2, _Mapping]] = ..., flow_reload_status: _Optional[_Union[FlowReloadStatusV2, _Mapping]] = ..., catalog_reload_required: _Optional[_Union[CatalogReloadRequiredV2, _Mapping]] = ..., cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ...) -> None: ...
+    def __init__(self, event_ulid: _Optional[str] = ..., run_created: _Optional[_Union[RunCreatedV2, _Mapping]] = ..., run_status_changed: _Optional[_Union[RunStatusChangedV2, _Mapping]] = ..., reset_required: _Optional[_Union[ResetRequiredV2, _Mapping]] = ..., node_status_changed: _Optional[_Union[NodeStatusChangedV2, _Mapping]] = ..., activity_appended: _Optional[_Union[ActivityAppendedV2, _Mapping]] = ..., flow_list_changed: _Optional[_Union[FlowListChangedV2, _Mapping]] = ..., flow_reload_status: _Optional[_Union[FlowReloadStatusV2, _Mapping]] = ..., catalog_reload_required: _Optional[_Union[CatalogReloadRequiredV2, _Mapping]] = ..., nodes_expanded: _Optional[_Union[RunNodesExpandedV2, _Mapping]] = ..., cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ...) -> None: ...

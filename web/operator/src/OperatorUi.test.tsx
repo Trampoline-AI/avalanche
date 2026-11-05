@@ -97,6 +97,57 @@ const presentation = {
 
 afterEach(() => window.localStorage.removeItem("avalanche.explorer-pinned"));
 
+describe("runtime map group cards", () => {
+  it("keeps index-aligned placeholders off the graph and opens real item details", () => {
+    const spec = {
+      mappedArgs: ["value"],
+      broadcastArgs: [],
+      maxItems: 8,
+      inherited: false,
+      failFast: true,
+    };
+    const topology = WorkflowTopologyMsg.create({
+      nodeIds: ["write", "edit", "write[0]", "edit[0]"],
+      graph: { write: { children: ["edit"] }, edit: { children: [] } },
+      displayNames: { write: "write_article", edit: "edit_english" },
+      mapSpecs: { write: spec, edit: { ...spec, inherited: true } },
+    });
+    const open = vi.fn();
+    const runNodes = [
+      NodeSnapshotMsg.create({
+        nodeId: "write[0]",
+        mapParent: "write",
+        mapIndex: 0,
+        status: "success",
+      }),
+      NodeSnapshotMsg.create({
+        nodeId: "edit[0]",
+        mapParent: "edit",
+        mapIndex: 0,
+        status: "running",
+      }),
+    ];
+    const view = render(
+      <GraphCanvas runTopology={topology} runNodes={runNodes} onOpenNode={open} />,
+    );
+    expect(screen.getByText(/edit_english ×\?/)).toBeVisible();
+    view.rerender(
+      <GraphCanvas
+        runTopology={topology}
+        runNodes={runNodes}
+        expansions={{ write: 4, edit: 4 }}
+        onOpenNode={open}
+      />,
+    );
+    expect(screen.getByText(/edit_english ×4/)).toBeVisible();
+    expect(screen.getAllByTitle("not started")).toHaveLength(6);
+    expect(screen.queryByRole("button", { name: "Inspect edit[1]" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect edit[0]" }));
+    expect(open).toHaveBeenCalledWith("edit[0]");
+    expect(document.querySelectorAll(".node-title")).toHaveLength(2);
+  });
+});
+
 describe("node inspection viewport", () => {
   it("opens a node without moving or zooming the viewport", async () => {
     const open = vi.fn();

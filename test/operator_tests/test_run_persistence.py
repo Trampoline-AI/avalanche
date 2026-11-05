@@ -129,6 +129,47 @@ print(json.dumps({
 sys.stdin.read()
 """
 
+_MAP_FLOW = """import avalanche as ava
+@ava.source
+def items():
+    return [2, 3, 5]
+@ava.step
+def scale(item):
+    return item * 10
+@ava.step
+def edit(item):
+    return item + 1
+@ava.workflow
+def mapped():
+    return edit.map(scale.map(items()))
+"""
+
+
+def test_mapped_run_topology_and_item_metadata_survive_restart(tmp_path):
+    path = tmp_path / "mapped.py"
+    path.write_text(_MAP_FLOW)
+    db = tmp_path / "operator.sqlite"
+    operator = _operator(path, db)
+    try:
+        run_id = operator.start_run("mapped")
+        run = _wait_terminal(operator, run_id)
+        assert run.status is RunStatus.SUCCESS
+        assert run.expansions == {"scale_1": 3, "edit_1": 3}
+        assert run.nodes["edit_1[2]"].map_index == 2
+    finally:
+        operator.close()
+    restarted = _operator(path, db)
+    try:
+        restored = restarted.get_run(run_id)
+        assert restored.status is RunStatus.SUCCESS
+        assert restored.expansions == {"scale_1": 3, "edit_1": 3}
+        assert restored.nodes["edit_1[2]"].map_parent == "edit_1"
+        assert restored.nodes["edit_1[2]"].map_index == 2
+        assert set(restored.nodes) == set(run.nodes)
+    finally:
+        restarted.close()
+
+
 _TERMINAL = {RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED}
 
 

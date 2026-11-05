@@ -56,6 +56,7 @@ from .models import (
     ResetBaseline,
     ResetBaselineCursor,
     RunCreated,
+    RunNodesExpanded,
     RunSnapshot,
     RunState,
     RunStatusChanged,
@@ -1355,6 +1356,14 @@ class GrpcStateProvider:
                         node_id=node.node_id,
                         revision=node.trace.revision,
                     )
+        elif payload == "nodes_expanded":
+            expanded = message.nodes_expanded
+            for node in expanded.nodes:
+                self._remember_activity_continuation(
+                    node.activity_continuation,
+                    run_id=expanded.run_id,
+                    node_id=node.node_id,
+                )
         elif payload == "activity_appended":
             activity = message.activity_appended.activity
             if activity.kind in {"log", "agent_event"} or (
@@ -2855,7 +2864,23 @@ class GrpcStateProvider:
             if current is None:
                 raise _RunUpdateResetError(f"update references unknown run {change.run_id}")
             run = replace(current)
-            if isinstance(change, RunStatusChanged):
+            if isinstance(change, RunNodesExpanded):
+                run.topology = change.topology
+                run.expansions = dict(change.expansions)
+                run.nodes = dict(current.nodes)
+                for item in change.nodes:
+                    run.nodes[item.node_id] = NodeState(
+                        node_id=item.node_id,
+                        name=item.name,
+                        node_type=item.node_type,
+                        map_parent=item.map_parent,
+                        map_index=item.map_index,
+                        status=item.status,
+                        revision=item.revision,
+                        event_page_token=item.event_page_token,
+                    )
+                    self._node_revisions[(run.run_id, item.node_id)] = item.revision
+            elif isinstance(change, RunStatusChanged):
                 old_revision = self._run_revisions.get(change.run_id, 0)
                 if change.revision <= old_revision:
                     run = None
@@ -3202,6 +3227,8 @@ def _run_from_created(operator_instance_id: str, created: RunCreated) -> RunStat
         item.node_id: NodeState(
             node_id=item.node_id,
             name=item.name,
+            map_parent=item.map_parent,
+            map_index=item.map_index,
             node_type=item.node_type,
             status=item.status,
             started_at=item.started_at,
@@ -3227,6 +3254,7 @@ def _run_from_snapshot(snapshot: RunSnapshot) -> RunState:
             topology=snapshot.topology,
         ),
     )
+    run.expansions = dict(snapshot.expansions)
     run.latest_log_sequence = snapshot.latest_log_sequence
     run.terminal_seal = snapshot.terminal_seal
     run.details_hydrated = False

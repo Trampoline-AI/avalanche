@@ -72,6 +72,75 @@ def _confirm_empty_action(session: str) -> None:
     _tmux("send-keys", "-t", session, "Tab", "Enter")
 
 
+def test_terminal_runtime_map_group_strip(tmp_path):
+    import socket
+
+    from runtime.operator.models import RunStatus
+    from runtime.operator.operator import Operator
+    from runtime.operator.server import serve as serve_operator
+
+    if not shutil.which("tmux"):
+        pytest.skip("tmux not installed")
+    workflow = Path(__file__).resolve().parents[1] / "examples/map_agent_fanout.py"
+    operator = Operator([str(workflow)], watch=False, schedule=False, state_db=":memory:")
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    server = None
+    session = f"pytest-map-{uuid4().hex[:8]}"
+    try:
+        server = serve_operator(operator, port=port, block=False)
+        _tmux(
+            "new-session",
+            "-d",
+            "-s",
+            session,
+            "-c",
+            str(workflow.parents[1]),
+            "-x",
+            "200",
+            "-y",
+            "45",
+            f"COLUMNS=200 LINES=45 uv run ava tui --connect localhost:{port} "
+            "--flow map_agent_pipeline",
+        )
+        _wait_for(session, lambda text: "write_article ×?" in text)
+        run_id = operator.start_run("map_agent_pipeline")
+        screen = _wait_for(
+            session,
+            lambda text: any(
+                "write_article ×4" in line and "·" in line for line in text.splitlines()
+            ),
+        )
+        assert "✓ ✓ ✓ ✓" not in next(
+            line for line in screen.splitlines() if "write_article ×4" in line
+        )
+        deadline = time.monotonic() + 90
+        while operator.get_run(run_id).status is not RunStatus.SUCCESS:
+            run = operator.get_run(run_id)
+            if run.status is RunStatus.FAILED:
+                for node_id, node in run.nodes.items():
+                    if node.error:
+                        print(f"{node_id}: {node.error}", flush=True)
+            assert run.status is not RunStatus.FAILED, {
+                key: node.error for key, node in run.nodes.items() if node.error
+            }
+            assert time.monotonic() < deadline
+            time.sleep(0.1)
+        _wait_for(session, lambda text: "✓ ✓ ✓ ✓" in text)
+        # Select the mapped agent group and open its item list, then the ordinary trace.
+        _tmux("send-keys", "-t", session, "Right", "Right", "Right", "Enter")
+        _wait_for(session, lambda text: "Map items" in text)
+        _tmux("send-keys", "-t", session, "Enter")
+        _wait_for(session, lambda text: "AGENT TURN" in text)
+    finally:
+        if session in _tmux("list-sessions", "-F", "#{session_name}").splitlines():
+            _tmux("kill-session", "-t", session)
+        if server is not None:
+            server.stop(grace=0).wait()
+        operator.close()
+
+
 def test_terminal_start_cancel_and_select_history(tui_session):
     screen = _wait_for(tui_session, lambda text: re.search(r"run_[0-9a-f-]+.*success", text))
     older = re.search(r"(run_[0-9a-f-]+).*success", screen).group(1)

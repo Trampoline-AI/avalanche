@@ -29,8 +29,9 @@ import dspy
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from .._agent_evidence import emit_agent_evidence
-from ..dag import Node, NodeFuture, NodeType, _workflow_context
+from ..dag import MapFuture, Node, NodeFuture, NodeType, _workflow_context
 from ..evaluations import Evaluations
+from ..input_ref import InputRef
 from ..policies import StepPolicy, UncertaintyPolicy
 from ..step_interface import (
     decoration_namespace,
@@ -629,7 +630,7 @@ class _InlineAgentNode(Node):
         )
 
 
-def step(
+def _step(
     signature: type[dspy.Signature],
     *,
     inputs: Mapping[str, Any] | None = None,
@@ -666,6 +667,23 @@ def step(
         unexpected = [name for name in inputs if name not in signature.input_fields]
         if unexpected:
             raise AgentStepError(f"inline agent has unexpected input fields {unexpected}")
+    node = _inline_agent_node(
+        signature, slug, runtime, tools, skills, evaluations, removed,
+        StepPolicy(retries=retries, on_uncertain=on_uncertain),
+    )
+    return node(**inputs) if inputs is not None else node()
+
+
+def _inline_agent_node(
+    signature: type[dspy.Signature],
+    slug: str | None,
+    runtime: AgentRuntime | None,
+    tools: Sequence[Callable],
+    skills: Sequence[Skill],
+    evaluations: Evaluations[InputT, OutputT] | None,
+    removed: Mapping[str, object],
+    policy: StepPolicy,
+) -> _InlineAgentNode:
     step_runtime, step_tools, step_skills = _step_configuration(
         owner="ava.agent.step", runtime=runtime, tools=tools, skills=skills, removed=removed
     )
@@ -713,11 +731,41 @@ def step(
         invoke,
         NodeType.STEP,
         num_returns=len(output_fields),
-        policy=StepPolicy(retries=retries, on_uncertain=on_uncertain),
+        policy=policy,
         slug=slug,
         step_interface=step_interface_from_signature(public_signature),
     )
-    return node(**inputs) if inputs is not None else node()
+    return node
+
+
+class _StepFactory:
+    __call__ = staticmethod(_step)
+
+    def map[T, B, I, O](
+        self,
+        signature: type[dspy.Signature],
+        *mapped: list[T] | NodeFuture | InputRef,
+        max_items: int | None = None,
+        fail_fast: bool = True,
+        slug: str | None = None,
+        runtime: AgentRuntime | None = None,
+        tools: Sequence[Callable[..., B]] = (),
+        skills: Sequence[Skill] = (),
+        evaluations: Evaluations[I, O] | None = None,
+        retries: int = 7,
+        on_uncertain: UncertaintyPolicy = "retry",
+        **broadcast: B,
+    ) -> MapFuture:
+        """Map signature input fields positionally; remaining fields are broadcast."""
+        signature = resolve_signature(signature, name="inline agent map")
+        node = _inline_agent_node(
+            signature, slug, runtime, tools, skills, evaluations, {},
+            StepPolicy(retries=retries, on_uncertain=on_uncertain),
+        )
+        return node.map(*mapped, max_items=max_items, fail_fast=fail_fast, **broadcast)
+
+
+step = _StepFactory()
 
 
 def _public_step_signature(

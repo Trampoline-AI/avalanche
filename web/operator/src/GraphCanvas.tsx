@@ -112,6 +112,9 @@ interface CardData extends Record<string, unknown> {
   runningElapsedSeconds?: number;
   declaration?: AgentFieldSchemas;
   instructionLine?: string;
+  mapItems?: { id: string; status?: string; onOpen?: () => void }[];
+  mapSummary?: string;
+  placeholderHint?: string;
   descriptionsExpanded: boolean;
   onOpen: () => void;
   inspectionDisabled?: boolean;
@@ -415,6 +418,39 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
           </span>
         )}
       </header>
+      {data.mapItems && (
+        <div className="relative z-[3] flex flex-wrap gap-1" aria-label="Map items">
+          {data.mapItems.map((item) =>
+            item.onOpen ? (
+              <button
+                key={item.id}
+                type="button"
+                onClick={item.onOpen}
+                aria-label={`Inspect ${item.id}`}
+                title={`${item.id}: ${item.status}`}
+                className="flex h-8 w-8 shrink-0 items-center justify-center rounded border"
+              >
+                {item.status === "success"
+                  ? "✓"
+                  : item.status === "running"
+                    ? "▶"
+                    : item.status === "failed"
+                      ? "✗"
+                      : "·"}
+              </button>
+            ) : (
+              <span
+                key={item.id}
+                title={data.placeholderHint ?? "not started"}
+                className="flex h-8 w-8 shrink-0 items-center justify-center"
+              >
+                ·
+              </span>
+            ),
+          )}
+          <span className="basis-full text-xs">{data.mapSummary}</span>
+        </div>
+      )}
       {hasEvaluationRow && (
         <div
           className={`node-evaluation-row flex min-w-0 items-center gap-2 ${isCompact ? "absolute inset-x-4 bottom-3" : "self-stretch"}`}
@@ -668,12 +704,14 @@ type TopologyView = Pick<
   | "evaluationMetadataJson"
   | "stepInterfaceJson"
   | "inputDeclarationJson"
+  | "mapSpecs"
 >;
 
 interface GraphCanvasProps {
   workflow?: FlowInfoMsg;
   runTopology?: WorkflowTopologyMsg;
   runNodes?: NodeSnapshotMsg[];
+  expansions?: Record<string, number>;
   /** How the displayed run started, such as "manual" or "scheduled". */
   runTriggeredBy?: TriggerKind;
   evaluations?: Record<string, EvaluationRecord>;
@@ -688,6 +726,7 @@ function GraphCanvasView({
   workflow,
   runTopology,
   runNodes = [],
+  expansions = {},
   runTriggeredBy,
   evaluations,
   bottomRightPanel,
@@ -704,6 +743,7 @@ function GraphCanvasView({
     if (!workflow) return undefined;
     return {
       nodeIds: workflow.nodeIds,
+      mapSpecs: workflow.mapSpecs,
       graph: workflow.graph,
       nodeTypes: workflow.nodeTypes,
       displayNames: workflow.displayNames,
@@ -715,6 +755,16 @@ function GraphCanvasView({
       inputDeclarationJson: workflow.inputDeclarationJson,
     };
   }, [runTopology, workflow]);
+  const groupedTopology = useMemo(() => {
+    if (!topology) return undefined;
+    const parents = new Set(Object.keys(topology.mapSpecs));
+    return {
+      ...topology,
+      nodeIds: topology.nodeIds.filter(
+        (id) => ![...parents].some((parent) => id.startsWith(`${parent}[`)),
+      ),
+    };
+  }, [topology]);
   const rawInputDeclaration = topology?.inputDeclarationJson ?? "";
   const inputDeclaration = useMemo(() => {
     try {
@@ -726,25 +776,28 @@ function GraphCanvasView({
   const hasInputNode = rawInputDeclaration !== "";
   // The input dot leads the graph, with edges into the workflow's first steps.
   const topologyNodeIds = useMemo(
-    () => (topology && hasInputNode ? [INPUT_NODE_ID, ...topology.nodeIds] : topology?.nodeIds),
-    [hasInputNode, topology],
+    () =>
+      groupedTopology && hasInputNode
+        ? [INPUT_NODE_ID, ...groupedTopology.nodeIds]
+        : groupedTopology?.nodeIds,
+    [hasInputNode, groupedTopology],
   );
   const topologyGraph = useMemo(
     () =>
-      topology && hasInputNode
+      groupedTopology && hasInputNode
         ? {
-            ...topology.graph,
+            ...groupedTopology.graph,
             [INPUT_NODE_ID]: {
-              children: topology.nodeIds.filter(
+              children: groupedTopology.nodeIds.filter(
                 (nodeId) =>
-                  !Object.values(topology.graph).some(({ children }) =>
+                  !Object.values(groupedTopology.graph).some(({ children }) =>
                     children.includes(nodeId),
                   ),
               ),
             },
           }
-        : topology?.graph,
-    [hasInputNode, topology],
+        : groupedTopology?.graph,
+    [hasInputNode, groupedTopology],
   );
   const [nodeMeasurements, setNodeMeasurements] = useState<
     ReadonlyMap<string, { width: number; height: number }>
@@ -930,7 +983,7 @@ function GraphCanvasView({
       (counts, label) => ({ ...counts, [label]: (counts[label] ?? 0) + 1 }),
       {},
     );
-    const nodes: Node<CardData>[] = topology.nodeIds.map((nodeId) => {
+    const nodes: Node<CardData>[] = (groupedTopology?.nodeIds ?? []).map((nodeId) => {
       const runtimeNode = runtimeNodes[nodeId];
       const agentDeclaration = runTopology
         ? undefined
@@ -955,7 +1008,30 @@ function GraphCanvasView({
         position: positions[nodeId],
         measured: nodeMeasurements.get(nodeId),
         data: {
-          label: labels[nodeId],
+          label:
+            nodeId in topology.mapSpecs
+              ? `${labels[nodeId]} ×${expansions[nodeId] ?? "?"}`
+              : labels[nodeId],
+          mapItems:
+            nodeId in topology.mapSpecs && expansions[nodeId] !== undefined
+              ? Array.from({ length: expansions[nodeId] }, (_, index) => {
+                  const id = `${nodeId}[${index}]`;
+                  const item = runtimeNodes[id];
+                  return {
+                    id,
+                    status: item?.status,
+                    onOpen: item ? () => onOpenNode(id) : undefined,
+                  };
+                })
+              : undefined,
+          placeholderHint:
+            runtimeNode && ["failed", "skipped", "success"].includes(runtimeNode.status)
+              ? "not run"
+              : "not started",
+          mapSummary:
+            nodeId in topology.mapSpecs && expansions[nodeId] !== undefined
+              ? `${runNodes.filter((item) => item.mapParent === nodeId && item.status === "success").length} done · ${runNodes.filter((item) => item.mapParent === nodeId && item.status === "running").length} running · ${runNodes.filter((item) => item.mapParent === nodeId && item.status === "failed").length} failed · ${expansions[nodeId] - runNodes.filter((item) => item.mapParent === nodeId && ["success", "running", "failed"].includes(item.status)).length} not started`
+              : undefined,
           identity:
             labelCounts[labels[nodeId]] > 1
               ? invocationIdentity(nodeId, labels[nodeId])
@@ -1007,6 +1083,9 @@ function GraphCanvasView({
     positions,
     openCallbacks,
     runNodes,
+    expansions,
+    groupedTopology,
+    onOpenNode,
     runTopology,
     selectedNodeId,
     topology,
@@ -1119,6 +1198,7 @@ export const GraphCanvas = memo(
   (left, right) =>
     left.workflow === right.workflow &&
     left.runTopology === right.runTopology &&
+    left.expansions === right.expansions &&
     left.runTriggeredBy === right.runTriggeredBy &&
     left.evaluations === right.evaluations &&
     left.bottomRightPanel === right.bottomRightPanel &&
