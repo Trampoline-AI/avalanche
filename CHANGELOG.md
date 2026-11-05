@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.18.0
 
 - Toggle graph node descriptions between two-line previews and fully expanded
   text with the information button beside Fit View. Descriptions appear from
   65% zoom, and graph spacing adapts to taller cards.
 
-- Avalanche and Delta share version 0.18.0 for the next release. Packages are
+- Avalanche and Delta now share one version, starting with 0.18.0. Packages are
   published from the Delta repository; this repository receives the public SDK
   source and release tags as a read-only mirror. Python packages remain on PyPI
   and the operator UI remains on GitHub Packages.
