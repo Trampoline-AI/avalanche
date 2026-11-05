@@ -34,10 +34,15 @@
   border-bottom: 0;
   border-radius: 0 0 var(--radius-ui) var(--radius-ui);
 }
-.navpanel-orientation svg {
+.navpanel-orientation svg,
+.graph-description-toggle svg {
   fill: none;
 }
 .navpanel button:hover {
+  background: var(--color-nav-hover);
+}
+.navpanel button[aria-pressed="true"] {
+  color: var(--color-sidebar-primary);
   background: var(--color-nav-hover);
 }
 .navpanel button:focus-visible {
@@ -746,6 +751,34 @@
     max-height: 0;
     opacity: 0;
     pointer-events: none;
+  }
+
+  .node-card--compact.node-card--description {
+    min-height: 140px;
+  }
+
+  .node-card--compact.node-card--description .node-instruction-line {
+    max-height: 3rem;
+    margin-top: 6px;
+    font-size: 12px;
+    opacity: 1;
+  }
+
+  .node-card.node-card--description .node-instruction-line--expanded {
+    display: block;
+    max-height: none;
+    overflow: visible;
+    overflow-wrap: anywhere;
+  }
+
+  .node-card--compact.node-card--description:has(.node-instruction-line--expanded)
+    .node-header {
+    grid-template-rows: auto auto auto;
+  }
+
+  .node-card--compact.node-card--description:has(.node-evaluation-row) {
+    min-height: 170px;
+    padding-bottom: 44px;
   }
 
   .node-card--compact .node-card-details {

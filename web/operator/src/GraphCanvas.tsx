@@ -8,13 +8,14 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowDown, ArrowRight, Bot, FlaskConical, ListFilter } from "lucide-react";
+import { ArrowDown, ArrowRight, Bot, FlaskConical, Info, ListFilter } from "lucide-react";
 
 import {
   Background,
   BackgroundVariant,
   BaseEdge,
   Controls,
+  ControlButton,
   Handle,
   Panel,
   Position,
@@ -111,6 +112,7 @@ interface CardData extends Record<string, unknown> {
   runningElapsedSeconds?: number;
   declaration?: AgentFieldSchemas;
   instructionLine?: string;
+  descriptionsExpanded: boolean;
   onOpen: () => void;
   inspectionDisabled?: boolean;
 }
@@ -233,6 +235,7 @@ function firstInstructionLine(instructions: string | undefined): string | undefi
 }
 
 const NODE_DETAIL_ZOOM_THRESHOLD = 1.0;
+const NODE_DESCRIPTION_ZOOM_THRESHOLD = 0.65;
 
 export const NodeDuration = memo(
   ({
@@ -295,6 +298,8 @@ NodeDuration.displayName = "NodeDuration";
 const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) => {
   const { zoom } = useViewport();
   const isCompact = zoom < NODE_DETAIL_ZOOM_THRESHOLD;
+  const showDescription =
+    Boolean(data.instructionLine) && zoom >= NODE_DESCRIPTION_ZOOM_THRESHOLD;
   const hasEvaluations = data.evaluationCount !== undefined || data.evaluationDeclarationError;
   const hasEvaluationRow = hasEvaluations || Boolean(data.composites);
   const designationClass = data.isClassifier
@@ -306,7 +311,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
   const stateColor = statusToneColor[statusTone(state)];
   return (
     <article
-      className={`node-card ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded border text-left motion-reduce:transition-none ${designationClass}`}
+      className={`node-card ${showDescription ? "node-card--description" : ""} ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded border text-left motion-reduce:transition-none ${designationClass}`}
       data-node-state={state}
       style={
         {
@@ -396,7 +401,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         )}
         {data.instructionLine && (
           <span
-            className="node-card-meta node-instruction-line min-w-0 self-stretch overflow-hidden text-ellipsis line-clamp-2 font-mono text-[9px] leading-[1.35] text-secondary"
+            className={`node-card-meta node-instruction-line ${data.descriptionsExpanded ? "node-instruction-line--expanded" : "line-clamp-2"} min-w-0 self-stretch overflow-hidden text-ellipsis font-mono text-[9px] leading-[1.35] text-secondary`}
             title={data.instructionLine}
           >
             {data.instructionLine}
@@ -692,6 +697,7 @@ function GraphCanvasView({
   inspectionDisabled = false,
 }: GraphCanvasProps) {
   const { containerRef, orientation, toggleOrientation } = useGraphOrientation();
+  const [descriptionsExpanded, setDescriptionsExpanded] = useState(false);
   const isCurrentWorkflow = workflow !== undefined && runTopology === undefined;
   const topology = useMemo<TopologyView | undefined>(() => {
     if (runTopology) return runTopology;
@@ -972,6 +978,7 @@ function GraphCanvasView({
           runningElapsedSeconds: runtimeNode?.runningElapsedSeconds ?? 0,
           declaration,
           instructionLine,
+          descriptionsExpanded,
           onOpen: openCallbacks[nodeId],
           inspectionDisabled,
         },
@@ -991,6 +998,7 @@ function GraphCanvasView({
     inputCard,
     agentNodeIds,
     classifierCards,
+    descriptionsExpanded,
     evaluationCards,
     evaluations,
     standardFields,
@@ -1053,6 +1061,17 @@ function GraphCanvasView({
           className="navpanel"
           showInteractive={false}
         >
+          <ControlButton
+            className="graph-description-toggle"
+            aria-label="Expand node descriptions"
+            aria-pressed={descriptionsExpanded}
+            title={
+              descriptionsExpanded ? "Show two-line descriptions" : "Show full descriptions"
+            }
+            onClick={() => setDescriptionsExpanded((expanded) => !expanded)}
+          >
+            <Info aria-hidden="true" size={16} />
+          </ControlButton>
           <div role="group" aria-label="Workflow orientation" className="navpanel-orientation">
             <button
               type="button"

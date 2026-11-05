@@ -207,6 +207,25 @@ describe("agent runtime on graph nodes", () => {
 });
 
 describe("graph orientation controls", () => {
+  it("toggles descriptions without opening a node and keeps the setting across orientations", () => {
+    const open = vi.fn();
+    render(<GraphCanvas workflow={workflow} onOpenNode={open} />);
+    const toggle = screen.getByRole("button", { name: "Expand node descriptions" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    const orientation = screen.getByRole("button", { name: /Switch to .* workflow/ });
+    expect(
+      toggle.compareDocumentPosition(orientation) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    fireEvent.click(orientation);
+    const retainedToggle = screen.getByRole("button", { name: "Expand node descriptions" });
+    expect(retainedToggle).toHaveAttribute("aria-pressed", "true");
+    fireEvent.click(retainedToggle);
+    expect(retainedToggle).toHaveAttribute("aria-pressed", "false");
+    expect(open).not.toHaveBeenCalled();
+  });
+
   it.each([
     [1200, "vertical"],
     [600, "horizontal"],
