@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Avalanche and Delta share version 0.18.0 for the next release. Packages are
+  published from the Delta repository; this repository receives the public SDK
+  source and release tags as a read-only mirror. Python packages remain on PyPI
+  and the operator UI remains on GitHub Packages.
+
 - The Avalanche skill now requires clear, succinct step descriptions that read
   as a coherent story from input to outcome and stay current as steps change.
 
