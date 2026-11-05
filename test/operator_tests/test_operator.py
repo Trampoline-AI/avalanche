@@ -36,6 +36,426 @@ def wait_terminal(operator, run_id):
     pytest.fail(f"Run {run_id} did not finish")
 
 
+def test_spawned_run_accepts_early_event_and_typed_decision(tmp_path):
+    """Use the real coordinator, pinned wait schema and synchronous control receipts."""
+    import http.client
+    import socket
+    import subprocess
+    import sys
+
+    from runtime.operator.client import GrpcStateProvider
+    from runtime.operator.server import serve
+    from runtime.operator.wait_control import WaitControlRequest
+    from runtime.operator.web import start_browser_server
+
+    fixture = Path(__file__).parents[1] / "fixtures" / "durable_waits_flow.py"
+    target = tmp_path / "flow.py"
+    # Local operator derives the identity from its OS account, not a body field.
+    import getpass
+
+    target.write_text(
+        fixture.read_text().replace(
+            'approvers=["reviewer"]', f"approvers=[{getpass.getuser()!r}]"
+        )
+    )
+    op = Operator([str(target)], watch=False, schedule=False, webhook_port=0,
+                  state_db=":memory:")
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    server = serve(op, port=port, block=False)
+    address = f"127.0.0.1:{port}"
+    browser = start_browser_server(address, port=0)
+    client = GrpcStateProvider(address)
+    try:
+        (info,) = client.list_workflows()
+        assert info.node_policies["draft_1"].on_uncertain == "hold"
+        assert info.node_waits["decision_1"].approvers == (getpass.getuser(),)
+        run_id = client.start_run(info.selector)
+        event = WaitControlRequest(
+            kind="event",
+            address="docusign.signed",
+            payload={"envelope_id": "signed"},
+            idempotency_key="early",
+        )
+        sent = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ava_cli",
+                "event",
+                "send",
+                run_id,
+                "docusign.signed",
+                '{"envelope_id":"signed"}',
+                "--connect",
+                address,
+                "--idempotency-key",
+                "early",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert sent.returncode == 0, sent.stderr
+        receipt = client.wait_control(run_id, event).receipt
+        assert receipt is not None
+        assert json.loads(sent.stdout)["receipt_id"] == receipt.receipt_id
+        assert receipt.run_id == run_id
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            cards = op.wait_control(run_id, WaitControlRequest(kind="list")).waits
+            if any(
+                card["node_id"] == "decision_1" and card["state"] == "waiting" for card in cards
+            ):
+                break
+            time.sleep(0.03)
+        else:
+            pytest.fail("decision did not arm")
+        http = http.client.HTTPConnection(browser.host, browser.port, timeout=10)
+        http.request(
+            "POST",
+            f"/api/v1/runs/{run_id}/decisions/decision_1",
+            body=json.dumps({"outcome": {"kind": "invalid"}, "reason": "invalid"}),
+            headers={"Content-Type": "application/json", "Idempotency-Key": "invalid"},
+        )
+        refused = http.getresponse()
+        assert refused.status == 422
+        refused.read()
+        http.close()
+        decision = WaitControlRequest(
+            kind="decision",
+            address="decision_1",
+            payload={"kind": "approve"},
+            idempotency_key="approval",
+            reason="checked pinned draft",
+        )
+        decided = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ava_cli",
+                "run",
+                "decide",
+                run_id,
+                "decision_1",
+                '{"kind":"approve"}',
+                "--connect",
+                address,
+                "--idempotency-key",
+                "approval",
+                "--reason",
+                "checked pinned draft",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert decided.returncode == 0, decided.stderr
+        audit = client.wait_control(run_id, decision).receipt
+        assert audit is not None
+        assert audit.principal == getpass.getuser()
+        assert audit.reason == "checked pinned draft"
+        assert wait_terminal(op, run_id).status == RunStatus.SUCCESS
+        assert op.wait_control(run_id, event).receipt == receipt
+        assert client.wait_control(run_id, decision).receipt == audit
+    finally:
+        client.close()
+        browser.close()
+        server.stop(grace=0).wait()
+        op.close()
+
+
+@pytest.fixture
+def wait_review_operator():
+    fixture = Path(__file__).parents[1] / "fixtures" / "wait_review_flows.py"
+    op = Operator([str(fixture)], watch=False, schedule=False, webhook_port=0,
+                  state_db=":memory:")
+    try:
+        yield op
+    finally:
+        op.close()
+
+
+def wait_for_review(op, run_id):
+    from avalanche.local_waits import WaitRefusalError
+    from runtime.operator.wait_control import WaitControlRequest
+
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        try:
+            cards = op.wait_control(run_id, WaitControlRequest(kind="list")).waits
+        except WaitRefusalError as exc:
+            # An oversized metadata response may be refused, but not break control.
+            assert exc.code == "response_too_large"
+            return None
+        if any(card["state"] == "waiting" for card in cards):
+            return cards
+        time.sleep(0.03)
+    pytest.fail("decision did not arm")
+
+
+@pytest.mark.parametrize("read_first", [True, False])
+def test_large_review_artifact_preserves_lists_and_acceptance_receipts(
+    wait_review_operator, read_first
+):
+    import hashlib
+
+    from runtime.operator.wait_control import WaitControlRequest
+
+    op = wait_review_operator
+    info = next(item for item in op.list_workflows() if item.name == "large_artifact")
+    run_id = op.start_run(info.selector)
+    if read_first:
+        cards = wait_for_review(op, run_id)
+        shown = cards[0]["show"]
+        assert (
+            shown["sha256"]
+            == hashlib.sha256(b'"' + b"x" * (2 * 1024 * 1024) + b'"').hexdigest()
+        )
+        assert shown["truncated"] is True
+    else:
+        # Observe node lifecycle without listing, so receipt bounds are independent.
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            node = op.get_run(run_id).nodes.get("decision_1")
+            if node is not None and node.status == NodeStatus.RUNNING:
+                break
+            time.sleep(0.03)
+        else:
+            pytest.fail("decision did not start")
+    decision = WaitControlRequest(
+        kind="decision",
+        address="decision_1",
+        payload={"kind": "approve"},
+        reason="checked artifact",
+        idempotency_key="approval",
+    )
+    accepted = op.wait_control(run_id, decision)
+    assert accepted.receipt is not None
+    assert accepted.receipt.reviewed["truncated"] is True
+    assert len(accepted.model_dump_json().encode()) < 2 * 1024 * 1024
+    assert wait_terminal(op, run_id).status == RunStatus.SUCCESS
+    assert op.wait_control(run_id, decision) == accepted
+
+
+def test_oversized_control_response_does_not_poison_channel(wait_review_operator):
+    from avalanche.local_waits import WaitRefusalError
+    from runtime.operator.wait_control import WaitControlRequest
+
+    op = wait_review_operator
+    info = next(item for item in op.list_workflows() if item.name == "large_response")
+    run_id = op.start_run(info.selector)
+    assert wait_for_review(op, run_id) is None
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        node = op.get_run(run_id).nodes.get("decision_1")
+        if node is not None and node.status == NodeStatus.RUNNING:
+            break
+        time.sleep(0.03)
+    else:
+        pytest.fail("decision did not start after oversized response refusal")
+    with pytest.raises(WaitRefusalError) as oversized_audit:
+        op.wait_control(
+            run_id,
+            WaitControlRequest(
+                kind="decision",
+                address="decision_1",
+                payload={"kind": "approve"},
+                # Individually valid fields can exceed the final card's aggregate
+                # budget once JSON escaping and both reviewed copies are included.
+                reason="\x00" * 4096,
+                idempotency_key="approval",
+            ),
+        )
+    assert oversized_audit.value.code == "wait_card_too_large"
+    assert oversized_audit.value.status == 413
+    accepted = op.wait_control(
+        run_id,
+        WaitControlRequest(
+            kind="decision",
+            address="decision_1",
+            payload={"kind": "approve"},
+            reason="checked metadata refusal",
+            idempotency_key="approval",
+        ),
+    )
+    assert accepted.receipt is not None
+    assert wait_terminal(op, run_id).status == RunStatus.SUCCESS
+
+
+@pytest.mark.parametrize(
+    "name", ["timeout_outcome", "timeout_failure", "pending", "unicode_approval"]
+)
+def test_terminal_wait_history_retains_system_audit_and_withdrawn_cards(
+    wait_review_operator, name
+):
+    from avalanche.local_waits import WaitRefusalError
+    from runtime.operator.wait_control import WaitControlRequest
+
+    op = wait_review_operator
+    workflow_name = "pending" if name == "unicode_approval" else name
+    info = next(item for item in op.list_workflows() if item.name == workflow_name)
+    run_id = op.start_run(info.selector)
+    if name == "unicode_approval":
+        assert wait_for_review(op, run_id)[0]["state"] == "waiting"
+        decision = WaitControlRequest(
+            kind="decision",
+            address="decision_1",
+            payload={"kind": "approve"},
+            reason="🙂" * 3000,
+            idempotency_key="unicode-approval",
+        )
+        accepted = op.wait_control(run_id, decision)
+        assert accepted.receipt is not None
+        assert accepted.receipt.reason == decision.reason
+    if name == "pending":
+        assert wait_for_review(op, run_id)[0]["state"] == "waiting"
+        op.cancel_run(run_id)
+    terminal = wait_terminal(op, run_id)
+    expected = {
+        "timeout_outcome": RunStatus.SUCCESS,
+        "timeout_failure": RunStatus.FAILED,
+        "pending": RunStatus.CANCELLED,
+        "unicode_approval": RunStatus.SUCCESS,
+    }
+    assert terminal.status == expected[name]
+    first = op.wait_control(run_id, WaitControlRequest(kind="list"))
+    assert len(first.waits) == 1
+    card = first.waits[0]
+    if name == "unicode_approval":
+        assert card["state"] == "resolved"
+        assert card["audit"] == accepted.receipt.model_dump(mode="json")
+        assert card["audit"]["reason"] == "🙂" * 3000
+        assert op.wait_control(run_id, decision) == accepted
+    elif name == "pending":
+        assert card["state"] == "withdrawn"
+        assert card["audit"] is None
+    else:
+        assert card["state"] == "resolved"
+        assert card["audit"]["principal"] == "system"
+        assert card["audit"]["reason"] == "decision_timeout"
+        assert card["audit"]["address"] == "decision:decision_1"
+    first.waits.clear()
+    assert len(op.wait_control(run_id, WaitControlRequest(kind="list")).waits) == 1
+    with pytest.raises(WaitRefusalError) as closed:
+        op.wait_control(
+            run_id,
+            WaitControlRequest(
+                kind="decision",
+                address="decision_1",
+                payload={"kind": "approve"},
+                reason="late",
+                idempotency_key="late",
+            ),
+        )
+    assert closed.value.code == "run_closed"
+
+
+@pytest.mark.parametrize("shown", [False, True])
+def test_mapped_large_artifact_receipts_and_terminal_cards(wait_review_operator, shown):
+    from runtime.operator.wait_control import WaitControlRequest
+
+    op = wait_review_operator
+    name = "mapped_shown_artifacts" if shown else "mapped_large_artifacts"
+    info = next(item for item in op.list_workflows() if item.name == name)
+    run_id = op.start_run(info.selector)
+    cards = wait_for_review(op, run_id)
+    assert [card["node_id"] for card in cards] == ["decision_1[0]", "decision_1[1]"]
+    assert cards[0]["show"]["truncated"] is True
+    if shown:
+        deadline = time.monotonic() + 10
+        while any(card["state"] != "waiting" for card in cards):
+            assert time.monotonic() < deadline
+            time.sleep(0.03)
+            cards = op.wait_control(run_id, WaitControlRequest(kind="list")).waits
+        assert cards[1]["show"] == {"body": "small", "policy": "Publication policy v1"}
+    else:
+        assert cards[1]["show"] == "small"
+    accepted = []
+    for index in range(2):
+        response = op.wait_control(
+            run_id,
+            WaitControlRequest(
+                kind="decision",
+                address=f"decision_1[{index}]",
+                payload={"kind": "approve"},
+                reason="checked item",
+                idempotency_key=f"item-{index}",
+            ),
+        )
+        assert response.receipt is not None
+        accepted.append(response.receipt)
+        if index == 0:
+            middle = op.wait_control(run_id, WaitControlRequest(kind="list")).waits
+            assert [card["state"] for card in middle] == ["resolved", "waiting"]
+            assert op.get_run(run_id).nodes["decision_1"].status == NodeStatus.RUNNING
+    assert wait_terminal(op, run_id).status == RunStatus.SUCCESS
+    final = op.wait_control(run_id, WaitControlRequest(kind="list")).waits
+    assert [card["state"] for card in final] == ["resolved", "resolved"]
+    assert [card["audit"]["receipt_id"] for card in final] == [
+        receipt.receipt_id for receipt in accepted
+    ]
+    assert final[0]["show"] == accepted[0].reviewed
+    assert final[1]["show"] == accepted[1].reviewed
+
+
+def test_mapped_show_failure_reaches_normal_operator_error_path(wait_review_operator):
+    op = wait_review_operator
+    info = next(item for item in op.list_workflows() if item.name == "mapped_show_failure")
+    run_id = op.start_run(info.selector)
+    terminal = wait_terminal(op, run_id)
+    assert terminal.status == RunStatus.FAILED
+    assert terminal.nodes["decision_1"].status == NodeStatus.FAILED
+    assert "NonRetryableError" in terminal.nodes["decision_1"].error
+    assert "invalid review input" in terminal.nodes["decision_1"].error
+
+
+def test_terminal_wait_pages_cross_spawn_grpc_and_rest(wait_review_operator):
+    import http.client
+    import socket
+
+    from runtime.operator.client import GrpcStateProvider
+    from runtime.operator.server import serve
+    from runtime.operator.wait_control import WaitControlRequest
+    from runtime.operator.web import start_browser_server
+
+    op = wait_review_operator
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    server = serve(op, port=port, block=False)
+    address = f"127.0.0.1:{port}"
+    browser = start_browser_server(address, port=0)
+    client = GrpcStateProvider(address)
+    try:
+        info = next(item for item in client.list_workflows() if item.name == "many_waits")
+        run_id = client.start_run(info.selector)
+        assert wait_terminal(op, run_id).status == RunStatus.SUCCESS
+        first = client.wait_control(run_id, WaitControlRequest(kind="list"))
+        assert len(first.waits) == 64
+        assert first.next_offset == 64
+        second = client.wait_control(run_id, WaitControlRequest(kind="list", offset=64))
+        assert len(second.waits) == 6
+        assert second.next_offset is None
+        assert len({card["node_id"] for card in first.waits + second.waits}) == 70
+        assert all(card["state"] == "resolved" for card in first.waits + second.waits)
+        http = http.client.HTTPConnection(browser.host, browser.port, timeout=10)
+        try:
+            http.request("GET", f"/api/v1/runs/{run_id}/waits?offset=64&limit=2")
+            response = http.getresponse()
+            body = json.loads(response.read())
+            assert response.status == 200
+            assert len(body["waits_json"]) == 2
+            assert body["next_offset"] == 66
+        finally:
+            http.close()
+    finally:
+        client.close()
+        browser.close()
+        server.stop(grace=0).wait()
+
+
 def test_discovered_workflow_executes_nodes_and_returns_detached_state(operator):
     workflow = next(
         item for item in operator.list_workflows() if item.name == "simple_workflow"
@@ -195,7 +615,11 @@ def test_agent_trace_header_and_events_carry_common_fields_over_protobuf(
     run.nodes["agent_1"] = NodeState("agent_1", "agent", "step", status=NodeStatus.RUNNING)
     operator._runs[run.run_id] = run
     handle = SimpleNamespace(
-        cancel_event=threading.Event(), result_bundle=None, success_quiesced=False
+        cancel_event=threading.Event(),
+        result_bundle=None,
+        success_quiesced=False,
+        controls=None,
+        cancel_writer=None,
     )
 
     def apply(event):
@@ -362,7 +786,11 @@ def test_agent_evidence_deduplicates_per_invocation_and_materializes_references(
     run.nodes["agent_1"] = NodeState("agent_1", "agent", "step", status=NodeStatus.RUNNING)
     operator._runs[run.run_id] = run
     handle = SimpleNamespace(
-        cancel_event=threading.Event(), result_bundle=None, success_quiesced=False
+        cancel_event=threading.Event(),
+        result_bundle=None,
+        success_quiesced=False,
+        controls=None,
+        cancel_writer=None,
     )
 
     def apply(event):

@@ -138,6 +138,46 @@ class _ContinuationBinding:
 class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
     """V2 gRPC servicer that delegates to an Operator instance."""
 
+    def ControlWait(self, request, context):  # noqa: N802
+        from pydantic import JsonValue, TypeAdapter, ValidationError
+
+        from avalanche.local_waits import WaitRefusalError
+
+        from .wait_control import WaitControlRequest
+
+        try:
+            command = WaitControlRequest(
+                kind=request.kind,
+                address=request.address,
+                payload=TypeAdapter(dict[str, JsonValue]).validate_json(
+                    request.payload_json or "{}"
+                ),
+                idempotency_key=request.idempotency_key,
+                reason=request.reason,
+                offset=request.offset,
+                limit=request.limit if request.HasField("limit") else 64,
+            )
+            if command.kind == "cancel":
+                context.abort(grpc.StatusCode.INVALID_ARGUMENT, "use CancelRun")
+            result = self._op.wait_control(request.run_id, command)
+        except WaitRefusalError as exc:
+            code = {
+                403: grpc.StatusCode.PERMISSION_DENIED,
+                404: grpc.StatusCode.NOT_FOUND,
+                409: grpc.StatusCode.ALREADY_EXISTS,
+                413: grpc.StatusCode.RESOURCE_EXHAUSTED,
+                422: grpc.StatusCode.INVALID_ARGUMENT,
+                503: grpc.StatusCode.UNAVAILABLE,
+            }[exc.status]
+            context.abort(code, exc.code)
+        except (ValidationError, ValueError):
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "invalid_wait_submission")
+        return pb.ControlWaitResponseV2(
+            receipt_json=result.receipt.model_dump_json() if result.receipt is not None else "",
+            waits_json=[json.dumps(card, allow_nan=False) for card in result.waits],
+            next_offset=result.next_offset,
+        )
+
     def __init__(self, operator: Operator) -> None:
         self._op = operator
         from .server_tui import TuiResourceReader

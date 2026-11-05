@@ -27,6 +27,7 @@ from .execution_services import (
 )
 from .input_ref import INPUT as input  # noqa: N811
 from .model_frame import Json
+from .policies import NonRetryableError, Outcome, OutcomeUnknownError
 
 # Progress tracking
 from .progress import ProgressStore
@@ -53,6 +54,7 @@ from .storage import Namespace, NamespaceConfig, ScanResult, Table, TableGroup
 
 # Types
 from .types import AppendResult, SnapshotMetadata, SnapshotState
+from .waits import decision, sleep, wait_for_event
 from .webhook import Webhook
 
 __version__ = "0.18.0"
@@ -124,6 +126,12 @@ __all__ = [
     "file_reference_context",
     # Decorators
     "source",
+    "NonRetryableError",
+    "OutcomeUnknownError",
+    "Outcome",
+    "sleep",
+    "wait_for_event",
+    "decision",
     "step",
     "transform",
     "dest",

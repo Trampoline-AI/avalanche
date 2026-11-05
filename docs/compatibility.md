@@ -34,6 +34,16 @@ unchanged `LocalExecutor`; it is now always the default in-repository executor.
 Delta's separate remote runtime is unchanged. **No protocol bump:** Delta does
 not use the removed backend or its configuration.
 
+## Retries-and-waits: retries and graph waits
+
+Protocol **3.0** replaces the previous 2.0 worker contract: discovery carries
+per-invocation retry/uncertainty policies, worker exceptions carry terminal and
+unknown-outcome flags, and `RunContext.step_key` uses the deployed invocation
+identity. This requires redeployment, not a compatibility adapter. Delta's
+scheduler enforcement and deployed waits require the run-manifest scheduler
+follow-up; retries-and-waits lands after run-manifest. Local Avalanche supports
+the full local contract. No release is made by this preparation.
+
 ## Release rule
 
 A major change needs a `BREAKING-PROTOCOL` line in `CHANGELOG.md` explaining the

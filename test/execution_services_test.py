@@ -141,6 +141,115 @@ def test_local_service_input_lifecycle_receipts_and_fan_in(max_workers: int | No
         ]
 
 
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "only",
+        "terminal",
+        "between",
+        "diamond",
+        "hold_terminal",
+        "hold_between",
+        "upstream_hold_terminal",
+        "upstream_hold_between",
+    ],
+)
+def test_waits_preserve_service_receipt_frontiers(shape):
+    services = RecordingServices()
+    if "hold" in shape:
+        calls = []
+
+        @ava.source(retries=0)
+        def upstream() -> str:
+            return "loaded"
+
+        @ava.step(on_uncertain="hold")
+        def ambiguous(value: str = "standalone") -> str:
+            calls.append(value)
+            raise ava.OutcomeUnknownError("external outcome unknown")
+
+        @ava.step(retries=0)
+        def downstream(value: str) -> str:
+            return f"after:{value}"
+
+        @ava.workflow(input=ManagedInput)
+        def reconciled():
+            held = upstream() >> ambiguous() if shape.startswith("upstream") else ambiguous()
+            return held >> downstream() if shape.endswith("between") else held
+
+        handle = reconciled().run(execution_services=_spec(services), input=_raw_input())
+        try:
+            assert handle.wait_until_waiting(timeout=5)
+            accepted = handle.decide(
+                "ambiguous_1",
+                {"kind": "done", "output": "confirmed"},
+                reason="confirmed external result",
+                idempotency_key="reconcile",
+            )
+            assert accepted.address == "decision:ambiguous_1"
+            between = shape.endswith("between")
+            assert handle.result(timeout=5) == ("after:confirmed" if between else "confirmed")
+            receipts = handle.execution_receipts(timeout=5)
+            ancestors = ["upstream_1"] if shape.startswith("upstream") else []
+            expected = ["downstream_1"] if between else ancestors
+            assert [receipt.node_id for receipt in receipts] == expected
+            assert [receipt.value["node"] for receipt in receipts] == expected
+            opens = [event for event in services.events if event[1] == "open"]
+            assert [event[0] for event in opens] == (
+                ancestors + ["ambiguous_1"] + (["downstream_1"] if between else [])
+            )
+            if between:
+                assert [receipt["node"] for receipt in opens[-1][3]] == ancestors
+            assert calls == (["loaded"] if ancestors else ["standalone"])
+            assert [event[1] for event in services.events if event[0] == "ambiguous_1"] == [
+                "probe",
+                "negotiate",
+                "open",
+                "materialize",
+                "abort",
+                "teardown",
+            ]
+        finally:
+            handle.cancel()
+        return
+
+    @ava.source(retries=0)
+    def load() -> str:
+        return "loaded"
+
+    @ava.step(retries=0)
+    def after() -> str:
+        return "after"
+
+    @ava.workflow(input=ManagedInput)
+    def flow():
+        if shape == "only":
+            return ava.sleep(0)
+        loaded = load()
+        if shape == "terminal":
+            return loaded >> ava.sleep(0)
+        if shape == "diamond":
+            return loaded >> (ava.sleep(0) & ava.sleep(0)) >> after()
+        return loaded >> ava.sleep(0) >> after()
+
+    handle = flow().run(execution_services=_spec(services), input=_raw_input())
+    assert handle.result(timeout=5) == ("after" if shape in {"between", "diamond"} else None)
+    receipts = handle.execution_receipts(timeout=5)
+    expected_terminal = (
+        [] if shape == "only" else ["load_1" if shape == "terminal" else "after_1"]
+    )
+    assert [receipt.node_id for receipt in receipts] == expected_terminal
+    assert [receipt.value["node"] for receipt in receipts] == expected_terminal
+    opens = [event for event in services.events if event[1] == "open"]
+    expected_nodes = [] if shape == "only" else ["load_1"]
+    if shape in {"between", "diamond"}:
+        expected_nodes.append("after_1")
+    assert [event[0] for event in opens] == expected_nodes
+    if shape in {"between", "diamond"}:
+        assert [receipt["node"] for receipt in opens[-1][3]] == ["load_1"]
+    assert not any(event[0].startswith("sleep") for event in services.events)
+
+
 @pytest.mark.parametrize("failure_stage", ["materialize", "user", "finalize"])
 def test_opened_failure_aborts_and_tears_down_once(failure_stage):
     events: list[tuple[Any, ...]] = []
@@ -160,7 +269,7 @@ def test_opened_failure_aborts_and_tears_down_once(failure_stage):
 
     called = []
 
-    @ava.source
+    @ava.source(retries=0)
     def task(payload: ManagedInput):
         called.append(payload.scalar)
         if failure_stage == "user":
@@ -195,7 +304,7 @@ def test_open_failure_has_no_fallback_or_opened_session_cleanup():
 
     called = []
 
-    @ava.source
+    @ava.source(retries=0)
     def task(value: str):
         called.append(value)
 
@@ -217,7 +326,7 @@ def test_open_failure_has_no_fallback_or_opened_session_cleanup():
 def test_malformed_multi_return_aborts_before_finalize():
     events: list[tuple[Any, ...]] = []
 
-    @ava.source(num_returns=2)
+    @ava.source(num_returns=2, retries=0)
     def task(payload: ManagedInput):
         return (payload.scalar,)
 

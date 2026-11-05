@@ -11,6 +11,8 @@ import { mapEvaluationRecord, type EvaluationRecord } from "./evaluations";
 import { parseTraceHeaderNative } from "./agentTrace/common";
 import { mapStepIo } from "./stepIo";
 import { isUnknownRecord } from "./guards";
+import { parseJsonValue, parseNullableSchema } from "./stepInterface";
+import type { WaitCard } from "./RunWaitPanel";
 
 import {
   OperatorServiceV2Client,
@@ -211,6 +213,14 @@ export interface OperatorApi {
     inputFiles?: InputFileAttachment[],
   ): Promise<string>;
   cancelRun(runId: string): Promise<void>;
+  listRunWaits?(runId: string): Promise<WaitCard[]>;
+  submitDecision?(
+    runId: string,
+    nodeId: string,
+    outcome: Record<string, unknown>,
+    reason: string,
+    idempotencyKey: string,
+  ): Promise<void>;
   /** Enable or disable a cron schedule; the operator keeps this only in memory. */
   /** `input`, only when enabling, replaces the input cron runs start with. */
   setScheduleEnabled(
@@ -672,6 +682,70 @@ export class GrpcWebOperatorApi implements OperatorApi {
       objectUri: staged.objectUri,
       objectKey: staged.objectKey,
     };
+  }
+
+  async listRunWaits(runId: string): Promise<WaitCard[]> {
+    const wires: string[] = [];
+    let offset = 0;
+    for (;;) {
+      const response = await this.client.controlWait({
+        runId,
+        kind: "list",
+        address: "",
+        payloadJson: "{}",
+        idempotencyKey: "",
+        reason: "",
+        offset,
+        limit: 64,
+      }).response;
+      wires.push(...response.waitsJson);
+      if (response.nextOffset === undefined) break;
+      if (response.nextOffset <= offset) throw new Error("Invalid wait page offset");
+      offset = response.nextOffset;
+    }
+    return wires.map((wire) => {
+      const card: unknown = JSON.parse(wire);
+      if (
+        !isUnknownRecord(card) ||
+        typeof card.node_id !== "string" ||
+        (card.kind !== "sleep" && card.kind !== "event" && card.kind !== "decision") ||
+        (card.state !== "pending" &&
+          card.state !== "waiting" &&
+          card.state !== "resolved" &&
+          card.state !== "withdrawn") ||
+        (card.prompt !== null && typeof card.prompt !== "string")
+      ) {
+        throw new Error("Invalid pinned wait card");
+      }
+      const schema = parseNullableSchema(card.schema, "wait schema");
+      if (schema === null) throw new Error("Missing wait schema");
+      return {
+        nodeId: card.node_id,
+        kind: card.kind,
+        state: card.state,
+        prompt: card.prompt,
+        schema,
+        show: parseJsonValue(card.show, "reviewed artifact"),
+      };
+    });
+  }
+
+  async submitDecision(
+    runId: string,
+    nodeId: string,
+    outcome: Record<string, unknown>,
+    reason: string,
+    idempotencyKey: string,
+  ): Promise<void> {
+    await this.client.controlWait({
+      runId,
+      kind: "decision",
+      offset: 0,
+      address: nodeId,
+      payloadJson: JSON.stringify(outcome),
+      idempotencyKey,
+      reason,
+    }).response;
   }
 
   async cancelRun(runId: string): Promise<void> {

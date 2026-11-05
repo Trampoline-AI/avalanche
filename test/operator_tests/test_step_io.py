@@ -390,7 +390,11 @@ def protocol_operator(status: RunStatus = RunStatus.RUNNING):
     run.nodes["step_1"] = NodeState("step_1", "step", "step", status=NodeStatus.RUNNING)
     operator._runs[run.run_id] = run
     handle = SimpleNamespace(
-        cancel_event=threading.Event(), result_bundle=None, success_quiesced=False
+        cancel_event=threading.Event(),
+        result_bundle=None,
+        success_quiesced=False,
+        controls=None,
+        cancel_writer=None,
     )
 
     def apply(event_type: str, **payload: object) -> None:

@@ -229,6 +229,8 @@ def _provisional_success_run(operator: Operator, run_id: str):
         result_bundle=pending,
         drain_thread=None,
         success_quiesced=False,
+        controls=None,
+        cancel_writer=None,
         publication_event=threading.Event(),
     )
     handle.publication_event.set()

@@ -68,7 +68,7 @@ def _write_workflow(root: Path) -> Path:
                         outputs=outputs, trace=AgentTrace(header=header, turns=())
                     )
 
-            @ava.agent_step(Echo, runtime=EchoRuntime())
+            @ava.agent_step(Echo, runtime=EchoRuntime(), retries=0)
             async def ask_twice(*, agent: ava.Agent) -> str:
                 for text in ("first", "second"):
                     answer = await agent(text=text)

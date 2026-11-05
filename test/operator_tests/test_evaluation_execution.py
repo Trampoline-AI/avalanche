@@ -240,7 +240,7 @@ evaluations = ava.Evaluations(
 def load():
     return {{"items": [Path(__file__).with_suffix(".txt").read_text()]}}
 
-@ava.agent_step(EchoSignature, evaluations=evaluations)
+@ava.agent_step(EchoSignature, evaluations=evaluations, retries=0)
 async def research(ticket: dict, repeat: int = 2, *, agent: ava.Agent,
                    context: ava.RunContext, logger=ava.Logger()) -> Report:
     import avalanche.runtimes.predict_rlm.runtime as predict_rlm_runtime

@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, JsonValue, PydanticUserError, TypeAdapter, ValidationError
 
 from ..dag import Node, NodeType, _safe_issubclass
+from ..policies import StepPolicy, UncertaintyPolicy
 from ..step_interface import (
     decoration_namespace,
     resolve_step_signature,
@@ -360,6 +361,8 @@ def classifier_step(
     model: str | None = None,
     timeout: float | None = None,
     slug: str | None = None,
+    retries: int = 7,
+    on_uncertain: UncertaintyPolicy = "retry",
 ) -> Callable[[Callable[..., object]], Node]:
     """Declare a bodyful TypeSafe step with optional default questions."""
     try:
@@ -431,6 +434,13 @@ def classifier_step(
         update_wrapper(wrapper, user_fn)
         wrapper.__signature__ = spec.public_signature  # type: ignore[attr-defined]
         wrapper.__classifier_step__ = spec  # type: ignore[attr-defined]
-        return Node(wrapper, NodeType.STEP, num_returns=1, slug=slug, step_interface=interface)
+        return Node(
+            wrapper,
+            NodeType.STEP,
+            num_returns=1,
+            slug=slug,
+            step_interface=interface,
+            policy=StepPolicy(retries=retries, on_uncertain=on_uncertain),
+        )
 
     return decorator

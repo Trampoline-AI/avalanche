@@ -22,6 +22,8 @@ service OperatorServiceV2 {
       returns (WorkflowNodeSourceV2);
   rpc StartRun(StartRunRequestV2) returns (StartRunResponseV2);
   rpc CancelRun(CancelRunRequestV2) returns (CancelRunResponseV2);
+  // Local/test controls. Caller identity is derived by the serving host, never the body.
+  rpc ControlWait(ControlWaitRequestV2) returns (ControlWaitResponseV2);
   // Enable or disable one workflow's cron schedule, optionally setting the input
   // its runs start with. The state is kept in operator memory only and resets to
   // the startup default (disabled, default input) on restart.
@@ -46,6 +48,23 @@ service OperatorServiceV2 {
 
 
 // Bounded JSON DTOs for optional TuiExtensions v1 resources. No file bodies.
+message ControlWaitRequestV2 {
+  string run_id = 1;
+  string kind = 2; // event | decision | list
+  string address = 3; // exact event key or decision invocation identity
+  string payload_json = 4;
+  string idempotency_key = 5;
+  string reason = 6;
+  uint32 offset = 7;
+  optional uint32 limit = 8;
+}
+
+message ControlWaitResponseV2 {
+  string receipt_json = 1;
+  repeated string waits_json = 2;
+  optional uint32 next_offset = 3;
+}
+
 message ReadTuiResourceRequestV2 {
   string resource = 1;
   string workflow_selector = 2;
@@ -161,6 +180,8 @@ message FlowInfoV2 {
   // JSON input object each cron run starts with. Absent means the workflow's
   // declared input defaults.
   optional string schedule_input_json = 21;
+  map<string, string> node_policies_json = 30;
+  map<string, string> node_waits_json = 31;
 }
 
 message DiscoveryDiagnosticV2 {

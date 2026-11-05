@@ -21,16 +21,21 @@ For a direct agent invocation inside the workflow, use
 The three ordinary node decorators have these signatures:
 
 ```python
-ava.source(fn=None, *, num_returns: int = 1, slug: str | None = None)
-ava.step(fn=None, *, num_returns: int = 1, slug: str | None = None)
-ava.dest(fn=None, *, num_returns: int = 1, slug: str | None = None)
+ava.source(fn=None, *, num_returns=1, slug=None, retries=7, on_uncertain="retry")
+ava.step(fn=None, *, num_returns=1, slug=None, retries=7, on_uncertain="retry")
+ava.dest(fn=None, *, num_returns=1, slug=None, retries=7, on_uncertain="retry")
 ```
 
 - `fn`: synchronous or asynchronous function to execute during a run. With no `fn`, returns a decorator; otherwise returns a callable node declaration. Decoration does not execute the function.
 - `num_returns=1`: executor output count, not inferred from annotations. Counts greater than one declare multiple outputs, selected with indexing. Decoration does not validate the count or returned shape; invalid shapes can fail during execution.
 - `slug=None`: invocation base name, defaulting to the function name. Repeated calls use the base slug, then `<slug>_2`, `<slug>_3`, etc. Conflicting explicit slugs or generated invocation slugs raise `ValueError` during construction.
 
-Source/step/destination labels do not prohibit dependencies, return values, or side effects. These decorators accept no retry, resource, or executor options. Ordinary Python argument and return annotations do not add runtime validation; [input/context annotations](inputs-context.md) have a separate injection contract.
+Source/step/destination labels do not prohibit dependencies, return values, or side effects.
+They share bounded `retries` and `on_uncertain` with agent steps; see
+[Retries and waits](../retries-and-waits.md) for terminal/uncertain exceptions,
+operation keys, graph waits and local controls. They accept no resource or executor
+options. Ordinary Python argument and return annotations do not add runtime
+validation; [input/context annotations](inputs-context.md) have a separate injection contract.
 
 ## Workflow declaration
 

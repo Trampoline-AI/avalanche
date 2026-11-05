@@ -16,6 +16,7 @@ import { Inspector } from "./Inspector";
 import type { FlowInfoMsg, InputFileAttachment, RunSnapshotMsg } from "./model";
 import { RunLogPane } from "./RunLogPane";
 import { RunControls } from "./RunControls";
+import { RunWaitPanel } from "./RunWaitPanel";
 import { useInputDraft } from "./useInputDraft";
 import { compareNewestRun, RunListPanel } from "./RunListPanel";
 import type { OperatorProjection } from "./state";
@@ -511,6 +512,14 @@ export function WorkflowWorkspaceSurface({
                       workflow&apos;s current state.
                     </div>
                   ) : null}
+                  {run &&
+                    displayedRunId &&
+                    runActionsEnabled &&
+                    run.summary?.status === "running" && (
+                      <div className="absolute right-3 bottom-3 z-10 w-80 max-w-[calc(100%-24px)] rounded border border-line bg-panel shadow-lg">
+                        <RunWaitPanel key={displayedRunId} api={api} runId={displayedRunId} />
+                      </div>
+                    )}
                 </div>
                 {run && (
                   <RunLogPane

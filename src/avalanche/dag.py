@@ -50,7 +50,7 @@ from __future__ import annotations
 
 import inspect
 from collections import defaultdict
-from concurrent.futures import FIRST_COMPLETED, CancelledError, Future, ThreadPoolExecutor, wait
+from concurrent.futures import CancelledError
 from contextvars import ContextVar, copy_context
 from copy import copy
 from dataclasses import dataclass, field
@@ -59,10 +59,12 @@ from functools import update_wrapper, wraps
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, DefaultDict, TypeVar, get_type_hints
 
-from pydantic import JsonValue
+from pydantic import BaseModel, JsonValue
 from ulid import ULID
 
 from .input_ref import InputRef
+from .local_waits import LocalPrincipal, LocalWaits
+from .policies import StepPolicy, UncertaintyPolicy
 from .run_handle import RunHandle
 from .step_interface import (
     StepInterface,
@@ -119,6 +121,7 @@ class NodeType(Enum):
     STEP = "step"
     TRANSFORM = "step"
     DEST = "dest"
+    WAIT = "wait"
 
 
 class Node:
@@ -144,6 +147,7 @@ class Node:
         *,
         slug: str | None = None,
         step_interface: StepInterface | None = None,
+        policy: StepPolicy | None = None,
     ):
         """
         Initialize a node.
@@ -160,6 +164,7 @@ class Node:
         self._explicit_slug = slug is not None
         self.node_type = node_type
         self.num_returns = num_returns
+        self.policy = policy if policy is not None else StepPolicy()
         self.step_interface = (
             step_interface if step_interface is not None else step_interface_for_function(fn)
         )
@@ -581,6 +586,8 @@ def source(
     *,
     num_returns: int = 1,
     slug: str | None = None,
+    retries: int = 7,
+    on_uncertain: UncertaintyPolicy = "retry",
 ) -> Node | Callable[[F], Node]:
     """
     Decorator for source nodes.
@@ -608,6 +615,7 @@ def source(
             f,
             NodeType.SOURCE,
             num_returns=num_returns,
+            policy=StepPolicy(retries=retries, on_uncertain=on_uncertain),
             slug=slug,
             step_interface=step_interface_for_function(f, namespace),
         )
@@ -622,6 +630,8 @@ def step(
     *,
     num_returns: int = 1,
     slug: str | None = None,
+    retries: int = 7,
+    on_uncertain: UncertaintyPolicy = "retry",
 ) -> Node | Callable[[F], Node]:
     """
     Decorator for step nodes.
@@ -645,6 +655,7 @@ def step(
             f,
             NodeType.STEP,
             num_returns=num_returns,
+            policy=StepPolicy(retries=retries, on_uncertain=on_uncertain),
             slug=slug,
             step_interface=step_interface_for_function(f, namespace),
         )
@@ -662,6 +673,8 @@ def dest(
     *,
     num_returns: int = 1,
     slug: str | None = None,
+    retries: int = 7,
+    on_uncertain: UncertaintyPolicy = "retry",
 ) -> Node | Callable[[F], Node]:
     """
     Decorator for destination nodes.
@@ -685,6 +698,7 @@ def dest(
             f,
             NodeType.DEST,
             num_returns=num_returns,
+            policy=StepPolicy(retries=retries, on_uncertain=on_uncertain),
             slug=slug,
             step_interface=step_interface_for_function(f, namespace),
         )
@@ -1858,8 +1872,8 @@ def _collect_implicit_parent_results(
     for incoming in incoming_refs:
         if incoming.future_id in explicit_ids:
             continue
-        presult = result_refs.get(incoming.future_id)
-        if presult is not None:
+        if incoming.future_id in result_refs:
+            presult = result_refs[incoming.future_id]
             if incoming.tuple_index is not None:
                 auto_values.append(
                     _indexed_parent_result(presult, incoming.tuple_index, executor)
@@ -2003,6 +2017,16 @@ class Workflow:
         """
         self.graph = graph
         self.nodes = nodes
+        from .waits import WaitNode
+
+        self.node_waits = {
+            node_id: ref.node.spec
+            for node_id, ref in nodes.items()
+            if isinstance(ref.node, WaitNode)
+        }
+        keys = [spec.key for spec in self.node_waits.values() if spec.kind == "event"]
+        if len(keys) != len(set(keys)):
+            raise ValueError("Duplicate event consumer key in workflow")
         self.node_slugs = node_slugs or {
             node_id: node_future.node_slug for node_id, node_future in nodes.items()
         }
@@ -2098,6 +2122,11 @@ class Workflow:
         run_id: str | None = None,
         rerun: Any = None,
         execution_services: "ExecutionServicesSpec | None" = None,
+        *,
+        fast_timers: bool = False,
+        events: dict[str, BaseModel | dict[str, JsonValue]] | None = None,
+        decisions: dict[str, BaseModel | dict[str, JsonValue]] | None = None,
+        principal: LocalPrincipal = LocalPrincipal(),
     ) -> RunHandle[Any]:
         """
         Start the workflow and return its process-local lifecycle handle.
@@ -2119,6 +2148,24 @@ class Workflow:
         from runtime.executor import get_default_executor
 
         resolved_executor = executor if executor is not None else get_default_executor()
+        from .waits import WaitNode
+
+        handle.waits = LocalWaits(
+            canonical_run_id,
+            {
+                nid: (ref.node.spec, ref.node.model)
+                for nid, ref in self.nodes.items()
+                if isinstance(ref.node, WaitNode)
+            },
+            fast_timers=fast_timers,
+        )
+        for key, value in (events or {}).items():
+            handle.send_event(key, value, idempotency_key=f"preload:{key}", principal=principal)
+        slug_to_id = {slug: nid for nid, slug in self.node_slugs.items()}
+        handle.node_aliases = slug_to_id
+        for node, value in (decisions or {}).items():
+            node_id = handle.canonical_node(node)
+            handle.waits.preload_decision(node_id, value, principal)
 
         cancel_requested = handle._compose_cancel_requested(
             hooks.cancel_requested if hooks is not None else None
@@ -2139,6 +2186,7 @@ class Workflow:
                 rerun=rerun,
                 execution_services=execution_services,
                 receipt_sink=handle._set_execution_receipts,
+                local_waits=handle.waits,
             )
         )
         return handle
@@ -2154,6 +2202,7 @@ class Workflow:
         rerun: Any = None,
         execution_services: "ExecutionServicesSpec | None" = None,
         receipt_sink: Callable[[tuple[Any, ...]], None] | None = None,
+        local_waits: LocalWaits | None = None,
     ) -> Any:
         """Execute the blocking workflow driver in the run-handle thread.
 
@@ -2169,6 +2218,12 @@ class Workflow:
             from runtime.executor import get_default_executor
 
             executor = get_default_executor()
+
+        # Runtime map expansion belongs to this execution, never the reusable
+        # authoring graph (which may be running concurrently or replayed).
+        self = copy(self)
+        self.nodes = dict(self.nodes)
+        self.node_slugs = dict(self.node_slugs)
 
         # Topological sort
         execution_order = self._topological_sort()
@@ -2208,6 +2263,18 @@ class Workflow:
         # stored in result_refs or exposed to workflow arguments/context.
         receipt_refs: dict[str, Any] = {}
         receipt_refs_lock = Lock()
+        # Non-executing waits forward the nearest executable ancestors. Keep
+        # identities (not receipt values) so fan-in deduplicates shared ancestry.
+        receipt_frontiers: dict[str, tuple[str, ...]] = {}
+
+        def parent_receipt_frontier(node_id: str) -> tuple[str, ...]:
+            return tuple(
+                dict.fromkeys(
+                    ancestor
+                    for parent in dependencies_map.get(node_id, [])
+                    for ancestor in receipt_frontiers[parent]
+                )
+            )
 
         # Build reverse dependency map (child -> parents) for execution.
         # Keep the original map so rerun stream providers can still identify
@@ -2472,8 +2539,7 @@ class Workflow:
                     with receipt_refs_lock:
                         parent_receipts = tuple(
                             receipt_refs[parent_id]
-                            for parent_id in dependencies_map.get(node_id, [])
-                            if parent_id in receipt_refs
+                            for parent_id in parent_receipt_frontier(node_id)
                         )
                     result, receipt_ref, _status = executor.submit_with_services(
                         actual_fn,
@@ -2496,6 +2562,7 @@ class Workflow:
                     )
                     with receipt_refs_lock:
                         receipt_refs[node_id] = receipt_ref
+                        receipt_frontiers[node_id] = (node_id,)
                 else:
                     result = executor.submit(
                         actual_fn,
@@ -2526,7 +2593,14 @@ class Workflow:
                     child_id in scheduled_node_ids for child_id in self.graph.get(node_id, [])
                 )
             ]
-            refs = [receipt_refs[node_id] for node_id in terminal_node_ids]
+            terminal_receipt_ids = tuple(
+                dict.fromkeys(
+                    ancestor
+                    for node_id in terminal_node_ids
+                    for ancestor in receipt_frontiers[node_id]
+                )
+            )
+            refs = [receipt_refs[node_id] for node_id in terminal_receipt_ids]
             values = executor.get(refs) if refs else []
             receipt_sink(
                 tuple(
@@ -2535,7 +2609,7 @@ class Workflow:
                         node_slug=self.node_slugs[node_id],
                         value=value,
                     )
-                    for node_id, value in zip(terminal_node_ids, values)
+                    for node_id, value in zip(terminal_receipt_ids, values)
                 )
             )
 
@@ -2563,6 +2637,13 @@ class Workflow:
                     if hooks.on_node_success:
                         hooks.on_node_success(node_id)
                 result_refs[node_id] = result
+                if execution_services is not None:
+                    with receipt_refs_lock:
+                        if node_id not in receipt_frontiers:
+                            # Waits and human reconcile-done complete without a
+                            # finalized service receipt. Preserve real ancestry;
+                            # never re-open the uncertain invocation to invent one.
+                            receipt_frontiers[node_id] = parent_receipt_frontier(node_id)
             except Exception as exc:
                 if hooks and hooks.on_node_failure:
                     hooks.on_node_failure(node_id, exc)
@@ -2572,72 +2653,23 @@ class Workflow:
 
         is_local_executor = isinstance(executor, LocalExecutor)
 
-        if is_local_executor and executor.max_workers != 1:
-            completed_nodes: set[str] = set()
-            remaining_nodes = list(execution_order)
-            pending_tasks: dict[Future[tuple[NodeFuture, Any]], str] = {}
-            primary_failure: Exception | None = None
-            cancelled = False
+        if is_local_executor:
+            if local_waits is None:
+                local_waits = LocalWaits(run_id, {})
+            from .local_scheduler import run_local_schedule
 
-            def dependencies_ready(node_id: str) -> bool:
-                return all(
-                    parent_id in completed_nodes
-                    for parent_id in dependencies_map.get(node_id, [])
-                )
-
-            with ThreadPoolExecutor(
-                max_workers=executor.max_workers,
-                thread_name_prefix=f"avalanche-local-{run_id}",
-            ) as pool:
-                while remaining_nodes or pending_tasks:
-                    if primary_failure is None and not cancelled:
-                        for node_id in list(remaining_nodes):
-                            if cancel_requested and cancel_requested():
-                                cancelled = True
-                                break
-                            if not dependencies_ready(node_id):
-                                continue
-
-                            if hooks and hooks.on_node_start:
-                                hooks.on_node_start(node_id)
-                            task = pool.submit(
-                                copy_context().run, submit_node, node_id, emit_hooks=False
-                            )
-                            pending_tasks[task] = node_id
-                            remaining_nodes.remove(node_id)
-
-                    if not pending_tasks:
-                        if primary_failure is not None or cancelled:
-                            break
-                        if remaining_nodes:
-                            raise RuntimeError("Local workflow scheduler has no runnable nodes")
-                        break
-
-                    wait(tuple(pending_tasks), return_when=FIRST_COMPLETED)
-                    completed_tasks = [task for task in pending_tasks if task.done()]
-                    for task in completed_tasks:
-                        node_id = pending_tasks.pop(task)
-                        try:
-                            node_ref, result = task.result()
-                        except Exception as exc:
-                            if hooks and hooks.on_node_failure:
-                                hooks.on_node_failure(node_id, exc)
-                            if primary_failure is None:
-                                primary_failure = exc
-                            continue
-
-                        try:
-                            complete_node(node_id, node_ref, result)
-                        except Exception as exc:
-                            if primary_failure is None:
-                                primary_failure = exc
-                        else:
-                            completed_nodes.add(node_id)
-
-            if primary_failure is not None:
-                raise primary_failure
-            if cancelled:
-                raise CancelledError()
+            run_local_schedule(
+                self,
+                execution_order,
+                dependencies_map,
+                result_refs,
+                executor.max_workers,
+                local_waits,
+                submit_node,
+                complete_node,
+                hooks,
+                cancel_requested,
+            )
         else:
             for node_id in execution_order:
                 # Check cancellation before starting each node

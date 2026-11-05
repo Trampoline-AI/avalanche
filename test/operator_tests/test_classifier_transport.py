@@ -100,6 +100,8 @@ def _event_handle(operator: Operator | None = None) -> SimpleNamespace:
         cancel_event=threading.Event(),
         result_bundle=operator._result_store.prepare() if operator is not None else None,
         success_quiesced=False,
+        controls=None,
+        cancel_writer=None,
     )
 
 

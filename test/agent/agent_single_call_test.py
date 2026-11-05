@@ -110,7 +110,7 @@ async def _after_failure(agent: ava.Agent) -> str:
     ids=["sequential", "loop", "concurrent", "after-failed-call"],
 )
 def test_second_agent_call_fails_the_step_before_any_model_work(body, started):
-    @ava.agent_step(Echo, runtime=_EchoRuntime())
+    @ava.agent_step(Echo, runtime=_EchoRuntime(), retries=0)
     async def answer(*, agent: ava.Agent) -> str:
         return await body(agent)
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from contextvars import ContextVar
 from typing import Any, Literal
 
@@ -66,6 +67,16 @@ class RunContext(BaseContext):
     node_slug: str | None = None
     lineage_vector: dict[str, str] = Field(default_factory=dict, exclude=True)
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def step_key(self) -> str:
+        """Stable logical operation key; never contains an attempt/generation ID."""
+        if self.node_id is None:
+            raise ValueError("step_key is only available inside a node invocation")
+        mapped = re.fullmatch(r"(.+)\[(0|[1-9][0-9]*)\]", self.node_id)
+        if mapped is not None:
+            return f"{self.run_id}:{mapped.group(1)}:{mapped.group(2)}"
+        return f"{self.run_id}:{self.node_id}"
 
     def for_node(self, *, node_id: str, node_name: str, node_slug: str) -> "RunContext":
         return self.model_copy(

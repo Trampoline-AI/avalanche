@@ -84,7 +84,11 @@ def _run_created_envelope(sequence, run_id, *, instance, status="pending"):
 
 def _event_handle():
     return SimpleNamespace(
-        cancel_event=threading.Event(), result_bundle=None, success_quiesced=False
+        cancel_event=threading.Event(),
+        result_bundle=None,
+        success_quiesced=False,
+        controls=None,
+        cancel_writer=None,
     )
 
 

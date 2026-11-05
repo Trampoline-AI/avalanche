@@ -12,6 +12,7 @@ import time
 import traceback
 from contextvars import ContextVar, Token
 from functools import wraps
+from multiprocessing.connection import Connection
 from pathlib import Path
 from typing import Any, Callable, Protocol
 from uuid import uuid4
@@ -28,6 +29,7 @@ from avalanche.classifier import capture_classifier_evidence
 from avalanche.classifier.models import ClassifierInvocation
 from avalanche.dag import Workflow
 from avalanche.evaluation_capture import capture_evaluations
+from avalanche.run_handle import RunHandle
 from avalanche.runtime import BaseInput
 
 from ..executor import LocalExecutor
@@ -48,6 +50,7 @@ from .result_store import (
 )
 from .results import encode_workflow_result
 from .step_io import preview_step_inputs, preview_value, step_signatures
+from .wait_control import FinalWaitSnapshot, serve_wait_controls
 from .workflow_metadata import (
     MAX_PREPARED_INPUT_LENGTH,
     PreparedRunInput,
@@ -73,6 +76,8 @@ def run_worker(
     start_event: Any,
     transferred_result_bundle_descriptor: Any,
     result_bundle_identity: tuple[int, int],
+    control_connection: Connection | None = None,
+    cancel_reader: Connection | None = None,
 ) -> None:
     """Detach exactly one inode-bound bundle capability and close it on exit."""
     bundle_descriptor: int | None = None
@@ -94,6 +99,8 @@ def run_worker(
             start_event,
             bundle_descriptor,
             result_bundle_identity,
+            control_connection,
+            cancel_reader,
         )
     finally:
         if bundle_descriptor is not None:
@@ -113,6 +120,8 @@ def _run_worker(
     start_event: Any,
     result_bundle_descriptor: int,
     result_bundle_identity: tuple[int, int],
+    control_connection: Connection | None = None,
+    cancel_reader: Connection | None = None,
 ) -> None:
     """Import/build exactly once, prepare, wait for the parent, and execute."""
     event_queue = _SealableEventQueue(event_queue)
@@ -131,6 +140,7 @@ def _run_worker(
 
     executor: LocalExecutor | None = None
     terminal_event: dict[str, Any] | None = None
+    run_handle: RunHandle | None = None
     try:
         if not assignment_event.wait(timeout=30.0):
             raise TimeoutError("Coordinator process ownership was not confirmed")
@@ -183,24 +193,48 @@ def _run_worker(
     try:
         executor = LocalExecutor()
 
+        # The operator graph displays a decision map as one declared node.
+        # Keep worker/journal identities per item, but scope operator previews
+        # and lifecycle observations to that group. Never relax the operator
+        # protocol's rejection of genuinely unpublished node identities.
+        item_groups = {
+            f"{node_id}[{index}]": node_id
+            for node_id, spec in workflow.node_waits.items()
+            if spec.map_max_items is not None
+            for index in range(spec.map_max_items)
+        }
+        show_groups = {
+            f"{node_id}.show[{index}]": node_id
+            for node_id, spec in workflow.node_waits.items()
+            if spec.map_max_items is not None
+            for index in range(spec.map_max_items)
+        }
+
         def wrap_fn(node_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
-            return _with_local_node_observers(node_id, fn, stdout, stderr, event_queue)
+            owner = show_groups.get(node_id, node_id)
+            return _with_local_node_observers(owner, fn, stdout, stderr, event_queue)
 
         _put_run_event(event_queue, {"type": "running", "timestamp": time.monotonic()})
         hooks = RunHooks(
-            on_node_start=lambda node_id: _put_run_event(
+            on_node_start=lambda node_id: None
+            if node_id in show_groups or node_id in item_groups
+            else _put_run_event(
                 event_queue,
                 {"type": "node_started", "node_id": node_id, "timestamp": time.monotonic()},
             ),
-            on_node_success=lambda node_id: _put_run_event(
+            on_node_success=lambda node_id: None
+            if node_id in show_groups or node_id in item_groups
+            else _put_run_event(
                 event_queue,
                 {"type": "node_succeeded", "node_id": node_id, "timestamp": time.monotonic()},
             ),
-            on_node_failure=lambda node_id, exc: _put_run_event(
+            on_node_failure=lambda node_id, exc: None
+            if node_id in item_groups
+            else _put_run_event(
                 event_queue,
                 {
                     "type": "node_failed",
-                    "node_id": node_id,
+                    "node_id": show_groups.get(node_id, node_id),
                     "timestamp": time.monotonic(),
                     "error": _bounded_event_text(
                         f"{type(exc).__name__}: {exc}",
@@ -211,13 +245,16 @@ def _run_worker(
             cancel_requested=cancel_event.is_set,
             wrap_fn=wrap_fn,
         )
-        result = workflow.run(
+        run_handle = workflow.run(
             executor=executor,
             hooks=hooks,
             input=input_value if validated_input is None else validated_input,
             context=context_value,
             run_id=run_id,
-        ).result()
+        )
+        if control_connection is not None:
+            serve_wait_controls(run_handle, control_connection, cancel_reader)
+        result = run_handle.result()
         status = "cancelled" if cancel_event.is_set() else "success"
         terminal_event = {"type": "terminal", "status": status}
         if status == "success":
@@ -266,6 +303,37 @@ def _run_worker(
         stdout.flush()
         stderr.flush()
         if terminal_event is not None:
+            if run_handle is not None:
+                try:
+                    run_handle.waits.close()
+                    _put_run_event(
+                        event_queue,
+                        {
+                            "type": "wait_snapshot",
+                            "snapshot": FinalWaitSnapshot.capture(run_handle).model_dump_json(),
+                        },
+                    )
+                except Exception as exc:
+                    # Export is a required protocol boundary, not best-effort
+                    # display data. Report its failure and the original outcome
+                    # explicitly instead of exiting without a terminal event.
+                    error = _bounded_event_text(
+                        f"Wait snapshot export failed after {terminal_event['status']}: "
+                        f"{type(exc).__name__}: {exc}; "
+                        f"original error: {terminal_event.get('error', '')}",
+                        65_536,
+                    )
+                    _put_run_event(
+                        event_queue,
+                        {
+                            "type": "log",
+                            "timestamp": time.time(),
+                            "level": logging.ERROR,
+                            "node_id": "operator",
+                            "message": error,
+                        },
+                    )
+                    terminal_event = {"type": "terminal", "status": "failed", "error": error}
             _put_terminal_run_event(event_queue, terminal_event)
 
 

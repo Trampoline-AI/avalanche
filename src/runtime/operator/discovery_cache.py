@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from avalanche import __version__ as avalanche_version
 from avalanche.agent.declaration import AgentDeclaration
+from avalanche.policies import StepPolicy, WaitSpec
 
 from .discovery import ConfiguredRoot, FileDiscoveryResult
 from .models import WorkflowDescriptor, WorkflowDiscoveryDiagnostic, WorkflowLocator
@@ -22,7 +23,7 @@ from .source import iter_source_paths
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 12
+_CACHE_SCHEMA_VERSION = 15
 
 
 class _CacheModel(BaseModel):
@@ -71,6 +72,8 @@ class _CachedDescriptor(_CacheModel):
     node_ids: tuple[str, ...]
     graph: tuple[tuple[str, tuple[str, ...]], ...]
     node_types: tuple[tuple[str, str], ...]
+    node_policies: tuple[tuple[str, StepPolicy], ...]
+    node_waits: tuple[tuple[str, WaitSpec], ...]
     display_names: tuple[tuple[str, str], ...]
     agent_node_ids: tuple[str, ...]
     agent_declarations: tuple[tuple[str, AgentDeclaration], ...]
@@ -94,6 +97,8 @@ class _CachedDescriptor(_CacheModel):
             node_ids=descriptor.node_ids,
             graph=descriptor.graph,
             node_types=descriptor.node_types,
+            node_policies=descriptor.node_policies,
+            node_waits=descriptor.node_waits,
             display_names=descriptor.display_names,
             agent_node_ids=descriptor.agent_node_ids,
             agent_declarations=descriptor.agent_declarations,
@@ -117,6 +122,8 @@ class _CachedDescriptor(_CacheModel):
             node_ids=self.node_ids,
             graph=self.graph,
             node_types=self.node_types,
+            node_policies=self.node_policies,
+            node_waits=self.node_waits,
             display_names=self.display_names,
             agent_node_ids=self.agent_node_ids,
             agent_declarations=self.agent_declarations,
@@ -186,7 +193,7 @@ class _SourceStamp(_CacheModel):
 
 
 class _CacheDocument(_CacheModel):
-    schema_version: Literal[12]
+    schema_version: Literal[15]
     environment: str
     roots: tuple[_CachedRoot, ...]
     watch_roots: tuple[str, ...]

@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- BREAKING-PROTOCOL: 3.0 adds invocation retry/uncertainty declarations, terminal
+  and unknown-outcome worker flags, and deployed-invocation step keys. Previous
+  protocol-major deployments must be redeployed. Retries-and-waits lands after
+  run-manifest.
+
+- Steps accept bounded `retries` and an explicit `on_uncertain` policy, with
+  `NonRetryableError`, `OutcomeUnknownError` and a stable `RunContext.step_key`.
+  Add typed graph decisions, event waits and sleep, including local buffering,
+  retained acceptance receipts, reconciliation, controlled deadlines and CLI
+  event/decision submission. `ava.decision.map` provides bounded independent item
+  decisions, with optional per-item `show=fn` steps for typed review cards and
+  shared context; hosts journal their outputs like ordinary steps. Quorum and
+  approve-all are compositions, not bulk resolution.
+  Wait nodes park without occupying a worker. Local
+  state remains process-local; durable hosts must enforce crash recovery and
+  authorization. Nullable timeouts and execution-service receipts propagate
+  through waits. Bound reviewed previews and control responses, page wait lists,
+  and retain terminal timeout audits and withdrawn cards in operator memory.
+  See [Retries and waits](docs/retries-and-waits.md).
+
 ## 0.18.0
 
 - Toggle graph node descriptions between two-line previews and fully expanded

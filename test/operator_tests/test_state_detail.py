@@ -39,6 +39,8 @@ def _event_handle() -> SimpleNamespace:
         cancel_event=threading.Event(),
         result_bundle=None,
         success_quiesced=False,
+        controls=None,
+        cancel_writer=None,
     )
 
 
@@ -502,6 +504,8 @@ def test_close_keeps_dispatcher_alive_for_notification_from_delayed_drain():
         preparation_thread=None,
         result_bundle=operator._result_store.prepare(),
         success_quiesced=False,
+        controls=None,
+        cancel_writer=None,
     )
     with operator._lock:
         operator._active_runs[run.run_id] = handle
