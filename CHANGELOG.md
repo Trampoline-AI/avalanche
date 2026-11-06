@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Allow workspace hosts to provide their route-shaped loading surface while the
+  initial catalog or selected run is loading, instead of replacing the page with a
+  reconnect screen. Hosts can reserve an empty run pane to keep route geometry stable.
+- Keep deployment definitions selected when new run summaries arrive on Deployments.
+
 ## 0.19.1
 
 - Keep graph connections visible when switching between runs with different steps.

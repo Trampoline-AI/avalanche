@@ -95,6 +95,10 @@ export interface WorkflowWorkspaceProps {
   definitionLabel?: string;
   /** Overrides the graph actions panel; null hides it, undefined uses built-in controls. */
   bottomRightPanel?: ReactNode;
+  /** Host loading surface used until the initial catalog is available. */
+  loadingFallback?: ReactNode;
+  /** Optional bottom pane when showing a definition rather than a run. */
+  emptyRunPanel?: ReactNode;
   navigation?: {
     selectedRunId?: string;
     onSelectRun: (runId: string | undefined) => void;
@@ -104,6 +108,8 @@ export interface WorkflowWorkspaceProps {
 interface WorkflowWorkspaceSurfaceProps extends Pick<
   WorkflowWorkspaceProps,
   | "layoutStorageKey"
+  | "loadingFallback"
+  | "emptyRunPanel"
   | "currentLabel"
   | "currentRowAction"
   | "showCurrentRow"
@@ -154,6 +160,8 @@ export function WorkflowWorkspaceSurface({
   runActionsEnabled = true,
   definitionLabel,
   bottomRightPanel,
+  loadingFallback,
+  emptyRunPanel,
   currentLabel,
   currentRowAction,
   showCurrentRow,
@@ -223,6 +231,7 @@ export function WorkflowWorkspaceSurface({
     // Current follows arrivals, not the history already present when it was opened.
     if (
       selectedRunId === undefined &&
+      timelineView !== "deployments" &&
       !current.pendingSelection &&
       latestRunId !== undefined &&
       latestRunId !== current.latestRunId
@@ -255,6 +264,7 @@ export function WorkflowWorkspaceSurface({
     state.connection,
     state.runs,
     state.selectedRunId,
+    timelineView,
     workflowId,
   ]);
 
@@ -428,6 +438,15 @@ export function WorkflowWorkspaceSurface({
     "--workspace-inspector-divider-width": "0px",
   } as CSSProperties;
 
+  // Do not paint a definition/empty graph before the initial selected snapshot.
+  if (
+    historical &&
+    !run &&
+    state.selectedRunStatus !== "error" &&
+    loadingFallback !== undefined
+  )
+    return loadingFallback;
+
   return (
     <section
       className={`avalanche-operator-ui avalanche-workspace flex min-h-0 min-w-0 flex-col ${className}`}
@@ -522,7 +541,7 @@ export function WorkflowWorkspaceSurface({
                       </div>
                     )}
                 </div>
-                {run && (
+                {run ? (
                   <RunLogPane
                     height={layout.logHeight}
                     expanded={layout.logExpanded}
@@ -534,6 +553,8 @@ export function WorkflowWorkspaceSurface({
                     liveLogs={displayedRunId ? state.liveLogs[displayedRunId] : undefined}
                     onSelectNode={openNode}
                   />
+                ) : (
+                  emptyRunPanel
                 )}
               </>
             ) : (
@@ -612,6 +633,8 @@ export function WorkflowWorkspace({
   runActionsEnabled = true,
   definitionLabel,
   bottomRightPanel,
+  loadingFallback,
+  emptyRunPanel,
   navigation,
   currentLabel,
   currentRowAction,
@@ -644,6 +667,7 @@ export function WorkflowWorkspace({
   const workflow = state.catalog?.workflows.find((item) => item.workflowId === workflowId);
 
   if (!state.catalog) {
+    if (loadingFallback !== undefined) return loadingFallback;
     return (
       <section
         className={`avalanche-operator-ui avalanche-workspace grid min-h-[32rem] place-items-center bg-canvas p-6 text-center ${className ?? ""}`}
@@ -683,6 +707,8 @@ export function WorkflowWorkspace({
       runActionsEnabled={runActionsEnabled}
       definitionLabel={definitionLabel}
       bottomRightPanel={bottomRightPanel}
+      loadingFallback={loadingFallback}
+      emptyRunPanel={emptyRunPanel}
       currentLabel={currentLabel}
       currentRowAction={currentRowAction}
       showCurrentRow={showCurrentRow}
