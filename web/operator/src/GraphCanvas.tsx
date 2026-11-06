@@ -1,8 +1,10 @@
 import {
+  createContext,
   memo,
   type CSSProperties,
   type ReactNode,
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -22,6 +24,7 @@ import {
   ReactFlow,
   useReactFlow,
   useStore,
+  getViewportForBounds,
   useViewport,
   type Edge,
   type EdgeProps,
@@ -29,6 +32,7 @@ import {
   type Node,
   type NodeChange,
   type NodeProps,
+  type Viewport,
 } from "@xyflow/react";
 
 import type { FlowInfoMsg, NodeSnapshotMsg, TriggerKind, WorkflowTopologyMsg } from "./model";
@@ -42,13 +46,18 @@ import { decodeStepInterface } from "./stepInterface";
 import type { EvaluationRecord } from "./evaluations";
 import { formatElapsedSeconds } from "./elapsedDuration";
 import { CompositeSummary } from "./CompositeSummary";
-import { arrangeGraph, createGraphLayout, type RoutedEdgeData } from "./graphLayout";
+import {
+  arrangeGraph,
+  createGraphLayout,
+  DEFAULT_NODE_SIZE,
+  type RoutedEdgeData,
+} from "./graphLayout";
 import {
   highlightConnectedEdges,
   INPUT_EDGE_MARKER,
   INPUT_EDGE_MARKER_CONNECTED,
 } from "./graphSelection";
-import { useGraphOrientation } from "./useGraphOrientation";
+import { type CanvasSize, useGraphOrientation } from "./useGraphOrientation";
 import { ClaudeLogo, isClaudeRuntime } from "./ClaudeLogo";
 import { RunStatus, statusTone, statusToneColor } from "./RunStatus";
 import {
@@ -239,6 +248,10 @@ function firstInstructionLine(instructions: string | undefined): string | undefi
 
 const NODE_DETAIL_ZOOM_THRESHOLD = 1.0;
 const NODE_DESCRIPTION_ZOOM_THRESHOLD = 0.65;
+// Zooms where a node card changes what it shows.
+const NODE_DETAIL_ZOOM_STEPS = [NODE_DESCRIPTION_ZOOM_THRESHOLD, NODE_DETAIL_ZOOM_THRESHOLD];
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 1.8;
 
 export const NodeDuration = memo(
   ({
@@ -298,8 +311,15 @@ export const NodeDuration = memo(
 );
 NodeDuration.displayName = "NodeDuration";
 
+// The zoom of the graph's first frame, before React Flow's viewport is live.
+const FirstFrameZoom = createContext<number | undefined>(undefined);
+
 const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) => {
-  const { zoom } = useViewport();
+  // React Flow applies its starting viewport in an effect after the nodes first
+  // render, so until then its store reports a zoom of 1.
+  const liveZoom = useStore((state) => (state.panZoom ? state.transform[2] : undefined));
+  const firstFrameZoom = useContext(FirstFrameZoom);
+  const zoom = liveZoom ?? firstFrameZoom ?? 1;
   const isCompact = zoom < NODE_DETAIL_ZOOM_THRESHOLD;
   const showDescription =
     Boolean(data.instructionLine) && zoom >= NODE_DESCRIPTION_ZOOM_THRESHOLD;
@@ -669,6 +689,58 @@ const VERTICAL_FIT_VIEW_OPTIONS: FitViewOptions = {
   padding: { top: "160px", bottom: "90px", left: "40px", right: "80px" },
 };
 
+interface FirstFrame {
+  viewport: Viewport;
+  fitViewOptions: FitViewOptions;
+}
+
+// Node cards pick their detail level from the zoom, and React Flow fits the view
+// only after it has measured the rendered cards. Mounted at its default zoom of 1,
+// a large graph rendered full cards first and then switched to compact cards,
+// animating the hidden content away in visible frames. Instead, start at the fit
+// computed from the layout React Flow is given, and keep its measured fit at the
+// same detail level, so the first frame is already final.
+function firstFrameFor(
+  nodes: readonly Node[],
+  canvas: CanvasSize | undefined,
+  options: FitViewOptions,
+): FirstFrame | undefined {
+  if (!canvas?.width || !canvas.height || nodes.length === 0) return undefined;
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const node of nodes) {
+    const width = node.measured?.width ?? DEFAULT_NODE_SIZE.width;
+    const height = node.measured?.height ?? DEFAULT_NODE_SIZE.height;
+    const x = node.position.x - NODE_ORIGIN[0] * width;
+    const y = node.position.y - NODE_ORIGIN[1] * height;
+    left = Math.min(left, x);
+    top = Math.min(top, y);
+    right = Math.max(right, x + width);
+    bottom = Math.max(bottom, y + height);
+  }
+  const viewport = getViewportForBounds(
+    { x: left, y: top, width: right - left, height: bottom - top },
+    canvas.width,
+    canvas.height,
+    MIN_ZOOM,
+    MAX_ZOOM,
+    options.padding ?? 0.1,
+  );
+  const below = NODE_DETAIL_ZOOM_STEPS.filter((step) => step <= viewport.zoom);
+  const above = NODE_DETAIL_ZOOM_STEPS.filter((step) => step > viewport.zoom);
+  return {
+    viewport,
+    fitViewOptions: {
+      ...options,
+      minZoom: Math.max(MIN_ZOOM, ...below),
+      // Detail thresholds are inclusive, so stay just under the next one.
+      maxZoom: above.length > 0 ? Math.min(...above) - 0.001 : MAX_ZOOM,
+    },
+  };
+}
+
 function FitGraphOnWidthChange({ options }: { options: FitViewOptions }) {
   const width = useStore((state) => state.width);
   const { fitView } = useReactFlow();
@@ -735,7 +807,9 @@ function GraphCanvasView({
   onOpenNode,
   inspectionDisabled = false,
 }: GraphCanvasProps) {
-  const { containerRef, orientation, toggleOrientation } = useGraphOrientation();
+  const { containerRef, orientation, toggleOrientation, canvasSize } = useGraphOrientation();
+  const fitViewOptions =
+    orientation === "vertical" ? VERTICAL_FIT_VIEW_OPTIONS : FIT_VIEW_OPTIONS;
   const [descriptionsExpanded, setDescriptionsExpanded] = useState(false);
   const isCurrentWorkflow = workflow !== undefined && runTopology === undefined;
   const topology = useMemo<TopologyView | undefined>(() => {
@@ -1092,84 +1166,93 @@ function GraphCanvasView({
     workflow,
   ]);
 
+  const firstFrame = useMemo(
+    () => firstFrameFor(nodes, canvasSize, fitViewOptions),
+    [nodes, canvasSize, fitViewOptions],
+  );
+
   return (
     <div ref={containerRef} className="graph-viewport" data-orientation={orientation}>
-      <ReactFlow
-        // A different node set needs fresh handle measurements. A run switch can
-        // replace a node with an equally sized one without a resize notification.
-        key={JSON.stringify([orientation, topologyNodeIds])}
-        nodes={nodes}
-        onNodesChange={onNodesChange}
-        edges={edges}
-        nodeTypes={NODE_TYPES}
-        nodeOrigin={NODE_ORIGIN}
-        edgeTypes={EDGE_TYPES}
-        fitView
-        fitViewOptions={
-          orientation === "vertical" ? VERTICAL_FIT_VIEW_OPTIONS : FIT_VIEW_OPTIONS
-        }
-        minZoom={0.25}
-        maxZoom={1.8}
-        nodesDraggable={false}
-        nodesConnectable={false}
-        elementsSelectable={!inspectionDisabled}
-        onPaneClick={onClearNode}
-        proOptions={{ hideAttribution: true }}
-      >
-        <InputEdgeMarkers />
-        <FitGraphOnWidthChange
-          options={orientation === "vertical" ? VERTICAL_FIT_VIEW_OPTIONS : FIT_VIEW_OPTIONS}
-        />
-        {bottomRightPanel && (
-          <Panel
-            position="bottom-right"
-            className="dag-panel dag-actions-panel nodrag nopan m-3.5 rounded border border-line bg-overlay-panel p-[7px] shadow-[0_6px_20px_var(--color-shadow-2)]"
+      {/* The canvas is measured before the first paint; the first frame needs its size. */}
+      {canvasSize && (
+        <FirstFrameZoom.Provider value={firstFrame?.viewport.zoom}>
+          <ReactFlow
+            // A different node set needs fresh handle measurements. A run switch can
+            // replace a node with an equally sized one without a resize notification.
+            key={JSON.stringify([orientation, topologyNodeIds])}
+            nodes={nodes}
+            onNodesChange={onNodesChange}
+            edges={edges}
+            nodeTypes={NODE_TYPES}
+            nodeOrigin={NODE_ORIGIN}
+            edgeTypes={EDGE_TYPES}
+            defaultViewport={firstFrame?.viewport}
+            fitView
+            fitViewOptions={firstFrame?.fitViewOptions ?? fitViewOptions}
+            minZoom={MIN_ZOOM}
+            maxZoom={MAX_ZOOM}
+            nodesDraggable={false}
+            nodesConnectable={false}
+            elementsSelectable={!inspectionDisabled}
+            onPaneClick={onClearNode}
+            proOptions={{ hideAttribution: true }}
           >
-            {bottomRightPanel}
-          </Panel>
-        )}
-        <Background
-          color={isCurrentWorkflow ? "var(--color-line)" : "var(--color-run-dots)"}
-          variant={BackgroundVariant.Dots}
-          gap={isCurrentWorkflow ? 18 : 24}
-          size={isCurrentWorkflow ? 2.5 : 1}
-        />
-        <Controls
-          fitViewOptions={
-            orientation === "vertical" ? VERTICAL_FIT_VIEW_OPTIONS : FIT_VIEW_OPTIONS
-          }
-          aria-label="Navpanel"
-          className="navpanel"
-          showInteractive={false}
-        >
-          <ControlButton
-            className="graph-description-toggle"
-            aria-label="Expand node descriptions"
-            aria-pressed={descriptionsExpanded}
-            title={
-              descriptionsExpanded ? "Show two-line descriptions" : "Show full descriptions"
-            }
-            onClick={() => setDescriptionsExpanded((expanded) => !expanded)}
-          >
-            <Info aria-hidden="true" size={16} />
-          </ControlButton>
-          <div role="group" aria-label="Workflow orientation" className="navpanel-orientation">
-            <button
-              type="button"
-              className="graph-orientation-toggle"
-              aria-label={`Switch to ${orientation === "vertical" ? "horizontal" : "vertical"} workflow`}
-              title={`${orientation === "vertical" ? "Vertical" : "Horizontal"} layout. Click to switch.`}
-              onClick={toggleOrientation}
+            <InputEdgeMarkers />
+            <FitGraphOnWidthChange options={fitViewOptions} />
+            {bottomRightPanel && (
+              <Panel
+                position="bottom-right"
+                className="dag-panel dag-actions-panel nodrag nopan m-3.5 rounded border border-line bg-overlay-panel p-[7px] shadow-[0_6px_20px_var(--color-shadow-2)]"
+              >
+                {bottomRightPanel}
+              </Panel>
+            )}
+            <Background
+              color={isCurrentWorkflow ? "var(--color-line)" : "var(--color-run-dots)"}
+              variant={BackgroundVariant.Dots}
+              gap={isCurrentWorkflow ? 18 : 24}
+              size={isCurrentWorkflow ? 2.5 : 1}
+            />
+            <Controls
+              fitViewOptions={fitViewOptions}
+              aria-label="Navpanel"
+              className="navpanel"
+              showInteractive={false}
             >
-              {orientation === "vertical" ? (
-                <ArrowDown aria-hidden="true" size={17} />
-              ) : (
-                <ArrowRight aria-hidden="true" size={17} />
-              )}
-            </button>
-          </div>
-        </Controls>
-      </ReactFlow>
+              <ControlButton
+                className="graph-description-toggle"
+                aria-label="Expand node descriptions"
+                aria-pressed={descriptionsExpanded}
+                title={
+                  descriptionsExpanded ? "Show two-line descriptions" : "Show full descriptions"
+                }
+                onClick={() => setDescriptionsExpanded((expanded) => !expanded)}
+              >
+                <Info aria-hidden="true" size={16} />
+              </ControlButton>
+              <div
+                role="group"
+                aria-label="Workflow orientation"
+                className="navpanel-orientation"
+              >
+                <button
+                  type="button"
+                  className="graph-orientation-toggle"
+                  aria-label={`Switch to ${orientation === "vertical" ? "horizontal" : "vertical"} workflow`}
+                  title={`${orientation === "vertical" ? "Vertical" : "Horizontal"} layout. Click to switch.`}
+                  onClick={toggleOrientation}
+                >
+                  {orientation === "vertical" ? (
+                    <ArrowDown aria-hidden="true" size={17} />
+                  ) : (
+                    <ArrowRight aria-hidden="true" size={17} />
+                  )}
+                </button>
+              </div>
+            </Controls>
+          </ReactFlow>
+        </FirstFrameZoom.Provider>
+      )}
     </div>
   );
 }

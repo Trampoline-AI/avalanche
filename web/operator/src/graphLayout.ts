@@ -31,7 +31,8 @@ export interface GraphArrangement {
   paths: Record<string, string>;
 }
 
-const DEFAULT_SIZE: Size = { width: 360, height: 130 };
+// The size assumed for a node until React Flow has measured it.
+export const DEFAULT_NODE_SIZE: Readonly<Size> = { width: 360, height: 130 };
 const NODE_GAP = { horizontal: 100, vertical: 60 };
 const LAYER_GAP = { horizontal: 140, vertical: 100 };
 const WAYPOINT_GAP = 40;
@@ -441,7 +442,7 @@ export function arrangeGraph(
   orientation: GraphOrientation,
 ): GraphArrangement {
   const vertical = orientation === "vertical";
-  const size = (nodeId: string) => measurements.get(nodeId) ?? DEFAULT_SIZE;
+  const size = (nodeId: string) => measurements.get(nodeId) ?? DEFAULT_NODE_SIZE;
   const acrossSize = (item: LayerItem) =>
     item.nodeId === undefined
       ? 0

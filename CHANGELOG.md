@@ -6,6 +6,8 @@
 - Operator UI tests: settle the initial log load before simulating reader scrolling,
   avoiding an intermittent scroll-position failure on busy CI runners. Browser
   behavior is unchanged.
+- Show graph steps at their final detail level from the first frame, instead of
+  briefly showing full cards that then collapse when the graph is zoomed out.
 
 ## 0.19.0
 
