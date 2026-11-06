@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Keep graph connections visible when switching between runs with different steps.
+
 ## 0.19.0
 
 - BREAKING-PROTOCOL: 3.0 adds invocation retry/uncertainty declarations, terminal

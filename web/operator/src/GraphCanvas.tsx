@@ -1095,7 +1095,9 @@ function GraphCanvasView({
   return (
     <div ref={containerRef} className="graph-viewport" data-orientation={orientation}>
       <ReactFlow
-        key={orientation}
+        // A different node set needs fresh handle measurements. A run switch can
+        // replace a node with an equally sized one without a resize notification.
+        key={JSON.stringify([orientation, topologyNodeIds])}
         nodes={nodes}
         onNodesChange={onNodesChange}
         edges={edges}
