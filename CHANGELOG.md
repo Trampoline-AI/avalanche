@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.1
 
 - Keep graph connections visible when switching between runs with different steps.
 - Operator UI tests: settle the initial log load before simulating reader scrolling,
