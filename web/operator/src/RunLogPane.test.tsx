@@ -121,23 +121,32 @@ describe("run logs", () => {
   });
 
   it("preserves the reader's position across older pages and resumes following only on request", async () => {
+    const initial = Promise.withResolvers<LogDescriptorPage>();
     const older = Promise.withResolvers<LogDescriptorPage>();
     const api = createApi({
       listLogPage: async (request) =>
-        request.pageToken === "older" ? older.promise : page([log(3)], "older"),
+        request.pageToken === "older" ? older.promise : initial.promise,
       readTextDetail: async (token) => `body-${token}`,
     });
     const view = render(<RunLogPane api={api} run={run} onSelectNode={() => undefined} />);
-    await screen.findByText("body-log-3");
     const scroll = view.container.querySelector<HTMLElement>(".run-log-scroll")!;
     let scrollHeight = 1000;
     Object.defineProperties(scroll, {
       scrollHeight: { configurable: true, get: () => scrollHeight },
       clientHeight: { configurable: true, value: 200 },
-      scrollTop: { configurable: true, writable: true, value: 500 },
+      scrollTop: { configurable: true, writable: true, value: 0 },
     });
+    // Settle initial decoding and its auto-scroll effect before simulating the reader.
+    // Finding the body alone can resolve before React flushes that passive effect.
+    await act(async () => {
+      initial.resolve(page([log(3)], "older"));
+      await initial.promise;
+    });
+    expect(screen.getByText("body-log-3")).toBeInTheDocument();
+    expect(scroll.scrollTop).toBe(1000);
     vi.useFakeTimers();
     try {
+      scroll.scrollTop = 500;
       fireEvent.scroll(scroll);
       // Complete the virtualizer's scroll-end debounce before jsdom teardown.
       await act(() => vi.runOnlyPendingTimersAsync());

@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Keep graph connections visible when switching between runs with different steps.
+- Operator UI tests: settle the initial log load before simulating reader scrolling,
+  avoiding an intermittent scroll-position failure on busy CI runners. Browser
+  behavior is unchanged.
 
 ## 0.19.0
 
