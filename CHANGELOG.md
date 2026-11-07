@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.19.4
 
 - Allow workspace hosts to provide their route-shaped loading surface while the
   initial catalog or selected run is loading, instead of replacing the page with a
