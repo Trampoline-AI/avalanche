@@ -193,7 +193,9 @@ class Node:
         if self.name not in ctx.instance_counter:
             ctx.instance_counter[self.name] = 0
         ctx.instance_counter[self.name] += 1
-        future_id = f"{self.name}_{ctx.instance_counter[self.name]}"
+        future_id = self._invocation_id(ctx.instance_counter[self.name])
+        if future_id in ctx.node_instances:
+            raise ValueError(f"Duplicate invocation id {future_id!r}")
 
         existing_node = ctx.slug_nodes.get(self.slug)
         if (
@@ -294,6 +296,10 @@ class Node:
         assert ctx is not None  # __call__ already validated capture context.
         ctx.node_instances[result.future_id] = result
         return result
+
+    def _invocation_id(self, instance: int) -> str:
+        """Stable graph-capture identity; implicit nodes may pin a derived ID."""
+        return f"{self.name}_{instance}"
 
     def _make_future(
         self,

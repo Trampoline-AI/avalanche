@@ -64,7 +64,7 @@ def test_show_closure_is_a_journaled_per_item_step_and_replays_identical_cards(
     journal_nodes = set()
 
     def journal(node_id, fn):
-        if not node_id.startswith("decision_1.show["):
+        if not node_id.startswith("decision_1_show["):
             return fn
         journal_nodes.add(node_id)
         path = tmp_path / f"{node_id}.json"
@@ -119,12 +119,12 @@ def test_show_closure_is_a_journaled_per_item_step_and_replays_identical_cards(
             assert set(workflow.nodes) == declared_nodes
             if with_services:
                 assert {r.node_id for r in run.execution_receipts(timeout=5)} == {
-                    "decision_1.show[0]",
-                    "decision_1.show[1]",
+                    "decision_1_show[0]",
+                    "decision_1_show[1]",
                 }
                 opens = [event for event in services.events if event[1] == "open"]
                 for event in opens:
-                    if ".show[" in event[0]:
+                    if "_show[" in event[0]:
                         assert [receipt["node"] for receipt in event[3]] == (
                             ["articles_1"] if runtime_items else []
                         )
@@ -134,10 +134,10 @@ def test_show_closure_is_a_journaled_per_item_step_and_replays_identical_cards(
         policy = "CHANGED after journal commit"
     assert observed[0] == observed[1]
     assert Counter(calls) == {"a": 1, "b": 1}
-    assert journal_nodes == {"decision_1.show[0]", "decision_1.show[1]"}
+    assert journal_nodes == {"decision_1_show[0]", "decision_1_show[1]"}
     assert sorted(path.name for path in tmp_path.iterdir()) == [
-        "decision_1.show[0].json",
-        "decision_1.show[1].json",
+        "decision_1_show[0].json",
+        "decision_1_show[1].json",
     ]
 
 
@@ -176,9 +176,9 @@ def test_show_failure_uses_per_item_step_retry_and_failure_path(terminal):
     with pytest.raises(error, match="invalid review input|review rendering failed"):
         run.result(timeout=5)
     assert calls == {"ok": 1, "bad": 1 if terminal else 8}
-    assert ("decision_1.show[1]", error) in failures
+    assert ("decision_1_show[1]", error) in failures
     assert ("decision_1[1]", error) in failures
-    assert "decision_1.show[0]" in successes
+    assert "decision_1_show[0]" in successes
     assert not any(card["state"] == "waiting" for card in run.waits.snapshot())
 
 

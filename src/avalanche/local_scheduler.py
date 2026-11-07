@@ -13,7 +13,6 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 
 from .input_ref import InputRef
 from .local_waits import LocalWaits, Reconcile
-from .mapping import MapSpec
 from .policies import MAX_GENERATION, NonRetryableError, OutcomeUnknownError
 from .waits import WaitNode
 
@@ -53,8 +52,6 @@ def run_local_schedule(
     cancelled = False
 
     from runtime.operator.map_driver import DynamicMaps
-
-    from .dag import MapFuture
 
     maps = DynamicMaps(
         run_id=waits.run_id,
@@ -221,9 +218,13 @@ def run_local_schedule(
                     if cancel_requested is not None and cancel_requested():
                         cancelled = True
                         break
-                    if not all(parent in completed for parent in dependencies.get(node_id, [])):
-                        continue
                     ref = workflow.nodes[node_id]
+                    node = ref.node
+                    mapped = isinstance(node, WaitNode) and node.spec.map_max_items is not None
+                    show_group_id = node.spec.show_node_id if mapped else None
+                    if not all(parent in completed for parent in dependencies.get(node_id, [])
+                               if parent != show_group_id):
+                        continue
                     if isinstance(ref.node, WaitNode):
                         if hooks and hooks.on_node_start:
                             hooks.on_node_start(node_id)
@@ -250,37 +251,14 @@ def run_local_schedule(
                                 items = ref.node.map_values
                             validated = TypeAdapter(list[JsonValue]).validate_python(wire)
                             children = waits.expand_decisions(
-                                node_id, validated, arm=ref.node.show_step is None
+                                node_id, validated, arm=show_group_id is None
                             )
                             map_groups[node_id] = children
-                            if ref.node.show_step is not None:
-                                assert items is not None
-                                parents = list(dependencies.get(node_id, []))
-                                if children:
-                                    dependencies[node_id] = []
-                                show_group_id = f"{node_id}.show"
-                                show_group = MapFuture(
-                                    ref.node.show_step,
-                                    show_group_id,
-                                    ref.graph_ref,
-                                    args=(list(items),),
-                                    node_slug=f"{ref.node_slug}.show",
-                                )
-                                show_group.map_spec = MapSpec(
-                                    mapped_args=("item",),
-                                    broadcast_args=(),
-                                    max_items=spec.map_max_items,
-                                    inherited=False,
-                                    fail_fast=True,
-                                )
-                                workflow.nodes[show_group_id] = show_group
-                                workflow.node_slugs[show_group_id] = show_group.node_slug
-                                dependencies[show_group_id] = parents
-                                maps.add(show_group)
-                                for index, child in enumerate(children):
-                                    show_id = f"{show_group_id}[{index}]"
-                                    dependencies.setdefault(node_id, []).append(show_id)
-                                    show_decisions[show_id] = child
+                            if show_group_id is not None:
+                                n = len(children)
+                                show_ids = [f"{show_group_id}[{i}]" for i in range(n)]
+                                dependencies[node_id] = show_ids
+                                show_decisions.update(zip(show_ids, children, strict=True))
                         else:
                             waits.arm(node_id, reviewed(node_id))
                             parked.add(node_id)

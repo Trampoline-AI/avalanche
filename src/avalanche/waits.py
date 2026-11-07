@@ -11,6 +11,7 @@ from runtime._async import call_sync_or_async
 
 from .dag import Node, NodeFuture, NodeType
 from .policies import Outcome, StepPolicy, WaitSpec
+from .step_interface import resolve_step_signature
 
 _JSON = TypeAdapter(JsonValue)
 
@@ -34,7 +35,6 @@ class WaitNode(Node):
         super().__init__(wait_node, NodeType.WAIT, slug=slug, policy=StepPolicy(retries=0))
         self.spec = spec
         self.model = model
-        self.show_step: Node | None = None
         self.map_values: tuple[JsonValue | BaseModel, ...] | None = None
 
 
@@ -115,6 +115,15 @@ def _decision_node(
     return WaitNode(spec, outcome, slug=slug), show_ref
 
 
+class _DecisionShowNode(Node):
+    def __init__(self, fn: Callable, decision: NodeFuture) -> None:
+        super().__init__(fn, NodeType.STEP, slug=f"{decision.node_slug}.show")
+        self.decision_id = decision.future_id
+
+    def _invocation_id(self, instance: int) -> str:
+        return f"{self.decision_id}_show"
+
+
 class DecisionFactory:
     def __call__(
         self,
@@ -165,15 +174,6 @@ class DecisionFactory:
             approvers=approvers,
             slug=slug,
         )
-        if show is not None:
-
-            def decision_show(item: JsonValue | BaseModel) -> BaseModel:
-                shown = call_sync_or_async(show, item)
-                if not isinstance(shown, BaseModel):
-                    raise TypeError("decision.map show must return a Pydantic model")
-                return shown
-
-            node.show_step = Node(decision_show, NodeType.STEP)
         if isinstance(items, NodeFuture):
             node.spec = WaitSpec.model_validate(
                 {
@@ -183,22 +183,37 @@ class DecisionFactory:
                     "map_source_index": items.tuple_index,
                 }
             )
-            return node(items=items)
-        if not isinstance(items, list):
-            raise TypeError("decision.map items must be a list or NodeFuture list")
-        node.map_values = tuple(items)
-        wire = [
-            item.model_dump(mode="json") if isinstance(item, BaseModel) else item
-            for item in items
-        ]
-        node.spec = WaitSpec.model_validate(
-            {
-                **node.spec.model_dump(by_alias=True),
-                "map_max_items": max_items,
-                "map_items": wire,
-            }
-        )
-        return node()
+            result = node(items=items)
+        else:
+            if not isinstance(items, list):
+                raise TypeError("decision.map items must be a list or NodeFuture list")
+            node.map_values = tuple(items)
+            wire = [
+                item.model_dump(mode="json") if isinstance(item, BaseModel) else item
+                for item in items
+            ]
+            node.spec = WaitSpec.model_validate(
+                {**node.spec.model_dump(by_alias=True), "map_max_items": max_items,
+                 "map_items": wire}
+            )
+            result = node()
+        if show is not None:
+            def decision_show(item: JsonValue | BaseModel) -> BaseModel:
+                shown = call_sync_or_async(show, item)
+                if not isinstance(shown, BaseModel):
+                    raise TypeError("decision.map show must return a Pydantic model")
+                return shown
+
+            signature = resolve_step_signature(show)
+            parameter = next(iter(signature.parameters.values()))
+            decision_show.__annotations__["item"] = parameter.annotation
+            decision_show.__annotations__["return"] = signature.return_annotation
+            shown = _DecisionShowNode(decision_show, result).map(items, max_items=max_items)
+            node.spec = node.spec.model_copy(update={"show_node_id": shown.future_id})
+            result.kwargs["show"] = shown
+            shown >> result
+            result.chain_start = shown
+        return result
 
 
 decision = DecisionFactory()

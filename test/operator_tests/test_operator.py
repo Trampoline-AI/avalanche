@@ -406,9 +406,12 @@ def test_mapped_show_failure_reaches_normal_operator_error_path(wait_review_oper
     run_id = op.start_run(info.selector)
     terminal = wait_terminal(op, run_id)
     assert terminal.status == RunStatus.FAILED
-    assert terminal.nodes["decision_1"].status == NodeStatus.FAILED
-    assert "NonRetryableError" in terminal.nodes["decision_1"].error
-    assert "invalid review input" in terminal.nodes["decision_1"].error
+    # `show` runs as the ordinary mapped step `decision_1_show`; its item fails like any step.
+    failed = terminal.nodes["decision_1_show[0]"]
+    assert failed.status == NodeStatus.FAILED
+    assert "NonRetryableError" in failed.error
+    assert "invalid review input" in failed.error
+    assert terminal.nodes["decision_1"].status == NodeStatus.SKIPPED
 
 
 def test_terminal_wait_pages_cross_spawn_grpc_and_rest(wait_review_operator):
