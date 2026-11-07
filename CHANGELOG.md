@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.19.5
+
+- `decision.map(show=fn)` captures `show` at graph construction as an ordinary
+  mapped step `<decision>_show` over the same items, so on deployed runs
+  decision child `i` displays item `i`'s show output. Duplicate invocation IDs in
+  one graph are refused.
+
 ## 0.19.4
 
 - Allow workspace hosts to provide their route-shaped loading surface while the
