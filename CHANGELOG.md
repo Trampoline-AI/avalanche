@@ -4,6 +4,8 @@
 
 - Keep the terminal UI responsive when a streamed update arrives while a resource
   panel is mounting; load the panel only once its widgets are ready.
+- Keep graph connections visible across run-topology changes by measuring handle
+  bounds after controlled node updates, even when replacement cards are equal-sized.
 
 ## 0.19.5
 

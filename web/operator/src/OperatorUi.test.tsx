@@ -4,7 +4,10 @@ import { StrictMode, type ComponentType, type ReactNode, useState } from "react"
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-const { setCenter } = vi.hoisted(() => ({ setCenter: vi.fn() }));
+const { setCenter, updateNodeInternals } = vi.hoisted(() => ({
+  setCenter: vi.fn(),
+  updateNodeInternals: vi.fn(),
+}));
 
 // jsdom has no graph viewport. Keep the real cards, controls, inspector, and projection;
 // replace only React Flow's layout host, not application components or live state.
@@ -18,7 +21,9 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
   Panel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
   useViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
   useStore: (selector: (state: { width: number }) => unknown) => selector({ width: 0 }),
+  useUpdateNodeInternals: () => updateNodeInternals,
   useReactFlow: () => ({
+    viewportInitialized: false,
     screenToFlowPosition: () => ({ x: 0, y: 0 }),
     fitView: vi.fn(),
     setCenter,

@@ -23,6 +23,7 @@ import {
   Position,
   ReactFlow,
   useReactFlow,
+  useUpdateNodeInternals,
   useStore,
   getViewportForBounds,
   useViewport,
@@ -741,6 +742,19 @@ function firstFrameFor(
   };
 }
 
+function MeasureGraphHandles({ nodes }: { nodes: readonly Node[] }) {
+  const { viewportInitialized } = useReactFlow();
+  const updateNodeInternals = useUpdateNodeInternals();
+  useEffect(() => {
+    if (!viewportInitialized) return;
+    // A controlled-node commit can clear handle bounds after ResizeObserver's
+    // initial measurement. Equal-sized replacement nodes then never resize.
+    // The public hook measures their committed DOM on the next animation frame.
+    updateNodeInternals(nodes.map((node) => node.id));
+  }, [nodes, updateNodeInternals, viewportInitialized]);
+  return null;
+}
+
 function FitGraphOnWidthChange({ options }: { options: FitViewOptions }) {
   const width = useStore((state) => state.width);
   const { fitView } = useReactFlow();
@@ -1198,6 +1212,7 @@ function GraphCanvasView({
             proOptions={{ hideAttribution: true }}
           >
             <InputEdgeMarkers />
+            <MeasureGraphHandles nodes={nodes} />
             <FitGraphOnWidthChange options={fitViewOptions} />
             {bottomRightPanel && (
               <Panel
