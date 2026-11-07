@@ -156,6 +156,7 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
     import sys
     from dataclasses import replace
     from textwrap import dedent
+    from threading import Event
 
     from tui.app import AvalancheApp
     from tui.screens.input_form import InputForm
@@ -473,32 +474,66 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
             assert schedules.items[0]["enabled"] is True
             assert schedules.items[0]["input"] == {"hours": 6}
             assert schedules.items[0]["next_run_at"] is not None
-            assert "schedule.disable" in {
-                action.id for action in extension.describe(schedule_context).actions
-            }
+            # A completed unary mutation does not mean the independent catalog
+            # stream has delivered the updated action description yet.
+            await wait_for(
+                pilot,
+                lambda: (
+                    "schedule.disable"
+                    in {action.id for action in extension.describe(schedule_context).actions}
+                ),
+            )
             assert (await asyncio.to_thread(observer.get_run, run_id)).triggered_by is (
                 TriggerKind.MANUAL
             )
-            await asyncio.to_thread(
-                extension.invoke,
-                "schedule.disable",
-                schedule_context,
-                {},
-                intent_id="disable-proof",
-            )
-            assertions.append("real_schedule_enable_and_disable")
-            from textual.widgets import DataTable
+            disabled_catalog = Event()
 
-            panel = next(
-                panel
-                for panel in app.extension_session.description.panels
-                if panel.resource == "schedules"
-            )
-            app.open_extension_panel(panel)
-            await pilot.pause()
+            def schedule_disabled(catalog):
+                if any(
+                    flow.selector == scheduled.selector and not flow.schedule_enabled
+                    for flow in catalog.workflows
+                ):
+                    disabled_catalog.set()
+
+            provider.on_catalog_update(schedule_disabled)
+            # Retain the real stream invalidation until a panel is pushed. Force
+            # the timer's legal pre-mount interleaving without a timing sleep.
+            timer = app._timer
+            assert timer is not None
+            timer.pause()
+            try:
+                await asyncio.to_thread(
+                    extension.invoke,
+                    "schedule.disable",
+                    schedule_context,
+                    {},
+                    intent_id="disable-proof",
+                )
+                await wait_for(pilot, disabled_catalog.is_set)
+                assert "schedule.enable" in {
+                    action.id for action in extension.describe(schedule_context).actions
+                }
+                assertions.append("real_schedule_enable_and_disable")
+                from textual.widgets import DataTable
+
+                description = app.extension_session.description
+                assert description is not None
+                panel = next(
+                    panel for panel in description.panels if panel.resource == "schedules"
+                )
+                app.open_extension_panel(panel)
+                assert not app.screen.is_mounted
+                app._tick()
+                assert "*" in app.extension_session.changed_resources
+            finally:
+                timer.resume()
+            await wait_for(pilot, lambda: app.screen.is_mounted)
             await wait_for(
                 pilot, lambda: app.screen.query_one("#resource-body", DataTable).row_count == 1
             )
+            table = app.screen.query_one("#resource-body", DataTable)
+            assert table.get_row_at(0)[panel.columns.index("enabled")] == "false"
+            assertions.append("stream_invalidation_before_panel_mount")
             app.save_screenshot(str(evidence / "schedules.svg"))
             await pilot.press("escape")
             assertions.append("pilot_real_schedule_resource_panel")

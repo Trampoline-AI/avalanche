@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Keep the terminal UI responsive when a streamed update arrives while a resource
+  panel is mounting; load the panel only once its widgets are ready.
+
 ## 0.19.5
 
 - `decision.map(show=fn)` captures `show` at graph construction as an ordinary

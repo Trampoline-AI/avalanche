@@ -539,7 +539,9 @@ class AvalancheApp(App):
         elif changed:
             self.store._refresh_workflow_catalog()
             self.store._refresh_runs_cache()
-            if isinstance(self.screen, ResourceScreen):
+            # push_screen exposes the new screen before Compose/Mount completes.
+            # Its on_mount reads the initial page, including changes received now.
+            if isinstance(self.screen, ResourceScreen) and self.screen.is_mounted:
                 if (
                     self.screen.panel.resource in session.changed_resources
                     or "*" in session.changed_resources
