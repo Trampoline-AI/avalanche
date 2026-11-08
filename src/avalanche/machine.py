@@ -11,6 +11,10 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import update_wrapper
 from types import FrameType
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .machine_remote import MachineEventReceipt
 
 from pydantic import BaseModel, JsonValue
 
@@ -319,6 +323,33 @@ class Machine:
         driver = MachineTest(self, input, stub=stub)
         await driver._drive()
         return driver
+
+    async def start(
+        self, input: BaseInput | Mapping[str, JsonValue], *, deployment_id: str | None = None,
+        api_url: str | None = None, token: str | None = None,
+        org: str | None = None, project: str | None = None,
+    ) -> str:
+        """Start once per key, returning the existing or newly created remote run ID."""
+        from .machine_remote import start
+
+        value = self.input_type.model_validate(input).model_dump(mode="json")
+        return await start(
+            self.builder.__name__, self.key(value), value, deployment_id=deployment_id,
+            api_url=api_url, token=token, org=org, project=project)
+
+    async def send(
+        self, key: tuple[JsonValue, ...], event: str, *, idempotency_key: str,
+        payload: BaseModel | JsonValue = None, api_url: str | None = None,
+        token: str | None = None, org: str | None = None, project: str | None = None,
+    ) -> MachineEventReceipt:
+        """Send by instance key; retries must retain the same idempotency key."""
+        from .machine_remote import send
+
+        if len(key) != len(self.key_fields):
+            raise ValueError("machine key has the wrong number of fields")
+        return await send(self.builder.__name__, key, event, payload=payload,
+                          idempotency_key=idempotency_key, api_url=api_url,
+                          token=token, org=org, project=project)
 
     def key(self, input: BaseInput | Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
         fields = self.spec.key_fields
