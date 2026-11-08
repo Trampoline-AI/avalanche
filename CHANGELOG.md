@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.0
 
 - Add declarative `@ava.machine` state graphs, typed `Event[T]` emissions and
   workflow outputs, discovery manifests, and a native-async local test driver.

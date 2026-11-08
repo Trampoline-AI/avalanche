@@ -71,7 +71,7 @@ from .types import AppendResult, SnapshotMetadata, SnapshotState
 from .waits import decision, sleep, wait_for_event
 from .webhook import Webhook
 
-__version__ = "0.19.5"
+__version__ = "0.20.0"
 
 from .references import (
     LocalReferenceBinder,
