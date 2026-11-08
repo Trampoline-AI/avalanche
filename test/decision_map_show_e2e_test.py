@@ -16,7 +16,7 @@ from runtime._async import call_sync_or_async
 from runtime.operator.hooks import RunHooks
 
 
-class Approval(ava.Outcome):
+class Approval(ava.Event):
     kind: Literal["approve", "reject"]
 
 

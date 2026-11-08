@@ -10,7 +10,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 from runtime._async import call_sync_or_async
 
 from .dag import Node, NodeFuture, NodeType
-from .policies import Outcome, StepPolicy, WaitSpec
+from .policies import Event, StepPolicy, WaitSpec
 from .step_interface import resolve_step_signature
 
 _JSON = TypeAdapter(JsonValue)
@@ -79,21 +79,21 @@ def wait_for_event(
 
 
 def _decision_node(
-    outcome: type[Outcome],
+    outcome: type[Event],
     *,
     prompt: str,
     timeout: timedelta | float | None,
     show: NodeFuture | JsonValue | BaseModel = None,
-    on_timeout: Outcome | None = None,
+    on_timeout: Event | None = None,
     assignees: list[str] | tuple[str, ...] | None = None,
     approvers: list[str] | tuple[str, ...] | None = None,
     slug: str | None = None,
 ) -> tuple[WaitNode, NodeFuture | None]:
     """Typed human decision. Missing on_timeout means decision_timeout failure."""
-    if not isinstance(outcome, type) or not issubclass(outcome, Outcome):
-        raise TypeError("decision requires an ava.Outcome subclass")
+    if not isinstance(outcome, type) or not issubclass(outcome, Event):
+        raise TypeError("decision requires an ava.Event subclass")
     if on_timeout is not None and not isinstance(on_timeout, outcome):
-        raise TypeError("on_timeout must be an instance of the declared Outcome")
+        raise TypeError("on_timeout must be an instance of the declared Event")
     show_ref = show if isinstance(show, NodeFuture) else None
     shown = (
         None
@@ -127,12 +127,12 @@ class _DecisionShowNode(Node):
 class DecisionFactory:
     def __call__(
         self,
-        outcome: type[Outcome],
+        outcome: type[Event],
         *,
         prompt: str,
         timeout: timedelta | float | None,
         show: NodeFuture | JsonValue | BaseModel = None,
-        on_timeout: Outcome | None = None,
+        on_timeout: Event | None = None,
         assignees: list[str] | tuple[str, ...] | None = None,
         approvers: list[str] | tuple[str, ...] | None = None,
         slug: str | None = None,
@@ -151,12 +151,12 @@ class DecisionFactory:
 
     def map[Item: JsonValue | BaseModel](
         self,
-        outcome: type[Outcome],
+        outcome: type[Event],
         items: NodeFuture | list[Item],
         *,
         prompt: str,
         timeout: timedelta | float | None,
-        on_timeout: Outcome | None = None,
+        on_timeout: Event | None = None,
         assignees: list[str] | tuple[str, ...] | None = None,
         approvers: list[str] | tuple[str, ...] | None = None,
         max_items: int = 8,

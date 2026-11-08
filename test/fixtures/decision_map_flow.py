@@ -5,7 +5,7 @@ from typing import Literal
 import avalanche as ava
 
 
-class Review(ava.Outcome):
+class Review(ava.Event):
     kind: Literal["approve", "reject"]
 
 

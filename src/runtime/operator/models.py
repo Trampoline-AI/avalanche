@@ -824,6 +824,7 @@ class WorkflowInfo:
     node_types: dict[str, str]  # node_id -> "source" | "step" | "dest" | "wait"
     node_policies: dict[str, StepPolicy] = field(default_factory=dict)
     node_waits: dict[str, WaitSpec] = field(default_factory=dict)
+    machine_spec_json: str = ""
     display_names: dict[str, str] = field(default_factory=dict)  # node_id -> display name
     agent_node_ids: list[str] = field(default_factory=list)
     agent_declarations: dict[str, AgentDeclaration] = field(default_factory=dict)
@@ -906,7 +907,12 @@ class ResetBaseline:
 class WorkflowDiscoveryDiagnostic:
     path: str
     kind: Literal[
-        "skipped", "import_error", "build_error", "invalid_schedule", "invalid_catalog"
+        "skipped",
+        "warning",
+        "import_error",
+        "build_error",
+        "invalid_schedule",
+        "invalid_catalog",
     ]
     message: str
 
@@ -933,6 +939,7 @@ class WorkflowDescriptor:
     display_names: tuple[tuple[str, str], ...]
     node_policies: tuple[tuple[str, StepPolicy], ...] = ()
     node_waits: tuple[tuple[str, WaitSpec], ...] = ()
+    machine_spec_json: str = ""
     agent_node_ids: tuple[str, ...] = ()
     agent_declarations: tuple[tuple[str, AgentDeclaration], ...] = ()
     classifier_metadata_json: tuple[tuple[str, str], ...] = ()

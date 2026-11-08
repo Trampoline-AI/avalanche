@@ -59,13 +59,13 @@ from functools import update_wrapper, wraps
 from threading import Lock
 from typing import TYPE_CHECKING, Any, Callable, DefaultDict, TypeVar, get_type_hints
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, TypeAdapter
 from ulid import ULID
 
 from .input_ref import InputRef
 from .local_waits import LocalPrincipal, LocalWaits
 from .mapping import DEFAULT_MAX_ITEMS, HARD_CAP, MapSpec
-from .policies import StepPolicy, UncertaintyPolicy
+from .policies import Event, NonRetryableError, StepPolicy, UncertaintyPolicy, event
 from .protocol import PROTOCOL_VERSION, ProtocolVersion
 from .run_handle import RunHandle
 from .step_interface import (
@@ -150,6 +150,7 @@ class Node:
         slug: str | None = None,
         step_interface: StepInterface | None = None,
         policy: StepPolicy | None = None,
+        emits: tuple[str, ...] = (),
     ):
         """
         Initialize a node.
@@ -167,6 +168,18 @@ class Node:
         self.node_type = node_type
         self.num_returns = num_returns
         self.policy = policy if policy is not None else StepPolicy()
+        self.emits = emits
+        annotation = inspect.signature(fn).return_annotation
+        if (
+            isinstance(annotation, type)
+            and issubclass(annotation, Event)
+            and (
+                annotation is Event
+                or annotation.__pydantic_generic_metadata__["origin"] is Event
+            )
+            and not emits
+        ):
+            raise ValueError("Event-returning steps must declare emits")
         self.step_interface = (
             step_interface if step_interface is not None else step_interface_for_function(fn)
         )
@@ -697,6 +710,42 @@ def source(
     return decorator(fn)
 
 
+def _event_step(fn: F, emits: tuple[str, ...]) -> F:
+    if len(set(emits)) != len(emits) or any(not name for name in emits):
+        raise ValueError("emits must contain unique nonempty names")
+    annotation = inspect.signature(fn).return_annotation
+    adapter = TypeAdapter(annotation) if emits else None
+
+    def validate(value):
+        if isinstance(value, Event) and value.name is not None:
+            if value.name not in emits:
+                raise NonRetryableError(f"undeclared event {value.name!r}; declares {emits!r}")
+            if adapter is not None:
+                validated = adapter.validate_python(value.model_dump(mode="python"))
+                return event(value.name, validated.output)
+        return value
+
+    def data(value):
+        return value.output if isinstance(value, Event) and value.name is not None else value
+
+    if inspect.iscoroutinefunction(fn):
+
+        @wraps(fn)
+        async def wrapped(*args, **kwargs):
+            return validate(
+                await fn(*(data(v) for v in args), **{k: data(v) for k, v in kwargs.items()})
+            )
+    else:
+
+        @wraps(fn)
+        def wrapped(*args, **kwargs):
+            return validate(
+                fn(*(data(v) for v in args), **{k: data(v) for k, v in kwargs.items()})
+            )
+
+    return wrapped
+
+
 def step(
     fn: F | None = None,
     *,
@@ -704,6 +753,7 @@ def step(
     slug: str | None = None,
     retries: int = 7,
     on_uncertain: UncertaintyPolicy = "retry",
+    emits: tuple[str, ...] = (),
 ) -> Node | Callable[[F], Node]:
     """
     Decorator for step nodes.
@@ -723,9 +773,11 @@ def step(
     def decorator(f: F) -> Node:
         namespace = localns if fn is not None else decoration_namespace()
         f.__signature__ = resolve_step_signature(f, namespace)
+        f = _event_step(f, emits)
         return Node(
             f,
             NodeType.STEP,
+            emits=emits,
             num_returns=num_returns,
             policy=StepPolicy(retries=retries, on_uncertain=on_uncertain),
             slug=slug,
@@ -1645,6 +1697,13 @@ def _with_current_run_context(
         )
         declared = {name: value for name, value in kwargs.items() if name not in hidden}
         bound = signature.bind_partial(*args, **declared)
+        bound.arguments.update(
+            {
+                name: value.output
+                for name, value in bound.arguments.items()
+                if isinstance(value, Event) and value.name is not None
+            }
+        )
         bound.arguments.update(rebind_arguments(fn, bound.arguments, LocalReferenceBinder()))
         return bound.args, {**bound.kwargs, **hidden}
 
@@ -2058,6 +2117,14 @@ def _bind_implicit_parent_results(
     return resolved_args, implicit_kwargs
 
 
+def _validated_workflow_output(fn):
+    @wraps(fn)
+    def validate(self, *args, **kwargs):
+        return self.validate_output(fn(self, *args, **kwargs))
+
+    return validate
+
+
 class Workflow:
     """
     Executable workflow with DAG and node instances.
@@ -2078,6 +2145,8 @@ class Workflow:
         context_type: type | None = None,
         agent_defaults: AgentDefaults | None = None,
         classifier_defaults: dict[str, JsonValue] | None = None,
+        output_type: type[BaseModel] | None = None,
+        emits: tuple[str, ...] = (),
     ):
         """
         Initialize workflow.
@@ -2106,6 +2175,16 @@ class Workflow:
         }
         self.name = name
         self.returns = returns
+        if output_type is not None and not issubclass(output_type, BaseModel):
+            raise TypeError("workflow output must be a Pydantic model")
+        self.output_type = output_type
+        self.emits = emits
+        from .machine_spec import MachineSpec
+
+        self.machine_spec: MachineSpec | None = None
+        returned_emits = self.output_node.node.emits if self.output_node is not None else ()
+        if returned_emits != emits:
+            raise ValueError("workflow emits must match its returned node emits")
         self.cron = cron
         self.webhook = _normalize_webhook(webhook)
         _validate_workflow_types(input_type, context_type)
@@ -2125,6 +2204,13 @@ class Workflow:
             raise ValueError(
                 f"Workflow '{name}' contains a cycle involving: {', '.join(sorted(in_cycle))}"
             )
+
+    @property
+    def output_node(self) -> NodeFuture | None:
+        if not isinstance(self.returns, NodeFuture):
+            return None
+        terminal = self.returns.chain_end
+        return terminal if isinstance(terminal, NodeFuture) else None
 
     def _topological_sort(self) -> list[str]:
         """
@@ -2269,6 +2355,16 @@ class Workflow:
     def required_protocol(self) -> ProtocolVersion:
         return PROTOCOL_VERSION
 
+    def validate_output(self, value):
+        if self.output_type is None:
+            return value
+        output = value.output if isinstance(value, Event) and value.name is not None else value
+        validated = self.output_type.model_validate(output)
+        if isinstance(value, Event) and value.name is not None:
+            return value.model_copy(update={"output": validated})
+        return validated
+
+    @_validated_workflow_output
     def _run_driver(
         self,
         executor: "Executor | None" = None,
@@ -2869,6 +2965,8 @@ def workflow(
     cron: str | None = None,
     webhook: Webhook | bool | None = None,
     input: type | None = None,
+    output: type[BaseModel] | None = None,
+    emits: tuple[str, ...] = (),
     context: type | None = None,
     ctx: type | None = None,
     agent_defaults: AgentDefaults | Mapping[str, object] | None = None,
@@ -2938,6 +3036,8 @@ def workflow(
                     cron=cron,
                     webhook=webhook,
                     input_type=input,
+                    output_type=output,
+                    emits=emits,
                     context_type=context_type,
                     agent_defaults=validated_agent_defaults,
                     classifier_defaults=classifier_defaults,

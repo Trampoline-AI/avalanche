@@ -21,7 +21,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, model_validator
 
-from .policies import DecisionTimeoutError, Outcome, WaitSpec
+from .policies import DecisionTimeoutError, Event, WaitSpec
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,7 @@ class WaitReceipt(BaseModel):
     payload_digest: str
 
 
-class Reconcile(Outcome):
+class Reconcile(Event):
     kind: Literal["done", "retry", "fail"]
     output: JsonValue = None
 

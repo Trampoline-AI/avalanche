@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import warnings
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from io import StringIO
@@ -24,6 +25,7 @@ from croniter import croniter
 from avalanche.agent.declaration import AgentDeclaration
 from avalanche.classifier.models import ClassifierDeclaration
 from avalanche.dag import Workflow
+from avalanche.machine import MachineDiscoveryWarning
 from avalanche.mapping import MapSpec
 from avalanche.policies import StepPolicy, WaitSpec
 
@@ -89,7 +91,7 @@ def raise_for_discovery_diagnostics(
     diagnostics: tuple[WorkflowDiscoveryDiagnostic, ...],
 ) -> None:
     """Raise when catalog diagnostics make discovery unusable."""
-    failures = tuple(item for item in diagnostics if item.kind != "skipped")
+    failures = tuple(item for item in diagnostics if item.kind not in {"skipped", "warning"})
     if failures:
         raise WorkflowDiscoveryError(failures)
 
@@ -487,8 +489,15 @@ def _worker(payload: dict[str, Any]) -> dict[str, Any]:
                     continue
                 found = True
                 try:
-                    with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
-                        workflow = builder()
+                    with warnings.catch_warnings(record=True) as caught:
+                        warnings.simplefilter("always", MachineDiscoveryWarning)
+                        with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                            workflow = builder()
+                    file_diagnostics.extend(
+                        _diagnostic(resolved_file, "warning", str(item.message))
+                        for item in caught
+                        if issubclass(item.category, MachineDiscoveryWarning)
+                    )
                     if not isinstance(workflow, Workflow):
                         raise TypeError("Marked builder did not return a Workflow")
                 except Exception as exc:
@@ -637,6 +646,9 @@ def _descriptor_to_dict(
     from .registry import workflow_input_schema
 
     return {
+        "machine_spec_json": workflow.machine_spec.model_dump_json()
+        if workflow.machine_spec is not None
+        else "",
         "input_schema_json": workflow_input_schema(workflow),
         "input_declaration_json": input_declaration_for_workflow(workflow, node_ids),
         "workflow_id": workflow_id,
@@ -679,6 +691,7 @@ def _descriptor_to_dict(
 
 def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
     return WorkflowDescriptor(
+        machine_spec_json=item["machine_spec_json"],
         input_schema_json=item["input_schema_json"],
         input_declaration_json=item["input_declaration_json"],
         workflow_id=item["workflow_id"],

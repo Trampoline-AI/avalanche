@@ -1,0 +1,367 @@
+{
+  "schema_version": "avalanche.machine/v1",
+  "name": "pr_lifecycle",
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "repo": {
+        "title": "Repo",
+        "type": "string"
+      },
+      "number": {
+        "title": "Number",
+        "type": "integer"
+      },
+      "head_sha": {
+        "title": "Head Sha",
+        "type": "string"
+      }
+    },
+    "required": [
+      "repo",
+      "number",
+      "head_sha"
+    ],
+    "title": "PR",
+    "type": "object"
+  },
+  "key_fields": [
+    "repo",
+    "number"
+  ],
+  "key_format": null,
+  "initial": "in_review",
+  "states": {
+    "in_review": {
+      "work": "review_round",
+      "initial": true,
+      "final": false,
+      "defer": [],
+      "transitions": [
+        {
+          "event": "review_done_with_nits",
+          "target": "amend",
+          "payload_schema": null
+        },
+        {
+          "event": "review_done",
+          "target": "ready_to_merge",
+          "payload_schema": null
+        }
+      ],
+      "timers": []
+    },
+    "amend": {
+      "work": "amend_round",
+      "initial": false,
+      "final": false,
+      "defer": [],
+      "transitions": [
+        {
+          "event": "amended",
+          "target": "in_review",
+          "payload_schema": null
+        }
+      ],
+      "timers": []
+    },
+    "ready_to_merge": {
+      "work": "notify_ready",
+      "initial": false,
+      "final": false,
+      "defer": [],
+      "transitions": [
+        {
+          "event": "merged",
+          "target": "closed",
+          "payload_schema": null
+        },
+        {
+          "event": "closed_without_merge",
+          "target": "closed",
+          "payload_schema": null
+        }
+      ],
+      "timers": [
+        {
+          "delay_seconds": 2592000.0,
+          "target": "closed"
+        }
+      ]
+    },
+    "closed": {
+      "work": "cleanup",
+      "initial": false,
+      "final": true,
+      "defer": [],
+      "transitions": [],
+      "timers": []
+    }
+  },
+  "work_graphs": {
+    "review_round": {
+      "node_ids": [
+        "lint_1",
+        "run_tests_1",
+        "ai_review_1",
+        "post_summary_1"
+      ],
+      "graph": {
+        "lint_1": [
+          "ai_review_1"
+        ],
+        "run_tests_1": [
+          "ai_review_1"
+        ],
+        "ai_review_1": [
+          "post_summary_1"
+        ]
+      },
+      "node_slugs": {
+        "ai_review_1": "ai_review",
+        "lint_1": "lint",
+        "run_tests_1": "run_tests",
+        "post_summary_1": "post_summary"
+      },
+      "node_types": {
+        "ai_review_1": "step",
+        "lint_1": "step",
+        "run_tests_1": "step",
+        "post_summary_1": "step"
+      },
+      "node_policies": {
+        "ai_review_1": {
+          "retries": 3,
+          "on_uncertain": "retry"
+        },
+        "lint_1": {
+          "retries": 3,
+          "on_uncertain": "retry"
+        },
+        "run_tests_1": {
+          "retries": 3,
+          "on_uncertain": "retry"
+        },
+        "post_summary_1": {
+          "retries": 7,
+          "on_uncertain": "retry"
+        }
+      },
+      "node_waits": {},
+      "node_emits": {
+        "ai_review_1": [
+          "review_done",
+          "review_done_with_nits"
+        ],
+        "lint_1": [],
+        "run_tests_1": [],
+        "post_summary_1": []
+      },
+      "node_output_schemas": {
+        "ai_review_1": {
+          "$defs": {
+            "ReviewReport": {
+              "properties": {
+                "nits": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Nits",
+                  "type": "array"
+                },
+                "summary": {
+                  "title": "Summary",
+                  "type": "string"
+                },
+                "score": {
+                  "title": "Score",
+                  "type": "number"
+                }
+              },
+              "required": [
+                "nits",
+                "summary",
+                "score"
+              ],
+              "title": "ReviewReport",
+              "type": "object"
+            }
+          },
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Name"
+            },
+            "output": {
+              "$ref": "#/$defs/ReviewReport",
+              "default": null
+            }
+          },
+          "title": "Event[ReviewReport]",
+          "type": "object"
+        },
+        "lint_1": {
+          "type": "null"
+        },
+        "run_tests_1": {
+          "type": "null"
+        },
+        "post_summary_1": {
+          "type": "null"
+        }
+      },
+      "emits": [
+        "review_done",
+        "review_done_with_nits"
+      ],
+      "output_node_id": "ai_review_1",
+      "output_schema": {
+        "properties": {
+          "nits": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Nits",
+            "type": "array"
+          },
+          "summary": {
+            "title": "Summary",
+            "type": "string"
+          },
+          "score": {
+            "title": "Score",
+            "type": "number"
+          }
+        },
+        "required": [
+          "nits",
+          "summary",
+          "score"
+        ],
+        "title": "ReviewReport",
+        "type": "object"
+      }
+    },
+    "amend_round": {
+      "node_ids": [
+        "apply_nits_1",
+        "push_fixup_1"
+      ],
+      "graph": {
+        "apply_nits_1": [
+          "push_fixup_1"
+        ]
+      },
+      "node_slugs": {
+        "apply_nits_1": "apply_nits",
+        "push_fixup_1": "push_fixup"
+      },
+      "node_types": {
+        "apply_nits_1": "step",
+        "push_fixup_1": "step"
+      },
+      "node_policies": {
+        "apply_nits_1": {
+          "retries": 3,
+          "on_uncertain": "hold"
+        },
+        "push_fixup_1": {
+          "retries": 3,
+          "on_uncertain": "hold"
+        }
+      },
+      "node_waits": {},
+      "node_emits": {
+        "apply_nits_1": [],
+        "push_fixup_1": []
+      },
+      "node_output_schemas": {
+        "apply_nits_1": {
+          "type": "null"
+        },
+        "push_fixup_1": {
+          "type": "null"
+        }
+      },
+      "emits": [],
+      "output_node_id": "push_fixup_1",
+      "output_schema": {
+        "type": "null"
+      }
+    },
+    "notify_ready": {
+      "node_ids": [
+        "notify_ready_1"
+      ],
+      "graph": {},
+      "node_slugs": {
+        "notify_ready_1": "notify_ready"
+      },
+      "node_types": {
+        "notify_ready_1": "step"
+      },
+      "node_policies": {
+        "notify_ready_1": {
+          "retries": 7,
+          "on_uncertain": "retry"
+        }
+      },
+      "node_waits": {},
+      "node_emits": {
+        "notify_ready_1": []
+      },
+      "node_output_schemas": {
+        "notify_ready_1": {
+          "type": "null"
+        }
+      },
+      "emits": [],
+      "output_node_id": "notify_ready_1",
+      "output_schema": {
+        "type": "null"
+      }
+    },
+    "cleanup": {
+      "node_ids": [
+        "cleanup_1"
+      ],
+      "graph": {},
+      "node_slugs": {
+        "cleanup_1": "cleanup"
+      },
+      "node_types": {
+        "cleanup_1": "step"
+      },
+      "node_policies": {
+        "cleanup_1": {
+          "retries": 7,
+          "on_uncertain": "retry"
+        }
+      },
+      "node_waits": {},
+      "node_emits": {
+        "cleanup_1": []
+      },
+      "node_output_schemas": {
+        "cleanup_1": {
+          "type": "null"
+        }
+      },
+      "emits": [],
+      "output_node_id": "cleanup_1",
+      "output_schema": {
+        "type": "null"
+      }
+    }
+  }
+}

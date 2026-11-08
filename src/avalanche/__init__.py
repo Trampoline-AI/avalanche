@@ -13,6 +13,8 @@ executor, and runtime API.
 
 from importlib import import_module
 
+from pydantic import BaseModel
+
 # DAG primitives
 # Execution engines
 from runtime.executor import Executor, LocalExecutor, get_default_executor
@@ -36,9 +38,10 @@ from .execution_services import (
     ExecutionTaskSpec,
 )
 from .input_ref import INPUT as input  # noqa: N811
+from .machine import Machine, machine, state
 from .mapping import DEFAULT_MAX_ITEMS, HARD_CAP, MapItemFailure, MapItemsFailed
 from .model_frame import Json
-from .policies import NonRetryableError, Outcome, OutcomeUnknownError
+from .policies import Event, NonRetryableError, OutcomeUnknownError, event
 
 # Progress tracking
 from .progress import ProgressStore
@@ -144,7 +147,11 @@ __all__ = [
     "source",
     "NonRetryableError",
     "OutcomeUnknownError",
-    "Outcome",
+    "Event",
+    "event",
+    "machine",
+    "state",
+    "Machine",
     "sleep",
     "wait_for_event",
     "decision",
@@ -171,6 +178,7 @@ __all__ = [
     # Runtime
     "BaseContext",
     "BaseInput",
+    "BaseModel",
     "Cursor",
     "File",
     "Workspace",

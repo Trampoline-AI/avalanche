@@ -188,6 +188,9 @@ def workflow_to_info(
     standard_step_docstring_lines = node_docstring_lines_for_workflow(workflow, node_ids)
     node_source_code = node_source_code_for_workflow(workflow, node_ids)
     return WorkflowInfo(
+        machine_spec_json=workflow.machine_spec.model_dump_json()
+        if workflow.machine_spec is not None
+        else "",
         name=workflow.name,
         display_name=workflow.name,
         workflow_id=workflow_id,
@@ -220,6 +223,7 @@ def workflow_to_info(
 def descriptor_to_info(descriptor: WorkflowDescriptor) -> WorkflowInfo:
     """Build a mutable public projection without mutating catalog metadata."""
     return WorkflowInfo(
+        machine_spec_json=descriptor.machine_spec_json,
         name=descriptor.display_name,
         display_name=descriptor.display_name,
         workflow_id=descriptor.workflow_id,
@@ -556,7 +560,9 @@ class WorkflowRegistry:
             for root in roots
         )
         diagnostics_tuple = tuple(candidate_diagnostics)
-        candidate_failed = any(item.kind != "skipped" for item in diagnostics_tuple)
+        candidate_failed = any(
+            item.kind not in {"skipped", "warning"} for item in diagnostics_tuple
+        )
         if candidate_failed:
             with self._lock:
                 current = self._view

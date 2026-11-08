@@ -47,10 +47,26 @@ class StepPolicy(BaseModel):
         return min(self.retries, MAX_GENERATION - 1)
 
 
-class Outcome(BaseModel):
-    """Base for author-defined typed decisions. Audit identity lives outside it."""
+class Event[T = JsonValue](BaseModel):
+    """Typed decision answer or named work event; audit identity is separate.
+
+    Decisions subclass this model with their own fields. Named work events carry
+    ``name`` and ``output``; unset envelope fields stay off the decision wire.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
+    name: str | None = Field(default=None, min_length=1, exclude_if=lambda value: value is None)
+    output: T = Field(default=None, exclude_if=lambda value: value is None)
+
+
+class _NamedEvent[T](Event[T]):
+    name: str | None = Field(..., min_length=1)
+    output: T = Field(...)
+
+
+def event[T](name: str, output: T) -> Event[T]:
+    """Return one typed value containing a transition name and its data output."""
+    return _NamedEvent[T](name=name, output=output)
 
 
 class WaitSpec(BaseModel):

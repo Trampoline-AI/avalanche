@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Add declarative `@ava.machine` state graphs, typed `Event[T]` emissions and
+  workflow outputs, discovery manifests, and a native-async local test driver.
+  Rename the decision base from `Outcome` to `Event` without an alias;
+  `OutcomeUnknownError` keeps its uncertain-effect meaning and name.
+
 - Keep the terminal UI responsive when a streamed update arrives while a resource
   panel is mounting; load the panel only once its widgets are ready.
 - Keep graph connections visible across run-topology changes by measuring handle

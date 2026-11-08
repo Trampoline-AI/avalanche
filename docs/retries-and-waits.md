@@ -76,7 +76,7 @@ from datetime import timedelta
 from typing import Literal
 from pydantic import BaseModel
 
-class Approval(ava.Outcome):
+class Approval(ava.Event):
     kind: Literal["approve", "reject", "edit"]
     note: str = ""
 
@@ -103,9 +103,9 @@ def contract_flow():
   exactly one. The deadline is computed once when the node arms.
 - `ava.wait_for_event(Model, key=..., timeout=...)` returns `Model | None`;
   `None` means timeout. `timeout` is required: a duration or explicit `None`.
-- `ava.decision(Outcome, prompt=..., show=..., timeout=..., on_timeout=...)`
-  returns the declared Outcome. `timeout` is required: a duration or explicit
-  `None`. `on_timeout` must be an instance of the declared Outcome; when omitted,
+- `ava.decision(Event, prompt=..., show=..., timeout=..., on_timeout=...)`
+  returns the declared Event. `timeout` is required: a duration or explicit
+  `None`. `on_timeout` must be an instance of the declared Event; when omitted,
   expiry fails with `decision_timeout`. A timeout is audited as a **system**
   resolution, not as a human rejection. Escalation can use an explicit typed
   timeout outcome that a downstream step interprets.
@@ -113,7 +113,7 @@ def contract_flow():
 A decision pins its schema, prompt and shown artifact. `show` accepts a JSON
 value, Pydantic model, or an upstream node reference (including a selected tuple
 item). Audit identity, time, reason and reviewed schema/artifact are outside
-author-controlled Outcome fields. `assignees` routes attention; it is not an ACL.
+author-controlled Event fields. `assignees` routes attention; it is not an ACL.
 Optional `approvers` further restricts `run:decide`. Event permission cannot
 resolve a decision. A second different decision conflicts; it cannot overwrite
 the first or resurrect a withdrawn run.

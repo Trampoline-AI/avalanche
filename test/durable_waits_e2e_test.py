@@ -13,7 +13,7 @@ from avalanche.local_waits import LocalPrincipal, WaitRefusalError
 from avalanche.policies import DecisionTimeoutError
 
 
-class Approval(ava.Outcome):
+class Approval(ava.Event):
     kind: Literal["approve", "reject"]
 
 

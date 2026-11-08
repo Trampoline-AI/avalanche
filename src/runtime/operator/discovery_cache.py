@@ -24,7 +24,7 @@ from .source import iter_source_paths
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 16
+_CACHE_SCHEMA_VERSION = 18
 
 
 class _CacheModel(BaseModel):
@@ -75,6 +75,7 @@ class _CachedDescriptor(_CacheModel):
     node_types: tuple[tuple[str, str], ...]
     node_policies: tuple[tuple[str, StepPolicy], ...]
     node_waits: tuple[tuple[str, WaitSpec], ...]
+    machine_spec_json: str
     display_names: tuple[tuple[str, str], ...]
     agent_node_ids: tuple[str, ...]
     agent_declarations: tuple[tuple[str, AgentDeclaration], ...]
@@ -101,6 +102,7 @@ class _CachedDescriptor(_CacheModel):
             node_types=descriptor.node_types,
             node_policies=descriptor.node_policies,
             node_waits=descriptor.node_waits,
+            machine_spec_json=descriptor.machine_spec_json,
             display_names=descriptor.display_names,
             agent_node_ids=descriptor.agent_node_ids,
             agent_declarations=descriptor.agent_declarations,
@@ -127,6 +129,7 @@ class _CachedDescriptor(_CacheModel):
             node_types=self.node_types,
             node_policies=self.node_policies,
             node_waits=self.node_waits,
+            machine_spec_json=self.machine_spec_json,
             display_names=self.display_names,
             agent_node_ids=self.agent_node_ids,
             agent_declarations=self.agent_declarations,
@@ -147,7 +150,12 @@ class _CachedDescriptor(_CacheModel):
 class _CachedDiagnostic(_CacheModel):
     path: str
     kind: Literal[
-        "skipped", "import_error", "build_error", "invalid_schedule", "invalid_catalog"
+        "skipped",
+        "warning",
+        "import_error",
+        "build_error",
+        "invalid_schedule",
+        "invalid_catalog",
     ]
     message: str
 
@@ -197,7 +205,7 @@ class _SourceStamp(_CacheModel):
 
 
 class _CacheDocument(_CacheModel):
-    schema_version: Literal[16]
+    schema_version: Literal[18]
     environment: str
     roots: tuple[_CachedRoot, ...]
     watch_roots: tuple[str, ...]

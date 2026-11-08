@@ -8,7 +8,7 @@ from pydantic import BaseModel
 import avalanche as ava
 
 
-class Approval(ava.Outcome):
+class Approval(ava.Event):
     kind: Literal["approve", "reject"]
     note: str = ""
 
