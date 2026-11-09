@@ -60,6 +60,95 @@ def test_review_loop():
     assert timed.state == "closed"
     assert timed.history[-2].source == "timer"
 
+    # Router work stays ordinary graph work; machine calls are host-owned nodes.
+    @ava.step
+    def request() -> example.PR:
+        return example.PR(repo="acme/api", number=44, head_sha="a1")
+
+    @ava.step
+    def instance_key(started: ava.MachineStart) -> tuple[str, int]:
+        return tuple(started.key)
+
+    @ava.step
+    def event_name() -> str:
+        return "merged"
+
+    @ava.workflow
+    def router():
+        value = request()
+        started = example.pr_lifecycle.start(value)
+        again = example.pr_lifecycle.start(value)
+        started >> again
+        key = instance_key(again)
+        receipt = example.pr_lifecycle.send(key, event_name())
+        return started, again, receipt
+
+    graph = router()
+    assert {spec.op for spec in graph.node_machines.values()} == {"start", "send"}
+    from runtime.operator.registry import workflow_to_info
+
+    info = workflow_to_info(graph, __file__)
+    assert info.node_machines == graph.node_machines
+    with pytest.raises(RuntimeError, match="MachineHost"):
+        graph.run()
+    with pytest.raises(TypeError, match="host="):
+        example.pr_lifecycle.start(example.PR(repo="acme/api", number=44, head_sha="a1"))
+    with pytest.raises(TypeError, match="host="):
+        example.pr_lifecycle.send(("acme/api", 44), "merged")
+
+    run = graph.test()
+    started, again, receipt = run.handle.result(timeout=1)
+    assert started.created and not again.created and started.run_id == again.run_id
+    assert receipt.status == "accepted" and not receipt.duplicate
+    instance = next(iter(run.host.instances.values()))
+    assert instance.state == "closed" and instance.handle.done()
+    assert [item.event for item in instance.history if item.source == "external"] == ["merged"]
+    send_id = next(name for name, spec in graph.node_machines.items() if spec.op == "send")
+    step_key = ava.RunContext(
+        run_id=run.handle.run_id,
+        workflow_name=graph.name,
+        node_id=send_id,
+    ).step_key
+    assert next(iter(run.host.receipts))[-1] == step_key
+
+    async def replay_and_explicit_host():
+        replay = await example.pr_lifecycle.send(
+            ("acme/api", 44),
+            "merged",
+            idempotency_key=step_key,
+            host=run.host,
+        )
+        assert replay.receipt_id == receipt.receipt_id and replay.duplicate
+        assert replay.accepted_at == receipt.accepted_at
+        from avalanche.local_waits import WaitRefusalError
+
+        with pytest.raises(WaitRefusalError, match="conflict"):
+            await example.pr_lifecycle.send(
+                ("acme/api", 44),
+                "merged",
+                {"changed": True},
+                idempotency_key=step_key,
+                host=run.host,
+            )
+        with pytest.raises(WaitRefusalError, match="run_closed"):
+            await example.pr_lifecycle.send(
+                ("acme/api", 44),
+                "merged",
+                idempotency_key="new",
+                host=run.host,
+            )
+        same = await example.pr_lifecycle.start(
+            example.PR(repo="acme/api", number=44, head_sha="a1"),
+            host=run.host,
+        )
+        assert same.run_id == started.run_id and not same.created
+        with pytest.raises(ValueError, match="idempotency_key"):
+            example.pr_lifecycle.send(("acme/api", 44), "merged", host=run.host)
+        async_run = await graph.test_async()
+        assert async_run.handle.result(timeout=1)[2].status == "accepted"
+
+    asyncio.run(replay_and_explicit_host())
+
 
 @pytest.mark.parametrize(
     ("body", "error"),
@@ -169,6 +258,41 @@ async def test_machine_run_control_early_events_payloads_and_defer():
     await m.aadvance_time(timedelta(seconds=5))
     assert m.history == history
 
+    @ava.step
+    def routed_payload() -> Amended:
+        return Amended(sha="routed")
+
+    @ava.step
+    def routed_event() -> str:
+        return "deferred"
+
+    @ava.step
+    def delivery_id() -> str:
+        return "delivery-2"
+
+    @ava.workflow
+    def payload_router():
+        started = lifecycle.start(Input(id=2))
+        buffered = lifecycle.send(
+            (2,),
+            routed_event(),
+            routed_payload(),
+            idempotency_key=delivery_id(),
+        )
+        started >> buffered
+        start_event = lifecycle.send((2,), "start")
+        buffered >> start_event
+        amended = lifecycle.send((2,), "amended", Amended(sha="advance"))
+        start_event >> amended
+        return amended
+
+    routed = await payload_router().test_async()
+    assert routed.handle.result(timeout=1).status == "accepted"
+    routed_instance = next(iter(routed.host.instances.values()))
+    assert routed_instance.state == "closed"
+    assert received == ["queued", "routed"]
+    assert any(address[-1] == "delivery-2" for address in routed.host.receipts)
+
 
 def test_machine_visit_reconciliation_reuses_local_waits():
     class Input(ava.BaseInput):
@@ -252,14 +376,29 @@ async def work() -> ava.Event[int]:
 def warned():
     waiting = ava.state(work, initial=True)
     waiting.on("external") >> waiting
+@ava.workflow
+def router():
+    started = warned.start(Input(id=1))
+    sent = warned.send((1,), "external")
+    started >> sent
+    return sent
 """)
-    registry = WorkflowRegistry()
+    registry = WorkflowRegistry(cache_dir=tmp_path / "cache")
     registry.scan([str(fixture)])
     diagnostics = tuple(registry.list_diagnostics())
     assert [d.kind for d in diagnostics] == ["warning"]
     assert "unhandled" in diagnostics[0].message
     raise_for_discovery_diagnostics(diagnostics)
-    assert [info.name for info in registry.list_workflows()] == ["warned"]
+    assert sorted(info.name for info in registry.list_workflows()) == ["router", "warned"]
+    router = next(info for info in registry.list_workflows() if info.name == "router")
+    assert {name: spec.model_dump() for name, spec in router.node_machines.items()} == {
+        "warned_start_1": {"machine": "warned", "op": "start"},
+        "warned_send_1": {"machine": "warned", "op": "send"},
+    }
+    cached = WorkflowRegistry(cache_dir=tmp_path / "cache")
+    cached.scan([str(fixture)])
+    cached_router = next(info for info in cached.list_workflows() if info.name == "router")
+    assert cached_router.node_machines == router.node_machines
 
 
 def test_machine_work_failure_retry_and_undeclared_event():

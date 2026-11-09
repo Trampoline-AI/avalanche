@@ -11,6 +11,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 
+from .machine_host import MachineOpSpec
 from .mapping import MapSpec
 from .policies import StepPolicy, WaitSpec
 
@@ -50,6 +51,9 @@ class MachineWorkSpec(BaseModel):
     node_types: dict[str, str]
     node_policies: dict[str, StepPolicy]
     node_waits: dict[str, WaitSpec] = Field(default_factory=dict)
+    node_machines: dict[str, MachineOpSpec] = Field(
+        default_factory=dict, exclude_if=lambda value: not value
+    )
     map_specs: dict[str, MachineMapSpec] = Field(
         default_factory=dict, exclude_if=lambda value: not value
     )
@@ -81,6 +85,8 @@ class MachineWorkSpec(BaseModel):
         )
         if expanded > 64:
             raise ValueError("state visit work exceeds 64 nodes including mapped children")
+        if not set(self.node_machines) <= nodes:
+            raise ValueError("unknown work machine node")
         if not set(self.node_waits) <= nodes:
             raise ValueError("unknown work wait node")
         for parent, children in self.graph.items():

@@ -6,25 +6,12 @@ import json
 from collections import deque
 from collections.abc import Mapping
 from copy import deepcopy
-from dataclasses import dataclass
 
-from pydantic import BaseModel, ConfigDict, JsonValue
+from pydantic import BaseModel, JsonValue
 
 from .local_waits import LocalPrincipal, LocalWaits, WaitReceipt, WaitRefusalError
+from .machine_core import BufferedEvent, InboxFact, consumable_index, retain_inbox
 from .policies import WaitSpec
-
-
-class InboxFact(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-    event: str
-    kind: str
-
-
-@dataclass(frozen=True)
-class BufferedEvent:
-    name: str
-    payload: BaseModel | dict[str, JsonValue] | None
-    size: int
 
 
 class MachineWaits(LocalWaits):
@@ -46,15 +33,13 @@ class MachineWaits(LocalWaits):
         defer: tuple[str, ...],
     ) -> None:
         self.accepts, self.defer = accepts, defer
-        retained: deque[BufferedEvent] = deque()
-        for event in self.buffer:
-            if event.name in accepts or event.name in defer:
-                retained.append(event)
-            else:
-                self.facts.append(InboxFact(event=event.name, kind="event_dropped"))
-                self._queued_count -= 1
-                self._queued_bytes -= event.size
-        self.buffer = retained
+        retained, dropped = retain_inbox(tuple(self.buffer), accepts, defer)
+        self.facts.extend(dropped)
+        self._queued_count -= len(self.buffer) - len(retained)
+        self._queued_bytes -= sum(event.size for event in self.buffer) - sum(
+            event.size for event in retained
+        )
+        self.buffer = deque(retained)
 
     def send_event(
         self,
@@ -107,31 +92,32 @@ class MachineWaits(LocalWaits):
             return receipt
 
     def consume(self) -> BufferedEvent | None:
-        for event in self.buffer:
-            if event.name in self.accepts:
-                self.buffer.remove(event)
-                self._queued_count -= 1
-                self._queued_bytes -= event.size
-                model = self.accepts[event.name]
-                wire = (
-                    event.payload.model_dump(mode="json")
-                    if isinstance(event.payload, BaseModel)
-                    else event.payload or {}
-                )
-                if model is None and wire != {}:
-                    raise WaitRefusalError("event_payload_must_be_empty", 422)
-                payload = (
-                    (
-                        event.payload
-                        if isinstance(event.payload, model)
-                        else model.model_validate_json(
-                            json.dumps(wire, allow_nan=False), strict=True
-                        )
+        index = consumable_index(tuple(self.buffer), self.accepts)
+        if index is not None:
+            event = self.buffer[index]
+            self.buffer.remove(event)
+            self._queued_count -= 1
+            self._queued_bytes -= event.size
+            model = self.accepts[event.name]
+            wire = (
+                event.payload.model_dump(mode="json")
+                if isinstance(event.payload, BaseModel)
+                else event.payload or {}
+            )
+            if model is None and wire != {}:
+                raise WaitRefusalError("event_payload_must_be_empty", 422)
+            payload = (
+                (
+                    event.payload
+                    if isinstance(event.payload, model)
+                    else model.model_validate_json(
+                        json.dumps(wire, allow_nan=False), strict=True
                     )
-                    if model is not None
-                    else None
                 )
-                return BufferedEvent(event.name, payload, event.size)
+                if model is not None
+                else None
+            )
+            return BufferedEvent(event.name, payload, event.size)
         return None
 
     def add_visit_waits(

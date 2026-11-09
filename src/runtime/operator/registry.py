@@ -164,6 +164,9 @@ def workflow_revision(info: WorkflowInfo) -> str:
     fields["node_policies"] = {
         node: policy.model_dump(mode="json") for node, policy in info.node_policies.items()
     }
+    fields["node_machines"] = {
+        node: spec.model_dump(mode="json") for node, spec in info.node_machines.items()
+    }
     fields["node_waits"] = {
         node: spec.model_dump(mode="json", by_alias=True)
         for node, spec in info.node_waits.items()
@@ -203,6 +206,7 @@ def workflow_to_info(
         node_types=node_types,
         node_policies={nid: workflow.nodes[nid].node.policy for nid in node_ids},
         node_waits=dict(workflow.node_waits),
+        node_machines=dict(workflow.node_machines),
         display_names=display_names,
         agent_node_ids=agent_node_ids,
         agent_declarations=agent_declarations,
@@ -236,6 +240,7 @@ def descriptor_to_info(descriptor: WorkflowDescriptor) -> WorkflowInfo:
         node_types=dict(descriptor.node_types),
         node_policies=dict(descriptor.node_policies),
         node_waits=dict(descriptor.node_waits),
+        node_machines=dict(descriptor.node_machines),
         display_names=dict(descriptor.display_names),
         agent_node_ids=list(descriptor.agent_node_ids),
         agent_declarations=dict(descriptor.agent_declarations),

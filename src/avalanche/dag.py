@@ -84,6 +84,8 @@ if TYPE_CHECKING:
 
     from .agent.defaults import AgentDefaults
     from .execution_services import ExecutionServicesSpec
+    from .machine_test import WorkflowTest
+    from .runtime import BaseInput
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -124,6 +126,7 @@ class NodeType(Enum):
     TRANSFORM = "step"
     DEST = "dest"
     WAIT = "wait"
+    MACHINE = "machine"
 
 
 class Node:
@@ -2160,8 +2163,14 @@ class Workflow:
         """
         self.graph = graph
         self.nodes = nodes
+        from .machine_nodes import MachineNode
         from .waits import WaitNode
 
+        self.node_machines = {
+            node_id: ref.node.spec
+            for node_id, ref in nodes.items()
+            if isinstance(ref.node, MachineNode)
+        }
         self.node_waits = {
             node_id: ref.node.spec
             for node_id, ref in nodes.items()
@@ -2303,6 +2312,11 @@ class Workflow:
         The handle is returned immediately. Call ``handle.result()`` to block in
         synchronous code or ``await handle`` from asynchronous code.
         """
+        if self.node_machines:
+            raise RuntimeError(
+                "MACHINE nodes require a machine-capable host; the embedded runner has no "
+                "MachineHost. Use workflow.test() for in-memory execution."
+            )
         canonical_run_id = run_id if run_id is not None else str(ULID())
         handle: RunHandle[Any] = RunHandle(canonical_run_id)
         from runtime.executor import get_default_executor
@@ -2350,6 +2364,28 @@ class Workflow:
             )
         )
         return handle
+
+    def test(
+        self, input: BaseInput | Mapping[str, JsonValue] | None = None,
+        *, stub: Mapping[Node, list[BaseModel | JsonValue]] | None = None,
+    ) -> WorkflowTest:
+        """Execute with fake time, stubs and an in-memory machine host."""
+        from .machine_test import WorkflowTest
+
+        driver = WorkflowTest(self, input, stub=stub)
+        driver._sync(driver._drive())
+        return driver
+
+    async def test_async(
+        self, input: BaseInput | Mapping[str, JsonValue] | None = None,
+        *, stub: Mapping[Node, list[BaseModel | JsonValue]] | None = None,
+    ) -> WorkflowTest:
+        """Async variant of test(), with the same isolated in-memory host."""
+        from .machine_test import WorkflowTest
+
+        driver = WorkflowTest(self, input, stub=stub)
+        await driver._drive()
+        return driver
 
     @property
     def required_protocol(self) -> ProtocolVersion:

@@ -39,6 +39,7 @@ from .execution_services import (
 )
 from .input_ref import INPUT as input  # noqa: N811
 from .machine import Machine, machine, state
+from .machine_host import MachineEventReceipt, MachineHost, MachineInstance, MachineStart
 from .mapping import DEFAULT_MAX_ITEMS, HARD_CAP, MapItemFailure, MapItemsFailed
 from .model_frame import Json
 from .policies import Event, NonRetryableError, OutcomeUnknownError, event
@@ -152,6 +153,10 @@ __all__ = [
     "machine",
     "state",
     "Machine",
+    "MachineHost",
+    "MachineStart",
+    "MachineEventReceipt",
+    "MachineInstance",
     "sleep",
     "wait_for_event",
     "decision",

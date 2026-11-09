@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 from collections import deque
 from collections.abc import Coroutine, Mapping
 from datetime import timedelta
@@ -22,6 +23,7 @@ from .dag import (
     Node,
     NodeFuture,
     ParallelTasks,
+    Workflow,
     _bind_implicit_parent_results,
     _build_node_binding_plan,
     _collect_implicit_parent_results,
@@ -31,7 +33,10 @@ from .dag import (
     _resolve_to_ref,
     _reverse_graph,
 )
-from .local_waits import Reconcile, WaitReceipt
+from .local_waits import LocalPrincipal, Reconcile, WaitReceipt, WaitRefusalError
+from .machine_core import MachineRecord, reduce_machine
+from .machine_host import JsonObject, MachineEventReceipt, MachineKey, MachineStart
+from .machine_nodes import MachineNode, execute_machine_node
 from .machine_waits import MachineWaits
 from .policies import MAX_GENERATION, Event, NonRetryableError, OutcomeUnknownError, event
 from .run_handle import RunHandle
@@ -63,7 +68,9 @@ class MachineTest:
         input: BaseInput | Mapping[str, JsonValue],
         *,
         stub: Mapping[Node, list[LocalValue]] | None,
+        host: InMemoryMachineHost | None = None,
     ) -> None:
+        self.host = host if host is not None else InMemoryMachineHost(stub=stub)
         self.machine = machine
         self.spec = machine.spec
         self.input = machine.input_type.model_validate(input)
@@ -78,6 +85,7 @@ class MachineTest:
         self._payload: LocalValue = None
         self._work_done = False
         self._internal_consumed = False
+        self._visit = 0
         self._enter()
 
     @staticmethod
@@ -90,6 +98,7 @@ class MachineTest:
         raise RuntimeError("use machine.test_async/asend/aadvance_time inside an event loop")
 
     def _enter(self) -> None:
+        self._visit += 1
         declaration = self.spec.states[self.state]
         self.waits.enter(self.machine.payloads[self.state], declaration.defer)
         self._due = [
@@ -205,45 +214,35 @@ class MachineTest:
                         continue
                 result = self._output(work.returns)
                 result = work.validate_output(result)
-                if declaration.final:
+                reduction = reduce_machine(
+                    self.spec,
+                    MachineRecord(self.state, self._payload, self._internal_consumed),
+                    tuple(self.waits.buffer),
+                    self._due,
+                    result,
+                    self.waits.now(),
+                    work_done=self._work_done,
+                )
+                if reduction.finished:
                     self.history.append(
                         MachineHistory(state=self.state, event=None, source=None)
                     )
                     self.handle._set_execution_receipts(())
                     self.handle._future.set_result(result)
                     return
-                expired = [
-                    (due, target) for due, target in self._due if due <= self.waits.now()
-                ]
-                if expired:
-                    _, target = min(expired, key=lambda timer: timer[0])
-                    self._transition(target, None, "timer", None)
-                    continue
-                if not self._internal_consumed:
-                    self._internal_consumed = True
-                    if isinstance(result, Event) and result.name is not None:
-                        if result.name not in work.emits:
-                            raise NonRetryableError(
-                                f"undeclared workflow event {result.name!r}"
-                            )
-                        target = next(
-                            (
-                                t.target
-                                for t in declaration.transitions
-                                if t.event == result.name
-                            ),
-                            None,
-                        )
-                        if target is not None:
-                            self._transition(target, result.name, "internal", result.output)
-                            continue
-                event = self.waits.consume()
-                if event is None:
+                self._internal_consumed = reduction.record.internal_consumed
+                transition = reduction.transition
+                if transition is None:
                     return
-                target = next(
-                    t.target for t in declaration.transitions if t.event == event.name
+                payload = transition.payload
+                if reduction.consumed_index is not None:
+                    # The inbox adapter validates a formerly deferred payload at consumption.
+                    consumed = self.waits.consume()
+                    assert consumed is not None
+                    payload = consumed.payload
+                self._transition(
+                    transition.target, transition.event, transition.source, payload
                 )
-                self._transition(target, event.name, "external", event.payload)
         except Exception as exc:
             self.handle._execution_receipts.set_exception(exc)
             self.handle._future.set_exception(exc)
@@ -261,8 +260,12 @@ class MachineTest:
             return tuple(self._output(item) for item in value)
         return value
 
+    @property
+    def work(self) -> Workflow:
+        return self.machine.works[self.spec.states[self.state].work]
+
     async def _run_work(self) -> bool:
-        work = self.machine.works[self.spec.states[self.state].work]
+        work = self.work
         dependencies = _reverse_graph(work.graph)
         while len(self._values) < len(work.nodes):
             ready = [
@@ -320,7 +323,7 @@ class MachineTest:
         self, ref: NodeFuture, dependencies: dict[str, list[str]]
     ) -> LocalValue | _Pending:
         node = ref.node
-        work = self.machine.works[self.spec.states[self.state].work]
+        work = self.work
         if isinstance(ref, MapFuture):
             mapped, broadcast = _resolve_input_refs(
                 [_resolve_to_ref(value, self._values) for value in ref.args],
@@ -368,6 +371,21 @@ class MachineTest:
                 return TypeAdapter(annotation).validate_python(answer.output)
             if answer.kind == "fail" or self._attempts[ref.future_id] >= MAX_GENERATION:
                 raise OutcomeUnknownError("reconciliation failed or generation ceiling")
+        if isinstance(node, MachineNode):
+            self.host.register(node.machine)
+            context = RunContext(
+                run_id=self.handle.run_id,
+                workflow_name=work.name,
+                node_id=f"v{self._visit}.{ref.future_id}" if self._visit else ref.future_id,
+                node_name=node.name,
+                node_slug=ref.node_slug,
+            )
+            args = [_resolve_to_ref(value, self._values) for value in ref.args]
+            kwargs = {
+                name: _resolve_to_ref(value, self._values) for name, value in ref.kwargs.items()
+            }
+            args, kwargs = _resolve_input_refs(args, kwargs, self.input, node.name, work.name)
+            return await execute_machine_node(node, args, kwargs, self.host, context)
         if node in self._stubs:
             return self._stub(node)
         plan = _build_node_binding_plan(
@@ -489,3 +507,138 @@ class MachineTest:
         finally:
             _current_run_context.reset(token)
         raise AssertionError("unreachable retry ladder")
+
+
+class InMemoryMachineHost:
+    """Test-only host: one instance per canonical key and real machine semantics."""
+
+    def __init__(self, *, stub: Mapping[Node, list[LocalValue]] | None = None) -> None:
+        self.machines: dict[str, Machine] = {}
+        self.instances: dict[tuple[str, str], MachineTest] = {}
+        self.receipts: dict[tuple[str, str, str, str], tuple[str, MachineEventReceipt]] = {}
+        self.stub = stub
+
+    def register(self, machine: Machine) -> None:
+        name = machine.builder.__name__
+        if name in self.machines and self.machines[name] is not machine:
+            raise ValueError(f"duplicate machine name {name!r}")
+        self.machines[name] = machine
+
+    @staticmethod
+    def _key(key: MachineKey) -> str:
+        return json.dumps(
+            key, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+        )
+
+    async def start(self, machine: str, key: MachineKey, input: JsonObject) -> MachineStart:
+        address = (machine, self._key(key))
+        if address in self.instances:
+            return MachineStart(
+                run_id=self.instances[address].handle.run_id, key=list(key), created=False
+            )
+        definition = self.machines[machine]
+        if definition.key(input) != key:
+            raise ValueError("machine key does not match input")
+        driver = MachineTest(definition, input, stub=self.stub, host=self)
+        self.instances[address] = driver
+        await driver._drive()
+        return MachineStart(run_id=driver.handle.run_id, key=list(key), created=True)
+
+    async def send(
+        self,
+        machine: str,
+        key: MachineKey,
+        event: str,
+        payload: JsonValue,
+        idempotency_key: str,
+    ) -> MachineEventReceipt:
+        encoded = self._key(key)
+        address = (machine, encoded, event, idempotency_key)
+        body = json.dumps(
+            {} if payload is None else payload,
+            sort_keys=True,
+            ensure_ascii=False,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        if address in self.receipts:
+            previous, receipt = self.receipts[address]
+            if previous != body:
+                raise WaitRefusalError("conflict", 409)
+            return receipt.model_copy(update={"duplicate": True})
+        driver = self.instances[(machine, encoded)]
+        if driver.handle.done():
+            raise WaitRefusalError("run_closed", 409)
+        if payload is not None and not isinstance(payload, dict):
+            raise WaitRefusalError("event_payload_must_be_object", 422)
+        accepted = driver.waits.send_event(
+            event,
+            {} if payload is None else payload,
+            idempotency_key=idempotency_key,
+            principal=LocalPrincipal(),
+        )
+        receipt = MachineEventReceipt(
+            receipt_id=accepted.receipt_id,
+            key=event,
+            accepted_at=accepted.accepted_at.timestamp(),
+            duplicate=False,
+            status="accepted" if accepted.reason == "accepted" else "ignored",
+        )
+        self.receipts[address] = (body, receipt)
+        if not driver._busy:
+            await driver._drive()
+        return receipt
+
+
+class WorkflowTest(MachineTest):
+    """Reuse the test visit DAG driver, without a synthetic machine definition."""
+
+    def __init__(
+        self,
+        workflow: Workflow,
+        input: BaseInput | Mapping[str, JsonValue] | None,
+        *,
+        stub: Mapping[Node, list[LocalValue]] | None = None,
+    ) -> None:
+        self._workflow = workflow
+        self.host = InMemoryMachineHost(stub=stub)
+        self.input = workflow.input_type.model_validate(input) if workflow.input_type else None
+        self.handle: RunHandle[LocalValue] = RunHandle(uuid4().hex)
+        self.waits = MachineWaits(self.handle.run_id)
+        self.handle.waits = self.waits
+        self.handle.node_aliases = {slug: name for name, slug in workflow.node_slugs.items()}
+        self.waits.add_visit_waits(
+            {
+                name: (ref.node.spec, ref.node.model)
+                for name, ref in workflow.nodes.items()
+                if isinstance(ref.node, WaitNode)
+            }
+        )
+        self._stubs = {node: deque(values) for node, values in (stub or {}).items()}
+        self._values: dict[str, LocalValue] = {}
+        self._map_values: dict[str, dict[int, LocalValue]] = {}
+        self._holds: set[str] = set()
+        self._attempts: dict[str, int] = {}
+        self._payload = None
+        self._visit = 0
+        self._busy = False
+
+    @property
+    def work(self) -> Workflow:
+        return self._workflow
+
+    async def _drive(self) -> None:
+        if self._busy or self.handle.done():
+            return
+        self._busy = True
+        try:
+            if await self._run_work():
+                result = self.work.validate_output(self._output(self.work.returns))
+                self.handle._set_execution_receipts(())
+                self.handle._future.set_result(result)
+        except Exception as exc:
+            self.handle._execution_receipts.set_exception(exc)
+            self.handle._future.set_exception(exc)
+            raise
+        finally:
+            self._busy = False

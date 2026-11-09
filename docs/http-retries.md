@@ -1,41 +1,21 @@
-# Remote machine HTTP retries
+# Machine host retries
 
-Remote `machine.start(...)` and `machine.send(...)` automatically retry HTTP
-429, 500, 502, 503 and 504 and connection failures/timeouts before a response.
-Other 4xx responses are final. A machine start retains its canonical instance
-key; send retains the caller's `idempotency_key`, payload and event on every
-attempt. These HTTP retries are separate from state-work/step retries.
+Machine operations no longer include a built-in hosted HTTP transport. This is
+a breaking change from 0.20.x: supply `host=` outside workflows instead of API
+scope/credential kwargs or environment-based target selection. The removed
+`avalanche.machine_remote` and `avalanche.http_retry` modules have no deprecated
+aliases. Hosts own network transport, authentication, connection lifetime and
+retry budgets; the SDK imposes no HTTP retry policy on them.
 
-```python
-# Existing machine and configured DELTA_API_URL/TOKEN/ORG_ID/PROJECT_ID:
-run_id = await approval.start({"id": 42}, retry_budget_s=15)
-receipt = await approval.send(
-    (42,), "approved", idempotency_key="delivery-42", retry_budget_s=15,
-)
-```
+Inside workflows, `machine.start` and `machine.send` declare graph nodes. The
+machine-capable scheduler performs them. A declared send without an explicit
+idempotency key uses the node's stable step key; a host must preserve it across
+retries. Outside workflows, sends require an explicit idempotency key. Retry
+an uncertain send with the same machine key, event, payload and idempotency key;
+never generate a new identity merely because a response was lost. Start is
+idempotent per machine key and returns `MachineStart`, including `created`.
 
-The default total budget is **60 seconds per request**. Override it using
-`DELTA_HTTP_RETRY_BUDGET_S` or `retry_budget_s=`; the explicit argument wins.
-Zero disables retries. Values must be finite and non-negative. The reusable
-transport also accepts `MachineRemoteClient(retry_budget_s=15)` from
-`avalanche.machine_remote`; close it with `async with` on its owning event loop.
-The machine convenience methods create and close that transport automatically.
-
-`Retry-After` is honored as seconds or an HTTP date. Otherwise waits have full
-jitter and exponential growth from 0.5 seconds, capped at 10 seconds. A wait
-longer than the remaining budget consumes only the remainder and returns the
-last real error, without sending an early request. `MachineRemoteError` retains
-HTTP status, a safe reason code and `Retry-After`, never arbitrary provider bodies.
-Connection failures retain the actual exception as their cause and identify its
-type; manually retry an uncertain result with the same key and payload.
-
-Retries log at INFO through the standard `avalanche.http_retry` logger. Enable
-that logger in your application's logging configuration. Notices contain only
-delay, status/reason or exception type, and attempt number: no bearer tokens,
-request/response bodies or URLs. Network I/O and waits are native async; task
-cancellation propagates immediately, with no retry thread.
-
-For lower-level transport use, GET/HEAD and keyed mutations can be repeated;
-unkeyed mutations retry only 429. No successful response body is automatically
-replayed. The remote machine API currently uses JSON responses, not SSE or
-signed uploads.
+These operation retries are separate from state-work step retries. The
+in-memory `.test()` host exercises instance identity and receipt replay, but is
+not a network retry or persistence proof. See [state machines](state-machines.md)
+for the declared-step and explicit-host APIs.

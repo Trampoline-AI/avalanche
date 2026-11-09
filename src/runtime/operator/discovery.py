@@ -26,6 +26,7 @@ from avalanche.agent.declaration import AgentDeclaration
 from avalanche.classifier.models import ClassifierDeclaration
 from avalanche.dag import Workflow
 from avalanche.machine import MachineDiscoveryWarning
+from avalanche.machine_host import MachineOpSpec
 from avalanche.mapping import MapSpec
 from avalanche.policies import StepPolicy, WaitSpec
 
@@ -662,6 +663,9 @@ def _descriptor_to_dict(
         "node_policies": [
             [nid, workflow.nodes[nid].node.policy.model_dump()] for nid in node_ids
         ],
+        "node_machines": [
+            [nid, spec.model_dump(mode="json")] for nid, spec in workflow.node_machines.items()
+        ],
         "node_waits": [
             [nid, spec.model_dump(mode="json", by_alias=True)]
             for nid, spec in workflow.node_waits.items()
@@ -700,6 +704,9 @@ def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
         node_ids=tuple(item["node_ids"]),
         node_policies=tuple(
             (key, StepPolicy.model_validate(value)) for key, value in item["node_policies"]
+        ),
+        node_machines=tuple(
+            (key, MachineOpSpec.model_validate(value)) for key, value in item["node_machines"]
         ),
         node_waits=tuple(
             (key, WaitSpec.model_validate(value)) for key, value in item["node_waits"]

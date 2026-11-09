@@ -5,20 +5,18 @@ from __future__ import annotations
 import inspect
 import warnings
 from collections import defaultdict
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Coroutine, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import timedelta
 from functools import update_wrapper
 from types import FrameType
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from .machine_remote import MachineEventReceipt
+from typing import overload
 
 from pydantic import BaseModel, JsonValue
 
 from .dag import MapFuture, Node, NodeFuture, Workflow, WorkflowContext, _workflow_context
+from .machine_host import MachineEventReceipt, MachineHost, MachineKey, MachineStart
 from .machine_spec import (
     MachineMapSpec,
     MachineSpec,
@@ -133,6 +131,7 @@ def work_spec(work: Workflow) -> MachineWorkSpec:
         node_types={name: ref.node.node_type.value for name, ref in work.nodes.items()},
         node_policies={name: ref.node.policy for name, ref in work.nodes.items()},
         node_waits=work.node_waits,
+        node_machines=work.node_machines,
         node_output_schemas={
             name: ref.node.step_interface.step_output.json_schema
             for name, ref in work.nodes.items()
@@ -324,35 +323,100 @@ class Machine:
         await driver._drive()
         return driver
 
-    async def start(
-        self, input: BaseInput | Mapping[str, JsonValue], *, deployment_id: str | None = None,
-        api_url: str | None = None, token: str | None = None,
-        org: str | None = None, project: str | None = None,
-        retry_budget_s: float | None = None,
-    ) -> str:
-        """Start once per key, returning the existing or newly created remote run ID."""
-        from .machine_remote import start
+    @overload
+    def start(
+        self,
+        input: BaseInput | Mapping[str, JsonValue] | NodeFuture,
+    ) -> NodeFuture: ...
 
+    @overload
+    def start(
+        self,
+        input: BaseInput | Mapping[str, JsonValue],
+        *,
+        host: MachineHost,
+    ) -> Coroutine[None, None, MachineStart]: ...
+
+    def start(
+        self,
+        input: BaseInput | Mapping[str, JsonValue] | NodeFuture,
+        *,
+        host: MachineHost | None = None,
+    ) -> NodeFuture | Coroutine[None, None, MachineStart]:
+        """Declare a host step, or explicitly select a host outside a workflow."""
+        from .machine_nodes import MachineNode
+
+        if _workflow_context.get() is not None:
+            if host is not None:
+                raise TypeError("host= is not allowed in a declared machine step")
+            return MachineNode(self, "start")(input)
+        if host is None:
+            raise TypeError("machine.start outside a workflow requires host=")
         value = self.input_type.model_validate(input).model_dump(mode="json")
-        return await start(
-            self.builder.__name__, self.key(value), value, deployment_id=deployment_id,
-            api_url=api_url, token=token, org=org, project=project,
-            retry_budget_s=retry_budget_s)
+        return host.start(self.builder.__name__, self.key(value), value)
 
-    async def send(
-        self, key: tuple[JsonValue, ...], event: str, *, idempotency_key: str,
-        payload: BaseModel | JsonValue = None, api_url: str | None = None,
-        token: str | None = None, org: str | None = None, project: str | None = None,
-        retry_budget_s: float | None = None,
-    ) -> MachineEventReceipt:
-        """Send by instance key; retries must retain the same idempotency key."""
-        from .machine_remote import send
+    @overload
+    def send(
+        self,
+        key: MachineKey | NodeFuture,
+        event: str | NodeFuture,
+        payload: BaseModel | JsonValue | NodeFuture = None,
+        idempotency_key: str | NodeFuture | None = None,
+    ) -> NodeFuture: ...
 
+    @overload
+    def send(
+        self,
+        key: MachineKey,
+        event: str,
+        payload: BaseModel | JsonValue = None,
+        idempotency_key: str | None = None,
+        *,
+        host: MachineHost,
+    ) -> Coroutine[None, None, MachineEventReceipt]: ...
+
+    def send(
+        self,
+        key: MachineKey | NodeFuture,
+        event: str | NodeFuture,
+        payload: BaseModel | JsonValue | NodeFuture = None,
+        idempotency_key: str | NodeFuture | None = None,
+        *,
+        host: MachineHost | None = None,
+    ) -> NodeFuture | Coroutine[None, None, MachineEventReceipt]:
+        """Declare a send; outside a workflow both host and replay identity are explicit."""
+        from .machine_nodes import MachineNode
+
+        if _workflow_context.get() is not None:
+            if host is not None:
+                raise TypeError("host= is not allowed in a declared machine step")
+            return MachineNode(self, "send")(
+                key,
+                event,
+                payload=payload,
+                idempotency_key=idempotency_key,
+            )
+        if host is None:
+            raise TypeError("machine.send outside a workflow requires host=")
+        if (
+            isinstance(key, NodeFuture)
+            or isinstance(event, NodeFuture)
+            or isinstance(payload, NodeFuture)
+        ):
+            raise TypeError("node futures require a workflow")
+        if (
+            not isinstance(idempotency_key, str)
+            or not idempotency_key
+            or len(idempotency_key) > 256
+            or any(not c.isprintable() for c in idempotency_key)
+        ):
+            raise ValueError("idempotency_key must contain 1-256 printable characters")
+        if not event or event in {".", ".."} or "/" in event:
+            raise ValueError("event must be a nonempty path segment")
         if len(key) != len(self.key_fields):
             raise ValueError("machine key has the wrong number of fields")
-        return await send(self.builder.__name__, key, event, payload=payload,
-                          idempotency_key=idempotency_key, api_url=api_url,
-                          token=token, org=org, project=project, retry_budget_s=retry_budget_s)
+        wire = payload.model_dump(mode="json") if isinstance(payload, BaseModel) else payload
+        return host.send(self.builder.__name__, key, event, wire, idempotency_key)
 
     def key(self, input: BaseInput | Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
         fields = self.spec.key_fields

@@ -98,9 +98,52 @@ The test driver is native async and creates no threads. In async code, use
 `await m.aadvance_time(...)`. A synchronous `send` called by active state work
 only queues the event; it never re-enters the driver.
 
-These are local authoring/test facilities, not restart durability or deployed
-machine support. Ordinary workflow execution must not silently run an empty
-machine carrier; use the machine test driver locally and a machine-capable host
-for deployment. Remote instance routing and CLI machine commands use the host's public HTTP API.
-Remote `machine.start` and `machine.send` preserve instance/event identities through
-transient failures; see [remote HTTP retries](http-retries.md) for configuration.
+## Declared machine operations
+
+Inside a workflow, start/send build graph nodes; they do not perform HTTP calls
+or require credentials in worker code. Their arguments may be node futures.
+
+```python
+@ava.workflow
+def router():
+    started = approval.start(Request(id=43))
+    sent = approval.send((43,), "approved")
+    started >> sent
+    return sent
+
+run = router().test()
+assert run.handle.result().status == "accepted"
+```
+
+`start` returns a node whose output is `ava.MachineStart(run_id, key, created)`.
+`send` returns a node whose output is `ava.MachineEventReceipt`, containing
+`receipt_id`, event `key`, `accepted_at`, `duplicate` and `status` (`accepted` or
+`ignored`). Omitting a declared send's `idempotency_key` uses that node's stable
+`RunContext.step_key`, so retries keep the same delivery identity. Defer/drop
+remain later inbox facts, not additional receipt statuses.
+
+`workflow.test()` and `await workflow.test_async()` execute these operations
+against an isolated in-memory host, sharing the machine transition reducer.
+These are authoring/test facilities, not restart durability. `workflow.run()`
+refuses MACHINE nodes with a missing-host error; operator-host execution is a
+separate integration. `machine.run()` is not an instance execution API.
+
+Outside a workflow, supply a host explicitly:
+
+```python
+async def start_and_approve(host: ava.MachineHost):
+    started = await approval.start(Request(id=44), host=host)
+    receipt = await approval.send(
+        (44,), "approved", idempotency_key="delivery-44", host=host,
+    )
+    return started, receipt
+```
+
+The host implements async `start(machine, key, input)` and
+`send(machine, key, event, payload, idempotency_key)`. The standalone SDK does
+not select a host, read hosted environment settings, or ship a hosted HTTP
+client. This breaks 0.20.x callers using API URL/token/organization/project,
+deployment or retry transport kwargs: replace them with `host=` and use
+`started.run_id` instead of treating the start result as a string. Outside a
+workflow, sends must provide their own replay identity. Transport retry policy
+belongs to the explicit host; see [host retries](http-retries.md).

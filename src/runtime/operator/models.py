@@ -20,6 +20,7 @@ from pydantic import (
     ValidationError,
 )
 
+from avalanche.machine_host import MachineOpSpec
 from avalanche.mapping import MapSpec
 from avalanche.policies import StepPolicy, WaitSpec
 
@@ -824,6 +825,7 @@ class WorkflowInfo:
     node_types: dict[str, str]  # node_id -> "source" | "step" | "dest" | "wait"
     node_policies: dict[str, StepPolicy] = field(default_factory=dict)
     node_waits: dict[str, WaitSpec] = field(default_factory=dict)
+    node_machines: dict[str, MachineOpSpec] = field(default_factory=dict)
     machine_spec_json: str = ""
     display_names: dict[str, str] = field(default_factory=dict)  # node_id -> display name
     agent_node_ids: list[str] = field(default_factory=list)
@@ -939,6 +941,7 @@ class WorkflowDescriptor:
     display_names: tuple[tuple[str, str], ...]
     node_policies: tuple[tuple[str, StepPolicy], ...] = ()
     node_waits: tuple[tuple[str, WaitSpec], ...] = ()
+    node_machines: tuple[tuple[str, MachineOpSpec], ...] = ()
     machine_spec_json: str = ""
     agent_node_ids: tuple[str, ...] = ()
     agent_declarations: tuple[tuple[str, AgentDeclaration], ...] = ()
