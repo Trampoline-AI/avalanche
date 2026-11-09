@@ -397,6 +397,119 @@ def test_finished_runs_survive_a_restart_with_their_state_revisions_and_sequence
         second.close()
 
 
+_KILLED_MACHINE_OPERATOR = """
+import json, sys, time
+from pathlib import Path
+from runtime.operator.operator import Operator
+from runtime.operator.state.machines import MachinesTable
+op = Operator([sys.argv[1]], watch=False, schedule=False, webhook_port=0, state_db=sys.argv[2])
+mode, journal = sys.argv[4], sys.argv[3]
+run_id = op.start_run("approval", input={
+    "ticket": 9, "journal": journal, "pause": mode == "active"})
+receipt = op._machine_host.send(run_id, "approved", {}, "before-crash")
+deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    with op._state_store.transaction() as c:
+        record = MachinesTable.load(c, run_id)
+    active = mode == "active" and Path(journal).exists()
+    waiting = mode == "waiting" and record.visit == 2 and record.status == "waiting"
+    if active or waiting:
+        break
+    time.sleep(0.03)
+else:
+    raise AssertionError("machine did not reach crash point")
+handle = op._active_runs.get(run_id)
+print(json.dumps({"run_id": run_id, "coordinator": handle.process.pid if handle else None,
+                  "receipt": receipt.model_dump(mode="json")}), flush=True)
+sys.stdin.read()
+"""
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
+def test_machine_timer_and_interrupted_visit_survive_sigkill(tmp_path):
+    from runtime.operator.state.machines import MachinesTable
+
+    fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
+    for mode in ("waiting", "active"):
+        root = tmp_path / mode
+        root.mkdir()
+        state_db, journal = root / "state.db", root / "visits.txt"
+        child = subprocess.Popen(
+            [
+                sys.executable,
+                "-c",
+                _KILLED_MACHINE_OPERATOR,
+                str(fixture),
+                str(state_db),
+                str(journal),
+                mode,
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        report = None
+        op = None
+        try:
+            report = json.loads(child.stdout.readline())
+            child.send_signal(signal.SIGKILL)
+            child.wait(timeout=10)
+            before = journal.read_text()
+            if mode == "waiting":
+                time.sleep(2.2)  # Absolute deadline is overdue, not restarted from now.
+            op = Operator(
+                [str(fixture)], watch=False, schedule=False, webhook_port=0, state_db=state_db
+            )
+            run_id = report["run_id"]
+            replay = op._machine_host.send(run_id, "approved", {}, "before-crash")
+            assert replay.duplicate and replay.receipt_id == report["receipt"]["receipt_id"]
+            if mode == "active":
+                assert not _process_alive(report["coordinator"])
+                assert journal.read_text() == before  # No automatic side-effect replay.
+                with op._state_store.transaction() as c:
+                    instance = MachinesTable.load(c, run_id)
+                    visit = MachinesTable.visit(c, run_id, 1)
+                assert instance.status == "interrupted" and instance.reason == "outcome_unknown"
+                assert visit.disposition == "indeterminate" and visit.snapshot is not None
+                Path(str(journal) + ".release").touch()
+                op._machine_host.retry(run_id)
+            deadline = time.monotonic() + 15
+            while (
+                time.monotonic() < deadline and op.get_run(run_id).status != RunStatus.SUCCESS
+            ):
+                time.sleep(0.03)
+            assert op.get_run(run_id).status == RunStatus.SUCCESS
+            with op._state_store.transaction() as c:
+                assert (
+                    c.execute(
+                        "SELECT COUNT(*) FROM machine_timers "
+                        "WHERE run_id=? AND fired_at IS NOT NULL",
+                        (run_id,),
+                    ).fetchone()[0]
+                    == 1
+                )
+                instance = MachinesTable.load(c, run_id)
+            assert instance.visit == (3 if mode == "waiting" else 4)
+            final_journal = journal.read_text()
+            op.close()
+            op = Operator(
+                [str(fixture)], watch=False, schedule=False, webhook_port=0, state_db=state_db
+            )
+            assert op.get_run(run_id).status == RunStatus.SUCCESS
+            assert journal.read_text() == final_journal
+            assert op._machine_host.send(run_id, "approved", {}, "before-crash").duplicate
+        finally:
+            if op is not None:
+                op.close()
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=10)
+            child.stdout.close()
+            child.stdin.close()
+            if report and report["coordinator"] and _process_alive(report["coordinator"]):
+                os.killpg(report["coordinator"], signal.SIGKILL)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
 def test_a_run_left_running_by_a_killed_operator_is_stopped_and_failed(flows, tmp_path):
     state_db = tmp_path / "state.db"

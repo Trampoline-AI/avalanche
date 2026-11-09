@@ -2172,7 +2172,10 @@ class Operator:
                 RunStatus.FAILED,
                 RunStatus.CANCELLED,
             }
-            if closed:
+            if closed or (
+                self._runs[run_id].status == RunStatus.WAITING
+                and run_id not in self._active_runs
+            ):
                 with self._state_store.transaction() as connection:
                     return WaitsTable.read(connection, run_id, request)
             controls = self._wait_controls.get(run_id)
@@ -3506,6 +3509,12 @@ class Operator:
             self._wait_for_notifications(notifications)
 
     def _finish_exited_run(self, run_id: str, handle: _RunHandle) -> None:
+        if handle.machine_visit is not None:
+            self._result_store.discard(handle.result_bundle)
+            handle.visit_finished = VisitFinished(
+                run_id, handle.machine_visit.visit, "failed", None, None
+            )
+            return
         cancelled = handle.cancel_event.is_set()
         entry = LogEntry(
             timestamp=datetime.now(),

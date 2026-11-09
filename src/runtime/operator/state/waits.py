@@ -24,9 +24,13 @@ class WaitsTable:
         snapshot: FinalWaitSnapshot,
         receipts: dict[tuple[str, str, str], tuple[str, WaitControlResponse]],
     ) -> None:
+        offset = connection.execute(
+            "SELECT COALESCE(MAX(position), -1) + 1 FROM wait_decisions WHERE run_id=?",
+            (run_id,),
+        ).fetchone()[0]
         connection.executemany(
             "INSERT INTO wait_decisions (run_id, position, card_json) VALUES (?, ?, ?)",
-            ((run_id, index, card) for index, card in enumerate(snapshot.cards)),
+            ((run_id, offset + index, card) for index, card in enumerate(snapshot.cards)),
         )
         connection.executemany(
             """INSERT INTO wait_receipts

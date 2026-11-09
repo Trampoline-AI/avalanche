@@ -1,5 +1,6 @@
 """Real local machine fixture: external event, mapped visit work and UTC timer."""
 
+import time
 from datetime import timedelta
 from pathlib import Path
 
@@ -9,12 +10,15 @@ import avalanche as ava
 class Ticket(ava.BaseInput):
     ticket: int
     journal: str
+    pause: bool = False
 
 
 @ava.step
 def observe(ticket: Ticket, context: ava.RunContext) -> str:
     with Path(ticket.journal).open("a") as output:
         output.write(context.step_key + "\n")
+    while ticket.pause and not Path(ticket.journal + ".release").exists():
+        time.sleep(0.05)
     return context.step_key
 
 

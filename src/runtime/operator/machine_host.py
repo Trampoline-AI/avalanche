@@ -325,6 +325,8 @@ class MachineHost:
                     ),
                 )
 
+        self.heap = [entry for entry in self.heap if entry[1] != record.run_id]
+        heapq.heapify(self.heap)
         self._commit(record, write, RunStatus.PENDING, request=request)
         self.op.start_run(record.machine, run_id=record.run_id, _machine_visit=record)
 
@@ -544,9 +546,9 @@ class MachineHost:
             record.internal_consumed = reduction.record.internal_consumed
             self._commit(record, lambda connection: None, RunStatus.WAITING)
             for timer in timers:
-                heapq.heappush(
-                    self.heap, (timer.due, record.run_id, record.visit, timer.timer_index)
-                )
+                entry = (timer.due, record.run_id, record.visit, timer.timer_index)
+                if entry not in self.heap:
+                    heapq.heappush(self.heap, entry)
 
     def _finished(self, command: VisitFinished) -> None:
         record = self._load(command.run_id)
@@ -578,12 +580,21 @@ class MachineHost:
     def _restart(self) -> None:
         with self.op._state_store.transaction() as connection:
             records = MachinesTable.all(connection)
-        for record in records:
+
+        def next_due(record: InstanceRecord) -> float:
+            with self.op._state_store.transaction() as connection:
+                timers = MachinesTable.timers(connection, record.run_id, record.visit)
+            return timers[0].due if timers else float("inf")
+
+        for record in sorted(records, key=next_due):
             if record.status == "active":
                 record.status, record.reason = "interrupted", "outcome_unknown"
                 with self.op._state_store.transaction() as connection:
                     visit = MachinesTable.visit(connection, record.run_id, record.visit)
                 visit.disposition = "indeterminate"
+                visit.snapshot = self.op.get_latest_run_snapshot(
+                    record.run_id, operator_instance_id=self.op.operator_instance_id
+                )
                 self._commit(
                     record,
                     lambda connection: MachinesTable.write_visit(
