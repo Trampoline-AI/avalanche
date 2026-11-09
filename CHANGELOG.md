@@ -1,18 +1,30 @@
 # Changelog
 
-## 0.20.4
+## Unreleased
 
-- **Breaking:** machine start/send are now host-neutral workflow steps. 0.20.x
-  callers outside Delta workflows break: pass an explicit `MachineHost` with
-  `host=` instead of API URL, token, organization, project, deployment or retry
-  transport arguments. There is no environment-based target or credential
-  fallback. Start now returns `MachineStart` (`run_id`, `key`, `created`) rather
-  than a run-ID string. Sends outside workflows require an explicit idempotency
-  key; declared sends default to the node's stable step key.
+- **Breaking for 0.20.x:** remove the built-in machine HTTP client and all
+  `DELTA_*` target/credential/retry environment reads, without deprecation.
+  Start an instance through the normal run-start path (`ava run <machine>`),
+  not `await Machine.start(..., host=...)` or the removed transport kwargs.
+  Outside workflows, sends require an explicit `MachineHost` via `host=` and
+  an idempotency key; declared sends default to the node's stable step key.
+  The declared start node remains pending a router-start API decision.
+- **Breaking for 0.20.x:** remove `key_format` from `@ava.machine` and
+  `MachineSpec`, including discovery JSON. Keys come from the declared input
+  fields via `Machine.key(input)`; remove the decorator argument and any
+  formatted-key shorthand. CLI addressing uses run IDs or typed input fields.
 - Add an in-memory machine host for workflow `.test()` / `.test_async()`, share
   transition/inbox selection with machine tests, and reject machine steps in
   the embedded runner until a machine-capable operator host is available.
 - Block hosted API URLs and hosted environment reads in standalone source CI.
+
+## 0.20.4
+
+- Remote machine start/send now retry HTTP 429 and transient 5xx or connection
+  failures with unchanged instance/event keys. Native async backoff honors
+  Retry-After within a 60-second default budget; configure it with
+  DELTA_HTTP_RETRY_BUDGET_S or retry_budget_s (zero disables). Retry notices use
+  standard INFO logging, and final errors retain status, reason and Retry-After.
 
 ## 0.20.3
 

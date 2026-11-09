@@ -16,7 +16,7 @@ from typing import overload
 from pydantic import BaseModel, JsonValue
 
 from .dag import MapFuture, Node, NodeFuture, Workflow, WorkflowContext, _workflow_context
-from .machine_host import MachineEventReceipt, MachineHost, MachineKey, MachineStart
+from .machine_host import MachineEventReceipt, MachineHost, MachineKey
 from .machine_spec import (
     MachineMapSpec,
     MachineSpec,
@@ -177,13 +177,11 @@ class Machine:
         builder: Callable[[], State | None],
         input_type: type[BaseInput],
         key: tuple[str, ...],
-        key_format: str | None,
     ) -> None:
         update_wrapper(self, builder)
         self.builder = builder
         self.input_type = input_type
         self.key_fields = key
-        self.key_format = key_format
         self._definition: Workflow | None = None
         self.works: dict[str, Workflow] = {}
         self.payloads: dict[str, dict[str, type[BaseModel] | None]] = {}
@@ -281,7 +279,6 @@ class Machine:
             name=self.__name__,
             input_schema=self.input_type.model_json_schema(),
             key_fields=self.key_fields,
-            key_format=self.key_format,
             initial=initials[0],
             states=states,
             work_graphs=specs,
@@ -323,37 +320,16 @@ class Machine:
         await driver._drive()
         return driver
 
-    @overload
     def start(
         self,
         input: BaseInput | Mapping[str, JsonValue] | NodeFuture,
-    ) -> NodeFuture: ...
-
-    @overload
-    def start(
-        self,
-        input: BaseInput | Mapping[str, JsonValue],
-        *,
-        host: MachineHost,
-    ) -> Coroutine[None, None, MachineStart]: ...
-
-    def start(
-        self,
-        input: BaseInput | Mapping[str, JsonValue] | NodeFuture,
-        *,
-        host: MachineHost | None = None,
-    ) -> NodeFuture | Coroutine[None, None, MachineStart]:
-        """Declare a host step, or explicitly select a host outside a workflow."""
+    ) -> NodeFuture:
+        """Declare a start node; router start semantics are pending a ruling."""
         from .machine_nodes import MachineNode
 
-        if _workflow_context.get() is not None:
-            if host is not None:
-                raise TypeError("host= is not allowed in a declared machine step")
-            return MachineNode(self, "start")(input)
-        if host is None:
-            raise TypeError("machine.start outside a workflow requires host=")
-        value = self.input_type.model_validate(input).model_dump(mode="json")
-        return host.start(self.builder.__name__, self.key(value), value)
+        if _workflow_context.get() is None:
+            raise TypeError("machine.start is workflow-only; start an instance with ava run")
+        return MachineNode(self, "start")(input)
 
     @overload
     def send(
@@ -428,8 +404,7 @@ def machine(
     *,
     input: type[BaseInput],
     key: tuple[str, ...],
-    key_format: str | None = None,
 ) -> Callable[[Callable[[], State | None]], Machine]:
     if not issubclass(input, BaseInput):
         raise TypeError("machine input must be a BaseInput model")
-    return lambda builder: Machine(builder, input, key, key_format)
+    return lambda builder: Machine(builder, input, key)

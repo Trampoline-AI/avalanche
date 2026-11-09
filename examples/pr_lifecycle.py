@@ -72,7 +72,7 @@ def amend_round():
     return apply_nits() >> push_fixup()
 
 
-@ava.machine(input=PR, key=("repo", "number"), key_format="{repo}#{number}")
+@ava.machine(input=PR, key=("repo", "number"))
 def pr_lifecycle():
     in_review = ava.state(review_round, initial=True)
     amend = ava.state(amend_round)

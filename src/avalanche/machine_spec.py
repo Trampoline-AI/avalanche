@@ -6,7 +6,6 @@ Delta validates the exported document at its manifest admission boundary.
 
 from __future__ import annotations
 
-from string import Formatter
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
@@ -110,7 +109,6 @@ class MachineSpec(BaseModel):
     name: str
     input_schema: dict[str, JsonValue]
     key_fields: tuple[str, ...] = Field(min_length=1)
-    key_format: str | None = None
     initial: str
     states: dict[str, MachineStateSpec]
     work_graphs: dict[str, MachineWorkSpec]
@@ -123,12 +121,6 @@ class MachineSpec(BaseModel):
         properties = self.input_schema.get("properties", {})
         if not isinstance(properties, dict) or not set(self.key_fields) <= properties.keys():
             raise ValueError("machine key fields must be declared input fields")
-        if self.key_format is not None:
-            fields = {
-                name for _, name, _, _ in Formatter().parse(self.key_format) if name is not None
-            }
-            if fields != set(self.key_fields):
-                raise ValueError("key_format must reference exactly the machine key fields")
         if len(set(self.key_fields)) != len(self.key_fields):
             raise ValueError("duplicate machine key fields")
         for name, state in self.states.items():

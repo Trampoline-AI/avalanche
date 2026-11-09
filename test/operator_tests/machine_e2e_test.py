@@ -91,7 +91,7 @@ def test_review_loop():
     assert info.node_machines == graph.node_machines
     with pytest.raises(RuntimeError, match="MachineHost"):
         graph.run()
-    with pytest.raises(TypeError, match="host="):
+    with pytest.raises(TypeError, match="ava run"):
         example.pr_lifecycle.start(example.PR(repo="acme/api", number=44, head_sha="a1"))
     with pytest.raises(TypeError, match="host="):
         example.pr_lifecycle.send(("acme/api", 44), "merged")
@@ -137,11 +137,11 @@ def test_review_loop():
                 idempotency_key="new",
                 host=run.host,
             )
-        same = await example.pr_lifecycle.start(
-            example.PR(repo="acme/api", number=44, head_sha="a1"),
-            host=run.host,
-        )
-        assert same.run_id == started.run_id and not same.created
+        with pytest.raises(TypeError, match="host"):
+            example.pr_lifecycle.start(
+                example.PR(repo="acme/api", number=44, head_sha="a1"),
+                host=run.host,
+            )
         with pytest.raises(ValueError, match="idempotency_key"):
             example.pr_lifecycle.send(("acme/api", 44), "merged", host=run.host)
         async_run = await graph.test_async()
@@ -222,7 +222,7 @@ async def test_machine_run_control_early_events_payloads_and_defer():
     async def close_work(payload: Amended) -> None:
         received.append(payload.sha)
 
-    @ava.machine(input=Input, key=("id",), key_format="{id}")
+    @ava.machine(input=Input, key=("id",))
     def lifecycle():
         review = ava.state(idle, initial=True, defer=["deferred"])
         amend = ava.state(amend_work, defer=["deferred"])

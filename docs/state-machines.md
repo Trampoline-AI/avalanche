@@ -18,7 +18,7 @@ class Request(ava.BaseInput):
 async def work() -> None:
     pass
 
-@ava.machine(input=Request, key=("id",), key_format="{id}")
+@ava.machine(input=Request, key=("id",))
 def approval():
     waiting = ava.state(work, initial=True)
     closed = ava.state(work, final=True)
@@ -32,8 +32,9 @@ assert m.state == "closed"
 ```
 
 The key consists of the named input fields, in order; the wire representation
-is a JSON array. `key_format` is optional and must reference exactly those
-fields. `approval.spec` is a JSON-only declaration: states reference work graphs,
+is a JSON array. Derive it with `approval.key(Request(id=42))`, which validates
+against the input model. There is no separate formatted-key parser.
+`approval.spec` is a JSON-only declaration: states reference work graphs,
 transitions optionally declare a Pydantic payload schema, timers hold seconds,
 and graph metadata carries retry policies, waits, maps and emissions.
 Discovery rejects unknown targets, invalid initial/final states, undeclared
@@ -100,8 +101,17 @@ only queues the event; it never re-enters the driver.
 
 ## Declared machine operations
 
-Inside a workflow, start/send build graph nodes; they do not perform HTTP calls
-or require credentials in worker code. Their arguments may be node futures.
+An instance is a run: starting it belongs to the normal run-start path,
+`ava run <machine> --input ...`, with the same file/workspace inputs as flows.
+The host derives the key from the input and returns the existing run for an
+existing key. Local operator integration is separate work; this SDK change does
+not yet make that path executable for machines.
+
+Inside a workflow, `send` builds a graph node; it does not perform HTTP calls or
+require credentials in worker code. Its arguments may be node futures. The
+following test also uses the retained declared `start` node: how a router starts
+an instance is pending the `ava-router-start` decision. Do not treat that node
+as a settled router API.
 
 ```python
 @ava.workflow
@@ -128,22 +138,27 @@ These are authoring/test facilities, not restart durability. `workflow.run()`
 refuses MACHINE nodes with a missing-host error; operator-host execution is a
 separate integration. `machine.run()` is not an instance execution API.
 
-Outside a workflow, supply a host explicitly:
+Outside a workflow, send to an already started instance with an explicit host:
 
 ```python
-async def start_and_approve(host: ava.MachineHost):
-    started = await approval.start(Request(id=44), host=host)
-    receipt = await approval.send(
-        (44,), "approved", idempotency_key="delivery-44", host=host,
+async def approve(host: ava.MachineHost):
+    return await approval.send(
+        approval.key(Request(id=44)), "approved",
+        idempotency_key="delivery-44", host=host,
     )
-    return started, receipt
 ```
 
-The host implements async `start(machine, key, input)` and
-`send(machine, key, event, payload, idempotency_key)`. The standalone SDK does
-not select a host, read hosted environment settings, or ship a hosted HTTP
+The host implements async `send(machine, key, event, payload, idempotency_key)`;
+its `start(machine, key, input)` hook remains only for the retained declared
+start node. There is no explicit-host `Machine.start` API. The standalone SDK
+does not select a host, read hosted environment settings, or ship a hosted HTTP
 client. This breaks 0.20.x callers using API URL/token/organization/project,
-deployment or retry transport kwargs: replace them with `host=` and use
-`started.run_id` instead of treating the start result as a string. Outside a
-workflow, sends must provide their own replay identity. Transport retry policy
-belongs to the explicit host; see [host retries](http-retries.md).
+deployment or retry transport kwargs: start through the run path and send with
+`host=`. Outside a workflow, sends must provide their own replay identity.
+Transport retry policy belongs to the explicit host; see
+[host retries](http-retries.md).
+
+The decorator and discovery spec no longer accept formatted-key templates.
+Remove that argument from 0.20.x declarations. Hosts address instances by run ID
+or named key fields parsed with the ordinary flow input-field parsing; the SDK
+only derives keys from validated input with `Machine.key(input)`.

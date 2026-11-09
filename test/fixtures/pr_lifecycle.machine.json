@@ -29,7 +29,6 @@
     "repo",
     "number"
   ],
-  "key_format": "{repo}#{number}",
   "initial": "in_review",
   "states": {
     "in_review": {
