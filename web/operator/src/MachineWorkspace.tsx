@@ -680,6 +680,20 @@ export function MachineRunWaits({
             </span>
           </WaitRow>
         ))}
+        {!instance.finished && instance.accepts.length > 0 && (
+          <WaitRow data-wait-kind="accepts">
+            <span className="text-ink">Waiting for event</span>
+            <span className="text-secondary">{instance.accepts.join(", ")}</span>
+          </WaitRow>
+        )}
+        {instance.due === null &&
+          instance.pending_events?.length === 0 &&
+          (instance.receipts ?? []).length === 0 &&
+          (instance.finished || instance.accepts.length === 0) && (
+            <WaitRow className="text-secondary" data-wait-kind="none">
+              No pending waits.
+            </WaitRow>
+          )}
       </ul>
     </section>
   );

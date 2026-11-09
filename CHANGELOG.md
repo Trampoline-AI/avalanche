@@ -113,7 +113,8 @@
   and open in the normal graph, side inspector and log pane. Send, retry visit
   and a development timer trigger sit beside Cancel in the run controls; the
   send form opens in the side panel; pending timers, deferred events, receipts
-  and visit waits show in the run waits panel. Instances start from the normal
+  and visit waits show in the run waits panel, with the events the current
+  state accepts (or "No pending waits"). Instances start from the normal
   run input form (including files and workspaces) and close with the normal run
   cancel. New optional `OperatorApi` methods: machine reads, event send,
   interrupted-visit retry and the development timer trigger; there is no
