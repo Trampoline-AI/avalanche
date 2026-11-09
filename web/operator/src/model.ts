@@ -275,6 +275,8 @@ export const CatalogSnapshotMsg = {
 };
 
 export interface RunSummaryMsg {
+  /** Host-supplied run label, e.g. a machine's input-derived key. */
+  label?: string;
   /**
    * @generated from protobuf field: string run_id = 1
    */

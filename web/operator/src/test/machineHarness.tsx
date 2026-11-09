@@ -8,7 +8,6 @@ import type {
   MachineInstance,
   MachinePageRequest,
   MachineSpec,
-  MachineStartRequest,
   MachineTransition,
   MachineVisit,
   MachineVisitEvent,
@@ -17,6 +16,9 @@ import {
   CatalogSnapshotMsg,
   FlowInfoMsg,
   OperatorUpdateEnvelope,
+  OperatorUpdate,
+  type InputFileAttachment,
+  type InputFileTarget,
   RunSnapshotMsg,
   RunSummaryMsg,
   WorkflowTopologyMsg,
@@ -27,14 +29,18 @@ const spec: MachineSpec = {
   schema_version: "avalanche.machine/v1",
   name: "review",
   key_fields: ["id"],
-  key_format: "{id}",
   input_schema: {
     type: "object",
     properties: {
       id: { type: "string" },
       priority: { type: "integer", minimum: 1, maximum: 5 },
+      document: { $ref: "#/$defs/File" },
+      workspace: { type: "object", additionalProperties: true },
     },
     required: ["id", "priority"],
+    $defs: {
+      File: { type: "object", properties: { kind: { const: "file" } } },
+    },
   },
   initial: "review",
   states: {
@@ -85,6 +91,11 @@ const flow = FlowInfoMsg.create({
   displayName: "Review machine",
   workflowId: "review",
   machineSpec: spec,
+  inputDeclarationJson: JSON.stringify({
+    type_name: "ReviewInput",
+    json_schema: spec.input_schema,
+    consumer_node_ids: [],
+  }),
 });
 const ordinary = FlowInfoMsg.create({
   name: "ordinary",
@@ -105,8 +116,15 @@ const instances = new Map<string, MachineInstance>();
 const visits = new Map<string, Map<number, MachineVisit>>();
 const facts = new Map<string, MachineVisitEvent[]>();
 const receipts = new Map<string, MachineEventReceipt>();
+const runs = new Map<string, RunSummaryMsg>();
+const updates: OperatorUpdate[] = [];
+let sequence = 1;
+function publish(change: OperatorUpdate["change"]) {
+  updates.push(
+    OperatorUpdate.create({ eventUlid: String(++sequence).padStart(26, "0"), change }),
+  );
+}
 let failSend = true;
-let failList = true;
 let failRead = false;
 
 function record(method: string, ...args: JsonValue[]) {
@@ -167,6 +185,19 @@ function enter(
       },
     },
   });
+  const summary = runs.get(runId)!;
+  summary.status = item.finished ? "succeeded" : "waiting";
+  summary.revision = String(item.visit);
+  publish({
+    oneofKind: "runStatusChanged",
+    runStatusChanged: {
+      runId,
+      status: summary.status,
+      revision: summary.revision,
+      startedAt: summary.startedAt,
+      endedAt: item.finished ? now : 0,
+    },
+  });
   if (state === "ready") {
     const visit = item.visit;
     setTimeout(() => {
@@ -188,7 +219,12 @@ class FakeOperatorApi implements OperatorApi {
     return catalog;
   }
   async loadBaseline() {
-    return { catalog, asOfEventUlid: catalog.asOfEventUlid, runs: [] };
+    record("baseline");
+    return {
+      catalog,
+      asOfEventUlid: String(sequence).padStart(26, "0"),
+      runs: structuredClone([...runs.values()]),
+    };
   }
   async getWorkflowNodeSource() {
     return "def work():\n    return 42";
@@ -196,16 +232,28 @@ class FakeOperatorApi implements OperatorApi {
   async getLatestRunSnapshot(runId: string) {
     record("snapshot", runId);
     return RunSnapshotMsg.create({
-      summary: RunSummaryMsg.create({ runId, workflowId: "ordinary", status: "succeeded" }),
-      topology: WorkflowTopologyMsg.create({ nodeIds: ["work"], nodeTypes: { work: "step" } }),
+      operatorInstanceId: catalog.operatorInstanceId,
+      asOfEventUlid: String(sequence).padStart(26, "0"),
+      summary: structuredClone(
+        runs.get(runId) ??
+          RunSummaryMsg.create({ runId, workflowId: "ordinary", status: "succeeded" }),
+      ),
+      topology: WorkflowTopologyMsg.create(
+        instances.has(runId) ? {} : { nodeIds: ["work"], nodeTypes: { work: "step" } },
+      ),
     });
   }
   async *streamUpdates(_operator: string, _after: string, signal?: AbortSignal) {
-    await new Promise<void>((resolve) => {
-      if (signal?.aborted) resolve();
-      else signal?.addEventListener("abort", () => resolve(), { once: true });
-    });
-    yield OperatorUpdateEnvelope.create();
+    let index = updates.length;
+    while (!signal?.aborted) {
+      while (index < updates.length) {
+        yield OperatorUpdateEnvelope.create({
+          operatorInstanceId: catalog.operatorInstanceId,
+          payload: { oneofKind: "update", update: updates[index++] },
+        });
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+    }
   }
   async listLogPage() {
     return {
@@ -247,23 +295,11 @@ class FakeOperatorApi implements OperatorApi {
   async readTextDetail() {
     return "";
   }
-  async startRun() {
-    record("flow-start");
-    return "flow-run";
-  }
   async cancelRun() {
     record("flow-cancel");
   }
   async setScheduleEnabled() {
     return ordinary;
-  }
-  async listMachineInstances(machine: string, request?: MachinePageRequest) {
-    record("list", machine, request?.cursor ?? null);
-    if (failList) {
-      failList = false;
-      throw new Error("Fixture transient listing failure");
-    }
-    return structuredClone(page([...instances.values()], request));
   }
   async getMachineInstance(runId: string) {
     record("get", runId);
@@ -318,16 +354,50 @@ class FakeOperatorApi implements OperatorApi {
       next_cursor: null,
     };
   }
-  async startMachine(machine: string, request: MachineStartRequest) {
-    record("start", machine, request.input);
-    const existing = [...instances.values()].find(
-      (item) => JSON.stringify(item.key) === JSON.stringify(request.key),
+  async stageInputFile(file: File, target: InputFileTarget) {
+    record("stage", target.workflow, target.field, file.name, await file.text());
+    return {
+      name: file.name,
+      mediaType: file.type,
+      sizeBytes: file.size,
+      sha256: "25c6fc35afa1d0990da2ab9bded19e53184cc29a14e1e19c440122c8b1fe3c88",
+      objectUri: "",
+      objectKey: "",
+      inlineBytes: new Uint8Array(await file.arrayBuffer()),
+    };
+  }
+  async startRun(
+    machine: string,
+    input?: Record<string, unknown>,
+    inputFiles?: InputFileAttachment[],
+  ) {
+    if (machine !== "review") {
+      record("flow-start");
+      return "flow-run";
+    }
+    const parsed = input ?? {};
+    if (typeof parsed.id !== "string" || typeof parsed.priority !== "number")
+      throw new Error("Machine input requires id and priority");
+    const key = [parsed.id];
+    record(
+      "run-start",
+      machine,
+      JSON.parse(JSON.stringify(parsed)),
+      (inputFiles ?? []).map((file) => ({
+        field: file.fieldName,
+        name: file.name,
+        bytes: Array.from(file.inlineBytes ?? []),
+      })),
     );
-    if (existing) return { run_id: existing.run_id, key: existing.key, created: false };
+
+    const existing = [...instances.values()].find(
+      (item) => JSON.stringify(item.key) === JSON.stringify(key),
+    );
+    if (existing) return existing.run_id;
     const run_id = `machine-${instances.size + 1}`;
     const item: MachineInstance = {
       machine,
-      key: request.key,
+      key,
       run_id,
       deployment_id: "",
       state: "review",
@@ -364,7 +434,22 @@ class FakeOperatorApi implements OperatorApi {
         ],
       ]),
     );
-    return { run_id, key: request.key, created: true };
+    const summary = RunSummaryMsg.create({
+      runId: run_id,
+      workflowId: machine,
+      flowName: machine,
+      label: parsed.id,
+      status: "interrupted",
+      createdSequence: String(instances.size),
+      revision: "1",
+      triggeredAt: Date.now() / 1000,
+    });
+    runs.set(run_id, summary);
+    publish({
+      oneofKind: "runCreated",
+      runCreated: { summary: structuredClone(summary), nodes: [] },
+    });
+    return run_id;
   }
   async sendMachineEvent(
     runId: string,
@@ -438,13 +523,9 @@ const api: OperatorApi = new FakeOperatorApi();
 const params = new URLSearchParams(location.search);
 const readOnly = params.has("readonly");
 if (readOnly) {
-  await api.startMachine!("review", {
-    key: ["read-only"],
-    input: { id: "read-only", priority: 1 },
-  });
+  await api.startRun("review", { id: "read-only", priority: 1 });
   calls.length = 0;
   Object.assign(api, {
-    startMachine: undefined,
     sendMachineEvent: undefined,
     retryMachineVisit: undefined,
     closeMachine: undefined,
@@ -497,6 +578,7 @@ function App() {
           api={api}
           workflowId={workflowId}
           navigation={{ selectedRunId, onSelectRun: select }}
+          runActionsEnabled={!readOnly}
         />
       </div>
     </div>

@@ -32,14 +32,33 @@ def wait_server(url: str, server: subprocess.Popen) -> None:
     raise RuntimeError("Browser harness server did not become ready")
 
 
+def start_run(
+    page, key: str, priority: int = 1, *, files: bool = False, evidence: Path | None = None
+) -> None:
+    page.get_by_role("button", name="Edit inputs", exact=True).click()
+    inputs = page.get_by_role("complementary", name="Workflow input declaration")
+    inputs.get_by_label("id value", exact=True).fill(key)
+    inputs.get_by_label("priority value", exact=True).fill(str(priority))
+    if files:
+        inputs.get_by_label("workspace value", exact=True).fill(
+            '{"kind":"workspace","entries":[]}'
+        )
+        inputs.get_by_label("document file", exact=True).set_input_files(
+            {"name": "proof.txt", "mimeType": "text/plain", "buffer": b"machine proof\n"}
+        )
+        expect(inputs.locator("[data-file-field]")).to_contain_text("proof.txt")
+    if evidence is not None:
+        page.screenshot(path=str(evidence / "00-run-input.png"), full_page=True)
+    inputs.get_by_role("button", name="Close", exact=True).click()
+    page.get_by_role("button", name="Run", exact=True).click()
+
+
 def scenario(page, url: str, evidence: Path) -> None:
     page.goto(url)
-    start = page.get_by_role("form", name="Start machine")
-    start.get_by_label("id", exact=False).fill("proof-1")
-    start.get_by_label("priority", exact=False).fill("2")
-    start.get_by_role("button", name="Start machine").click()
+    start_run(page, "proof-1", 2, files=True, evidence=evidence)
     expect(page.locator('[data-machine-run="machine-1"]')).to_be_visible()
-    expect(page.locator("[data-machine-run-entry]")).to_have_count(1)
+    expect(page.locator(".run-list-row")).to_have_count(1)
+    expect(page.locator(".run-list-row")).to_contain_text("proof-1")
     expect(page.locator('[data-current="true"]')).to_have_count(1)
     expect(page.locator(".react-flow__edge-machineArc")).to_have_count(4)
     paths = page.locator(".react-flow__edge-machineArc .react-flow__edge-path").evaluate_all(
@@ -96,23 +115,17 @@ def scenario(page, url: str, evidence: Path) -> None:
     page.locator("[data-machine-run]").evaluate("el => el.scrollTop = 0")
     page.screenshot(path=str(evidence / "04-timer.png"), full_page=True)
     expect(page.locator('[data-machine-state="closed"]')).to_be_visible(timeout=12000)
-    expect(page.locator("[data-machine-run-entry]")).to_have_count(1)
+    expect(page.locator(".run-list-row")).to_have_count(1)
     expect(page.get_by_role("region", name="Machine actions")).to_have_count(0)
     page.screenshot(path=str(evidence / "05-final.png"), full_page=True)
     # Same-key start returns to the existing run; never creates a visit run-list entry.
     page.get_by_role("button", name="Current definition", exact=True).click()
-    start = page.get_by_role("form", name="Start machine")
-    start.get_by_label("id", exact=False).fill("proof-1")
-    start.get_by_label("priority", exact=False).fill("2")
-    start.get_by_role("button", name="Start machine").click()
+    start_run(page, "proof-1", 2)
     expect(page.locator('[data-machine-run="machine-1"]')).to_be_visible()
-    expect(page.locator("[data-machine-run-entry]")).to_have_count(1)
+    expect(page.locator(".run-list-row")).to_have_count(1)
     # Another instance exercises the explicit dev-only timer control.
     page.get_by_role("button", name="Current definition", exact=True).click()
-    start = page.get_by_role("form", name="Start machine")
-    start.get_by_label("id", exact=False).fill("manual-timer")
-    start.get_by_label("priority", exact=False).fill("1")
-    start.get_by_role("button", name="Start machine").click()
+    start_run(page, "manual-timer", 1)
     expect(page.locator('[data-machine-run="machine-2"]')).to_be_visible()
     page.get_by_role("button", name="Retry visit", exact=True).click()
     page.locator("details summary").click()
@@ -123,10 +136,7 @@ def scenario(page, url: str, evidence: Path) -> None:
     expect(page.locator('[data-machine-state="closed"]')).to_be_visible()
     # Third instance exercises close. Confirming is deliberate, never automatic.
     page.get_by_role("button", name="Current definition", exact=True).click()
-    start = page.get_by_role("form", name="Start machine")
-    start.get_by_label("id", exact=False).fill("close-proof")
-    start.get_by_label("priority", exact=False).fill("1")
-    start.get_by_role("button", name="Start machine").click()
+    start_run(page, "close-proof", 1)
     expect(page.locator('[data-machine-run="machine-3"]')).to_be_visible()
     page.once("dialog", lambda dialog: dialog.accept())
     page.get_by_role("button", name="Close machine", exact=True).click()
@@ -139,11 +149,16 @@ def scenario(page, url: str, evidence: Path) -> None:
     expect(page.get_by_role("alert")).to_have_count(0)
     # Ordinary workflow path still uses its normal graph and controls.
     calls = page.evaluate("window.machineHarness.calls")
-    assert not [
-        call
-        for call in calls
-        if call["method"].startswith("flow-") or call["method"] == "snapshot"
-    ], calls
+    assert not [call for call in calls if call["method"].startswith("flow-")], calls
+    starts = [call for call in calls if call["method"] == "run-start"]
+    assert len(starts) == 4, starts
+    assert starts[0]["args"][1] == {
+        "id": "proof-1", "priority": 2, "workspace": {"kind": "workspace", "entries": []}
+    }, starts
+    assert starts[0]["args"][2] == [{
+        "field": "document", "name": "proof.txt", "bytes": list(b"machine proof\n")
+    }], starts
+    assert any(call["method"] == "baseline" for call in calls), calls
     (evidence / "calls.json").write_text(json.dumps(calls, indent=2) + "\n")
     page.get_by_test_id("flow-nav").click()
     expect(page.locator('[aria-label="Machine state graph"]')).to_have_count(0)
@@ -155,13 +170,13 @@ def scenario(page, url: str, evidence: Path) -> None:
     expect(page.locator('[data-current="true"]')).to_have_count(1)
     expect(page.get_by_role("region", name="Machine actions")).to_have_count(0)
     page.get_by_role("button", name="Current definition", exact=True).click()
-    expect(page.get_by_role("form", name="Start machine")).to_have_count(0)
+    expect(page.get_by_role("button", name="Run", exact=True)).to_have_count(0)
     writes = page.evaluate(
         "window.machineHarness.calls.filter(c => "
-        "['start','send','retry','close','fire','flow-start','flow-cancel'].includes(c.method))"
+        "['run-start','send','retry','close','fire','flow-start','flow-cancel'].includes(c.method))"
     )
     assert not writes, writes
-    page.locator("[data-machine-run-entry]").click()
+    page.locator(".run-list-row").click()
     page.screenshot(path=str(evidence / "07-read-only.png"), full_page=True)
     # Deep-link failure is explicit, not a fallback to an unrelated run.
     page.goto(url + "?run=missing")

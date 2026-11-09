@@ -102,13 +102,16 @@
   the embedded runner until a machine-capable operator host is available.
 - Block hosted API URLs and hosted environment reads in standalone source CI.
 
-## 0.20.4
-
 - Add a machine-capable operator UI contract and run workspace: one run per
   instance, curved state graphs with cycles and self-loops, expandable visit
   graphs, event facts and receipts, timer countdowns, and optional host controls.
   This phase adds browser proof against a typed fake host; local operator
-  transport integration follows separately.
+  transport integration follows separately. Machines start through the normal
+  schema-driven run input form (including staged files), and use the normal run
+  timeline. The host derives their key from input; no separate machine start or
+  listing API is required. The machine UI contract drops `key_format`.
+
+## 0.20.4
 
 - Remote machine start/send now retry HTTP 429 and transient 5xx or connection
   failures with unchanged instance/event keys. Native async backoff honors

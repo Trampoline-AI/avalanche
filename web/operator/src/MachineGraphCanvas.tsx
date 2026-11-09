@@ -182,6 +182,7 @@ export function MachineGraphCanvas({
     <div ref={container} className="h-full min-h-0 w-full" aria-label="Machine state graph">
       {viewport && (
         <ReactFlow
+          key={`${size!.width}:${size!.height}`}
           nodes={graph.nodes}
           edges={graph.edges}
           nodeTypes={nodeTypes}

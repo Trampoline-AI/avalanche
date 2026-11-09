@@ -182,8 +182,6 @@ import type {
   MachineInstance,
   MachinePage,
   MachinePageRequest,
-  MachineStartRequest,
-  MachineStartResponse,
   MachineTransition,
   MachineVisit,
   MachineVisitEvent,
@@ -191,11 +189,6 @@ import type {
 
 export interface OperatorApi {
   // Optional capabilities. Run IDs address reads; adapters resolve their host's key/scope.
-  listMachineInstances?(
-    machine: string,
-    page?: MachinePageRequest,
-    signal?: AbortSignal,
-  ): Promise<MachinePage<MachineInstance>>;
   getMachineInstance?(runId: string, signal?: AbortSignal): Promise<MachineInstance>;
   getMachineHistory?(
     runId: string,
@@ -209,7 +202,6 @@ export interface OperatorApi {
     page?: MachinePageRequest,
     signal?: AbortSignal,
   ): Promise<MachinePage<MachineVisitEvent>>;
-  startMachine?(machine: string, request: MachineStartRequest): Promise<MachineStartResponse>;
   sendMachineEvent?(
     runId: string,
     event: string,

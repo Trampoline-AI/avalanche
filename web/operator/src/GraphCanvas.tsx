@@ -1298,7 +1298,12 @@ function sameRunNodeState(
 
 export function GraphCanvas(props: GraphCanvasProps) {
   return props.machine ? (
-    <MachineGraphCanvas spec={props.machine.spec} state={props.machine.state} />
+    <div className="relative h-full min-h-0">
+      <MachineGraphCanvas spec={props.machine.spec} state={props.machine.state} />
+      {props.bottomRightPanel && (
+        <div className="absolute bottom-4 right-4 z-10">{props.bottomRightPanel}</div>
+      )}
+    </div>
   ) : (
     <FlowGraphCanvas {...props} />
   );

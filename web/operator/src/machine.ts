@@ -7,7 +7,6 @@ export interface MachineSpec {
   name: string;
   input_schema: JsonSchema;
   key_fields: string[];
-  key_format: string | null;
   initial: string;
   states: Record<string, MachineState>;
   work_graphs: Record<string, MachineWorkGraph>;
@@ -35,16 +34,6 @@ export interface MachineWorkGraph {
   output_schema: JsonSchema | null;
 }
 /** Public machine fields use the HTTP model's spelling, not protobuf camel case. */
-export interface MachineStartRequest {
-  key: MachineKey;
-  input: { [key: string]: JsonValue };
-  deployment_id?: string | null;
-}
-export interface MachineStartResponse {
-  run_id: string;
-  key: MachineKey;
-  created: boolean;
-}
 export interface MachineTransition {
   from: string;
   to: string | null;

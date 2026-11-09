@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { OperatorApi } from "./api";
-import type { FlowInfoMsg } from "./model";
 import type {
-  JsonValue,
   MachineEventReceipt,
   MachineInstance,
   MachinePage,
@@ -228,7 +226,7 @@ function Timer({ due }: { due: number }) {
   );
 }
 
-function MachineRun({
+export function MachineRun({
   api,
   runId,
   spec: catalogSpec,
@@ -505,148 +503,5 @@ function MachineRun({
         </div>
       </section>
     </article>
-  );
-}
-
-export function MachineWorkspace({
-  api,
-  workflow,
-  selectedRunId,
-  onSelectRun,
-  enabled,
-  className = "",
-}: {
-  api: OperatorApi;
-  workflow: FlowInfoMsg;
-  selectedRunId?: string;
-  onSelectRun: (id?: string) => void;
-  enabled: boolean;
-  className?: string;
-}) {
-  const spec = workflow.machineSpec!;
-  const [cursor, setCursor] = useState<string>();
-  const load = useCallback(
-    (signal: AbortSignal): Promise<MachinePage<MachineInstance>> =>
-      api.listMachineInstances!(spec.name, { cursor, limit: 25 }, signal),
-    [api, spec.name, cursor],
-  );
-  const read = useRead(api.listMachineInstances ? load : undefined, true);
-  const navigation = useRef({ selectedRunId, machine: spec.name, generation: 0 });
-  if (
-    navigation.current.selectedRunId !== selectedRunId ||
-    navigation.current.machine !== spec.name
-  )
-    navigation.current = {
-      selectedRunId,
-      machine: spec.name,
-      generation: navigation.current.generation + 1,
-    };
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
-  return (
-    <section
-      className={`avalanche-operator-ui avalanche-workspace flex h-full min-h-0 min-w-0 bg-canvas ${className}`}
-    >
-      <aside
-        className="w-[270px] shrink-0 overflow-auto border-r border-line bg-panel p-4"
-        aria-label="Machine run list"
-      >
-        <h2 className="mb-3 text-sm font-semibold text-ink">Runs</h2>
-        <button
-          className={`${machineButton} mb-3 w-full`}
-          aria-current={!selectedRunId ? "page" : undefined}
-          onClick={() => onSelectRun(undefined)}
-        >
-          Current definition
-        </button>
-        {!api.listMachineInstances ? (
-          <p className="text-xs text-secondary">
-            Machine run listing is unavailable from this host.
-          </p>
-        ) : (
-          <>
-            <ReadError error={read.error} retry={read.refresh} />
-            {read.value?.items.map((instance) => (
-              <button
-                key={instance.run_id}
-                data-machine-run-entry={instance.run_id}
-                aria-current={selectedRunId === instance.run_id ? "page" : undefined}
-                className={`mb-2 grid w-full gap-1 rounded border p-3 text-left text-xs ${selectedRunId === instance.run_id ? "border-acid bg-acid/10" : "border-line"}`}
-                onClick={() => onSelectRun(instance.run_id)}
-              >
-                <strong className="text-ink">{keyLabel(instance)}</strong>
-                <span className="text-secondary">
-                  {instance.state} · {instance.status}
-                </span>
-                <span className="truncate font-mono text-secondary">{instance.run_id}</span>
-              </button>
-            ))}
-            <div className="flex gap-2">
-              {cursor && (
-                <button className={machineButton} onClick={() => setCursor(undefined)}>
-                  First runs
-                </button>
-              )}
-              {read.value?.next_cursor != null && (
-                <button
-                  className={machineButton}
-                  onClick={() => setCursor(read.value!.next_cursor!)}
-                >
-                  Next runs
-                </button>
-              )}
-            </div>
-          </>
-        )}
-      </aside>
-      {selectedRunId ? (
-        <MachineRun
-          key={selectedRunId}
-          api={api}
-          runId={selectedRunId}
-          spec={spec}
-          enabled={enabled}
-        />
-      ) : (
-        <article className="min-w-0 flex-1 overflow-auto p-5 text-ink">
-          <h2 className="text-lg font-semibold">{workflow.displayName || workflow.name}</h2>
-          <div className="my-4 h-[400px] rounded border border-line">
-            <GraphCanvas machine={{ spec }} onOpenNode={() => {}} />
-          </div>
-          {enabled && api.startMachine && (
-            <section className="max-w-lg" aria-label="Start machine">
-              <h3 className="mb-3 text-sm font-semibold">Start machine</h3>
-              <p className="mb-3 text-xs text-secondary">
-                Key fields: {spec.key_fields.join(", ")}. Starting the same key opens the same
-                run.
-              </p>
-              <MachinePayloadForm
-                schema={spec.input_schema}
-                label="Start machine"
-                onSubmit={async (input) => {
-                  if (input === null || typeof input !== "object" || Array.isArray(input))
-                    throw new Error("Machine input must be an object");
-                  const key: JsonValue[] = spec.key_fields.map((field) => {
-                    if (!(field in input)) throw new Error(`Key field ${field} is required`);
-                    return input[field];
-                  });
-                  const generation = navigation.current.generation;
-                  const result = await api.startMachine!(spec.name, { key, input });
-                  if (alive.current && generation === navigation.current.generation) {
-                    read.refresh();
-                    onSelectRun(result.run_id);
-                  }
-                }}
-              />
-            </section>
-          )}
-        </article>
-      )}
-    </section>
   );
 }

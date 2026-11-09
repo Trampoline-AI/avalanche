@@ -11,7 +11,7 @@ import {
 } from "react";
 
 import type { OperatorApi } from "./api";
-import { MachineWorkspace } from "./MachineWorkspace";
+import { MachineRun } from "./MachineWorkspace";
 import { GraphCanvas } from "./GraphCanvas";
 import { Inspector } from "./Inspector";
 import type { FlowInfoMsg, InputFileAttachment, RunSnapshotMsg } from "./model";
@@ -209,7 +209,7 @@ export function WorkflowWorkspaceSurface({
   }>({ following: false });
 
   useEffect(() => {
-    if (!workflowId || workflow?.machineSpec) return;
+    if (!workflowId) return;
     const current = selection.current;
     if (current.workflowId !== workflowId) {
       current.workflowId = workflowId;
@@ -267,7 +267,6 @@ export function WorkflowWorkspaceSurface({
     state.selectedRunId,
     timelineView,
     workflowId,
-    workflow?.machineSpec,
   ]);
 
   const selectWorkflowRun = useCallback(
@@ -440,20 +439,6 @@ export function WorkflowWorkspaceSurface({
     "--workspace-inspector-divider-width": "0px",
   } as CSSProperties;
 
-  if (workflow?.machineSpec) {
-    return (
-      <MachineWorkspace
-        key={workflowId}
-        api={api}
-        workflow={workflow}
-        selectedRunId={selectedRunId}
-        onSelectRun={onSelectRun}
-        enabled={runActionsEnabled && bottomRightPanel !== null}
-        className={className}
-      />
-    );
-  }
-
   // Do not paint a definition/empty graph before the initial selected snapshot.
   if (
     historical &&
@@ -476,7 +461,7 @@ export function WorkflowWorkspaceSurface({
           {runListPanel && (
             <div
               ref={timelineElement}
-              className={`workspace-timeline z-20 ${timelineExpanded ? "relative w-[410px] max-w-full shrink-0 max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:left-0" : "absolute top-3.5 left-3.5 w-[300px] max-w-[calc(100vw-3rem)]"}`}
+              className={`workspace-timeline z-20 ${timelineExpanded ? "relative w-[410px] max-w-full shrink-0 max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:left-0" : workflow?.machineSpec && historical ? "relative w-[300px] shrink-0" : "absolute top-3.5 left-3.5 w-[300px] max-w-[calc(100vw-3rem)]"}`}
             >
               {runListPanel}
             </div>
@@ -484,10 +469,19 @@ export function WorkflowWorkspaceSurface({
           <div
             className={`canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${run ? "run-canvas bg-run-canvas" : "blueprint-canvas bg-panel"}`}
           >
-            {workflow || run ? (
+            {workflow?.machineSpec && selectedRunId ? (
+              <MachineRun
+                key={selectedRunId}
+                api={api}
+                runId={selectedRunId}
+                spec={workflow.machineSpec}
+                enabled={runActionsEnabled && bottomRightPanel !== null}
+              />
+            ) : workflow || run ? (
               <>
                 <div className="run-graph-shell relative min-h-0 min-w-0 flex-1 overflow-hidden">
                   <GraphCanvas
+                    machine={workflow?.machineSpec ? { spec: workflow.machineSpec } : undefined}
                     workflow={!run || previewWorkflow ? workflow : undefined}
                     runTopology={previewWorkflow ? undefined : run?.topology}
                     runNodes={requestingRun ? undefined : run?.nodes}
@@ -502,6 +496,14 @@ export function WorkflowWorkspaceSurface({
                       bottomRightPanel === undefined ? runControlsPanel : bottomRightPanel
                     }
                   />
+                  {workflow?.machineSpec && workflow.inputDeclarationJson && (
+                    <button
+                      className="absolute top-4 right-4 rounded border border-line bg-panel p-2 text-xs text-ink"
+                      onClick={() => openNode(INPUT_NODE_ID)}
+                    >
+                      Edit inputs
+                    </button>
+                  )}
                   {evaluationState.error && (
                     <p
                       role="alert"
