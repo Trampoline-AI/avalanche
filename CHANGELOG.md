@@ -1,6 +1,11 @@
 # Changelog
 
-## 0.20.0
+## 0.20.1
+
+- First published state-machines release; 0.20.0 was tagged but never
+  published. No SDK change since 0.20.0.
+
+## 0.20.0 (tagged, never published)
 
 - Add declarative `@ava.machine` state graphs, typed `Event[T]` emissions and
   workflow outputs, discovery manifests, and a native-async local test driver.
