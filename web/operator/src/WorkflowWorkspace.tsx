@@ -11,6 +11,7 @@ import {
 } from "react";
 
 import type { OperatorApi } from "./api";
+import { MachineWorkspace } from "./MachineWorkspace";
 import { GraphCanvas } from "./GraphCanvas";
 import { Inspector } from "./Inspector";
 import type { FlowInfoMsg, InputFileAttachment, RunSnapshotMsg } from "./model";
@@ -208,7 +209,7 @@ export function WorkflowWorkspaceSurface({
   }>({ following: false });
 
   useEffect(() => {
-    if (!workflowId) return;
+    if (!workflowId || workflow?.machineSpec) return;
     const current = selection.current;
     if (current.workflowId !== workflowId) {
       current.workflowId = workflowId;
@@ -266,6 +267,7 @@ export function WorkflowWorkspaceSurface({
     state.selectedRunId,
     timelineView,
     workflowId,
+    workflow?.machineSpec,
   ]);
 
   const selectWorkflowRun = useCallback(
@@ -437,6 +439,20 @@ export function WorkflowWorkspaceSurface({
     "--workspace-inspector-column-width": inspectorOpen ? `${inspectorWidth}px` : "0px",
     "--workspace-inspector-divider-width": "0px",
   } as CSSProperties;
+
+  if (workflow?.machineSpec) {
+    return (
+      <MachineWorkspace
+        key={workflowId}
+        api={api}
+        workflow={workflow}
+        selectedRunId={selectedRunId}
+        onSelectRun={onSelectRun}
+        enabled={runActionsEnabled && bottomRightPanel !== null}
+        className={className}
+      />
+    );
+  }
 
   // Do not paint a definition/empty graph before the initial selected snapshot.
   if (

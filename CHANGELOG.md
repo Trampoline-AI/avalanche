@@ -104,6 +104,12 @@
 
 ## 0.20.4
 
+- Add a machine-capable operator UI contract and run workspace: one run per
+  instance, curved state graphs with cycles and self-loops, expandable visit
+  graphs, event facts and receipts, timer countdowns, and optional host controls.
+  This phase adds browser proof against a typed fake host; local operator
+  transport integration follows separately.
+
 - Remote machine start/send now retry HTTP 429 and transient 5xx or connection
   failures with unchanged instance/event keys. Native async backoff honors
   Retry-After within a 60-second default budget; configure it with

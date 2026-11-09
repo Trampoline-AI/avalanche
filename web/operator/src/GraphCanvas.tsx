@@ -36,6 +36,8 @@ import {
   type Viewport,
 } from "@xyflow/react";
 
+import { MachineGraphCanvas } from "./MachineGraphCanvas";
+import type { MachineSpec } from "./machine";
 import type { FlowInfoMsg, NodeSnapshotMsg, TriggerKind, WorkflowTopologyMsg } from "./model";
 import {
   AgentDeclaration as AgentDeclarationSchema,
@@ -794,6 +796,7 @@ type TopologyView = Pick<
 >;
 
 interface GraphCanvasProps {
+  machine?: { spec: MachineSpec; state?: string | null };
   workflow?: FlowInfoMsg;
   runTopology?: WorkflowTopologyMsg;
   runNodes?: NodeSnapshotMsg[];
@@ -1293,7 +1296,15 @@ function sameRunNodeState(
   });
 }
 
-export const GraphCanvas = memo(
+export function GraphCanvas(props: GraphCanvasProps) {
+  return props.machine ? (
+    <MachineGraphCanvas spec={props.machine.spec} state={props.machine.state} />
+  ) : (
+    <FlowGraphCanvas {...props} />
+  );
+}
+
+const FlowGraphCanvas = memo(
   GraphCanvasView,
   (left, right) =>
     left.workflow === right.workflow &&

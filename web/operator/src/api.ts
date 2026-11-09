@@ -176,7 +176,49 @@ export interface ClassifierEventDescriptorPage {
   nextCursor: string;
 }
 
+import type {
+  JsonValue,
+  MachineEventReceipt,
+  MachineInstance,
+  MachinePage,
+  MachinePageRequest,
+  MachineStartRequest,
+  MachineStartResponse,
+  MachineTransition,
+  MachineVisit,
+  MachineVisitEvent,
+} from "./machine";
+
 export interface OperatorApi {
+  // Optional capabilities. Run IDs address reads; adapters resolve their host's key/scope.
+  listMachineInstances?(
+    machine: string,
+    page?: MachinePageRequest,
+    signal?: AbortSignal,
+  ): Promise<MachinePage<MachineInstance>>;
+  getMachineInstance?(runId: string, signal?: AbortSignal): Promise<MachineInstance>;
+  getMachineHistory?(
+    runId: string,
+    page?: MachinePageRequest,
+    signal?: AbortSignal,
+  ): Promise<MachinePage<MachineTransition>>;
+  getMachineVisit?(runId: string, visit: number, signal?: AbortSignal): Promise<MachineVisit>;
+  getMachineVisitEvents?(
+    runId: string,
+    visit: number,
+    page?: MachinePageRequest,
+    signal?: AbortSignal,
+  ): Promise<MachinePage<MachineVisitEvent>>;
+  startMachine?(machine: string, request: MachineStartRequest): Promise<MachineStartResponse>;
+  sendMachineEvent?(
+    runId: string,
+    event: string,
+    payload: JsonValue,
+    idempotencyKey: string,
+  ): Promise<MachineEventReceipt>;
+  retryMachineVisit?(runId: string): Promise<void>;
+  closeMachine?(runId: string): Promise<void>;
+  fireNextMachineTimer?(runId: string): Promise<void>;
   getCatalog(signal?: AbortSignal): Promise<CatalogSnapshotMsg>;
   loadBaseline(signal?: AbortSignal): Promise<StructuralBaseline>;
   getWorkflowNodeSource(

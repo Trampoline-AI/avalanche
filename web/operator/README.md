@@ -298,3 +298,86 @@ through the host's `OperatorApi`.
 
 This package does not run an operator server, create an authentication boundary, or provide
 multi-tenant behavior. Those concerns stay with the embedding host.
+
+## Machine runs (phase A contract)
+
+A catalog flow can supply `machineSpec: MachineSpec`, the parsed discovery
+`machine_spec_json` document (`avalanche.machine/v1`). `WorkflowWorkspace` then
+shows one run row per machine instance, labelled with its key and current state.
+Selecting a row keeps the instance's `run_id` as the page identity; visits never
+become separate runs. Ordinary workflow rendering and controls are unchanged.
+
+The graph uses the shared `GraphCanvas` and React Flow with cubic arcs, including
+self-loops and cycles, and highlights the current state. Known card dimensions
+and a pre-paint container measurement avoid an initial fit jump. Below it,
+expandable visit sections show clocks, catalog revision when available,
+transition, disposition, the shared step graph and inspector, and the original
+step kind, generation and attempts. Event facts are fetched only for open
+sections, in bounded windows; an empty page with a non-null cursor still offers
+the next window. Pending inbox entries and admission receipts remain separate
+from later consumed/ignored/dropped facts. Timer deadlines are Unix seconds;
+the countdown never fires a timer in the browser.
+
+All machine methods on `OperatorApi` are optional:
+
+- Reads: `listMachineInstances(machine, page?, signal?)`,
+  `getMachineInstance(runId, signal?)`, `getMachineHistory(runId, page?, signal?)`,
+  `getMachineVisit(runId, visit, signal?)`, and
+  `getMachineVisitEvents(runId, visit, page?, signal?)`.
+- Writes: `startMachine(machine, request)`,
+  `sendMachineEvent(runId, event, payload, idempotencyKey)`,
+  `retryMachineVisit(runId)`, `closeMachine(runId)`, and
+  `fireNextMachineTimer(runId)`.
+
+The exported types in `src/machine.ts` follow the public machine JSON field
+names (`run_id`, `next_cursor`, `entered_at`, `g`, etc.). Read adapters resolve a
+run ID to their host's machine key and scope. A deployment-based host must supply
+`MachineInstance.machine_spec` with the instance's pinned definition, rather than
+silently displaying its latest deployment. A local host may omit it to use the
+current catalog definition. `catalog_revision` on visits and `pending_events` /
+`receipts` on instances are optional local-operator extensions; missing data is
+not presented as an empty inbox or fabricated revision.
+
+The instance, current visit, first history window and run-list window refresh
+once per second, without overlapping requests. Older history/fact windows stay
+stable until navigation or an explicit retry. Requests are aborted and late
+responses discarded on scope changes. A missing read method shows an explicit
+unavailable state. Missing write methods hide the corresponding controls, so
+read-only hosts issue no mutation. `runActionsEnabled={false}` or
+`bottomRightPanel={null}` also suppresses machine writes.
+
+Start keys are derived from the declared input key fields. Event forms use each
+transition's payload JSON schema: typed primitive and enum controls, JSON editors
+for compound values. The host remains the complete JSON-schema validator.
+A failed send retains its idempotency key when retrying the same event and payload.
+Close requires confirmation; fire-next-timer appears only for a host exposing
+that optional development capability and an instance with a deadline.
+
+This phase intentionally does **not** add machine support to
+`GrpcWebOperatorApi`, protobuf, REST, or the Python operator. Phase B connects
+these optional methods to the real operator after the operator transport change
+(PR 2). It must rerun the browser scenario against that real host before claiming
+local-operator end-to-end support. The console adapter port follows separately.
+
+### Browser proof
+
+Use Node 22 (as in browser CI) and the workspace's pinned pnpm. From `web/`:
+
+```bash
+pnpm install --frozen-lockfile
+uv run --no-project --python 3.13 --with playwright==1.55.0 playwright install chromium firefox
+uv run --no-project --python 3.13 --with playwright==1.55.0 python \
+  operator/scripts/machine_browser_proof.py --evidence /path/to/evidence
+```
+
+The script owns and stops a loopback Vite server. It renders the real
+`WorkflowWorkspace` against the typed fake `OperatorApi` in
+`src/test/machineHarness.tsx`, which is excluded from the published package.
+Both browsers exercise instance identity, cyclic/curved graph rendering,
+first-frame stability, interrupted-visit retry, archived visit expansion,
+empty event-page continuations, ignored/dropped facts, typed send payloads,
+a committed-send/lost-response retry, receipt display, natural timer countdown
+and firing, manual timer firing, close, transient read recovery, ordinary-flow
+rendering, read-only hosts and a missing-run deep link. Screenshots, host calls,
+server output and a JSON result are written under the supplied evidence path.
+No backend persistence, protocol, or restart claim is made by this fake-host proof.

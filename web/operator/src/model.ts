@@ -91,6 +91,8 @@ export const DiscoveryDiagnosticMsg = {
 };
 
 export interface FlowInfoMsg {
+  /** Parsed machine_spec_json supplied by a machine-capable host. */
+  machineSpec?: import("./machine").MachineSpec;
   mapSpecs: Record<string, MapSpecMsg>;
   /**
    * @generated from protobuf field: string name = 1

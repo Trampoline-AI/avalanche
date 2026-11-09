@@ -27,3 +27,4 @@ export type {
   WorkspaceDeployments,
 } from "./WorkflowWorkspace";
 export * from "./model";
+export type * from "./machine";
