@@ -4,12 +4,14 @@ import type {
   MachineEventReceipt,
   MachineInstance,
   MachinePage,
+  MachineKey,
   MachineSpec,
   MachineTransition,
+  MachineVisit,
   MachineVisitEvent,
 } from "./machine";
 import { MachinePayloadForm, machineButton } from "./MachinePayloadForm";
-import { MachineVisitWorkspace } from "./MachineVisitWorkspace";
+import { RunWaitPanel } from "./RunWaitPanel";
 
 function useRead<T>(load: ((signal: AbortSignal) => Promise<T>) | undefined, poll = false) {
   const [result, setResult] = useState<{ load: typeof load; value: T }>();
@@ -58,10 +60,21 @@ function ReadError({ error, retry }: { error?: string; retry: () => void }) {
 function clock(value: number | null) {
   return value === null ? "Not recorded" : new Date(value * 1000).toLocaleString();
 }
-function keyLabel(instance: MachineInstance) {
-  return instance.key
-    .map((part) => (typeof part === "string" ? part : JSON.stringify(part)))
-    .join(" / ");
+/**
+ * A readable instance key: text parts joined by " / ", numbers as "#n"
+ * (["acme/api", 44] is "acme/api #44"). Hosts use it for RunSummaryMsg.label.
+ */
+export function machineKeyLabel(key: MachineKey): string {
+  return key.reduce<string>((label, part, index) => {
+    const text =
+      typeof part === "number"
+        ? `#${part}`
+        : typeof part === "string"
+          ? part
+          : JSON.stringify(part);
+    if (index === 0) return text;
+    return `${label}${typeof part === "number" ? " " : " / "}${text}`;
+  }, "");
 }
 
 function EventFacts({
@@ -91,34 +104,22 @@ function EventFacts({
     );
   return (
     <section aria-label="Event facts" className="grid gap-2">
-      <h4 className="text-sm font-semibold">Event facts</h4>
+      <h3 className="m-0 border-b border-line pb-2 font-mono text-[9px] tracking-[.16em] text-secondary uppercase">
+        Event facts
+      </h3>
       <ReadError error={read.error} retry={read.refresh} />
       {read.value ? (
         <>
-          <div className="overflow-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Event</th>
-                  <th>Disposition</th>
-                  <th>Receipt</th>
-                  <th>Source</th>
-                </tr>
-              </thead>
-              <tbody>
-                {read.value.items.map((fact) => (
-                  <tr key={fact.tseq} data-event-status={fact.status}>
-                    <td className="py-2">{clock(fact.at)}</td>
-                    <td>{fact.event ?? "—"}</td>
-                    <td>{fact.status}</td>
-                    <td className="font-mono">{fact.receipt_id ?? "—"}</td>
-                    <td>{fact.source}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <ul className="m-0 grid list-none gap-1 p-0 font-mono text-[11px]">
+            {read.value.items.map((fact) => (
+              <li key={fact.tseq} data-event-status={fact.status}>
+                <span className="text-ink">{fact.event ?? "—"}</span> · {fact.status} ·{" "}
+                <span className="text-secondary">
+                  {fact.source} · {fact.receipt_id ?? "no receipt"} · {clock(fact.at)}
+                </span>
+              </li>
+            ))}
+          </ul>
           {read.value.items.length === 0 && (
             <p className="text-xs text-secondary">No event facts in this window.</p>
           )}
@@ -145,99 +146,6 @@ function EventFacts({
   );
 }
 
-function VisitSection({
-  api,
-  runId,
-  number,
-  current,
-  refreshKey,
-  enabled,
-  open,
-  onToggle,
-}: {
-  api: OperatorApi;
-  runId: string;
-  number: number;
-  current: boolean;
-  refreshKey: string;
-  enabled: boolean;
-  open: boolean;
-  onToggle: () => void;
-}) {
-  const load = useCallback(
-    (signal: AbortSignal) => api.getMachineVisit!(runId, number, signal),
-    // refreshKey re-reads the visit after the instance moves on.
-    [api, runId, number, refreshKey],
-  );
-  const read = useRead(load, current);
-  const visit = read.value;
-  return (
-    <section
-      id={`machine-visit-section-${number}`}
-      className="border-t border-line py-3"
-      data-visit={number}
-      data-visit-state={visit?.state}
-    >
-      <button
-        type="button"
-        className="flex w-full items-center justify-between gap-3 text-left"
-        aria-expanded={open}
-        aria-controls={`machine-visit-${number}`}
-        onClick={onToggle}
-      >
-        <span className="flex min-w-0 items-center gap-2 font-mono text-xs text-ink">
-          <span className="text-secondary">Visit {number}</span>
-          {visit && <strong className="truncate">{visit.state}</strong>}
-          {visit && (
-            <span className="text-[9px] tracking-[.12em] text-secondary uppercase">
-              {visit.disposition}
-            </span>
-          )}
-        </span>
-        <span aria-hidden="true" className="text-secondary">
-          {open ? "−" : "+"}
-        </span>
-      </button>
-      <ReadError error={read.error} retry={read.refresh} />
-      {visit && (
-        <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 font-mono text-[10px] text-secondary">
-          <dt>Entered</dt>
-          <dd>{clock(visit.entered_at)}</dd>
-          <dt>Left</dt>
-          <dd>{clock(visit.left_at)}</dd>
-          <dt>Catalog revision</dt>
-          <dd>{visit.catalog_revision ?? "Not reported by this host"}</dd>
-          {visit.transition && (
-            <>
-              <dt>Transition</dt>
-              <dd>
-                {visit.transition.from} → {visit.transition.to ?? "closed"} ·{" "}
-                {visit.transition.event ?? visit.transition.source}
-              </dd>
-            </>
-          )}
-        </dl>
-      )}
-      {open && (
-        <div id={`machine-visit-${number}`} className="mt-3 grid gap-4">
-          {visit ? (
-            <MachineVisitWorkspace
-              api={api}
-              runId={runId}
-              visit={visit}
-              enabled={enabled}
-              current={current}
-            />
-          ) : (
-            <p role="status">Loading visit…</p>
-          )}
-          <EventFacts api={api} runId={runId} visit={number} live={current} />
-        </div>
-      )}
-    </section>
-  );
-}
-
 function Timer({ due }: { due: number }) {
   const [now, setNow] = useState(() => Date.now() / 1000);
   useEffect(() => {
@@ -245,8 +153,8 @@ function Timer({ due }: { due: number }) {
     return () => clearInterval(timer);
   }, []);
   return (
-    <span className="text-secondary">
-      Next timer: <time dateTime={new Date(due * 1000).toISOString()}>{clock(due)}</time> ·{" "}
+    <span>
+      <time dateTime={new Date(due * 1000).toISOString()}>{clock(due)}</time> ·{" "}
       <span className="text-amber" data-timer-remaining={Math.max(0, Math.ceil(due - now))}>
         {due > now ? `${Math.ceil(due - now)}s remaining` : "Due — awaiting host"}
       </span>
@@ -263,317 +171,508 @@ export function useMachineInstance(api: OperatorApi, runId: string | undefined) 
   return useRead(api.getMachineInstance && runId ? load : undefined, true);
 }
 
+/** The newest window of the run's transitions; polled while it is the first window. */
+export function useMachineHistory(api: OperatorApi, runId: string | undefined) {
+  const [cursor, setCursor] = useState<{ runId?: string; value?: string }>();
+  const current = cursor && cursor.runId === runId ? cursor.value : undefined;
+  const load = useCallback(
+    (signal: AbortSignal): Promise<MachinePage<MachineTransition>> =>
+      api.getMachineHistory!(runId!, { cursor: current, limit: 25 }, signal),
+    [api, runId, current],
+  );
+  const read = useRead(
+    api.getMachineHistory && runId ? load : undefined,
+    current === undefined,
+  );
+  return {
+    ...read,
+    cursor: current,
+    setCursor: (value: string | undefined) => setCursor({ runId, value }),
+  };
+}
+export type MachineHistory = ReturnType<typeof useMachineHistory>;
+
+/** One visit, polled while it is the instance's current visit. */
+export function useMachineVisit(
+  api: OperatorApi,
+  runId: string | undefined,
+  visit: number | undefined,
+  live: boolean,
+  refreshKey: string,
+) {
+  const load = useCallback(
+    (signal: AbortSignal) => api.getMachineVisit!(runId!, visit!, signal),
+    // refreshKey re-reads the visit after the instance moves on.
+    [api, runId, visit, refreshKey],
+  );
+  return useRead(api.getMachineVisit && runId && visit !== undefined ? load : undefined, live);
+}
+
+/** The state each visit ran in, newest first, from the instance and its history. */
+export function machineVisits(
+  instance: MachineInstance,
+  history: MachinePage<MachineTransition> | undefined,
+): { visit: number; state: string; left?: MachineTransition }[] {
+  const visits = new Map<number, { visit: number; state: string; left?: MachineTransition }>();
+  for (const transition of history?.items ?? [])
+    visits.set(transition.visit, {
+      visit: transition.visit,
+      state: transition.from,
+      left: transition,
+    });
+  if (instance.visit > 0 && instance.state && !visits.has(instance.visit))
+    visits.set(instance.visit, { visit: instance.visit, state: instance.state });
+  return [...visits.values()].sort((a, b) => b.visit - a.visit);
+}
+
 /**
- * Below the shared graph on a machine run page: machine-only writes (send, retry,
- * dev timer), pending events and receipts, and one section per visit with that
- * visit's step graph, inspector, logs and waits. Cancel, logs and live status stay
- * the normal run controls.
+ * The visits of the selected machine run, as a section of the run timeline. The
+ * first row returns to the state graph; each visit row opens that visit's steps.
  */
-export function MachineRunSections({
+export function MachineVisitTimeline({
+  instance,
+  history,
+  selectedVisit,
+  onSelectVisit,
+  expanded = false,
+}: {
+  instance: MachineInstance | undefined;
+  history: MachineHistory;
+  selectedVisit?: number;
+  onSelectVisit: (visit: number | undefined) => void;
+  expanded?: boolean;
+}) {
+  if (!instance) return null;
+  const visits = machineVisits(instance, history.value);
+  const row = `machine-visit-row flex w-full cursor-pointer items-center justify-between gap-3 border-0 border-b border-run-list-line text-left font-mono leading-none ${expanded ? "h-[34px] pl-[28px] pr-[30px] text-[11px]" : "h-[27.5px] pl-[28px] pr-[30px] text-[10px]"}`;
+  const active =
+    "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover";
+  return (
+    <section aria-label="Machine visits" className="shrink-0 border-t border-run-list-line">
+      <div className="flex h-7 items-center justify-between pl-[16px] pr-[30px] font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase">
+        <span>Visits</span>
+        <span>{machineKeyLabel(instance.key)}</span>
+      </div>
+      <div className={`overflow-auto overscroll-contain ${expanded ? "max-h-80" : "max-h-40"}`}>
+        <button
+          type="button"
+          aria-pressed={selectedVisit === undefined}
+          className={`${row} ${selectedVisit === undefined ? active : "bg-transparent hover:bg-hover"}`}
+          onClick={() => onSelectVisit(undefined)}
+        >
+          <span className="truncate text-ink">State machine</span>
+          <span className="text-secondary" data-machine-state={instance.state}>
+            {instance.state ?? "—"}
+          </span>
+        </button>
+        {visits.map((visit) => {
+          const current = visit.visit === instance.visit && !instance.finished;
+          return (
+            <button
+              key={visit.visit}
+              type="button"
+              data-visit={visit.visit}
+              aria-pressed={selectedVisit === visit.visit}
+              aria-label={`Visit ${visit.visit}, ${visit.state}${current ? ", current" : ""}`}
+              className={`${row} ${selectedVisit === visit.visit ? active : "bg-transparent hover:bg-hover"}`}
+              onClick={() => onSelectVisit(visit.visit)}
+            >
+              <span className="min-w-0 truncate">
+                <span className="text-secondary">#{visit.visit}</span>{" "}
+                <span className="text-ink">{visit.state}</span>
+              </span>
+              <span className="shrink-0 text-secondary">
+                {current
+                  ? "current"
+                  : visit.left
+                    ? `→ ${visit.left.to ?? "closed"} · ${visit.left.event ?? visit.left.source}`
+                    : ""}
+              </span>
+            </button>
+          );
+        })}
+        {history.error && (
+          <p role="alert" className="px-[16px] py-1 text-[10px] text-danger">
+            {history.error}{" "}
+            <button type="button" className="underline" onClick={history.refresh}>
+              Retry read
+            </button>
+          </p>
+        )}
+        {(history.cursor !== undefined || history.value?.next_cursor != null) && (
+          <div className="flex gap-3 px-[16px] py-1.5 text-[10px]">
+            {history.cursor !== undefined && (
+              <button
+                type="button"
+                className="underline"
+                onClick={() => history.setCursor(undefined)}
+              >
+                Latest visits
+              </button>
+            )}
+            {history.value?.next_cursor != null && (
+              <button
+                type="button"
+                className="underline"
+                onClick={() => history.setCursor(history.value!.next_cursor!)}
+              >
+                Older visits
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+const runAction =
+  "cursor-pointer rounded border border-line bg-panel px-[11px] py-[7px] text-[10px] text-ink hover:bg-hover disabled:cursor-wait disabled:opacity-50";
+
+/**
+ * Machine-only run actions, placed beside the normal run controls (Cancel): send
+ * an event (opens its form in the side panel), retry an interrupted visit, and the
+ * development timer trigger. Each appears only when the host implements it.
+ */
+export function MachineRunActions({
+  api,
+  runId,
+  instance,
+  enabled,
+  onSend,
+  onChanged,
+}: {
+  api: OperatorApi;
+  runId: string;
+  instance: MachineInstance | undefined;
+  enabled: boolean;
+  onSend: () => void;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const scope = useRef(true);
+  useEffect(() => {
+    scope.current = true;
+    return () => {
+      scope.current = false;
+    };
+  }, []);
+  if (!instance || !enabled || instance.finished) return null;
+  const retryable = ["interrupted", "needs_attention", "indeterminate"].includes(
+    instance.status,
+  );
+  async function act(mutate: () => Promise<void>) {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await mutate();
+      if (scope.current) onChanged();
+    } catch (cause) {
+      if (scope.current) setError(cause instanceof Error ? cause.message : "Action failed");
+    } finally {
+      if (scope.current) setBusy(false);
+    }
+  }
+  const actions = [
+    api.sendMachineEvent && (
+      <button key="send" type="button" className={runAction} onClick={onSend}>
+        Send event
+      </button>
+    ),
+    api.retryMachineVisit && retryable && (
+      <button
+        key="retry"
+        type="button"
+        className={runAction}
+        disabled={busy}
+        onClick={() => void act(() => api.retryMachineVisit!(runId))}
+      >
+        Retry visit
+      </button>
+    ),
+    api.fireNextMachineTimer && instance.due !== null && (
+      <button
+        key="fire"
+        type="button"
+        className={runAction}
+        disabled={busy}
+        title="Development hosts only"
+        onClick={() => void act(() => api.fireNextMachineTimer!(runId))}
+      >
+        Fire next timer
+      </button>
+    ),
+  ].filter(Boolean);
+  if (actions.length === 0) return null;
+  return (
+    <div role="group" aria-label="Machine actions" className="flex items-center gap-2">
+      {actions}
+      {error && (
+        <p role="alert" className="m-0 max-w-48 text-[10px] text-danger">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The send form in the run's side panel, the way the run input form opens there.
+ * A failed send keeps its idempotency key when retried with the same payload.
+ */
+export function MachineSendPanel({
   api,
   runId,
   spec: catalogSpec,
   instance,
-  readError,
-  refresh,
-  enabled,
-  focus,
+  onClose,
+  onSent,
 }: {
   api: OperatorApi;
   runId: string;
   spec: MachineSpec;
   instance: MachineInstance | undefined;
-  readError?: string;
-  refresh: () => void;
-  enabled: boolean;
-  /** A state picked on the graph; its latest visit opens. */
-  focus?: { state: string; nonce: number };
+  onClose: () => void;
+  onSent: () => void;
 }) {
   const spec = instance?.machine_spec ?? catalogSpec;
-  const [cursor, setCursor] = useState<string>();
-  const historyLoad = useCallback(
-    (signal: AbortSignal): Promise<MachinePage<MachineTransition>> =>
-      api.getMachineHistory!(runId, { cursor, limit: 25 }, signal),
-    [api, runId, cursor],
-  );
-  const history = useRead(
-    api.getMachineHistory ? historyLoad : undefined,
-    cursor === undefined,
-  );
-  const [openVisits, setOpenVisits] = useState<ReadonlySet<number>>(() => new Set());
   const [event, setEvent] = useState<string>();
   const [receipt, setReceipt] = useState<MachineEventReceipt>();
-  const [busy, setBusy] = useState(false);
-  const [actionError, setActionError] = useState<string>();
   const idempotency = useRef<{ signature: string; key: string } | undefined>(undefined);
-  const actionScope = useRef(true);
+  const scope = useRef(true);
   useEffect(() => {
-    actionScope.current = true;
+    scope.current = true;
     return () => {
-      actionScope.current = false;
+      scope.current = false;
     };
   }, []);
-  const handledFocus = useRef<number | undefined>(undefined);
-  useEffect(() => {
-    if (!focus || !instance || handledFocus.current === focus.nonce) return;
-    handledFocus.current = focus.nonce;
-    const visit =
-      focus.state === instance.state
-        ? instance.visit
-        : Math.max(
-            0,
-            ...(history.value?.items ?? [])
-              .filter((transition) => transition.from === focus.state)
-              .map((transition) => transition.visit),
-          );
-    if (visit <= 0) return;
-    setOpenVisits((current) => new Set(current).add(visit));
-    requestAnimationFrame(() =>
-      document
-        .getElementById(`machine-visit-section-${visit}`)
-        ?.scrollIntoView({ block: "start", behavior: "smooth" }),
-    );
-  }, [focus, history.value, instance]);
-  async function action(mutate: () => Promise<void>) {
-    setBusy(true);
-    setActionError(undefined);
-    try {
-      await mutate();
-      if (actionScope.current) {
-        refresh();
-        history.refresh();
-      }
-    } catch (cause) {
-      if (actionScope.current)
-        setActionError(cause instanceof Error ? cause.message : "Action failed");
-    } finally {
-      if (actionScope.current) setBusy(false);
-    }
-  }
-  if (!api.getMachineInstance)
-    return (
-      <p role="status" className="p-4 text-xs text-secondary">
-        Machine reads are unavailable from this host.
-      </p>
-    );
-  if (!instance)
-    return (
-      <div className="p-4 text-xs">
-        <ReadError error={readError} retry={refresh} />
-        <p role="status">Loading machine run…</p>
-      </div>
-    );
   const events = new Map<string, MachineSpec["states"][string]["transitions"][number]>();
   for (const state of Object.values(spec.states))
     for (const transition of state.transitions)
       if (!events.has(transition.event)) events.set(transition.event, transition);
   // Event names may recur with state-specific payload schemas.
-  for (const transition of (instance.state && spec.states[instance.state]?.transitions) || [])
+  for (const transition of (instance?.state && spec.states[instance.state]?.transitions) || [])
     events.set(transition.event, transition);
   const chosen = event && events.has(event) ? event : events.keys().next().value;
-  const visitNumbers = [
-    ...new Set([
-      ...(history.value?.items.map((transition) => transition.visit) ?? []),
-      instance.visit,
-    ]),
-  ]
-    .filter((number) => number > 0)
-    .sort((a, b) => b - a);
-  const writable =
-    enabled &&
-    !instance.finished &&
-    Boolean(api.retryMachineVisit || api.fireNextMachineTimer || api.sendMachineEvent);
   return (
-    <article
-      aria-label="Machine run"
-      className="grid gap-4 p-4 text-ink"
-      data-machine-run={runId}
+    <aside
+      aria-label="Send event"
+      className="inspector inspector-run relative flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden border-l border-line bg-panel"
     >
-      <header className="flex flex-wrap items-center gap-x-4 gap-y-1 font-mono text-[11px]">
-        <strong className="text-sm">{keyLabel(instance)}</strong>
-        <span className="text-secondary">
-          State{" "}
-          <span className="text-ink" data-machine-state={instance.state}>
-            {instance.state ?? "none"}
+      <header className="flex shrink-0 items-start justify-between gap-3 border-b border-line px-5 pt-[19px] pb-3.5">
+        <div className="min-w-0">
+          <span className="eyebrow block font-mono text-[9px] tracking-[.16em] text-acid uppercase">
+            Send event · Run <span className="normal-case">{runId}</span>
           </span>
-        </span>
-        {instance.due !== null && <Timer due={instance.due} />}
-        <ReadError error={readError} retry={refresh} />
+          <h2 className="m-0 mt-1 text-lg">
+            {instance ? machineKeyLabel(instance.key) : runId}
+          </h2>
+        </div>
+        <button
+          type="button"
+          aria-label="Close"
+          className="cursor-pointer rounded border border-line bg-panel px-2 py-1 text-xs"
+          onClick={onClose}
+        >
+          ×
+        </button>
       </header>
-      {writable && (
-        <section className="grid gap-3" aria-label="Machine actions">
-          <div className="flex flex-wrap gap-2">
-            {api.retryMachineVisit && (
-              <button
-                type="button"
-                className={machineButton}
-                disabled={
-                  busy ||
-                  !["interrupted", "needs_attention", "indeterminate"].includes(instance.status)
-                }
-                onClick={() => void action(() => api.retryMachineVisit!(runId))}
+      <div className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-5 py-4 text-xs">
+        {chosen ? (
+          <>
+            <label className="grid gap-1 text-secondary">
+              Event
+              <select
+                aria-label="Event"
+                className="rounded border border-line bg-canvas p-2 text-ink"
+                value={chosen}
+                onChange={(e) => setEvent(e.target.value)}
               >
-                Retry visit
-              </button>
-            )}
-            {api.fireNextMachineTimer && instance.due !== null && (
-              <button
-                type="button"
-                className={machineButton}
-                disabled={busy}
-                title="Development hosts only"
-                onClick={() => void action(() => api.fireNextMachineTimer!(runId))}
-              >
-                Fire next timer
-              </button>
-            )}
-          </div>
-          {actionError && (
-            <p role="alert" className="text-xs text-danger">
-              {actionError}
+                {[...events.keys()].map((name) => (
+                  <option key={name}>{name}</option>
+                ))}
+              </select>
+            </label>
+            <p className="m-0 text-secondary">
+              Accepts now: {instance?.accepts.join(", ") || "nothing"}. Other events may be
+              deferred or ignored by the host.
             </p>
-          )}
-          {api.sendMachineEvent && chosen && (
-            <details className="rounded border border-line bg-panel p-3">
-              <summary className="cursor-pointer text-xs">Send event</summary>
-              <div className="mt-3 grid max-w-lg gap-3">
-                <label className="grid gap-1 text-xs">
-                  Event
-                  <select
-                    aria-label="Event"
-                    className="rounded border border-line bg-canvas p-2"
-                    value={chosen}
-                    onChange={(e) => setEvent(e.target.value)}
-                  >
-                    {[...events.keys()].map((name) => (
-                      <option key={name}>{name}</option>
-                    ))}
-                  </select>
-                </label>
-                <p className="text-xs text-secondary">
-                  Accepts now: {instance.accepts.join(", ") || "None"}. Other events may be
-                  deferred or ignored by the host.
-                </p>
-                <MachinePayloadForm
-                  key={`${chosen}:${JSON.stringify(events.get(chosen)!.payload_schema)}`}
-                  schema={events.get(chosen)!.payload_schema}
-                  label="Send event"
-                  disabled={busy}
-                  onSubmit={async (payload) => {
-                    const signature = JSON.stringify([chosen, payload]);
-                    if (idempotency.current?.signature !== signature)
-                      idempotency.current = {
-                        signature,
-                        // getRandomValues also works for an HTTP operator on a LAN host.
-                        key: Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
-                          byte.toString(16).padStart(2, "0"),
-                        ).join(""),
-                      };
-                    const result = await api.sendMachineEvent!(
-                      runId,
-                      chosen,
-                      payload,
-                      idempotency.current.key,
-                    );
-                    if (!actionScope.current) return;
-                    setReceipt(result);
-                    idempotency.current = undefined;
-                    refresh();
-                    history.refresh();
-                  }}
-                />
-              </div>
-            </details>
-          )}
-        </section>
-      )}
-      <section aria-label="Pending events and receipts" className="grid gap-1 text-xs">
-        <h3 className="font-mono text-[9px] tracking-[.12em] text-secondary uppercase">
-          Pending events and receipts
-        </h3>
+            <MachinePayloadForm
+              key={`${chosen}:${JSON.stringify(events.get(chosen)!.payload_schema)}`}
+              schema={events.get(chosen)!.payload_schema}
+              label="Send event"
+              onSubmit={async (payload) => {
+                const signature = JSON.stringify([chosen, payload]);
+                if (idempotency.current?.signature !== signature)
+                  idempotency.current = {
+                    signature,
+                    // getRandomValues also works for an HTTP operator on a LAN host.
+                    key: Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+                      byte.toString(16).padStart(2, "0"),
+                    ).join(""),
+                  };
+                const result = await api.sendMachineEvent!(
+                  runId,
+                  chosen,
+                  payload,
+                  idempotency.current.key,
+                );
+                if (!scope.current) return;
+                setReceipt(result);
+                idempotency.current = undefined;
+                onSent();
+              }}
+            />
+            {receipt && (
+              <p
+                role="status"
+                className="m-0 font-mono text-[11px]"
+                data-receipt-status={receipt.status}
+                data-receipt-duplicate={receipt.duplicate}
+              >
+                Receipt {receipt.receipt_id} · {receipt.key} · {receipt.status}
+                {receipt.duplicate ? " · duplicate" : ""}
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="m-0 text-secondary">This machine declares no events.</p>
+        )}
+      </div>
+    </aside>
+  );
+}
+
+function WaitRow({ children, ...props }: React.ComponentProps<"li">) {
+  return (
+    <li
+      className="grid gap-0.5 border-b border-line py-2 font-mono text-[11px] last:border-0"
+      {...props}
+    >
+      {children}
+    </li>
+  );
+}
+
+/**
+ * Machine rows for the run's waits panel (where a flow run shows its pending
+ * waits): the pending timer, deferred events and accepted receipts.
+ */
+export function MachineRunWaits({
+  instance,
+  readError,
+  refresh,
+}: {
+  instance: MachineInstance | undefined;
+  readError?: string;
+  refresh: () => void;
+}) {
+  if (!instance) return <ReadError error={readError} retry={refresh} />;
+  const timerTarget =
+    instance.state &&
+    instance.machine_spec?.states[instance.state]?.timers.map((timer) => timer.target)[0];
+  return (
+    <section aria-label="Machine waits" className="p-3 text-xs">
+      <ReadError error={readError} retry={refresh} />
+      <ul className="m-0 list-none p-0">
+        {instance.due !== null && (
+          <WaitRow data-wait-kind="timer">
+            <span className="text-ink">Timer{timerTarget ? ` → ${timerTarget}` : ""}</span>
+            <Timer due={instance.due} />
+          </WaitRow>
+        )}
         {instance.pending_events === undefined ? (
-          <p className="text-secondary">Pending inbox not reported by this host.</p>
-        ) : instance.pending_events.length === 0 ? (
-          <p className="text-secondary">No pending events.</p>
+          <WaitRow className="text-secondary">
+            Pending events not reported by this host.
+          </WaitRow>
         ) : (
           instance.pending_events.map((pending) => (
-            <p key={pending.receipt_id} className="font-mono text-[11px]">
-              {pending.event} · {pending.receipt_id} ·{" "}
-              <code>{JSON.stringify(pending.payload)}</code>
-            </p>
+            <WaitRow key={pending.receipt_id} data-wait-kind="event">
+              <span className="text-ink">Deferred · {pending.event}</span>
+              <span className="text-secondary">
+                {pending.receipt_id} · {JSON.stringify(pending.payload)}
+              </span>
+            </WaitRow>
           ))
         )}
-        {[
-          ...(instance.receipts ?? []).filter(
-            (item) => item.receipt_id !== receipt?.receipt_id,
-          ),
-          ...(receipt ? [receipt] : []),
-        ].map((item) => (
-          <p
-            key={item.receipt_id}
-            className="font-mono text-[11px]"
-            data-receipt-status={item.status}
-            data-receipt-duplicate={item.duplicate}
-          >
-            {item.key} · {item.status}
-            {item.duplicate ? " · duplicate" : ""} · {item.receipt_id} ·{" "}
-            {clock(item.accepted_at)}
-          </p>
+        {(instance.receipts ?? []).map((item) => (
+          <WaitRow key={item.receipt_id} data-receipt-status={item.status}>
+            <span className="text-ink">
+              {item.key} · {item.status}
+            </span>
+            <span className="text-secondary">
+              {item.receipt_id} · {clock(item.accepted_at)}
+            </span>
+          </WaitRow>
         ))}
-      </section>
-      <section aria-label="Machine visits">
-        <h3 className="font-mono text-[9px] tracking-[.12em] text-secondary uppercase">
-          Visits
-        </h3>
-        {!api.getMachineHistory ? (
-          <p className="text-xs text-secondary">History unavailable from this host.</p>
-        ) : (
-          <ReadError error={history.error} retry={history.refresh} />
+      </ul>
+    </section>
+  );
+}
+
+/**
+ * A selected visit in the run's waits panel: its clocks, catalog revision and
+ * transition, its waits, decision cards and terminal audits, and its event facts.
+ */
+export function MachineVisitWaits({
+  api,
+  runId,
+  visit,
+  readError,
+  refresh,
+  current,
+  enabled,
+}: {
+  api: OperatorApi;
+  runId: string;
+  visit: MachineVisit | undefined;
+  readError?: string;
+  refresh: () => void;
+  current: boolean;
+  enabled: boolean;
+}) {
+  if (!visit)
+    return (
+      <div className="p-3 text-xs">
+        <ReadError error={readError} retry={refresh} />
+      </div>
+    );
+  return (
+    <section aria-label={`Visit ${visit.visit}`} className="grid gap-3 p-3 text-xs">
+      <ReadError error={readError} retry={refresh} />
+      <dl className="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 font-mono text-[10px]">
+        <dt className="text-secondary">Visit</dt>
+        <dd className="m-0">
+          #{visit.visit} · {visit.state} · {visit.disposition}
+        </dd>
+        <dt className="text-secondary">Entered</dt>
+        <dd className="m-0">{clock(visit.entered_at)}</dd>
+        <dt className="text-secondary">Left</dt>
+        <dd className="m-0">{clock(visit.left_at)}</dd>
+        <dt className="text-secondary">Revision</dt>
+        <dd className="m-0">{visit.catalog_revision ?? "Not reported"}</dd>
+        {visit.transition && (
+          <>
+            <dt className="text-secondary">Transition</dt>
+            <dd className="m-0">
+              {visit.transition.from} → {visit.transition.to ?? "closed"} ·{" "}
+              {visit.transition.event ?? visit.transition.source}
+            </dd>
+          </>
         )}
-        {!api.getMachineVisit ? (
-          <p className="text-xs text-secondary">Visit detail unavailable from this host.</p>
-        ) : (
-          visitNumbers.map((number) => (
-            <VisitSection
-              key={number}
-              api={api}
-              runId={runId}
-              number={number}
-              current={number === instance.visit && !instance.finished}
-              enabled={enabled}
-              refreshKey={`${instance.visit}:${instance.status}`}
-              open={openVisits.has(number)}
-              onToggle={() =>
-                setOpenVisits((current) => {
-                  const next = new Set(current);
-                  if (!next.delete(number)) next.add(number);
-                  return next;
-                })
-              }
-            />
-          ))
-        )}
-        <div className="flex gap-2">
-          {cursor && (
-            <button
-              type="button"
-              className={machineButton}
-              onClick={() => setCursor(undefined)}
-            >
-              Latest history
-            </button>
-          )}
-          {history.value?.next_cursor != null && (
-            <button
-              type="button"
-              className={machineButton}
-              onClick={() => setCursor(history.value!.next_cursor!)}
-            >
-              Older visits
-            </button>
-          )}
-        </div>
-      </section>
-    </article>
+      </dl>
+      {api.listRunWaits && (
+        <RunWaitPanel
+          key={`${runId}:${visit.visit}`}
+          api={api}
+          runId={runId}
+          visit={visit.visit}
+          readOnly={!enabled || !current}
+          live={current}
+        />
+      )}
+      <EventFacts api={api} runId={runId} visit={visit.visit} live={current} />
+    </section>
   );
 }

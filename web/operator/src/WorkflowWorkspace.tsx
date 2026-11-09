@@ -11,7 +11,17 @@ import {
 } from "react";
 
 import type { OperatorApi } from "./api";
-import { MachineRunSections, useMachineInstance } from "./MachineWorkspace";
+import {
+  MachineRunActions,
+  MachineRunWaits,
+  MachineSendPanel,
+  MachineVisitTimeline,
+  MachineVisitWaits,
+  machineVisits,
+  useMachineHistory,
+  useMachineInstance,
+  useMachineVisit,
+} from "./MachineWorkspace";
 import type { MachineGraphView } from "./machineGraph";
 import { GraphCanvas } from "./GraphCanvas";
 import { Inspector } from "./Inspector";
@@ -367,8 +377,8 @@ export function WorkflowWorkspaceSurface({
     run?.operatorInstanceId ?? "",
     run?.summary?.runId,
   );
-  // A machine instance is a run: same page, with the graph in machine mode and the
-  // visits below it.
+  // A machine instance is a run: the same page, with the graph in machine mode,
+  // its visits as a section of the run timeline and its detail in the side panel.
   const machineSpec = workflow?.machineSpec;
   const machineRunId = machineSpec ? selectedRunId : undefined;
   const machineRead = useMachineInstance(api, machineRunId);
@@ -376,6 +386,44 @@ export function WorkflowWorkspaceSurface({
     machineRunId !== undefined && machineRead.value?.run_id === machineRunId
       ? machineRead.value
       : undefined;
+  const machineHistory = useMachineHistory(api, machineRunId);
+  const [visitSelection, setVisitSelection] = useState<{ runId: string; visit: number }>();
+  const selectedVisit =
+    visitSelection && visitSelection.runId === machineRunId ? visitSelection.visit : undefined;
+  const currentVisit =
+    selectedVisit !== undefined &&
+    selectedVisit === machineInstance?.visit &&
+    !machineInstance.finished;
+  const visitRead = useMachineVisit(
+    api,
+    machineRunId,
+    selectedVisit,
+    currentVisit,
+    `${machineInstance?.visit}:${machineInstance?.status}`,
+  );
+  const visit =
+    selectedVisit !== undefined && visitRead.value?.visit === selectedVisit
+      ? visitRead.value
+      : undefined;
+  // A selected visit's steps are shown exactly like a flow run's.
+  const visitRun = visit?.snapshot;
+  const [sendFor, setSendFor] = useState<string>();
+  const sendOpen = machineRunId !== undefined && sendFor === machineRunId;
+  const openSend = useCallback(() => {
+    setInspectedNode(undefined);
+    setSendFor(machineRunId);
+  }, [machineRunId]);
+  const selectVisit = useCallback(
+    (next: number | undefined) => {
+      setInspectedNode(undefined);
+      setVisitSelection(
+        next === undefined || machineRunId === undefined
+          ? undefined
+          : { runId: machineRunId, visit: next },
+      );
+    },
+    [machineRunId],
+  );
   const instanceSpecJson = machineInstance?.machine_spec
     ? JSON.stringify(machineInstance.machine_spec)
     : undefined;
@@ -384,11 +432,16 @@ export function WorkflowWorkspaceSurface({
       instanceSpecJson ? (JSON.parse(instanceSpecJson) as typeof machineSpec) : machineSpec,
     [instanceSpecJson, machineSpec],
   );
-  const [machineFocus, setMachineFocus] = useState<{ state: string; nonce: number }>();
+  const historyPage = machineHistory.value;
   const openMachineState = useCallback(
-    (state: string) =>
-      setMachineFocus((current) => ({ state, nonce: (current?.nonce ?? 0) + 1 })),
-    [],
+    (state: string) => {
+      if (!machineInstance) return;
+      const latest = machineVisits(machineInstance, historyPage).find(
+        (item) => item.state === state,
+      );
+      if (latest) selectVisit(latest.visit);
+    },
+    [historyPage, machineInstance, selectVisit],
   );
   const machineState = machineInstance?.state;
   const machineStatus = machineInstance?.status;
@@ -414,13 +467,15 @@ export function WorkflowWorkspaceSurface({
   // Requesting snapshots have no run-pinned graph yet. Keep the definition visible
   // through the status update and the subsequent prepared-snapshot refresh.
   const previewWorkflow = requestingRun && !run?.topology?.nodeIds.length;
-  const shownTopology = previewWorkflow
-    ? workflow
-    : run
-      ? run.topology
-      : historical
-        ? undefined
-        : workflow;
+  const shownTopology = visitRun
+    ? visitRun.topology
+    : previewWorkflow
+      ? workflow
+      : run
+        ? run.topology
+        : historical
+          ? undefined
+          : workflow;
   const shownNodeIds = shownTopology?.nodeIds;
   const shownInputDeclaration = shownTopology?.inputDeclarationJson;
   const topologyNodeIds = useMemo(
@@ -436,9 +491,11 @@ export function WorkflowWorkspaceSurface({
   }, [topologyNodeIds]);
   const inspectedNodeAvailable =
     !inspectedNode || !topologyNodeIds || topologyNodeIds.includes(inspectedNode);
-  const inspectorOpen = Boolean(
+  const nodeInspectorOpen = Boolean(
     inspectedNode && inspectedNodeAvailable && !requestingRun && (!historical || run),
   );
+  // A machine run's send form opens in the side panel, like the run input form.
+  const inspectorOpen = nodeInspectorOpen || (sendOpen && run !== undefined);
   const runListPanel = workflowId ? (
     <RunListPanel
       key={workflowId}
@@ -455,9 +512,20 @@ export function WorkflowWorkspaceSurface({
       deployments={deployments}
       timelineView={timelineView}
       onTimelineViewChange={onTimelineViewChange}
+      selectedRunSection={
+        machineRunId ? (
+          <MachineVisitTimeline
+            instance={machineInstance}
+            history={machineHistory}
+            selectedVisit={selectedVisit}
+            onSelectVisit={selectVisit}
+            expanded={timelineExpanded}
+          />
+        ) : undefined
+      }
     />
   ) : undefined;
-  const runControlsPanel = (historical ? loadedRun : workflow) ? (
+  const normalRunControls = (historical ? loadedRun : workflow) ? (
     <RunControls
       workflow={!historical ? workflow : undefined}
       run={loadedRun}
@@ -470,6 +538,26 @@ export function WorkflowWorkspaceSurface({
       onEditInput={() => openNode(INPUT_NODE_ID)}
     />
   ) : undefined;
+  // Machine-only actions sit beside the normal run controls (Cancel).
+  const runControlsPanel =
+    machineRunId && normalRunControls ? (
+      <div className="flex items-center gap-2 max-[700px]:flex-wrap">
+        <MachineRunActions
+          api={api}
+          runId={machineRunId}
+          instance={machineInstance}
+          enabled={runActionsEnabled}
+          onSend={openSend}
+          onChanged={() => {
+            machineRead.refresh();
+            machineHistory.refresh();
+          }}
+        />
+        {normalRunControls}
+      </div>
+    ) : (
+      normalRunControls
+    );
   const displayedRunId = run?.summary?.runId;
   const liveEventDescriptorKey =
     displayedRunId && inspectedNode ? `${displayedRunId}:${inspectedNode}` : "";
@@ -515,11 +603,15 @@ export function WorkflowWorkspaceSurface({
                   className={`run-graph-shell relative min-w-0 flex-1 overflow-hidden ${machineRunId ? "min-h-[300px]" : "min-h-0"}`}
                 >
                   <GraphCanvas
-                    machine={machineView}
+                    machine={visitRun ? undefined : machineView}
                     workflow={!run || previewWorkflow ? workflow : undefined}
-                    runTopology={previewWorkflow ? undefined : run?.topology}
-                    runNodes={requestingRun ? undefined : run?.nodes}
-                    expansions={run?.expansions}
+                    runTopology={
+                      visitRun ? visitRun.topology : previewWorkflow ? undefined : run?.topology
+                    }
+                    runNodes={
+                      visitRun ? visitRun.nodes : requestingRun ? undefined : run?.nodes
+                    }
+                    expansions={visitRun ? visitRun.expansions : run?.expansions}
                     runTriggeredBy={previewWorkflow ? undefined : run?.summary?.triggeredBy}
                     inspectionDisabled={requestingRun}
                     evaluations={evaluationState.records}
@@ -530,6 +622,26 @@ export function WorkflowWorkspaceSurface({
                       bottomRightPanel === undefined ? runControlsPanel : bottomRightPanel
                     }
                   />
+                  {machineRunId && selectedVisit !== undefined && (
+                    <nav
+                      aria-label="Machine visit"
+                      className="absolute top-[18px] left-1/2 z-[6] flex -translate-x-1/2 items-center gap-2 rounded border border-line bg-panel px-3 py-[7px] font-mono text-[10px] text-secondary shadow-[0_4px_14px_var(--color-shadow-4)]"
+                    >
+                      <button
+                        type="button"
+                        className="cursor-pointer border-0 bg-transparent p-0 text-acid underline underline-offset-2"
+                        onClick={() => selectVisit(undefined)}
+                      >
+                        State machine
+                      </button>
+                      <span aria-hidden="true">/</span>
+                      <span className="text-ink">
+                        Visit {selectedVisit}
+                        {visit ? ` · ${visit.state}` : ""}
+                      </span>
+                      {!visit && <span role="status">Loading visit…</span>}
+                    </nav>
+                  )}
                   {evaluationState.error && (
                     <p
                       role="alert"
@@ -576,6 +688,30 @@ export function WorkflowWorkspaceSurface({
                       workflow&apos;s current state.
                     </div>
                   ) : null}
+                  {machineRunId && run && (
+                    <div
+                      aria-label="Machine run waits"
+                      className="absolute right-3 bottom-[72px] z-10 max-h-[55%] w-80 max-w-[calc(100%-24px)] overflow-auto rounded border border-line bg-panel shadow-lg"
+                    >
+                      {selectedVisit !== undefined ? (
+                        <MachineVisitWaits
+                          api={api}
+                          runId={machineRunId}
+                          visit={visit}
+                          readError={visitRead.error}
+                          refresh={visitRead.refresh}
+                          current={currentVisit}
+                          enabled={runActionsEnabled && bottomRightPanel !== null}
+                        />
+                      ) : (
+                        <MachineRunWaits
+                          instance={machineInstance}
+                          readError={machineRead.error}
+                          refresh={machineRead.refresh}
+                        />
+                      )}
+                    </div>
+                  )}
                   {run &&
                     displayedRunId &&
                     runActionsEnabled &&
@@ -586,21 +722,6 @@ export function WorkflowWorkspaceSurface({
                       </div>
                     )}
                 </div>
-                {machineRunId && machineSpec && (
-                  <div className="machine-run-sections h-[42%] min-h-[180px] shrink-0 overflow-auto border-t border-line bg-canvas">
-                    <MachineRunSections
-                      key={machineRunId}
-                      api={api}
-                      runId={machineRunId}
-                      spec={machineSpec}
-                      instance={machineInstance}
-                      readError={machineRead.error}
-                      refresh={machineRead.refresh}
-                      enabled={runActionsEnabled && bottomRightPanel !== null}
-                      focus={machineFocus}
-                    />
-                  </div>
-                )}
                 {run ? (
                   <RunLogPane
                     height={layout.logHeight}
@@ -608,9 +729,11 @@ export function WorkflowWorkspaceSurface({
                     onHeightChange={setLogHeight}
                     onExpandedChange={setLogExpanded}
                     api={api}
-                    run={run}
+                    run={visitRun ?? run}
                     nodeId={inspectedNode === INPUT_NODE_ID ? undefined : inspectedNode}
-                    liveLogs={displayedRunId ? state.liveLogs[displayedRunId] : undefined}
+                    liveLogs={
+                      displayedRunId && !visitRun ? state.liveLogs[displayedRunId] : undefined
+                    }
                     onSelectNode={openNode}
                   />
                 ) : (
@@ -643,24 +766,42 @@ export function WorkflowWorkspaceSurface({
               id={`${workspaceId}-inspector`}
               className="workspace-inspector-pane col-start-3 grid min-h-0 min-w-0 overflow-hidden bg-panel max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:right-0 max-[1000px]:z-30 max-[1000px]:w-[var(--workspace-inspector-width)] max-[1000px]:max-w-full max-[700px]:w-full"
             >
-              <Inspector
-                api={api}
-                embedded
-                workflow={workflow}
-                run={run}
-                nodeId={inspectedNode}
-                evaluationState={evaluationState}
-                liveEvents={state.liveEvents[liveEventDescriptorKey]}
-                liveClassifierEvents={state.liveClassifierEvents[liveEventDescriptorKey]}
-                onClose={closePanel}
-                definitionLabel={definitionLabel}
-                onOpenDefinition={
-                  run && inspectedNode && workflow?.nodeIds.includes(inspectedNode)
-                    ? openCurrentDefinition
-                    : undefined
-                }
-                inputDraft={!historical && runActionsEnabled ? inputDraft : undefined}
-              />
+              {nodeInspectorOpen || !machineRunId ? (
+                <Inspector
+                  api={api}
+                  embedded
+                  workflow={workflow}
+                  run={visitRun ?? run}
+                  nodeId={inspectedNode}
+                  evaluationState={evaluationState}
+                  liveEvents={state.liveEvents[liveEventDescriptorKey]}
+                  liveClassifierEvents={state.liveClassifierEvents[liveEventDescriptorKey]}
+                  onClose={closePanel}
+                  definitionLabel={definitionLabel}
+                  onOpenDefinition={
+                    run &&
+                    !visitRun &&
+                    inspectedNode &&
+                    workflow?.nodeIds.includes(inspectedNode)
+                      ? openCurrentDefinition
+                      : undefined
+                  }
+                  inputDraft={!historical && runActionsEnabled ? inputDraft : undefined}
+                />
+              ) : (
+                <MachineSendPanel
+                  key={machineRunId}
+                  api={api}
+                  runId={machineRunId}
+                  spec={machineSpec!}
+                  instance={machineInstance}
+                  onClose={() => setSendFor(undefined)}
+                  onSent={() => {
+                    machineRead.refresh();
+                    machineHistory.refresh();
+                  }}
+                />
+              )}
             </div>
           </>
         )}

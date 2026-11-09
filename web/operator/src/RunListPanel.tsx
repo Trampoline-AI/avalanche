@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Maximize2, Minimize2, Workflow } from "lucide-react";
 
 import { formatElapsedSeconds } from "./elapsedDuration";
@@ -40,6 +40,8 @@ interface RunListPanelProps extends Pick<
   onViewAll?: () => void;
   onClose?: () => void;
   expanded?: boolean;
+  /** Rendered under the run list for the selected run, e.g. a machine run's visits. */
+  selectedRunSection?: ReactNode;
 }
 
 export function compareNewestRun(left: RunSummaryMsg, right: RunSummaryMsg) {
@@ -83,6 +85,7 @@ export function RunListPanel({
   deployments,
   timelineView,
   onTimelineViewChange,
+  selectedRunSection,
 }: RunListPanelProps) {
   const [internalView, setInternalView] = useState<"runs" | "deployments">("runs");
   const view = deployments ? (timelineView ?? internalView) : "runs";
@@ -523,6 +526,7 @@ export function RunListPanel({
               </div>
               <div ref={scrollHandle} className="timeline-scroll-handle" aria-hidden="true" />
             </div>
+            {view === "runs" && selectedRunSection}
             {expanded && view === "runs" && (
               <nav
                 aria-label="Run pagination"

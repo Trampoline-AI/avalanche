@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { useState } from "react";
 import { WorkflowWorkspace } from "../WorkflowWorkspace";
+import { machineKeyLabel } from "../MachineWorkspace";
 import type { LogPageRequest, OperatorApi } from "../api";
 import type { WaitCard } from "../RunWaitPanel";
 import type {
@@ -31,16 +32,17 @@ import "../style.css";
 const spec: MachineSpec = {
   schema_version: "avalanche.machine/v1",
   name: "review",
-  key_fields: ["id"],
+  key_fields: ["repo", "pr"],
   input_schema: {
     type: "object",
     properties: {
-      id: { type: "string" },
+      repo: { type: "string" },
+      pr: { type: "integer", minimum: 1 },
       priority: { type: "integer", minimum: 1, maximum: 5 },
       document: { $ref: "#/$defs/File" },
       workspace: { type: "object", additionalProperties: true },
     },
-    required: ["id", "priority"],
+    required: ["repo", "pr", "priority"],
     $defs: {
       File: { type: "object", properties: { kind: { const: "file" } } },
     },
@@ -324,11 +326,40 @@ class FakeOperatorApi implements OperatorApi {
         runs.get(runId) ??
           RunSummaryMsg.create({ runId, workflowId: "ordinary", status: "succeeded" }),
       ),
+      logPageToken: instances.has(runId) ? "" : `flowlogs:${runId}`,
       topology: WorkflowTopologyMsg.create(
         instances.has(runId)
           ? {}
-          : { nodeIds: ordinary.nodeIds, graph: ordinary.graph, nodeTypes: ordinary.nodeTypes },
+          : {
+              nodeIds: ordinary.nodeIds,
+              graph: ordinary.graph,
+              nodeTypes: ordinary.nodeTypes,
+              displayNames: ordinary.displayNames,
+              standardStepDocstringLines: ordinary.standardStepDocstringLines,
+              inputDeclarationJson: ordinary.inputDeclarationJson,
+            },
       ),
+      nodes: instances.has(runId)
+        ? []
+        : ordinary.nodeIds.map((nodeId, index) =>
+            NodeSnapshotMsg.create({
+              nodeId,
+              name: nodeId,
+              nodeType: "step",
+              status: "success",
+              startedAt: (runs.get(runId)?.startedAt ?? 0) + index,
+              endedAt: (runs.get(runId)?.startedAt ?? 0) + index + 1,
+              stepIo: {
+                inputs: [],
+                output: {
+                  kind: "json",
+                  typeName: "dict",
+                  value: { step: nodeId },
+                  truncated: false,
+                },
+              },
+            }),
+          ),
     });
   }
   async *streamUpdates(_operator: string, _after: string, signal?: AbortSignal) {
@@ -344,8 +375,25 @@ class FakeOperatorApi implements OperatorApi {
     }
   }
   async listLogPage(request: LogPageRequest) {
-    const [, runId, visit] = request.pageToken.split(":");
+    const [scope, runId, visit] = request.pageToken.split(":");
     record("logs", runId ?? "", Number(visit));
+    if (scope === "flowlogs")
+      return {
+        operatorInstanceId: request.expectedOperatorInstanceId,
+        asOfEventUlid: request.expectedAsOfEventUlid,
+        records: [
+          LogRecordDescriptorMsg.create({
+            sequence: "1",
+            timestamp: Date.now() / 1000,
+            level: "INFO",
+            nodeId: "fetch",
+            sizeBytes: "18",
+            bodyToken: "log:flow",
+          }),
+        ],
+        nextCursor: "",
+        nextPageToken: "",
+      };
     return {
       operatorInstanceId: request.expectedOperatorInstanceId,
       asOfEventUlid: request.expectedAsOfEventUlid,
@@ -417,6 +465,7 @@ class FakeOperatorApi implements OperatorApi {
     return null;
   }
   async readTextDetail(token: string) {
+    if (token === "log:flow") return "fetched document\n";
     return token.startsWith("log:") ? `visit ${token.slice(4)} check finished\n` : "";
   }
   async cancelRun(runId: string) {
@@ -502,13 +551,35 @@ class FakeOperatorApi implements OperatorApi {
     inputFiles?: InputFileAttachment[],
   ) {
     if (machine !== "review") {
-      record("flow-start");
-      return "flow-run";
+      record("flow-start", machine);
+      const runId = `flow-${runs.size + 1}`;
+      const now = Date.now() / 1000;
+      const summary = RunSummaryMsg.create({
+        runId,
+        workflowId: machine,
+        flowName: machine,
+        status: "succeeded",
+        createdSequence: String(runs.size + 1),
+        revision: "1",
+        triggeredAt: now,
+        startedAt: now,
+        endedAt: now + 4,
+      });
+      runs.set(runId, summary);
+      publish({
+        oneofKind: "runCreated",
+        runCreated: { summary: structuredClone(summary), nodes: [] },
+      });
+      return runId;
     }
     const parsed = input ?? {};
-    if (typeof parsed.id !== "string" || typeof parsed.priority !== "number")
-      throw new Error("Machine input requires id and priority");
-    const key = [parsed.id];
+    if (
+      typeof parsed.repo !== "string" ||
+      typeof parsed.pr !== "number" ||
+      typeof parsed.priority !== "number"
+    )
+      throw new Error("Machine input requires repo, pr and priority");
+    const key = [parsed.repo, parsed.pr];
     record(
       "run-start",
       machine,
@@ -569,7 +640,7 @@ class FakeOperatorApi implements OperatorApi {
       runId: run_id,
       workflowId: machine,
       flowName: machine,
-      label: parsed.id,
+      label: machineKeyLabel(key),
       status: "interrupted",
       createdSequence: String(instances.size),
       revision: "1",
@@ -650,7 +721,7 @@ const api: OperatorApi = new FakeOperatorApi();
 const params = new URLSearchParams(location.search);
 const readOnly = params.has("readonly");
 if (readOnly) {
-  await api.startRun("review", { id: "read-only", priority: 1 });
+  await api.startRun("review", { repo: "acme/api", pr: 1, priority: 1 });
   calls.length = 0;
   Object.assign(api, {
     sendMachineEvent: undefined,

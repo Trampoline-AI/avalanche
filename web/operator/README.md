@@ -301,36 +301,38 @@ multi-tenant behavior. Those concerns stay with the embedding host.
 
 ## Machine runs (phase A contract)
 
-A machine instance is a run. A catalog flow can supply `machineSpec: MachineSpec`,
-the parsed discovery `machine_spec_json` document (`avalanche.machine/v1`).
-`WorkflowWorkspace` then shows one normal timeline row per instance (with the
-optional `RunSummaryMsg.label`, e.g. the input-derived key) and one normal run
-page. Visits are sections of that page, never separate runs. Ordinary workflows
+A machine instance is a run, and its page is the normal run page: same
+timeline, graph canvas, side inspector, log pane and run controls. A catalog flow
+can supply `machineSpec: MachineSpec`, the parsed discovery `machine_spec_json`
+(`avalanche.machine/v1`). Instances are ordinary rows in the run timeline,
+labelled by `RunSummaryMsg.label`; hosts derive it from the key with
+`machineKeyLabel` (`["acme/api", 44]` reads `acme/api #44`). Ordinary workflows
 are unchanged.
 
-**One canvas.** The machine graph is a mode of the shared `GraphCanvas`
-(`machine` prop): states are the same node cards, on the same grid, with the same
-controls, zoom, orientation toggle and input dot as a flow. Only what differs for
-a state machine changes: a cycle-safe layout (breadth-first ranks from the initial
-state), cubic arcs for back edges and self-loops, labelled with their event,
-dotted timer arcs with a live countdown, and a ring on the current state.
-Clicking a state opens its latest visit.
+Machine-only elements extend the nearest run component; there is no machine
+page, instance table or extra panel type:
 
-**Normal run path.** Machines start with the existing `startRun(workflowSelector,
-input?, inputFiles?)` from the normal run input inspector (opened from the input
-dot) and Run control, including staged files and workspace values. Hosts supply
-`FlowInfoMsg.inputDeclarationJson` from the machine input schema, as for flows.
-The host derives the key from input and returns the existing run ID for a repeated
-key. Cancelling a waiting instance is the normal `cancelRun`; the page keeps every
-normal run control, the run log pane and live status.
+| Machine element                                         | Run component it extends                                                 |
+| ------------------------------------------------------- | ------------------------------------------------------------------------ |
+| State graph                                             | `GraphCanvas` (`machine` mode): same cards, grid, controls, input dot    |
+| Current state                                           | The graph's node card (ring + run status)                                |
+| One arc per trigger, loops, timer arcs                  | The graph's edges (cubic arcs, dotted timers with countdown)             |
+| Visits                                                  | A section of the run timeline under the selected run                     |
+| A visit's steps                                         | The run graph and side inspector (outputs, attempts, trace) and log pane |
+| Send, retry visit, dev timer                            | Run controls, beside Cancel                                              |
+| Send form                                               | The side panel, like the run input form                                  |
+| Pending timer, deferred events, receipts                | The run waits panel                                                      |
+| A visit's clocks, waits, decisions, audits, event facts | The run waits panel                                                      |
+| Close a waiting run                                     | The normal Cancel run (`cancelRun`)                                      |
+| Start                                                   | The normal run input form and Run (`startRun`, files and workspaces)     |
 
-**Visit sections** below the graph show state, disposition, clocks, catalog
-revision (when reported) and transition. Expanded, a visit shows its own step
-graph, the shared inspector (outputs, generation and attempts, trace), its log
-pane, `.map` items, and its waits, decision cards and terminal decision audits
-through `RunWaitPanel`, plus paged event facts. The host supplies
-`MachineVisit.snapshot`, a run snapshot scoped to that visit (qualified node IDs,
-retained I/O, trace and log tokens); the UI never synthesizes step detail.
+Clicking a state on the graph opens its latest visit; "State machine" in the
+timeline section or the canvas breadcrumb returns to the state graph. The host
+supplies `MachineVisit.snapshot`, a run snapshot scoped to that visit (qualified
+node IDs, retained I/O, trace and log tokens); the UI never synthesizes step
+detail. The pieces are exported for hosts composing the page (`MachineRunActions`,
+`MachineSendPanel`, `MachineRunWaits`, `MachineVisitWaits`, `MachineVisitTimeline`,
+the `useMachine*` hooks and `machineKeyLabel`).
 
 All machine methods on `OperatorApi` are optional:
 
@@ -376,14 +378,15 @@ uv run --no-project --python 3.13 --with playwright==1.55.0 python \
 The script owns and stops a loopback Vite server. It renders the real
 `WorkflowWorkspace` against the typed fake `OperatorApi` in
 `src/test/machineHarness.tsx`, which is excluded from the published package. Both
-browsers check that a machine and a flow share the canvas (same cards, grid,
-controls and input dot), then exercise: run-form start with typed input, staged
+browsers check that a machine and a flow share the canvas and the run page (same
+cards, grid, controls, input dot, timeline, side panel and logs), then exercise: run-form start with typed input, staged
 file and workspace values; one timeline row per instance and same-key identity;
-curved, cyclic and timer arcs and a stable first frame; interrupted-visit retry;
-visit sections with real step detail (inspector outputs and attempts, scoped logs,
-`.map` items, wait and decision cards, terminal audits); paged event facts; typed
+one arc per trigger (self-loop, back and timer arcs) and a stable first frame;
+interrupted-visit retry; visits in the timeline opening real step detail (side
+inspector outputs and attempts, scoped logs, `.map` items, wait and decision
+cards, terminal audits); paged event facts; typed
 send with a lost-response retry and receipts; host timer countdown on the page and
 the arc; dev timer firing; normal run cancel; transient read recovery; ordinary
 flows; read-only hosts and a missing-run deep link. It writes screenshots
-(including a flow-versus-machine pair), host calls and a JSON result to the
+(including workflow-run versus machine-run and definition pairs), host calls and a JSON result to the
 evidence path. No backend persistence, protocol or restart claim is made.

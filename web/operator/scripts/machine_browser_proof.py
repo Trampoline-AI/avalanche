@@ -34,12 +34,18 @@ def wait_server(url: str, server: subprocess.Popen) -> None:
 
 
 def start_run(
-    page, key: str, priority: int = 1, *, files: bool = False, evidence: Path | None = None
+    page,
+    pr: int,
+    priority: int = 1,
+    *,
+    files: bool = False,
+    evidence: Path | None = None,
 ) -> None:
     # The normal run form, opened from the graph's input dot like any flow.
     page.get_by_role("button", name="Inspect workflow input ReviewInput").click()
     inputs = page.get_by_role("complementary", name="Workflow input declaration")
-    inputs.get_by_label("id value", exact=True).fill(key)
+    inputs.get_by_label("repo value", exact=True).fill("acme/api")
+    inputs.get_by_label("pr value", exact=True).fill(str(pr))
     inputs.get_by_label("priority value", exact=True).fill(str(priority))
     if files:
         inputs.get_by_label("workspace value", exact=True).fill(
@@ -50,7 +56,7 @@ def start_run(
         )
         expect(inputs.locator("[data-file-field]")).to_contain_text("proof.txt")
     if evidence is not None:
-        page.screenshot(path=str(evidence / "00-run-input.png"), full_page=True)
+        page.screenshot(path=str(evidence / "00-run-input.png"))
     inputs.get_by_role("button", name="Close", exact=True).click()
     page.get_by_role("button", name="Run", exact=True).click()
 
@@ -71,7 +77,25 @@ def shared_canvas(page) -> dict:
         "orientation": shell.get_by_role("group", name="Workflow orientation").count(),
         "cards": sorted(set(shell.locator(".node-card").evaluate_all(CARD_STYLE))),
         "input_dot": shell.locator(".node-input").count(),
+        "timeline": page.locator(".workspace-timeline").count(),
+        "log_pane": page.get_by_label("Run logs").count(),
     }
+
+
+def compose(page, evidence: Path, pair: tuple[str, str], out: str, captions: tuple) -> None:
+    images = [base64.b64encode((evidence / name).read_bytes()).decode() for name in pair]
+    page.set_viewport_size({"width": 2900, "height": 1140})
+    page.set_content(
+        "<body style='margin:0;display:flex;gap:20px;background:#222;padding:10px'>"
+        + "".join(
+            f"<figure style='margin:0'><img width=1440 src='data:image/png;base64,{data}'>"
+            f"<figcaption style='color:#fff;font:14px sans-serif'>{caption}"
+            "</figcaption></figure>"
+            for data, caption in zip(images, captions)
+        )
+        + "</body>"
+    )
+    page.screenshot(path=str(evidence / out))
 
 
 def scenario(page, url: str, evidence: Path) -> dict:
@@ -90,67 +114,90 @@ def scenario(page, url: str, evidence: Path) -> dict:
     expect(page.locator(".react-flow__edge-machine")).to_have_count(0)
     page.get_by_test_id("machine-nav").click()
 
-    start_run(page, "proof-1", 2, files=True, evidence=evidence)
-    expect(page.locator('[data-machine-run="machine-1"]')).to_be_visible()
+    start_run(page, 44, 2, files=True, evidence=evidence)
+    actions = page.get_by_role("group", name="Machine actions")
+    waits = page.get_by_label("Machine run waits")
+    selected_row = page.locator(".run-list-row.active")
+    expect(waits).to_be_visible()
     expect(page.locator(".run-list-row")).to_have_count(1)
-    expect(page.locator(".run-list-row")).to_contain_text("proof-1")
+    # The key reads as fields, never raw JSON.
+    expect(page.locator(".run-list-row")).to_contain_text("acme/api #44")
+    expect(page.locator(".run-list-row")).not_to_contain_text("[")
     graph = page.locator(".run-graph-shell")
     expect(graph.locator('.node-card[data-current="true"]')).to_have_count(1)
+    # One arc per trigger, never bundled.
     expect(graph.locator(".react-flow__edge-machine")).to_have_count(4)
     paths = graph.locator(".react-flow__edge-machine .react-flow__edge-path").evaluate_all(
         "els => els.map(e => e.getAttribute('d'))"
     )
     assert all(" C " in path for path in paths), paths
-    labels = graph.locator(".react-flow__edge").evaluate_all(
-        "els => els.map(e => e.getAttribute('aria-label') || '')"
-    )
-    assert any(label.startswith("review to review") for label in labels), labels
-    assert any(label.startswith("ready to review") for label in labels), labels
+    labels = graph.locator(".machine-arc-label").all_inner_texts()
+    assert sorted(label.split(" ·")[0].strip() for label in labels) == [
+        "advance",
+        "after 6s",
+        "amend",
+        "back",
+    ], labels
+    expect(graph.locator(".machine-arc--self")).to_have_count(1)
+    expect(graph.locator(".machine-arc--back")).to_have_count(1)
     expect(graph.locator(".machine-arc--timer")).to_have_count(1)
     # The measured first frame is final: the viewport does not move after paint.
     viewport = graph.locator(".react-flow__viewport")
     first = viewport.get_attribute("style")
     page.wait_for_timeout(300)
     assert first == viewport.get_attribute("style"), "First-frame viewport moved"
-    # Normal run controls stay on the machine run page.
+    # Normal run controls stay on the machine run page; no instance table or refresh.
     expect(page.get_by_role("button", name="Cancel run", exact=True)).to_be_visible()
-    page.screenshot(path=str(evidence / "01-interrupted.png"))
+    expect(page.get_by_role("table")).to_have_count(0)
+    expect(page.get_by_role("button", name="Refresh instances")).to_have_count(0)
+    expect(waits.locator("[data-wait-kind]")).to_have_count(1)
+    page.screenshot(path=str(evidence / "01-machine-run.png"))
 
-    page.get_by_role("button", name="Retry visit", exact=True).click()
-    expect(page.locator('[data-visit="2"]')).to_be_visible()
-    # Visit 2 carries real, host-scoped step detail in the shared inspector.
-    visit = page.locator('[data-visit="2"]')
-    visit.get_by_role("button", expanded=False).click()
-    workspace = visit.get_by_role("region", name="Visit 2 step workspace")
-    expect(workspace.locator(".react-flow__node")).to_have_count(3)
-    expect(workspace.get_by_label("Map items")).to_be_visible()
-    expect(workspace.get_by_role("button", name="Inspect v2.fanout[0]")).to_be_visible()
-    workspace.get_by_role("button", name="Inspect check", exact=True).click()
-    expect(workspace.get_by_label("Execution attempts")).to_contain_text("3")
-    workspace.get_by_role("tab", name="Run I/O").click()
-    expect(workspace.get_by_role("complementary")).to_contain_text("score")
-    expect(visit.get_by_text("visit 2 check finished")).to_be_visible()
-    expect(visit.get_by_role("region", name="Run waits")).to_contain_text("Approve visit 2?")
-    visit.scroll_into_view_if_needed()
-    page.screenshot(path=str(evidence / "02-visit-steps.png"))
-    # The archived first visit keeps its own graph and paged event facts.
-    first_visit = page.locator('[data-visit="1"]')
-    first_visit.get_by_role("button", expanded=False).click()
-    expect(
-        first_visit.get_by_role("region", name="Visit 1 step workspace").locator(
-            ".react-flow__node"
-        )
-    ).to_have_count(1)
-    expect(first_visit.locator("[data-event-status]")).to_have_count(0)
-    first_visit.get_by_role("button", name="Next facts").click()
-    expect(first_visit.locator('[data-event-status="ignored"]')).to_be_visible()
-    expect(first_visit.locator('[data-event-status="dropped"]')).to_be_visible()
-    # Clicking a state on the graph opens its latest visit.
-    graph.get_by_role("button", name="Inspect review", exact=True).click()
+    actions.get_by_role("button", name="Retry visit", exact=True).click()
+    visits = page.get_by_role("region", name="Machine visits")
+    expect(visits.locator('[data-visit="2"]')).to_be_visible()
+    # A visit row opens that visit's steps on the same canvas, like a flow run.
+    visits.locator('[data-visit="2"]').click()
+    expect(page.get_by_role("navigation", name="Machine visit")).to_contain_text("Visit 2")
+    expect(graph.locator(".react-flow__edge-machine")).to_have_count(0)
+    expect(graph.locator(".react-flow__node")).to_have_count(3)
+    expect(graph.get_by_label("Map items")).to_be_visible()
+    expect(graph.get_by_role("button", name="Inspect v2.fanout[0]")).to_be_visible()
+    detail = waits
+    expect(detail.get_by_role("region", name="Run waits")).to_contain_text("Approve visit 2?")
+    page.screenshot(path=str(evidence / "02-visit-detail.png"))
+    # Its steps open in the normal side inspector with real scoped detail and logs.
+    graph.get_by_role("button", name="Inspect check", exact=True).click()
+    inspector = page.get_by_role("complementary", name="Run inspector")
+    expect(inspector.get_by_label("Execution attempts")).to_contain_text("3")
+    expect(inspector).to_contain_text("score")
+    expect(page.get_by_text("visit 2 check finished")).to_be_visible()
+    run_look = {
+        "timeline": page.locator(".workspace-timeline").count(),
+        "graph": graph.locator(".graph-viewport").count(),
+        "side_panel": page.locator(".workspace-inspector-pane").count(),
+        "log_pane": page.get_by_label("Run logs").count(),
+    }
+    page.wait_for_timeout(300)
+    page.screenshot(path=str(evidence / "side-machine-run.png"))
+    page.screenshot(path=str(evidence / "03-visit-step.png"))
+    inspector.get_by_role("button", name="Close", exact=True).click()
+    # The first, interrupted visit keeps its own graph and paged event facts.
+    visits.locator('[data-visit="1"]').click()
+    expect(graph.locator(".react-flow__node")).to_have_count(1)
+    expect(detail.locator("[data-event-status]")).to_have_count(0)
+    detail.get_by_role("button", name="Next facts").click()
+    expect(detail.locator('[data-event-status="ignored"]')).to_be_visible()
+    expect(detail.locator('[data-event-status="dropped"]')).to_be_visible()
+    page.get_by_role("navigation", name="Machine visit").get_by_role(
+        "button", name="State machine"
+    ).click()
+    expect(graph.locator(".react-flow__edge-machine")).to_have_count(4)
 
     # Send commits but loses its first response. The UI retry keeps its idempotency key.
-    page.locator("details summary").click()
-    send = page.get_by_role("form", name="Send event")
+    actions.get_by_role("button", name="Send event", exact=True).click()
+    send_panel = page.get_by_role("complementary", name="Send event")
+    send = send_panel.get_by_role("form", name="Send event")
     send.get_by_label("note", exact=False).fill("revise")
     send.get_by_label("score", exact=False).fill("3")
     send.get_by_label("approved", exact=False).select_option("true")
@@ -158,73 +205,80 @@ def scenario(page, url: str, evidence: Path) -> dict:
     expect(send.get_by_role("alert")).to_be_visible()
     send.get_by_role("button", name="Send event").click()
     expect(send.get_by_role("alert")).to_have_count(0)
-    expect(page.locator('[data-visit="3"]')).to_be_visible()
+    expect(visits.locator('[data-visit="3"]')).to_be_visible()
     sends = page.evaluate("window.machineHarness.calls.filter(c => c.method === 'send')")
     assert len(sends) == 2 and sends[0]["args"][3] == sends[1]["args"][3], sends
     assert sends[0]["args"][2] == {"note": "revise", "score": 3, "approved": True}, sends
-    expect(page.locator('[data-receipt-status="accepted"]')).to_be_visible()
-    expect(page.locator('[data-receipt-duplicate="true"]')).to_have_count(1)
-    # The visit that just ended shows its terminal decision audit.
-    expect(visit.get_by_role("region", name="Decision audit")).to_be_visible()
-    page.screenshot(path=str(evidence / "03-send-receipt.png"))
+    expect(send_panel.locator('[data-receipt-status="accepted"]')).to_be_visible()
+    expect(send_panel.locator('[data-receipt-duplicate="true"]')).to_have_count(1)
+    expect(waits.locator('[data-receipt-status="accepted"]')).to_have_count(1)
+    page.screenshot(path=str(evidence / "04-send-receipt.png"))
+    # The visit that just ended keeps its terminal decision audit.
+    visits.locator('[data-visit="2"]').click()
+    expect(detail.get_by_role("region", name="Decision audit")).to_be_visible()
+    # Clicking a state on the machine graph opens its latest visit.
+    visits.get_by_role("button", name="State machine").click()
+    graph.get_by_role("button", name="Inspect review", exact=True).click()
+    expect(page.get_by_role("navigation", name="Machine visit")).to_contain_text("Visit 3")
+    visits.get_by_role("button", name="State machine").click()
 
     # The timer advances in the host without a click; the arc counts down too.
-    page.get_by_label("Event", exact=True).select_option("advance")
-    page.get_by_role("form", name="Send event").get_by_role("button", name="Send event").click()
-    expect(page.locator('[data-machine-state="ready"]')).to_be_visible()
+    send_panel.get_by_label("Event", exact=True).select_option("advance")
+    send.get_by_role("button", name="Send event").click()
+    expect(visits.locator('[data-machine-state="ready"]')).to_be_visible()
     expect(graph.locator('.node-card[data-current="true"]')).to_contain_text("ready")
-    timer = page.locator("[data-timer-remaining]")
+    timer = waits.locator("[data-timer-remaining]")
     arc = graph.locator("[data-arc-remaining]")
     before = int(timer.get_attribute("data-timer-remaining"))
     arc_before = int(arc.get_attribute("data-arc-remaining"))
     page.wait_for_timeout(1100)
     assert int(timer.get_attribute("data-timer-remaining")) < before
     assert int(arc.get_attribute("data-arc-remaining")) < arc_before
-    page.locator(".machine-run-sections").evaluate("el => el.scrollTop = 0")
-    page.screenshot(path=str(evidence / "04-timer.png"))
-    expect(page.locator('[data-machine-state="closed"]')).to_be_visible(timeout=12000)
+    page.screenshot(path=str(evidence / "05-timer.png"))
+    expect(visits.locator('[data-machine-state="closed"]')).to_be_visible(timeout=12000)
     expect(page.locator(".run-list-row")).to_have_count(1)
-    expect(page.get_by_role("region", name="Machine actions")).to_have_count(0)
-    page.screenshot(path=str(evidence / "05-final.png"))
+    expect(actions).to_have_count(0)
+    page.screenshot(path=str(evidence / "06-final.png"))
 
     # Same-key start returns the existing run; visits never become run-list entries.
     page.get_by_role("button", name="Current definition", exact=True).click()
-    start_run(page, "proof-1", 2)
-    expect(page.locator('[data-machine-run="machine-1"]')).to_be_visible()
+    start_run(page, 44, 2)
     expect(page.locator(".run-list-row")).to_have_count(1)
+    expect(selected_row).to_contain_text("acme/api #44")
     # Another instance exercises the dev-only timer control.
     page.get_by_role("button", name="Current definition", exact=True).click()
-    start_run(page, "manual-timer", 1)
-    expect(page.locator('[data-machine-run="machine-2"]')).to_be_visible()
-    page.get_by_role("button", name="Retry visit", exact=True).click()
-    page.locator("details summary").click()
-    page.get_by_label("Event", exact=True).select_option("advance")
-    page.get_by_role("form", name="Send event").get_by_role("button", name="Send event").click()
-    expect(page.locator('[data-machine-state="ready"]')).to_be_visible()
-    page.get_by_role("button", name="Fire next timer", exact=True).click()
-    expect(page.locator('[data-machine-state="closed"]')).to_be_visible()
+    start_run(page, 45, 1)
+    expect(selected_row).to_contain_text("acme/api #45")
+    actions.get_by_role("button", name="Retry visit", exact=True).click()
+    actions.get_by_role("button", name="Send event", exact=True).click()
+    send_panel.get_by_label("Event", exact=True).select_option("advance")
+    send.get_by_role("button", name="Send event").click()
+    expect(visits.locator('[data-machine-state="ready"]')).to_be_visible()
+    actions.get_by_role("button", name="Fire next timer", exact=True).click()
+    expect(visits.locator('[data-machine-state="closed"]')).to_be_visible()
     # A third instance closes through the normal run cancel.
     page.get_by_role("button", name="Current definition", exact=True).click()
-    start_run(page, "cancel-proof", 1)
-    expect(page.locator('[data-machine-run="machine-3"]')).to_be_visible()
+    start_run(page, 46, 1)
+    expect(selected_row).to_contain_text("acme/api #46")
     page.get_by_role("button", name="Cancel run", exact=True).click()
-    expect(page.locator('[data-machine-state="closed"]')).to_be_visible()
+    expect(visits.locator('[data-machine-state="closed"]')).to_be_visible()
     expect(page.locator(".run-list-row").first).to_contain_text("cancelled", ignore_case=True)
     expect(page.get_by_role("button", name="Cancel run", exact=True)).to_have_count(0)
-    page.screenshot(path=str(evidence / "06-cancelled.png"))
-    # A transient read failure is surfaced and recoverable, not a blank canvas.
+    page.screenshot(path=str(evidence / "07-cancelled.png"))
+    # A transient read failure is surfaced and recoverable, not a blank page.
     page.evaluate("window.machineHarness.failNextRead()")
-    expect(page.get_by_role("alert").first).to_be_visible(timeout=4000)
-    page.get_by_role("button", name="Retry read", exact=True).first.click()
+    expect(waits.get_by_role("alert").first).to_be_visible(timeout=4000)
     page.evaluate("window.machineHarness.recoverRead()")
-    expect(page.get_by_role("button", name="Retry read")).to_have_count(0, timeout=4000)
+    waits.get_by_role("button", name="Retry read", exact=True).first.click()
+    expect(waits.get_by_role("button", name="Retry read")).to_have_count(0, timeout=4000)
     calls = page.evaluate("window.machineHarness.calls")
     assert not [call for call in calls if call["method"].startswith("flow-")], calls
     assert [call["args"] for call in calls if call["method"] == "cancel"] == [["machine-3"]]
     starts = [call for call in calls if call["method"] == "run-start"]
     assert len(starts) == 4, starts
     assert starts[0]["args"][1] == {
-        "id": "proof-1",
+        "repo": "acme/api",
+        "pr": 44,
         "priority": 2,
         "workspace": {"kind": "workspace", "entries": []},
     }, starts
@@ -233,48 +287,62 @@ def scenario(page, url: str, evidence: Path) -> dict:
     ], starts
     assert any(call["method"] == "baseline" for call in calls), calls
     (evidence / "calls.json").write_text(json.dumps(calls, indent=2) + "\n")
-    # The ordinary flow keeps its normal DAG with no machine arcs.
+
+    # A workflow run on the same page: same timeline, canvas, side inspector, logs.
     page.get_by_test_id("flow-nav").click()
+    page.get_by_role("button", name="Run", exact=True).click()
+    expect(page.locator(".run-list-row")).to_have_count(1)
     expect(page.locator(".react-flow__edge-machine")).to_have_count(0)
-    expect(page.locator(".react-flow__node")).to_have_count(4)
-    page.screenshot(path=str(evidence / "07-ordinary-flow.png"))
+    expect(graph.locator(".node-card")).to_have_count(3)
+    expect(page.get_by_text("fetched document")).to_be_visible()
+    graph.get_by_role("button", name="Inspect score", exact=True).click()
+    expect(page.get_by_role("complementary", name="Run inspector")).to_contain_text("step")
+    flow_run_look = {
+        "timeline": page.locator(".workspace-timeline").count(),
+        "graph": graph.locator(".graph-viewport").count(),
+        "side_panel": page.locator(".workspace-inspector-pane").count(),
+        "log_pane": page.get_by_label("Run logs").count(),
+    }
+    assert flow_run_look == run_look, (flow_run_look, run_look)
+    page.wait_for_timeout(300)
+    page.screenshot(path=str(evidence / "side-flow-run.png"))
+    page.screenshot(path=str(evidence / "08-flow-run.png"))
+
     # No optional methods means genuinely read-only; no mutation request is made.
     page.goto(url + "?readonly")
-    expect(page.locator('[data-machine-run="machine-1"]')).to_be_visible()
+    expect(page.get_by_label("Machine run waits")).to_be_visible()
     expect(page.locator('.node-card[data-current="true"]')).to_have_count(1)
-    expect(page.get_by_role("region", name="Machine actions")).to_have_count(0)
+    expect(page.get_by_role("group", name="Machine actions")).to_have_count(0)
     expect(page.get_by_role("button", name="Cancel run", exact=True)).to_have_count(0)
     page.get_by_role("button", name="Current definition", exact=True).click()
     expect(page.get_by_role("button", name="Run", exact=True)).to_have_count(0)
     writes = page.evaluate(
         "window.machineHarness.calls.filter(c => "
-        "['run-start','send','retry','cancel','fire','flow-start','flow-cancel'].includes(c.method))"
+        "['run-start','send','retry','cancel','fire','flow-start','flow-cancel']"
+        ".includes(c.method))"
     )
     assert not writes, writes
     page.locator(".run-list-row").click()
-    page.screenshot(path=str(evidence / "08-read-only.png"))
+    page.screenshot(path=str(evidence / "09-read-only.png"))
     # Deep-link failure is explicit, not a fallback to an unrelated run.
     page.goto(url + "?run=missing")
     expect(page.get_by_role("alert").last).to_be_visible()
-    page.screenshot(path=str(evidence / "09-missing-run.png"))
-    # One image, flow left and machine right, to compare the shared look.
-    images = [
-        base64.b64encode((evidence / name).read_bytes()).decode()
-        for name in ("side-flow.png", "side-machine.png")
-    ]
-    page.set_viewport_size({"width": 2900, "height": 1140})
-    page.set_content(
-        "<body style='margin:0;display:flex;gap:20px;background:#222;padding:10px'>"
-        + "".join(
-            f"<figure style='margin:0'><img width=1440 src='data:image/png;base64,{data}'>"
-            f"<figcaption style='color:#fff;font:14px sans-serif'>{caption}"
-            "</figcaption></figure>"
-            for data, caption in zip(images, ("Flow", "Machine"))
-        )
-        + "</body>"
+    page.screenshot(path=str(evidence / "10-missing-run.png"))
+    compose(
+        page,
+        evidence,
+        ("side-flow-run.png", "side-machine-run.png"),
+        "11-flow-run-vs-machine-run.png",
+        ("Workflow run", "Machine run"),
     )
-    page.screenshot(path=str(evidence / "10-flow-vs-machine.png"))
-    return {"machine_canvas": machine_look, "flow_canvas": flow_look}
+    compose(
+        page,
+        evidence,
+        ("side-flow.png", "side-machine.png"),
+        "12-flow-vs-machine-definition.png",
+        ("Workflow definition", "Machine definition"),
+    )
+    return {"machine_canvas": machine_look, "flow_canvas": flow_look, "run_page": run_look}
 
 
 def main() -> None:

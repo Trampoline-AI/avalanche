@@ -28,3 +28,18 @@ export type {
 } from "./WorkflowWorkspace";
 export * from "./model";
 export type * from "./machine";
+// Machine run pieces, for hosts composing the run page (the console port).
+export {
+  MachineRunActions,
+  MachineRunWaits,
+  MachineSendPanel,
+  MachineVisitTimeline,
+  MachineVisitWaits,
+  machineKeyLabel,
+  machineVisits,
+  useMachineHistory,
+  useMachineInstance,
+  useMachineVisit,
+} from "./MachineWorkspace";
+export type { MachineHistory } from "./MachineWorkspace";
+export type { MachineGraphView } from "./machineGraph";

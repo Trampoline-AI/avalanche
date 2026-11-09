@@ -102,17 +102,21 @@
   the embedded runner until a machine-capable operator host is available.
 - Block hosted API URLs and hosted environment reads in standalone source CI.
 
-- Operator UI: a machine instance is a run, shown on the normal run page. The
+- Operator UI: a machine instance is a run, shown on the normal run page. Runs
+  are listed in the run timeline with a readable key label (`acme/api #44`). The
   machine graph is a mode of the shared flow canvas (same cards, grid, controls
-  and input dot) with curved arcs for cycles, self-loops and timers, and the
-  current state highlighted. Instances start from the normal run input form
-  (including files and workspaces), appear once in the run list and close with
-  the normal run cancel. Visit sections show each visit's own step graph,
-  inspector, logs, waits and decision audits. Optional `OperatorApi` methods add
-  machine reads, event send (JSON payloads), interrupted-visit retry and a
-  development timer trigger; there is no machine start, list or close method,
-  and no `key_format`. This phase is proven in browsers against a typed fake
-  host; local operator transport follows separately.
+  and input dot), one arc per trigger, curved for cycles, self-loops and timers,
+  with the current state highlighted. Visits are a section of the run timeline
+  and open in the normal graph, side inspector and log pane. Send, retry visit
+  and a development timer trigger sit beside Cancel in the run controls; the
+  send form opens in the side panel; pending timers, deferred events, receipts
+  and visit waits show in the run waits panel. Instances start from the normal
+  run input form (including files and workspaces) and close with the normal run
+  cancel. New optional `OperatorApi` methods: machine reads, event send (JSON
+  payloads), interrupted-visit retry and the development timer trigger; there is
+  no machine start, list or close method, and no `key_format`. This phase is
+  proven in browsers against a typed fake host; local operator transport
+  follows separately.
 
 ## 0.20.4
 
