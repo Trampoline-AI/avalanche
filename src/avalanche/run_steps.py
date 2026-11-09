@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Literal
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from .dag import Node, NodeFuture, NodeType, Workflow, _workflow_context
 from .policies import StepPolicy
 from .runtime import BaseInput
-
-if TYPE_CHECKING:
-    from .machine import Machine
-
 
 class RunStart(BaseModel):
     """Normal run-start outcome, including permanent keyed-run tombstones."""
@@ -32,7 +28,9 @@ class RunOpSpec(BaseModel):
     op: Literal["start"] = "start"
 
 
-type RunTarget = Machine | Workflow | Callable[[], Workflow]
+# Machine implements the same zero-argument workflow-builder protocol.
+# Keep this alias evaluable without introducing the machine/dag import cycle.
+type RunTarget = Workflow | Callable[[], Workflow]
 
 
 class RunNode(Node):
