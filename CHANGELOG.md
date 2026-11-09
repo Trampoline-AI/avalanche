@@ -10,6 +10,7 @@
   `state.db`; inspect or replay them after restarting the operator.
 - Accept `cron=` and `webhook=` on machine declarations and forward them to the
   normal run carrier.
+- Use SQLite `synchronous=FULL` for the local operator's durable state.
 
 - **Breaking for 0.20.x:** remove the built-in machine HTTP client and all
   `DELTA_*` target/credential/retry environment reads, without deprecation.

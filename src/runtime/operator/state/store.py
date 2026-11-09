@@ -184,6 +184,5 @@ def _pragma_int(connection: sqlite3.Connection, name: str) -> int:
 
 def _configure(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA foreign_keys = ON")
-    # NORMAL is crash-safe in WAL mode: a killed process loses nothing it committed;
-    # only an OS crash or power loss can drop the last commits, never corrupt the file.
-    connection.execute("PRAGMA synchronous = NORMAL")
+    # An accepted receipt must survive an OS crash/power loss, not only SIGKILL.
+    connection.execute("PRAGMA synchronous = FULL")
