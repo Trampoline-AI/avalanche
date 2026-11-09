@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.4
 
 - Remote machine start/send now retry HTTP 429 and transient 5xx or connection
   failures with unchanged instance/event keys. Native async backoff honors
