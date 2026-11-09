@@ -101,6 +101,7 @@ class FinalWaitSnapshot(BaseModel):
 @dataclass
 class RunControls:
     connection: Connection
+    machine_writer: Connection | None = None
     lock: Lock = field(default_factory=Lock)
     receipts: dict[tuple[str, str, str], tuple[str, WaitControlResponse]] = field(
         default_factory=dict
@@ -111,6 +112,8 @@ class RunControls:
     def close(self) -> None:
         with self.lock:
             self.connection.close()
+            if self.machine_writer is not None:
+                self.machine_writer.close()
 
     def request(
         self, request: WaitControlRequest, *, closed: bool = False

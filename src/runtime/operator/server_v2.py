@@ -1089,7 +1089,11 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             )
             if existing is not None:
                 return self._start_response(existing)
-        except (ValueError, UnknownWorkflow, AmbiguousWorkflow) as exc:
+        except UnknownWorkflow as exc:
+            context.abort(grpc.StatusCode.NOT_FOUND, exc.args[0])
+        except AmbiguousWorkflow as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
+        except ValueError as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
         # A refused run releases its files, so they expire like unused uploads.
         with self._op.input_files.claims() as claims:

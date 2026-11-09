@@ -58,7 +58,9 @@ class WaitsTable:
                 card = json.loads(row["card_json"])
                 if "machine_timer" in card:
                     card["remaining_seconds"] = max(0.0, card["until"] - time.time())
-                cards.append(json.dumps(card, allow_nan=False))
+                cards.append(
+                    json.dumps(card, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+                )
             cards = tuple(cards)
             response = FinalWaitSnapshot(cards=cards).read(
                 request.model_copy(update={"offset": 0})

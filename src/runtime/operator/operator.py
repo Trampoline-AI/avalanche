@@ -23,6 +23,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from datetime import datetime
+from functools import partial
 from multiprocessing.connection import Connection
 from pathlib import Path
 from types import MappingProxyType
@@ -261,8 +262,13 @@ class _RunHandle:
     success_quiesced: bool = False
     cancel_writer: Connection | None = None
     controls: RunControls | None = None
-    machine_visit: InstanceRecord | None = None
-    machine_writer: Connection | None = None
+
+
+@dataclass(kw_only=True)
+class _MachineRunHandle(_RunHandle):
+    """Visit lifecycle belongs only to machine coordinators, not ordinary flows."""
+
+    machine_visit: InstanceRecord
     visit_finished: VisitFinished | None = None
 
 
@@ -1909,7 +1915,7 @@ class Operator:
             control_parent, control_child = self._mp.Pipe()
             cancel_reader, cancel_writer = self._mp.Pipe(duplex=False)
             machine_reader, machine_writer = self._mp.Pipe(duplex=False)
-            controls = RunControls(control_parent)
+            controls = RunControls(control_parent, machine_writer=machine_writer)
             cancel_event = self._mp.Event()
             start_event = self._mp.Event()
             assignment_event = self._mp.Event()
@@ -1942,11 +1948,23 @@ class Operator:
                 windows_job = create_kill_on_close_job()
             except BaseException:
                 self._result_store.discard(result_bundle)
-                for endpoint in (control_parent, control_child, cancel_reader, cancel_writer):
+                for endpoint in (
+                    control_parent,
+                    control_child,
+                    cancel_reader,
+                    cancel_writer,
+                    machine_reader,
+                    machine_writer,
+                ):
                     endpoint.close()
                 _close_event_queue(event_queue)
                 raise
-            handle = _RunHandle(
+            make_handle = (
+                _RunHandle
+                if _machine_visit is None
+                else partial(_MachineRunHandle, machine_visit=_machine_visit)
+            )
+            handle = make_handle(
                 process=process,
                 event_queue=event_queue,
                 cancel_event=cancel_event,
@@ -1957,8 +1975,6 @@ class Operator:
                 publication_event=threading.Event(),
                 cancel_writer=cancel_writer,
                 controls=controls,
-                machine_visit=_machine_visit,
-                machine_writer=machine_writer,
             )
             # Reserve the ID before releasing the lock so concurrent callers
             # cannot create a second coordinator with the same caller-owned ID.
@@ -2105,7 +2121,7 @@ class Operator:
                     return
                 if self._closed:
                     raise RuntimeError("Operator closed while preparing run")
-                if handle.machine_visit is None:
+                if not isinstance(handle, _MachineRunHandle):
                     run.flow_name = prepared_run.flow_name
                     run.workflow_display_name = prepared_run.workflow_display_name
                 run.topology = prepared_run.topology
@@ -2119,7 +2135,7 @@ class Operator:
                 handle.drain_thread = drain
 
                 def replace_visit_nodes(connection: sqlite3.Connection) -> None:
-                    if handle.machine_visit is not None:
+                    if isinstance(handle, _MachineRunHandle):
                         connection.execute(
                             "DELETE FROM run_nodes WHERE run_id=? AND node_id NOT IN ("
                             + ",".join("?" for _ in run.nodes)
@@ -2130,8 +2146,10 @@ class Operator:
                 notifications = self._publish_run_locked(
                     run,
                     machine_write=replace_visit_nodes,
-                    nodes_expanded=handle.machine_visit is not None,
-                    changed_node_ids=tuple(run.nodes) if handle.machine_visit else (),
+                    nodes_expanded=isinstance(handle, _MachineRunHandle),
+                    changed_node_ids=tuple(run.nodes)
+                    if isinstance(handle, _MachineRunHandle)
+                    else (),
                 )
             self._wait_for_notifications(notifications)
             drain.start()
@@ -2817,9 +2835,11 @@ class Operator:
                     self._release_evidence_checks_locked(run_id)
                 _close_run_controls(handle)
                 _close_event_queue(handle.event_queue)
-                if handle.machine_writer is not None:
-                    handle.machine_writer.close()
-                if handle.visit_finished is not None and not self._closed:
+                if (
+                    isinstance(handle, _MachineRunHandle)
+                    and handle.visit_finished is not None
+                    and not self._closed
+                ):
                     self._machine_host.queue.put(handle.visit_finished)
 
     def _apply_event(
@@ -2840,9 +2860,9 @@ class Operator:
                 response = MachineStepResponse(node_id=request.node_id, output=reply.result())
             except ValueError as exc:
                 response = MachineStepResponse(node_id=request.node_id, error=str(exc))
-            if handle.machine_writer is None:
+            if handle.controls is None or handle.controls.machine_writer is None:
                 raise _CoordinatorProtocolError("Missing machine reply pipe")
-            handle.machine_writer.send_bytes(response.model_dump_json().encode())
+            handle.controls.machine_writer.send_bytes(response.model_dump_json().encode())
             return False
         if event_type == "wait_snapshot":
             snapshot = FinalWaitSnapshot.model_validate_json(event["snapshot"])
@@ -2895,7 +2915,7 @@ class Operator:
             ) from exc
         if terminal and stored_result is None:
             self._result_store.discard(handle.result_bundle)
-        if terminal and handle.machine_visit is not None:
+        if terminal and isinstance(handle, _MachineRunHandle):
             outcome = json.loads(event.get("machine_outcome_json", "null"))
             handle.visit_finished = VisitFinished(
                 run_id,
@@ -3569,7 +3589,7 @@ class Operator:
             self._wait_for_notifications(notifications)
 
     def _finish_exited_run(self, run_id: str, handle: _RunHandle) -> None:
-        if handle.machine_visit is not None:
+        if isinstance(handle, _MachineRunHandle):
             self._result_store.discard(handle.result_bundle)
             handle.visit_finished = VisitFinished(
                 run_id, handle.machine_visit.visit, "failed", None, None
