@@ -15,6 +15,8 @@ from urllib.parse import quote, urlsplit
 import httpx2
 from pydantic import BaseModel, ConfigDict, JsonValue
 
+from .http_retry import RetryTransport, failure_summary, retry_budget
+
 
 class MachineRemoteError(RuntimeError):
     """A remote operation failed; retry sends using the same idempotency key."""
@@ -75,23 +77,54 @@ def _scope(
     )
 
 
+class MachineRemoteClient:
+    """Reusable native-async transport. Close it on the event loop that owns it."""
+
+    def __init__(self, *, retry_budget_s: float | None = None) -> None:
+        budget = retry_budget(retry_budget_s)
+        self.http = httpx2.AsyncClient(follow_redirects=False, timeout=300)
+        # Preserve HTTPX's environment proxy/TLS setup, then apply one policy to
+        # both direct and proxy transports.
+        self.http._transport = RetryTransport(self.http._transport, budget)
+        self.http._mounts = {
+            pattern: RetryTransport(transport, budget) if transport is not None else None
+            for pattern, transport in self.http._mounts.items()
+        }
+
+    async def __aenter__(self) -> MachineRemoteClient:
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback) -> None:
+        await self.http.aclose()
+
+    async def post(
+        self, url: str, token: str, body: bytes, *, idempotency_key: str | None = None
+    ) -> bytes:
+        headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
+        if idempotency_key is not None:
+            headers["Idempotency-Key"] = idempotency_key
+        try:
+            response = await self.http.post(url, content=body, headers=headers)
+        except httpx2.HTTPError as exc:
+            raise MachineRemoteError(
+                f"Machine outcome unknown ({type(exc).__name__}); "
+                "retry the same instance key and Idempotency-Key"
+            ) from exc
+        if response.status_code not in {200, 201, 202}:
+            raise MachineRemoteError(f"Machine request refused ({failure_summary(response)})")
+        return response.content
+
+
 async def _post(
-    url: str, token: str, body: bytes, *, idempotency_key: str | None = None
+    url: str,
+    token: str,
+    body: bytes,
+    *,
+    idempotency_key: str | None = None,
+    retry_budget_s: float | None = None,
 ) -> bytes:
-    headers = {"Authorization": "Bearer " + token, "Content-Type": "application/json"}
-    if idempotency_key is not None:
-        headers["Idempotency-Key"] = idempotency_key
-    try:
-        async with httpx2.AsyncClient(follow_redirects=False, timeout=300) as client:
-            response = await client.post(url, content=body, headers=headers)
-    except httpx2.HTTPError as exc:
-        raise MachineRemoteError(
-            "Machine outcome unknown; retry the same instance key and Idempotency-Key"
-        ) from exc
-    if response.status_code not in {200, 201, 202}:
-        # Provider bodies can contain credentials or signed URLs. Never echo them.
-        raise MachineRemoteError(f"Machine request refused (HTTP {response.status_code})")
-    return response.content
+    async with MachineRemoteClient(retry_budget_s=retry_budget_s) as client:
+        return await client.post(url, token, body, idempotency_key=idempotency_key)
 
 
 async def start(
@@ -104,12 +137,18 @@ async def start(
     token: str | None = None,
     org: str | None = None,
     project: str | None = None,
+    retry_budget_s: float | None = None,
 ) -> str:
     root, bearer = _scope(api_url, token, org, project)
     body = json.dumps(
         {"key": key, "input": input, "deployment_id": deployment_id}, allow_nan=False
     ).encode()
-    raw = await _post(f"{root}/{quote(machine, safe='')}/instances", bearer, body)
+    raw = await _post(
+        f"{root}/{quote(machine, safe='')}/instances",
+        bearer,
+        body,
+        retry_budget_s=retry_budget_s,
+    )
     return _Started.model_validate_json(raw).run_id
 
 
@@ -124,6 +163,7 @@ async def send(
     token: str | None = None,
     org: str | None = None,
     project: str | None = None,
+    retry_budget_s: float | None = None,
 ) -> MachineEventReceipt:
     if (
         not idempotency_key
@@ -147,6 +187,7 @@ async def send(
         bearer,
         body,
         idempotency_key=idempotency_key,
+        retry_budget_s=retry_budget_s,
     )
     receipt = MachineEventReceipt.model_validate_json(raw)
     if receipt.key != event:

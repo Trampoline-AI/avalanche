@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Remote machine start/send now retry HTTP 429 and transient 5xx or connection
+  failures with unchanged instance/event keys. Native async backoff honors
+  Retry-After within a 60-second default budget; configure it with
+  DELTA_HTTP_RETRY_BUDGET_S or retry_budget_s (zero disables). Retry notices use
+  standard INFO logging, and final errors retain status, reason and Retry-After.
+
 ## 0.20.3
 
 - No SDK change since 0.20.2; versions move together.

@@ -101,5 +101,6 @@ only queues the event; it never re-enters the driver.
 These are local authoring/test facilities, not restart durability or deployed
 machine support. Ordinary workflow execution must not silently run an empty
 machine carrier; use the machine test driver locally and a machine-capable host
-for deployment. Remote instance routing and CLI machine commands are separate
-runtime/API work.
+for deployment. Remote instance routing and CLI machine commands use the host's public HTTP API.
+Remote `machine.start` and `machine.send` preserve instance/event identities through
+transient failures; see [remote HTTP retries](http-retries.md) for configuration.
