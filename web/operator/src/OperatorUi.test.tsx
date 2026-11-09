@@ -314,6 +314,61 @@ describe("graph orientation controls", () => {
 });
 
 describe("operator workflows", () => {
+  it("updates sidebar run counts and outcomes from streamed run events", async () => {
+    const created = Promise.withResolvers<void>();
+    const failed = Promise.withResolvers<void>();
+    const inventory = FlowInfoMsg.create({
+      ...workflow,
+      workflowId: "inventory",
+      displayName: "Inventory",
+    });
+    const inventoryRun = RunSummaryMsg.create({ ...summary, workflowId: inventory.workflowId });
+    const api = createApi({
+      loadBaseline: async () => ({
+        ...baseline,
+        catalog: CatalogSnapshotMsg.create({
+          ...baseline.catalog,
+          workflows: [workflow, inventory],
+        }),
+        runs: [],
+      }),
+      streamUpdates: async function* (_instance, _cursor, signal) {
+        await created.promise;
+        yield envelope(2, {
+          oneofKind: "runCreated",
+          runCreated: { summary: inventoryRun, nodes: [] },
+        });
+        await failed.promise;
+        yield envelope(3, {
+          oneofKind: "runStatusChanged",
+          runStatusChanged: {
+            runId: summary.runId,
+            status: "failed",
+            revision: "2",
+            startedAt: 0,
+            endedAt: 1,
+          },
+        });
+        yield* idleUpdates(signal);
+      },
+    });
+    render(<OperatorUi host={{ api, presentation }} />);
+    const inventoryButton = await screen.findByRole("button", { name: /Inventory/ });
+    expect(within(inventoryButton).getByRole("img", { name: /0 runs/ })).toHaveTextContent("0");
+    created.resolve();
+    expect(
+      await within(inventoryButton).findByRole("img", {
+        name: /1 run: 0 successful, 0 failed, 1 other/,
+      }),
+    ).toHaveTextContent("1");
+    failed.resolve();
+    expect(
+      await within(inventoryButton).findByRole("img", {
+        name: /1 run: 0 successful, 1 failed, 0 other/,
+      }),
+    ).toHaveTextContent("1");
+  });
+
   it("starts and selects a run, inspects its node, and cancels it", async () => {
     const inventory = FlowInfoMsg.create({
       ...workflow,
@@ -671,6 +726,7 @@ describe("operator workflows", () => {
     ];
     const props = {
       onSelect: vi.fn(),
+      runs: {},
       selection: { kind: "run", workflowId: workflow.workflowId, runId: "run-1" } as const,
     };
     const { rerender } = render(

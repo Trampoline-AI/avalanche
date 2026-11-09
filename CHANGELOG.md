@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Show run counts on workflow icons in the browser sidebar, with a green/red ring
+  for successful and failed runs. Any failures occupy at least 10% of the ring;
+  other run states remain neutral.
+
 ## 0.20.4
 
 - Remote machine start/send now retry HTTP 429 and transient 5xx or connection
