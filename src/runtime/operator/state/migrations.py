@@ -267,6 +267,31 @@ MIGRATIONS: tuple[Migration, ...] = (
             "ALTER TABLE run_nodes ADD COLUMN map_index INTEGER CHECK (map_index >= 0)",
         ),
     ),
+    Migration(
+        version=7,
+        name="durable wait decisions and receipts",
+        statements=(
+            """
+            CREATE TABLE wait_decisions (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                position INTEGER NOT NULL CHECK (position >= 0),
+                card_json TEXT NOT NULL,
+                PRIMARY KEY (run_id, position)
+            ) STRICT
+            """,
+            """
+            CREATE TABLE wait_receipts (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                scope TEXT NOT NULL,
+                address TEXT NOT NULL,
+                idempotency_key TEXT NOT NULL,
+                request_json TEXT NOT NULL,
+                response_json TEXT NOT NULL,
+                PRIMARY KEY (run_id, scope, address, idempotency_key)
+            ) STRICT
+            """,
+        ),
+    ),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version

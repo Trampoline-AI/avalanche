@@ -158,6 +158,7 @@ from .state.schedule_input_files import (
 )
 from .state.schedules import ScheduleState
 from .state.traces import RunTracesTable
+from .state.waits import WaitsTable
 from .step_io import StepInputs, StepIo, StepValuePreview
 from .wait_control import (
     FinalWaitSnapshot,
@@ -2096,15 +2097,20 @@ class Operator:
 
     def wait_control(self, run_id: str, request: WaitControlRequest) -> WaitControlResponse:
         with self._lock:
-            if run_id not in self._runs or run_id not in self._wait_controls:
+            if run_id not in self._runs:
                 raise WaitRefusalError("unknown_run", 404)
-            controls = self._wait_controls[run_id]
             closed = self._runs[run_id].status in {
                 RunStatus.SUCCESS,
                 RunStatus.FAILED,
                 RunStatus.CANCELLED,
             }
-        return controls.request(request, closed=closed)
+            if closed:
+                with self._state_store.transaction() as connection:
+                    return WaitsTable.read(connection, run_id, request)
+            controls = self._wait_controls.get(run_id)
+            if controls is None:
+                raise WaitRefusalError("coordinator_unavailable", 503)
+        return controls.request(request)
 
     def cancel_run(self, run_id: str) -> None:
         with self._lock:
@@ -2684,6 +2690,8 @@ class Operator:
                 with controls.lock:
                     if controls.final_snapshot is not None:
                         raise _CoordinatorProtocolError("duplicate final wait snapshot")
+                    with self._state_store.transaction() as connection:
+                        WaitsTable.finish(connection, run_id, snapshot, controls.receipts)
                     controls.final_snapshot = snapshot
             return False
         if event_type == "evaluation_submitted":

@@ -6,6 +6,11 @@
   derivation, discovery metadata and existing-key test-host behavior as machines.
   Host run-ID/`--key` lookup and durable key storage remain integration work;
   unkeyed flows retain independent start semantics.
+- Keep completed local runs' wait decision cards, audits and replay receipts in
+  `state.db`; inspect or replay them after restarting the operator.
+- Accept `cron=` and `webhook=` on machine declarations and forward them to the
+  normal run carrier.
+
 - **Breaking for 0.20.x:** remove the built-in machine HTTP client and all
   `DELTA_*` target/credential/retry environment reads, without deprecation.
   Start an instance through the normal run-start path (`ava run <machine>`),

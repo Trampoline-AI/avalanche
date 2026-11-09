@@ -58,8 +58,9 @@ def test_spawned_run_accepts_early_event_and_typed_decision(tmp_path):
             'approvers=["reviewer"]', f"approvers=[{getpass.getuser()!r}]"
         )
     )
+    state_db = tmp_path / "state.db"
     op = Operator([str(target)], watch=False, schedule=False, webhook_port=0,
-                  state_db=":memory:")
+                  state_db=state_db)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -158,6 +159,21 @@ def test_spawned_run_accepts_early_event_and_typed_decision(tmp_path):
         assert audit.reason == "checked pinned draft"
         assert wait_terminal(op, run_id).status == RunStatus.SUCCESS
         assert op.wait_control(run_id, event).receipt == receipt
+        assert client.wait_control(run_id, decision).receipt == audit
+        before_cards = client.wait_control(run_id, WaitControlRequest(kind="list")).waits
+        assert any(card["node_id"] == "decision_1" for card in before_cards)
+        client.close()
+        browser.close()
+        server.stop(grace=0).wait()
+        op.close()
+        op = Operator([str(target)], watch=False, schedule=False, webhook_port=0,
+                      state_db=state_db)
+        server = serve(op, port=port, block=False)
+        browser = start_browser_server(address, port=0)
+        client = GrpcStateProvider(address)
+        after_cards = client.wait_control(run_id, WaitControlRequest(kind="list")).waits
+        assert after_cards == before_cards
+        assert client.wait_control(run_id, event).receipt == receipt
         assert client.wait_control(run_id, decision).receipt == audit
     finally:
         client.close()
