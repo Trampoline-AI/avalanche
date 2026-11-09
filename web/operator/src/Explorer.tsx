@@ -1,11 +1,18 @@
-import { memo, useEffect, useState } from "react";
+import { memo, useEffect, useMemo, useState } from "react";
 import { Clock, Folder, PanelLeft, X } from "lucide-react";
 
-import type { CatalogSnapshotMsg, FlowInfoMsg } from "./model";
+import type { CatalogSnapshotMsg, FlowInfoMsg, RunSummaryMsg } from "./model";
 import type { OperatorUiSelection } from "./ui/types";
+import {
+  countWorkflowRuns,
+  emptyRunCounts,
+  WorkflowRunBadge,
+  type WorkflowRunCounts,
+} from "./WorkflowRunBadge";
 
 interface ExplorerProps {
   catalog?: CatalogSnapshotMsg;
+  runs: Readonly<Record<string, RunSummaryMsg>>;
   selection?: OperatorUiSelection;
   onSelect: (selection: OperatorUiSelection) => void;
   onTogglePin?: () => void;
@@ -18,6 +25,7 @@ interface ExplorerProps {
 
 interface WorkflowRowProps {
   workflow: FlowInfoMsg;
+  runCounts: WorkflowRunCounts;
   selected: boolean;
   compact: boolean;
   onSelect: (selection: OperatorUiSelection) => void;
@@ -46,6 +54,7 @@ function ScheduleBadge({ workflow }: { workflow: FlowInfoMsg }) {
 
 const WorkflowRow = memo(function WorkflowRow({
   workflow,
+  runCounts,
   selected,
   compact,
   onSelect,
@@ -71,14 +80,15 @@ const WorkflowRow = memo(function WorkflowRow({
       }`}
       onClick={() => onSelect({ kind: "workflow", workflowId: workflow.workflowId })}
     >
-      <span
-        aria-hidden="true"
-        className="relative grid size-8 shrink-0 place-items-center rounded border border-icon-line text-sm font-medium"
-      >
-        {workflow.displayName.slice(0, 1).toUpperCase() +
-          workflow.displayName.slice(1, 2).toLowerCase()}
+      <span className="relative grid size-8 shrink-0 place-items-center rounded border border-icon-line text-sm font-medium">
+        <span aria-hidden="true">
+          {workflow.displayName.slice(0, 1).toUpperCase() +
+            workflow.displayName.slice(1, 2).toLowerCase()}
+        </span>
+        <WorkflowRunBadge counts={runCounts} />
         {compact && workflow.cron && (
           <Clock
+            aria-hidden="true"
             className={`absolute -right-1 -bottom-1 size-3 rounded-full bg-panel ${
               workflow.scheduleEnabled ? "text-acid" : "text-amber"
             }`}
@@ -110,6 +120,7 @@ function diagnosticKey(catalog: CatalogSnapshotMsg): string {
 
 function ExplorerView({
   catalog,
+  runs,
   selection,
   onSelect,
   onTogglePin,
@@ -119,6 +130,7 @@ function ExplorerView({
   pinned = true,
   expanded = true,
 }: ExplorerProps) {
+  const runCounts = useMemo(() => countWorkflowRuns(runs), [runs]);
   const [dismissedDiagnosticKey, setDismissedDiagnosticKey] = useState<string>();
   const visibleDiagnostics =
     catalog?.diagnostics.filter((diagnostic) => diagnostic.kind !== "skipped") ?? [];
@@ -209,6 +221,7 @@ function ExplorerView({
                 >
                   <WorkflowRow
                     workflow={workflow}
+                    runCounts={runCounts.get(workflow.workflowId) ?? emptyRunCounts}
                     compact={!contentVisible}
                     selected={selection?.workflowId === workflow.workflowId}
                     onSelect={onSelect}

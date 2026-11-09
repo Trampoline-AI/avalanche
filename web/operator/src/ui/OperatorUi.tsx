@@ -187,6 +187,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
         >
           <Explorer
             catalog={state.catalog}
+            runs={state.runs}
             selection={selection}
             onSelect={select}
             pinned={explorerPinned}
