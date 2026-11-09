@@ -102,14 +102,17 @@
   the embedded runner until a machine-capable operator host is available.
 - Block hosted API URLs and hosted environment reads in standalone source CI.
 
-- Add a machine-capable operator UI contract and run workspace: one run per
-  instance, curved state graphs with cycles and self-loops, expandable visit
-  graphs, event facts and receipts, timer countdowns, and optional host controls.
-  This phase adds browser proof against a typed fake host; local operator
-  transport integration follows separately. Machines start through the normal
-  schema-driven run input form (including staged files), and use the normal run
-  timeline. The host derives their key from input; no separate machine start or
-  listing API is required. The machine UI contract drops `key_format`.
+- Operator UI: a machine instance is a run, shown on the normal run page. The
+  machine graph is a mode of the shared flow canvas (same cards, grid, controls
+  and input dot) with curved arcs for cycles, self-loops and timers, and the
+  current state highlighted. Instances start from the normal run input form
+  (including files and workspaces), appear once in the run list and close with
+  the normal run cancel. Visit sections show each visit's own step graph,
+  inspector, logs, waits and decision audits. Optional `OperatorApi` methods add
+  machine reads, event send (JSON payloads), interrupted-visit retry and a
+  development timer trigger; there is no machine start, list or close method,
+  and no `key_format`. This phase is proven in browsers against a typed fake
+  host; local operator transport follows separately.
 
 ## 0.20.4
 

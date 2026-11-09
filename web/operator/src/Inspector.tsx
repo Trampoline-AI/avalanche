@@ -782,6 +782,12 @@ function AgentAndStepInspector({
               </span>
             )}
           </div>
+          {(node?.generation !== undefined || node?.attempts !== undefined) && (
+            <p aria-label="Execution attempts" className="mt-1 text-xs text-secondary">
+              Generation: {node.generation ?? "Not reported"} · Attempts:{" "}
+              {node.attempts ?? "Not reported"}
+            </p>
+          )}
           {runsOnClaude && (
             <p className="inspector-runtime m-0 mt-1.5 inline-flex items-center gap-1.5 rounded border border-claude/30 bg-claude/10 px-1.5 py-0.5 font-mono text-[9px] text-claude">
               <ClaudeLogo className="size-3" />

@@ -635,6 +635,12 @@
     border-color: var(--color-line);
   }
 
+  /* A state machine's current state: the only machine-specific card treatment. */
+  .node-card.node-card--current {
+    border-color: var(--color-acid);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-acid) 28%, transparent);
+  }
+
   /* The run input is data coming in, not a step: a dot with no run state. Its
      edges are dashed with a diamond head (graphSelection.ts). */
   .node-input-dot {

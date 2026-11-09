@@ -9,6 +9,8 @@ export interface WaitCard {
   schema: JsonSchema;
   prompt: string | null;
   show: JsonValue;
+  /** Retained terminal decision evidence, supplied by the host. */
+  audit?: { outcome: JsonValue; reason: string; at: number };
 }
 
 function DecisionForm({
@@ -22,7 +24,11 @@ function DecisionForm({
   const [reason, setReason] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [key] = useState(() => crypto.randomUUID());
+  const [key] = useState(() =>
+    Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join(""),
+  );
   const properties = card.schema.properties ?? {};
   async function decide(event: React.FormEvent) {
     event.preventDefault();
@@ -90,7 +96,19 @@ function DecisionForm({
 }
 
 /** Uses pinned server schemas and server-side validation, never a payload reviewer ID. */
-export function RunWaitPanel({ api, runId }: { api: OperatorApi; runId: string }) {
+export function RunWaitPanel({
+  api,
+  runId,
+  visit,
+  readOnly = false,
+  live = true,
+}: {
+  api: OperatorApi;
+  runId: string;
+  visit?: number;
+  readOnly?: boolean;
+  live?: boolean;
+}) {
   const [cards, setCards] = useState<WaitCard[]>([]);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -99,7 +117,7 @@ export function RunWaitPanel({ api, runId }: { api: OperatorApi; runId: string }
     let timer: ReturnType<typeof setTimeout>;
     async function load() {
       try {
-        const next = await api.listRunWaits!(runId);
+        const next = await api.listRunWaits!(runId, visit);
         if (!stopped) {
           setCards(next);
           setError("");
@@ -107,15 +125,15 @@ export function RunWaitPanel({ api, runId }: { api: OperatorApi; runId: string }
       } catch (cause) {
         if (!stopped) setError(cause instanceof Error ? cause.message : "Waits unavailable");
       }
-      if (!stopped) timer = setTimeout(() => void load(), 1500);
+      if (!stopped && live) timer = setTimeout(() => void load(), 1500);
     }
     void load();
     return () => {
       stopped = true;
       clearTimeout(timer);
     };
-  }, [api, runId]);
-  if (!api.listRunWaits || !api.submitDecision) return null;
+  }, [api, runId, visit, live]);
+  if (!api.listRunWaits) return null;
   return (
     <section
       aria-label="Run waits"
@@ -129,15 +147,29 @@ export function RunWaitPanel({ api, runId }: { api: OperatorApi; runId: string }
           {card.show !== null && (
             <pre className="max-h-32 overflow-auto">{JSON.stringify(card.show, null, 2)}</pre>
           )}
-          {card.kind === "decision" && card.state === "waiting" && (
-            <DecisionForm
-              card={card}
-              submit={async (outcome, reason, key) => {
-                await api.submitDecision!(runId, card.nodeId, outcome, reason, key);
-                setCards(await api.listRunWaits!(runId));
-              }}
-            />
+          {card.audit && (
+            <section
+              aria-label="Decision audit"
+              className="grid gap-1 border-t border-line pt-2"
+            >
+              <p>
+                {card.audit.reason} · {new Date(card.audit.at * 1000).toLocaleString()}
+              </p>
+              <pre>{JSON.stringify(card.audit.outcome, null, 2)}</pre>
+            </section>
           )}
+          {!readOnly &&
+            api.submitDecision &&
+            card.kind === "decision" &&
+            card.state === "waiting" && (
+              <DecisionForm
+                card={card}
+                submit={async (outcome, reason, key) => {
+                  await api.submitDecision!(runId, card.nodeId, outcome, reason, key);
+                  setCards(await api.listRunWaits!(runId, visit));
+                }}
+              />
+            )}
         </article>
       ))}
       {error && <p role="status">{error}</p>}

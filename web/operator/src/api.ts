@@ -209,7 +209,6 @@ export interface OperatorApi {
     idempotencyKey: string,
   ): Promise<MachineEventReceipt>;
   retryMachineVisit?(runId: string): Promise<void>;
-  closeMachine?(runId: string): Promise<void>;
   fireNextMachineTimer?(runId: string): Promise<void>;
   getCatalog(signal?: AbortSignal): Promise<CatalogSnapshotMsg>;
   loadBaseline(signal?: AbortSignal): Promise<StructuralBaseline>;
@@ -247,7 +246,8 @@ export interface OperatorApi {
     inputFiles?: InputFileAttachment[],
   ): Promise<string>;
   cancelRun(runId: string): Promise<void>;
-  listRunWaits?(runId: string): Promise<WaitCard[]>;
+  /** A visit filters at the host; never return another visit's cards/audits. */
+  listRunWaits?(runId: string, visit?: number): Promise<WaitCard[]>;
   submitDecision?(
     runId: string,
     nodeId: string,

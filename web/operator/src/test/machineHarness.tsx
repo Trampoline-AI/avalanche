@@ -1,7 +1,8 @@
 import { createRoot } from "react-dom/client";
 import { useState } from "react";
 import { WorkflowWorkspace } from "../WorkflowWorkspace";
-import type { OperatorApi } from "../api";
+import type { LogPageRequest, OperatorApi } from "../api";
+import type { WaitCard } from "../RunWaitPanel";
 import type {
   JsonValue,
   MachineEventReceipt,
@@ -15,10 +16,12 @@ import type {
 import {
   CatalogSnapshotMsg,
   FlowInfoMsg,
+  LogRecordDescriptorMsg,
   OperatorUpdateEnvelope,
   OperatorUpdate,
   type InputFileAttachment,
   type InputFileTarget,
+  NodeSnapshotMsg,
   RunSnapshotMsg,
   RunSummaryMsg,
   WorkflowTopologyMsg,
@@ -101,10 +104,92 @@ const ordinary = FlowInfoMsg.create({
   name: "ordinary",
   displayName: "Ordinary flow",
   workflowId: "ordinary",
-  nodeIds: ["work"],
-  nodeTypes: { work: "step" },
-  displayNames: { work: "Work" },
+  nodeIds: ["fetch", "score", "notify"],
+  graph: { fetch: { children: ["score"] }, score: { children: ["notify"] } },
+  nodeTypes: { fetch: "step", score: "step", notify: "step" },
+  displayNames: { fetch: "fetch", score: "score", notify: "notify" },
+  standardStepDocstringLines: {
+    fetch: "Load the document under review.",
+    score: "Score the document.",
+    notify: "Tell the reviewer.",
+  },
+  inputDeclarationJson: JSON.stringify({
+    type_name: "ReviewInput",
+    json_schema: { type: "object", properties: { id: { type: "string" } } },
+    consumer_node_ids: ["fetch"],
+  }),
 });
+/** The host's own scoped snapshot for one visit: qualified steps, I/O, logs and .map. */
+function visitSnapshot(runId: string, visit: number, status: string): RunSnapshotMsg {
+  const id = (name: string) => `v${visit}.${name}`;
+  const output = (value: JsonValue) => ({
+    inputs: [],
+    output: { kind: "json" as const, typeName: "dict", value, truncated: false },
+  });
+  const now = Date.now() / 1000;
+  const step = (name: string, extra: Partial<NodeSnapshotMsg> = {}) =>
+    NodeSnapshotMsg.create({
+      nodeId: id(name),
+      name,
+      nodeType: "step",
+      status: "success",
+      startedAt: now - 3,
+      endedAt: now - 1,
+      ...extra,
+    });
+  const interrupted = status === "indeterminate";
+  return RunSnapshotMsg.create({
+    operatorInstanceId: catalog.operatorInstanceId,
+    asOfEventUlid: String(sequence).padStart(26, "0"),
+    summary: RunSummaryMsg.create({ runId, workflowId: "review", status }),
+    logPageToken: `logs:${runId}:${visit}`,
+    expansions: interrupted ? {} : { [id("fanout")]: 2 },
+    topology: WorkflowTopologyMsg.create(
+      interrupted
+        ? { nodeIds: [id("check")], nodeTypes: { [id("check")]: "step" } }
+        : {
+            nodeIds: [id("check"), id("fanout"), id("notify")],
+            graph: {
+              [id("check")]: { children: [id("fanout")] },
+              [id("fanout")]: { children: [id("notify")] },
+            },
+            nodeTypes: {
+              [id("check")]: "step",
+              [id("fanout")]: "step",
+              [id("notify")]: "step",
+            },
+            displayNames: {
+              [id("check")]: "check",
+              [id("fanout")]: "fanout",
+              [id("notify")]: "notify",
+            },
+            mapSpecs: {
+              [id("fanout")]: {
+                mappedArgs: ["item"],
+                broadcastArgs: [],
+                maxItems: 0,
+                inherited: false,
+                failFast: true,
+              },
+            },
+          },
+    ),
+    nodes: interrupted
+      ? [step("check", { status: "indeterminate", attempts: 2, generation: 1, endedAt: 0 })]
+      : [
+          step("check", { attempts: 3, generation: 2, stepIo: output({ visit, score: 7 }) }),
+          step("fanout"),
+          ...[0, 1].map((index) =>
+            step(`fanout[${index}]`, {
+              mapParent: id("fanout"),
+              mapIndex: index,
+              stepIo: output({ item: index }),
+            }),
+          ),
+          step("notify", { attempts: 1, generation: 0, stepIo: output({ sent: true }) }),
+        ],
+  });
+}
 const catalog = CatalogSnapshotMsg.create({
   operatorInstanceId: "machine-browser",
   revision: "1",
@@ -156,11 +241,12 @@ function enter(
   previous.transition = transition;
   item.visit++;
   item.state = state;
-  item.status = state === "closed" ? "final" : "waiting";
+  item.status = source === "cancel" ? "cancelled" : state === "closed" ? "final" : "waiting";
   item.finished = state === "closed";
   item.accepts = spec.states[state].transitions.map((t) => t.event);
   item.due = state === "ready" ? now + 6 : null;
   visits.get(runId)!.set(item.visit, {
+    snapshot: visitSnapshot(runId, item.visit, "success"),
     visit: item.visit,
     state,
     entered_at: now,
@@ -186,7 +272,7 @@ function enter(
     },
   });
   const summary = runs.get(runId)!;
-  summary.status = item.finished ? "succeeded" : "waiting";
+  summary.status = source === "cancel" ? "cancelled" : item.finished ? "succeeded" : "waiting";
   summary.revision = String(item.visit);
   publish({
     oneofKind: "runStatusChanged",
@@ -239,7 +325,9 @@ class FakeOperatorApi implements OperatorApi {
           RunSummaryMsg.create({ runId, workflowId: "ordinary", status: "succeeded" }),
       ),
       topology: WorkflowTopologyMsg.create(
-        instances.has(runId) ? {} : { nodeIds: ["work"], nodeTypes: { work: "step" } },
+        instances.has(runId)
+          ? {}
+          : { nodeIds: ordinary.nodeIds, graph: ordinary.graph, nodeTypes: ordinary.nodeTypes },
       ),
     });
   }
@@ -255,14 +343,50 @@ class FakeOperatorApi implements OperatorApi {
       await new Promise<void>((resolve) => setTimeout(resolve, 25));
     }
   }
-  async listLogPage() {
+  async listLogPage(request: LogPageRequest) {
+    const [, runId, visit] = request.pageToken.split(":");
+    record("logs", runId ?? "", Number(visit));
     return {
-      operatorInstanceId: catalog.operatorInstanceId,
-      asOfEventUlid: catalog.asOfEventUlid,
-      records: [],
+      operatorInstanceId: request.expectedOperatorInstanceId,
+      asOfEventUlid: request.expectedAsOfEventUlid,
+      records: visit
+        ? [
+            LogRecordDescriptorMsg.create({
+              sequence: "1",
+              timestamp: Date.now() / 1000,
+              level: "INFO",
+              nodeId: `v${visit}.check`,
+              sizeBytes: "32",
+              bodyToken: `log:${visit}`,
+            }),
+          ]
+        : [],
       nextCursor: "",
       nextPageToken: "",
     };
+  }
+  async listRunWaits(runId: string, visit?: number): Promise<WaitCard[]> {
+    record("waits", runId, visit ?? null);
+    const item = instances.get(runId);
+    if (!item || visit === undefined || visit < 2) return [];
+    const current = visit === item.visit && !item.finished;
+    return [
+      {
+        nodeId: `v${visit}.approve`,
+        kind: "decision",
+        state: current ? "waiting" : "resolved",
+        schema: {
+          type: "object",
+          properties: { approve: { type: "boolean" } },
+          required: ["approve"],
+        },
+        prompt: `Approve visit ${visit}?`,
+        show: { visit },
+        audit: current
+          ? undefined
+          : { outcome: { approve: true }, reason: "reviewed in proof", at: Date.now() / 1000 },
+      },
+    ];
   }
   async listAgentEventPage() {
     return {
@@ -292,11 +416,17 @@ class FakeOperatorApi implements OperatorApi {
   async readJsonDetail() {
     return null;
   }
-  async readTextDetail() {
-    return "";
+  async readTextDetail(token: string) {
+    return token.startsWith("log:") ? `visit ${token.slice(4)} check finished\n` : "";
   }
-  async cancelRun() {
-    record("flow-cancel");
+  async cancelRun(runId: string) {
+    if (!instances.has(runId)) {
+      record("flow-cancel");
+      return;
+    }
+    // A waiting instance closes through the normal run cancel.
+    record("cancel", runId);
+    enter(runId, "closed", "cancel", null);
   }
   async setScheduleEnabled() {
     return ordinary;
@@ -422,6 +552,7 @@ class FakeOperatorApi implements OperatorApi {
           {
             visit: 1,
             state: "review",
+            snapshot: visitSnapshot(run_id, 1, "indeterminate"),
             entered_at: Date.now() / 1000,
             left_at: null,
             disposition: "indeterminate",
@@ -509,10 +640,6 @@ class FakeOperatorApi implements OperatorApi {
     record("retry", runId);
     enter(runId, instance(runId).state!, "internal", null);
   }
-  async closeMachine(runId: string) {
-    record("close", runId);
-    enter(runId, "closed", "cancel", null);
-  }
   async fireNextMachineTimer(runId: string) {
     record("fire", runId);
     enter(runId, "closed", "timer", null);
@@ -528,7 +655,6 @@ if (readOnly) {
   Object.assign(api, {
     sendMachineEvent: undefined,
     retryMachineVisit: undefined,
-    closeMachine: undefined,
     fireNextMachineTimer: undefined,
   });
 }

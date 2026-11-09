@@ -156,7 +156,11 @@ export function RunControls({
   const active =
     run?.summary?.status === "requesting" ||
     run?.summary?.status === "pending" ||
-    run?.summary?.status === "running";
+    run?.summary?.status === "running" ||
+    // A machine run parks between visits; cancelling it closes the instance.
+    run?.summary?.status === "waiting" ||
+    run?.summary?.status === "interrupted" ||
+    run?.summary?.status === "needs_attention";
 
   const start = async () => {
     if (!workflow) return;

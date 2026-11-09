@@ -11,7 +11,8 @@ import {
 } from "react";
 
 import type { OperatorApi } from "./api";
-import { MachineRun } from "./MachineWorkspace";
+import { MachineRunSections, useMachineInstance } from "./MachineWorkspace";
+import type { MachineGraphView } from "./machineGraph";
 import { GraphCanvas } from "./GraphCanvas";
 import { Inspector } from "./Inspector";
 import type { FlowInfoMsg, InputFileAttachment, RunSnapshotMsg } from "./model";
@@ -366,6 +367,45 @@ export function WorkflowWorkspaceSurface({
     run?.operatorInstanceId ?? "",
     run?.summary?.runId,
   );
+  // A machine instance is a run: same page, with the graph in machine mode and the
+  // visits below it.
+  const machineSpec = workflow?.machineSpec;
+  const machineRunId = machineSpec ? selectedRunId : undefined;
+  const machineRead = useMachineInstance(api, machineRunId);
+  const machineInstance =
+    machineRunId !== undefined && machineRead.value?.run_id === machineRunId
+      ? machineRead.value
+      : undefined;
+  const instanceSpecJson = machineInstance?.machine_spec
+    ? JSON.stringify(machineInstance.machine_spec)
+    : undefined;
+  const shownMachineSpec = useMemo(
+    () =>
+      instanceSpecJson ? (JSON.parse(instanceSpecJson) as typeof machineSpec) : machineSpec,
+    [instanceSpecJson, machineSpec],
+  );
+  const [machineFocus, setMachineFocus] = useState<{ state: string; nonce: number }>();
+  const openMachineState = useCallback(
+    (state: string) =>
+      setMachineFocus((current) => ({ state, nonce: (current?.nonce ?? 0) + 1 })),
+    [],
+  );
+  const machineState = machineInstance?.state;
+  const machineStatus = machineInstance?.status;
+  const machineDue = machineInstance?.due;
+  const machineView = useMemo<MachineGraphView | undefined>(
+    () =>
+      shownMachineSpec
+        ? {
+            spec: shownMachineSpec,
+            state: machineState,
+            status: machineStatus,
+            due: machineDue,
+            onOpenState: machineRunId ? openMachineState : undefined,
+          }
+        : undefined,
+    [machineDue, machineRunId, machineState, machineStatus, openMachineState, shownMachineSpec],
+  );
   const requestingRun =
     run?.summary?.status === "requesting" ||
     (run !== undefined &&
@@ -461,7 +501,7 @@ export function WorkflowWorkspaceSurface({
           {runListPanel && (
             <div
               ref={timelineElement}
-              className={`workspace-timeline z-20 ${timelineExpanded ? "relative w-[410px] max-w-full shrink-0 max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:left-0" : workflow?.machineSpec && historical ? "relative w-[300px] shrink-0" : "absolute top-3.5 left-3.5 w-[300px] max-w-[calc(100vw-3rem)]"}`}
+              className={`workspace-timeline z-20 ${timelineExpanded ? "relative w-[410px] max-w-full shrink-0 max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:left-0" : "absolute top-3.5 left-3.5 w-[300px] max-w-[calc(100vw-3rem)]"}`}
             >
               {runListPanel}
             </div>
@@ -469,19 +509,13 @@ export function WorkflowWorkspaceSurface({
           <div
             className={`canvas relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${run ? "run-canvas bg-run-canvas" : "blueprint-canvas bg-panel"}`}
           >
-            {workflow?.machineSpec && selectedRunId ? (
-              <MachineRun
-                key={selectedRunId}
-                api={api}
-                runId={selectedRunId}
-                spec={workflow.machineSpec}
-                enabled={runActionsEnabled && bottomRightPanel !== null}
-              />
-            ) : workflow || run ? (
+            {workflow || run ? (
               <>
-                <div className="run-graph-shell relative min-h-0 min-w-0 flex-1 overflow-hidden">
+                <div
+                  className={`run-graph-shell relative min-w-0 flex-1 overflow-hidden ${machineRunId ? "min-h-[300px]" : "min-h-0"}`}
+                >
                   <GraphCanvas
-                    machine={workflow?.machineSpec ? { spec: workflow.machineSpec } : undefined}
+                    machine={machineView}
                     workflow={!run || previewWorkflow ? workflow : undefined}
                     runTopology={previewWorkflow ? undefined : run?.topology}
                     runNodes={requestingRun ? undefined : run?.nodes}
@@ -496,14 +530,6 @@ export function WorkflowWorkspaceSurface({
                       bottomRightPanel === undefined ? runControlsPanel : bottomRightPanel
                     }
                   />
-                  {workflow?.machineSpec && workflow.inputDeclarationJson && (
-                    <button
-                      className="absolute top-4 right-4 rounded border border-line bg-panel p-2 text-xs text-ink"
-                      onClick={() => openNode(INPUT_NODE_ID)}
-                    >
-                      Edit inputs
-                    </button>
-                  )}
                   {evaluationState.error && (
                     <p
                       role="alert"
@@ -553,12 +579,28 @@ export function WorkflowWorkspaceSurface({
                   {run &&
                     displayedRunId &&
                     runActionsEnabled &&
+                    !machineRunId &&
                     run.summary?.status === "running" && (
                       <div className="absolute right-3 bottom-3 z-10 w-80 max-w-[calc(100%-24px)] rounded border border-line bg-panel shadow-lg">
                         <RunWaitPanel key={displayedRunId} api={api} runId={displayedRunId} />
                       </div>
                     )}
                 </div>
+                {machineRunId && machineSpec && (
+                  <div className="machine-run-sections h-[42%] min-h-[180px] shrink-0 overflow-auto border-t border-line bg-canvas">
+                    <MachineRunSections
+                      key={machineRunId}
+                      api={api}
+                      runId={machineRunId}
+                      spec={machineSpec}
+                      instance={machineInstance}
+                      readError={machineRead.error}
+                      refresh={machineRead.refresh}
+                      enabled={runActionsEnabled && bottomRightPanel !== null}
+                      focus={machineFocus}
+                    />
+                  </div>
+                )}
                 {run ? (
                   <RunLogPane
                     height={layout.logHeight}

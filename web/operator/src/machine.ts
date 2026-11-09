@@ -1,4 +1,5 @@
 import type { JsonSchema, JsonValue } from "./stepInterface";
+import type { RunSnapshotMsg } from "./model";
 
 export type { JsonSchema, JsonValue } from "./stepInterface";
 export type MachineKey = JsonValue[];
@@ -68,6 +69,10 @@ export interface MachineVisitNode {
   attempts: number;
 }
 export interface MachineVisit {
+  /** Host-provided bounded snapshot: this run ID, only this visit's qualified
+   * nodes/topology/expansions, retained I/O/trace tokens, scoped log token and seal.
+   * Never synthesize it from the status-only nodes below. */
+  snapshot: RunSnapshotMsg;
   visit: number;
   state: string;
   entered_at: number | null;

@@ -301,70 +301,66 @@ multi-tenant behavior. Those concerns stay with the embedding host.
 
 ## Machine runs (phase A contract)
 
-A catalog flow can supply `machineSpec: MachineSpec`, the parsed discovery
-`machine_spec_json` document (`avalanche.machine/v1`). `WorkflowWorkspace` then
-shows one normal timeline row per machine instance, with its key label when the
-host supplies one and its run status. The run page shows the current state.
-Selecting a row keeps the instance's `run_id` as the page identity; visits never
-become separate runs. Ordinary workflow rendering and controls are unchanged.
+A machine instance is a run. A catalog flow can supply `machineSpec: MachineSpec`,
+the parsed discovery `machine_spec_json` document (`avalanche.machine/v1`).
+`WorkflowWorkspace` then shows one normal timeline row per instance (with the
+optional `RunSummaryMsg.label`, e.g. the input-derived key) and one normal run
+page. Visits are sections of that page, never separate runs. Ordinary workflows
+are unchanged.
 
-The graph uses the shared `GraphCanvas` and React Flow with cubic arcs, including
-self-loops and cycles, and highlights the current state. Known card dimensions
-and a pre-paint container measurement avoid an initial fit jump. Below it,
-expandable visit sections show clocks, catalog revision when available,
-transition, disposition, the shared step graph and inspector, and the original
-step kind, generation and attempts. Event facts are fetched only for open
-sections, in bounded windows; an empty page with a non-null cursor still offers
-the next window. Pending inbox entries and admission receipts remain separate
-from later consumed/ignored/dropped facts. Timer deadlines are Unix seconds;
-the countdown never fires a timer in the browser.
+**One canvas.** The machine graph is a mode of the shared `GraphCanvas`
+(`machine` prop): states are the same node cards, on the same grid, with the same
+controls, zoom, orientation toggle and input dot as a flow. Only what differs for
+a state machine changes: a cycle-safe layout (breadth-first ranks from the initial
+state), cubic arcs for back edges and self-loops, labelled with their event,
+dotted timer arcs with a live countdown, and a ring on the current state.
+Clicking a state opens its latest visit.
+
+**Normal run path.** Machines start with the existing `startRun(workflowSelector,
+input?, inputFiles?)` from the normal run input inspector (opened from the input
+dot) and Run control, including staged files and workspace values. Hosts supply
+`FlowInfoMsg.inputDeclarationJson` from the machine input schema, as for flows.
+The host derives the key from input and returns the existing run ID for a repeated
+key. Cancelling a waiting instance is the normal `cancelRun`; the page keeps every
+normal run control, the run log pane and live status.
+
+**Visit sections** below the graph show state, disposition, clocks, catalog
+revision (when reported) and transition. Expanded, a visit shows its own step
+graph, the shared inspector (outputs, generation and attempts, trace), its log
+pane, `.map` items, and its waits, decision cards and terminal decision audits
+through `RunWaitPanel`, plus paged event facts. The host supplies
+`MachineVisit.snapshot`, a run snapshot scoped to that visit (qualified node IDs,
+retained I/O, trace and log tokens); the UI never synthesizes step detail.
 
 All machine methods on `OperatorApi` are optional:
 
 - Reads: `getMachineInstance(runId, signal?)`, `getMachineHistory(runId, page?, signal?)`,
   `getMachineVisit(runId, visit, signal?)`, and
   `getMachineVisitEvents(runId, visit, page?, signal?)`.
-- Writes: `sendMachineEvent(runId, event, payload, idempotencyKey)`,
-  `retryMachineVisit(runId)`, `closeMachine(runId)`, and
-  `fireNextMachineTimer(runId)`.
+- Machine-only writes: `sendMachineEvent(runId, event, payload, idempotencyKey)`,
+  `retryMachineVisit(runId)` (interrupted visits) and `fireNextMachineTimer(runId)`
+  (development hosts only).
+- `listRunWaits(runId, visit?)` takes an optional visit, filtered by the host.
 
-The exported types in `src/machine.ts` follow the public machine JSON field
-names (`run_id`, `next_cursor`, `entered_at`, `g`, etc.). Read adapters resolve a
-run ID to their host's machine key and scope. A deployment-based host must supply
-`MachineInstance.machine_spec` with the instance's pinned definition, rather than
-silently displaying its latest deployment. A local host may omit it to use the
-current catalog definition. `catalog_revision` on visits and `pending_events` /
-`receipts` on instances are optional local-operator extensions; missing data is
-not presented as an empty inbox or fabricated revision.
+There is no machine start, list or close method. The exported types in
+`src/machine.ts` follow the public machine JSON field names (`run_id`,
+`next_cursor`, `entered_at`, etc.). A deployment-based host supplies
+`MachineInstance.machine_spec` with the pinned definition; a local host may omit
+it to use the catalog definition. `catalog_revision`, `pending_events` and
+`receipts` are optional local-operator extensions; missing data is shown as not
+reported, never as an empty inbox.
 
-Machine instances arrive through the normal run baseline and update stream, with
-an optional `RunSummaryMsg.label` for the input-derived key. There is no separate
-machine listing API or timeline. The instance, current visit and first history
-window refresh once per second, without overlapping requests. Older history/fact windows stay
-stable until navigation or an explicit retry. Requests are aborted and late
-responses discarded on scope changes. A missing read method shows an explicit
-unavailable state. Missing write methods hide the corresponding controls, so
-read-only hosts issue no mutation. `runActionsEnabled={false}` or
-`bottomRightPanel={null}` also suppresses machine writes.
+Send forms use each transition's payload JSON schema: typed primitive and enum
+controls, JSON editors for compound values. Payloads are JSON only; file or
+workspace payloads are not supported yet. The host validates the full schema. A
+failed send keeps its idempotency key when retried with the same event and
+payload. Missing write methods hide their controls, so read-only hosts issue no
+mutation; `runActionsEnabled={false}` or `bottomRightPanel={null}` also hide them.
 
-Machines start with the existing `startRun(workflowSelector, input?, inputFiles?)`
-and the existing run input inspector and Run control, including file staging and
-workspace values. Hosts supply the normal `FlowInfoMsg.inputDeclarationJson` from
-the machine input schema, just as they do for flows. The host derives the key from input and returns the existing
-run ID for a repeated key. There is no machine start form, start request/response
-model or key-format field. Start permission uses `runActionsEnabled`, just like
-flows. Event forms use each
-transition's payload JSON schema: typed primitive and enum controls, JSON editors
-for compound values. The host remains the complete JSON-schema validator.
-A failed send retains its idempotency key when retrying the same event and payload.
-Close requires confirmation; fire-next-timer appears only for a host exposing
-that optional development capability and an instance with a deadline.
-
-This phase intentionally does **not** add machine support to
-`GrpcWebOperatorApi`, protobuf, REST, or the Python operator. Phase B connects
-these optional methods to the real operator after the operator transport change
-(PR 2). It must rerun the browser scenario against that real host before claiming
-local-operator end-to-end support. The console adapter port follows separately.
+This phase does **not** add machine support to `GrpcWebOperatorApi`, protobuf,
+REST or the Python operator. Phase B connects these methods to the real operator
+after the operator transport change (PR 2) and reruns the browser scenario against
+it before claiming local end-to-end support. The console port follows separately.
 
 ### Browser proof
 
@@ -379,13 +375,15 @@ uv run --no-project --python 3.13 --with playwright==1.55.0 python \
 
 The script owns and stops a loopback Vite server. It renders the real
 `WorkflowWorkspace` against the typed fake `OperatorApi` in
-`src/test/machineHarness.tsx`, which is excluded from the published package.
-Both browsers exercise normal run-form start with typed input, staged file and
-workspace values, normal timeline/key labels and same-key identity, cyclic/curved graph rendering,
-first-frame stability, interrupted-visit retry, archived visit expansion,
-empty event-page continuations, ignored/dropped facts, typed send payloads,
-a committed-send/lost-response retry, receipt display, natural timer countdown
-and firing, manual timer firing, close, transient read recovery, ordinary-flow
-rendering, read-only hosts and a missing-run deep link. Screenshots, host calls,
-server output and a JSON result are written under the supplied evidence path.
-No backend persistence, protocol, or restart claim is made by this fake-host proof.
+`src/test/machineHarness.tsx`, which is excluded from the published package. Both
+browsers check that a machine and a flow share the canvas (same cards, grid,
+controls and input dot), then exercise: run-form start with typed input, staged
+file and workspace values; one timeline row per instance and same-key identity;
+curved, cyclic and timer arcs and a stable first frame; interrupted-visit retry;
+visit sections with real step detail (inspector outputs and attempts, scoped logs,
+`.map` items, wait and decision cards, terminal audits); paged event facts; typed
+send with a lost-response retry and receipts; host timer countdown on the page and
+the arc; dev timer firing; normal run cancel; transient read recovery; ordinary
+flows; read-only hosts and a missing-run deep link. It writes screenshots
+(including a flow-versus-machine pair), host calls and a JSON result to the
+evidence path. No backend persistence, protocol or restart claim is made.

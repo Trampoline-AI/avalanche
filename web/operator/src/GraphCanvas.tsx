@@ -10,7 +10,15 @@ import {
   useRef,
   useState,
 } from "react";
-import { ArrowDown, ArrowRight, Bot, FlaskConical, Info, ListFilter } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowRight,
+  Bot,
+  Clock,
+  FlaskConical,
+  Info,
+  ListFilter,
+} from "lucide-react";
 
 import {
   Background,
@@ -18,7 +26,9 @@ import {
   BaseEdge,
   Controls,
   ControlButton,
+  EdgeLabelRenderer,
   Handle,
+  MarkerType,
   Panel,
   Position,
   ReactFlow,
@@ -36,8 +46,14 @@ import {
   type Viewport,
 } from "@xyflow/react";
 
-import { MachineGraphCanvas } from "./MachineGraphCanvas";
-import type { MachineSpec } from "./machine";
+import {
+  formatDelay,
+  layoutMachine,
+  machineArcHandles,
+  machineArcPath,
+  type MachineArcData,
+  type MachineGraphView,
+} from "./machineGraph";
 import type { FlowInfoMsg, NodeSnapshotMsg, TriggerKind, WorkflowTopologyMsg } from "./model";
 import {
   AgentDeclaration as AgentDeclarationSchema,
@@ -127,6 +143,8 @@ interface CardData extends Record<string, unknown> {
   mapItems?: { id: string; status?: string; onOpen?: () => void }[];
   mapSummary?: string;
   placeholderHint?: string;
+  /** A state machine's current state (machine mode only). */
+  current?: boolean;
   descriptionsExpanded: boolean;
   onOpen: () => void;
   inspectionDisabled?: boolean;
@@ -337,8 +355,9 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
   const stateColor = statusToneColor[statusTone(state)];
   return (
     <article
-      className={`node-card ${showDescription ? "node-card--description" : ""} ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded border text-left motion-reduce:transition-none ${designationClass}`}
+      className={`node-card ${data.current ? "node-card--current" : ""} ${showDescription ? "node-card--description" : ""} ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded border text-left motion-reduce:transition-none ${designationClass}`}
       data-node-state={state}
+      data-current={data.current || undefined}
       style={
         {
           "--node-state-color": stateColor,
@@ -683,13 +702,81 @@ const RoutedEdge = memo(
 );
 RoutedEdge.displayName = "RoutedEdge";
 
+function TimerRemaining({ due }: { due: number }) {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now() / 1000), 250);
+    return () => window.clearInterval(timer);
+  }, []);
+  const remaining = Math.max(0, Math.ceil(due - now));
+  return (
+    <span className="machine-arc-countdown text-amber" data-arc-remaining={remaining}>
+      {" "}
+      · {remaining > 0 ? `${formatDelay(remaining)} left` : "due"}
+    </span>
+  );
+}
+
+// Machine mode: arcs may cycle back or loop on a state, so they are cubic curves
+// between card handles rather than routed DAG paths.
+const MachineArc = memo(
+  ({
+    id,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    data,
+    markerEnd,
+    style,
+  }: EdgeProps<Edge<MachineArcData, "machine">>) => {
+    if (data === undefined) throw new Error("Machine arc is missing its data");
+    const { path, label } = machineArcPath(
+      data,
+      { x: sourceX, y: sourceY },
+      { x: targetX, y: targetY },
+    );
+    return (
+      <>
+        <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} />
+        {data.label && (
+          <EdgeLabelRenderer>
+            <div
+              className={`machine-arc-label nodrag nopan pointer-events-none absolute inline-flex items-center gap-1 rounded border bg-panel px-1.5 py-0.5 font-mono text-[10px] whitespace-nowrap ${data.live ? "border-line-strong text-ink" : "border-line text-secondary"}`}
+              style={{
+                transform: `translate(-50%, -50%) translate(${label.x}px, ${label.y}px)`,
+              }}
+              data-arc-kind={data.kind}
+              data-arc-live={data.live || undefined}
+            >
+              {data.timer && <Clock aria-hidden="true" className="size-3" />}
+              {data.label}
+              {data.timer?.due !== undefined && <TimerRemaining due={data.timer.due} />}
+            </div>
+          </EdgeLabelRenderer>
+        )}
+      </>
+    );
+  },
+);
+MachineArc.displayName = "MachineArc";
+
 const NODE_TYPES = { workflow: WorkflowNodeCard, workflowInput: WorkflowInputDot };
 const NODE_ORIGIN: [number, number] = [0, 0.5];
-const EDGE_TYPES = { routed: RoutedEdge };
+const EDGE_TYPES = { routed: RoutedEdge, machine: MachineArc };
 const FIT_VIEW_OPTIONS = { padding: 0.24 };
 // Leave room for the floating timeline above a top-to-bottom graph.
 const VERTICAL_FIT_VIEW_OPTIONS: FitViewOptions = {
   padding: { top: "160px", bottom: "90px", left: "40px", right: "80px" },
+};
+
+// Fitting covers cards only; leave room for the arcs that curve outside them
+// (self-loops above or left, back arcs below or right).
+const MACHINE_FIT_VIEW_OPTIONS: FitViewOptions = {
+  padding: { top: "120px", bottom: "150px", left: "60px", right: "80px" },
+};
+const MACHINE_VERTICAL_FIT_VIEW_OPTIONS: FitViewOptions = {
+  padding: { top: "160px", bottom: "70px", left: "160px", right: "180px" },
 };
 
 interface FirstFrame {
@@ -796,7 +883,8 @@ type TopologyView = Pick<
 >;
 
 interface GraphCanvasProps {
-  machine?: { spec: MachineSpec; state?: string | null };
+  /** Draws a state machine with the same cards, canvas and controls as a flow. */
+  machine?: MachineGraphView;
   workflow?: FlowInfoMsg;
   runTopology?: WorkflowTopologyMsg;
   runNodes?: NodeSnapshotMsg[];
@@ -812,6 +900,7 @@ interface GraphCanvasProps {
 }
 
 function GraphCanvasView({
+  machine,
   workflow,
   runTopology,
   runNodes = [],
@@ -825,8 +914,13 @@ function GraphCanvasView({
   inspectionDisabled = false,
 }: GraphCanvasProps) {
   const { containerRef, orientation, toggleOrientation, canvasSize } = useGraphOrientation();
-  const fitViewOptions =
-    orientation === "vertical" ? VERTICAL_FIT_VIEW_OPTIONS : FIT_VIEW_OPTIONS;
+  const fitViewOptions = machine
+    ? orientation === "vertical"
+      ? MACHINE_VERTICAL_FIT_VIEW_OPTIONS
+      : MACHINE_FIT_VIEW_OPTIONS
+    : orientation === "vertical"
+      ? VERTICAL_FIT_VIEW_OPTIONS
+      : FIT_VIEW_OPTIONS;
   const [descriptionsExpanded, setDescriptionsExpanded] = useState(false);
   const isCurrentWorkflow = workflow !== undefined && runTopology === undefined;
   const topology = useMemo<TopologyView | undefined>(() => {
@@ -890,6 +984,18 @@ function GraphCanvasView({
         : groupedTopology?.graph,
     [hasInputNode, groupedTopology],
   );
+  const [machineSelected, setMachineSelected] = useState<string>();
+  const machineLayout = useMemo(
+    () => (machine ? layoutMachine(machine, orientation) : undefined),
+    [machine, orientation],
+  );
+  const graphNodeIds = useMemo(
+    () =>
+      machine
+        ? [...(hasInputNode ? [INPUT_NODE_ID] : []), ...Object.keys(machine.spec.states)]
+        : topologyNodeIds,
+    [hasInputNode, machine, topologyNodeIds],
+  );
   const [nodeMeasurements, setNodeMeasurements] = useState<
     ReadonlyMap<string, { width: number; height: number }>
   >(() => new Map());
@@ -910,14 +1016,14 @@ function GraphCanvasView({
           next.set(change.id, change.dimensions);
         }
         if (!next) return current;
-        const nodeIds = new Set(topologyNodeIds);
+        const nodeIds = new Set(graphNodeIds);
         for (const nodeId of next.keys()) {
           if (!nodeIds.has(nodeId)) next.delete(nodeId);
         }
         return next;
       });
     },
-    [topologyNodeIds],
+    [graphNodeIds],
   );
   const layout = useMemo(
     () =>
@@ -1183,9 +1289,121 @@ function GraphCanvasView({
     workflow,
   ]);
 
+  // Machine mode reuses the same cards, input dot and edge highlighting; only the
+  // layout (cycle-safe ranks) and the curved arcs differ from a flow.
+  const machineGraph = useMemo(() => {
+    if (!machine || !machineLayout) return undefined;
+    const { spec } = machine;
+    const { positions, links } = machineLayout;
+    const horizontal = orientation === "horizontal";
+    const states: Node<CardData>[] = Object.entries(spec.states).map(([name, declaration]) => {
+      const current = name === machine.state;
+      return {
+        id: name,
+        type: "workflow",
+        selected: name === machineSelected,
+        position: positions[name],
+        measured: nodeMeasurements.get(name),
+        data: {
+          label: name,
+          nodeType: declaration.final
+            ? "final state"
+            : name === spec.initial
+              ? "initial state"
+              : "state",
+          isAgent: false,
+          isClaude: false,
+          isClassifier: false,
+          current,
+          status: current ? machine.status : undefined,
+          instructionLine: [
+            `work ${declaration.work}`,
+            declaration.defer.length > 0 ? `defers ${declaration.defer.join(", ")}` : "",
+          ]
+            .filter(Boolean)
+            .join(" · "),
+          descriptionsExpanded,
+          onOpen: () => {
+            setMachineSelected(name);
+            machine.onOpenState?.(name);
+          },
+          inspectionDisabled,
+        },
+      };
+    });
+    const arcs: Edge<MachineArcData, "machine">[] = links.map((link) => ({
+      ...link,
+      type: "machine",
+      ...machineArcHandles(link.data.kind, orientation),
+    }));
+    const initial = positions[spec.initial];
+    const nodes: Node[] = states;
+    if (inputCard && initial) {
+      nodes.unshift({
+        id: INPUT_NODE_ID,
+        selected: selectedNodeId === INPUT_NODE_ID,
+        type: "workflowInput",
+        position: horizontal
+          ? { x: initial.x - 150, y: initial.y }
+          : { x: initial.x + DEFAULT_NODE_SIZE.width / 2 - 14, y: initial.y - 170 },
+        measured: nodeMeasurements.get(INPUT_NODE_ID),
+        data: inputCard,
+      } satisfies Node<InputDotData>);
+      arcs.unshift({
+        id: "machine-input",
+        source: INPUT_NODE_ID,
+        target: spec.initial,
+        type: "machine",
+        ...machineArcHandles("forward", orientation),
+        data: { kind: "forward", orientation, lane: 0, label: "", live: false },
+      });
+    }
+    const selected = selectedNodeId === INPUT_NODE_ID ? INPUT_NODE_ID : machineSelected;
+    const edges = highlightConnectedEdges(arcs, selected).map((edge) => {
+      const data = edge.data as MachineArcData;
+      if (edge.source === INPUT_NODE_ID) return edge;
+      const muted = edge.className?.includes("dag-edge--muted");
+      const connected = edge.className?.includes("dag-edge--connected");
+      const stroke = connected
+        ? "var(--color-acid)"
+        : data.live
+          ? "var(--color-ink)"
+          : "var(--color-edge)";
+      return {
+        ...edge,
+        className: `${edge.className ?? ""} machine-arc machine-arc--${data.kind}${data.timer ? " machine-arc--timer" : ""}${data.live ? " machine-arc--live" : ""}`,
+        ariaLabel: `${edge.source} to ${edge.target}: ${data.label}${connected ? " (connected to selected node)" : ""}`,
+        style: {
+          ...edge.style,
+          stroke,
+          strokeWidth: connected ? 2.8 : data.live ? 1.8 : 1.4,
+          // Timer arcs are dotted; muting still dashes the rest.
+          strokeDasharray: muted ? "6 4" : data.timer ? "1 5" : undefined,
+          strokeLinecap: data.timer ? ("round" as const) : undefined,
+        },
+        markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
+        // Stay under the arc labels, which share one layer.
+        zIndex: 0,
+      };
+    });
+    return { nodes, edges };
+  }, [
+    descriptionsExpanded,
+    inputCard,
+    inspectionDisabled,
+    machine,
+    machineLayout,
+    machineSelected,
+    nodeMeasurements,
+    orientation,
+    selectedNodeId,
+  ]);
+  const shownNodes = machineGraph ? machineGraph.nodes : nodes;
+  const shownEdges = machineGraph ? machineGraph.edges : edges;
+
   const firstFrame = useMemo(
-    () => firstFrameFor(nodes, canvasSize, fitViewOptions),
-    [nodes, canvasSize, fitViewOptions],
+    () => firstFrameFor(shownNodes, canvasSize, fitViewOptions),
+    [shownNodes, canvasSize, fitViewOptions],
   );
 
   return (
@@ -1196,10 +1414,10 @@ function GraphCanvasView({
           <ReactFlow
             // A different node set needs fresh handle measurements. A run switch can
             // replace a node with an equally sized one without a resize notification.
-            key={JSON.stringify([orientation, topologyNodeIds])}
-            nodes={nodes}
+            key={JSON.stringify([orientation, graphNodeIds])}
+            nodes={shownNodes}
             onNodesChange={onNodesChange}
-            edges={edges}
+            edges={shownEdges}
             nodeTypes={NODE_TYPES}
             nodeOrigin={NODE_ORIGIN}
             edgeTypes={EDGE_TYPES}
@@ -1211,11 +1429,14 @@ function GraphCanvasView({
             nodesDraggable={false}
             nodesConnectable={false}
             elementsSelectable={!inspectionDisabled}
-            onPaneClick={onClearNode}
+            onPaneClick={() => {
+              setMachineSelected(undefined);
+              onClearNode?.();
+            }}
             proOptions={{ hideAttribution: true }}
           >
             <InputEdgeMarkers />
-            <MeasureGraphHandles nodes={nodes} />
+            <MeasureGraphHandles nodes={shownNodes} />
             <FitGraphOnWidthChange options={fitViewOptions} />
             {bottomRightPanel && (
               <Panel
@@ -1296,22 +1517,10 @@ function sameRunNodeState(
   });
 }
 
-export function GraphCanvas(props: GraphCanvasProps) {
-  return props.machine ? (
-    <div className="relative h-full min-h-0">
-      <MachineGraphCanvas spec={props.machine.spec} state={props.machine.state} />
-      {props.bottomRightPanel && (
-        <div className="absolute bottom-4 right-4 z-10">{props.bottomRightPanel}</div>
-      )}
-    </div>
-  ) : (
-    <FlowGraphCanvas {...props} />
-  );
-}
-
-const FlowGraphCanvas = memo(
+export const GraphCanvas = memo(
   GraphCanvasView,
   (left, right) =>
+    left.machine === right.machine &&
     left.workflow === right.workflow &&
     left.runTopology === right.runTopology &&
     left.expansions === right.expansions &&
