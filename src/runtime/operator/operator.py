@@ -209,7 +209,7 @@ MAX_RUN_DETAIL_BYTES = 128 * 1024 * 1024
 MAX_AGENT_DETAIL_DEPTH = 64
 _MISSING_WORKFLOW_ID = "\0"
 _UNFINISHED_RUN_STATUSES = frozenset(
-    {RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING}
+    {RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING}
 )
 # Why a run, and its unfinished steps, failed when a new operator started.
 OPERATOR_RESTARTED_REASON = "Operator restarted before the run finished; it was not resumed"
@@ -405,8 +405,7 @@ def _summarize_reload_diagnostics(
     diagnostics: tuple[WorkflowDiscoveryDiagnostic, ...],
 ) -> str:
     summaries = [
-        f"{diagnostic.kind} {diagnostic.path}: "
-        f"{diagnostic.message[:_RELOAD_LOG_MESSAGE_LIMIT]}"
+        f"{diagnostic.kind} {diagnostic.path}: {diagnostic.message[:_RELOAD_LOG_MESSAGE_LIMIT]}"
         for diagnostic in diagnostics[:_RELOAD_LOG_DIAGNOSTIC_LIMIT]
     ]
     omitted = len(diagnostics) - len(summaries)
@@ -1713,7 +1712,12 @@ class Operator:
             run = self._runs.get(run_id)
             if run is not None:
                 status = run.status
-                if status in {RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING}:
+                if status in {
+                    RunStatus.REQUESTING,
+                    RunStatus.PENDING,
+                    RunStatus.RUNNING,
+                    RunStatus.WAITING,
+                }:
                     raise RunResultNotReadyError(f"Run {run_id} is not terminal")
                 if status != RunStatus.SUCCESS:
                     raise RunResultUnavailableError(
@@ -3195,7 +3199,7 @@ class Operator:
             return None
         if node_id not in run.nodes:
             raise _CoordinatorProtocolError(
-                "classifier evidence references unpublished node " f"{_bounded_ascii(node_id)}"
+                f"classifier evidence references unpublished node {_bounded_ascii(node_id)}"
             )
         declaration_json = next(
             (
@@ -3581,7 +3585,7 @@ class Operator:
                 snapshot = self._run_snapshot_locked(
                     run,
                     summary=self._run_summary_locked(run),
-                    as_of_sequence=publication_sequence
+                    as_of_sequence=publication_sequence,
                 )
                 changes.append(
                     RunNodesExpanded(

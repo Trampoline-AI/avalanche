@@ -481,6 +481,7 @@ class UIStore:
                 RunStatus.REQUESTING: "REQUESTING",
                 RunStatus.PENDING: "IDLE",
                 RunStatus.RUNNING: "RUNNING",
+                RunStatus.WAITING: "WAITING",
                 RunStatus.FAILED: "FAILED",
                 RunStatus.SUCCESS: "DONE",
                 RunStatus.CANCELLED: "IDLE",

@@ -294,6 +294,89 @@ MIGRATIONS: tuple[Migration, ...] = (
     ),
 )
 
+# Rebuild the parent table without renaming it first: child foreign keys must keep
+# referring to `runs`. migrate() disables FK enforcement only for this atomic
+# rebuild, then checks every relationship before committing.
+MIGRATIONS += (
+    Migration(
+        version=8,
+        name="machine runs and visit journal",
+        statements=(
+            MIGRATIONS[3]
+            .statements[0]
+            .replace("CREATE TABLE runs (", "CREATE TABLE runs_replacement (")
+            .replace("'cancelled')", "'cancelled', 'waiting')")
+            .replace(
+                "process_booted TEXT,",
+                "process_booted TEXT, expansions_json TEXT NOT NULL DEFAULT '{}',",
+            ),
+            "INSERT INTO runs_replacement SELECT * FROM runs",
+            "DROP TABLE runs",
+            "ALTER TABLE runs_replacement RENAME TO runs",
+            "CREATE INDEX runs_by_created_sequence ON runs (created_sequence)",
+            """
+            CREATE TABLE machine_instances (
+                run_id TEXT PRIMARY KEY REFERENCES runs (run_id) ON DELETE CASCADE,
+                machine TEXT NOT NULL,
+                key_json TEXT NOT NULL,
+                state TEXT NOT NULL,
+                visit INTEGER NOT NULL CHECK (visit > 0),
+                status TEXT NOT NULL CHECK (status IN (
+                    'active', 'waiting', 'interrupted', 'needs_attention', 'final', 'closed'
+                )),
+                record_json TEXT NOT NULL,
+                UNIQUE (machine, key_json)
+            ) STRICT
+            """,
+            """
+            CREATE TABLE machine_visits (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                visit INTEGER NOT NULL CHECK (visit > 0),
+                state TEXT NOT NULL,
+                catalog_revision TEXT NOT NULL,
+                entered_at REAL NOT NULL,
+                left_at REAL,
+                record_json TEXT NOT NULL,
+                PRIMARY KEY (run_id, visit)
+            ) STRICT
+            """,
+            """
+            CREATE TABLE machine_timers (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                visit INTEGER NOT NULL,
+                timer_index INTEGER NOT NULL CHECK (timer_index >= 0),
+                due REAL NOT NULL,
+                target TEXT NOT NULL,
+                fired_at REAL,
+                reason TEXT CHECK (reason IN ('due', 'catchup', 'manual', 'cancelled')),
+                PRIMARY KEY (run_id, visit, timer_index)
+            ) STRICT
+            """,
+            "CREATE INDEX machine_timers_due ON machine_timers (due) WHERE reason IS NULL",
+            """
+            CREATE TABLE machine_facts (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                tseq INTEGER NOT NULL CHECK (tseq > 0),
+                visit INTEGER NOT NULL,
+                at REAL NOT NULL,
+                record_json TEXT NOT NULL,
+                PRIMARY KEY (run_id, tseq)
+            ) STRICT
+            """,
+            """
+            CREATE TABLE wait_inbox (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                receipt_id TEXT NOT NULL,
+                event TEXT NOT NULL,
+                payload_json TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
+                PRIMARY KEY (run_id, receipt_id)
+            ) STRICT
+            """,
+        ),
+    ),
+)
+
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
 
 _CREATE_SCHEMA_MIGRATIONS = """
@@ -353,11 +436,21 @@ def migrate(
                 "different --state-db."
             )
     for migration in migrations[len(applied) :]:
-        with sqlite_transaction(connection):
-            for statement in migration.statements:
-                connection.execute(statement)
-            connection.execute(
-                "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
-                (migration.version, migration.name, time.time()),
-            )
+        rebuild_runs = migration.version == 8
+        if rebuild_runs:
+            connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            with sqlite_transaction(connection):
+                for statement in migration.statements:
+                    connection.execute(statement)
+                if rebuild_runs and connection.execute("PRAGMA foreign_key_check").fetchone():
+                    raise StateSchemaMismatchError("Run table rebuild broke a foreign key")
+                connection.execute(
+                    "INSERT INTO schema_migrations (version, name, applied_at) "
+                    "VALUES (?, ?, ?)",
+                    (migration.version, migration.name, time.time()),
+                )
+        finally:
+            if rebuild_runs:
+                connection.execute("PRAGMA foreign_keys = ON")
     return supported

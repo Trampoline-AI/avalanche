@@ -40,7 +40,9 @@ from .schedule_input_files import SCHEDULE_INPUT_FOLDER_NAME
 from .schedules import SchedulesTable
 from .store import MEMORY, OperatorStateStore, StateDbPath
 
-UNFINISHED_STATUSES = frozenset({RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING})
+UNFINISHED_STATUSES = frozenset(
+    {RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING}
+)
 """Runs an operator stopped before they ended; the next operator start fails them."""
 
 VACUUM_FREE_FRACTION = 0.25

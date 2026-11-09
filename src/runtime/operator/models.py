@@ -54,6 +54,7 @@ class NodeStatus(Enum):
 
 
 class RunStatus(Enum):
+    WAITING = "waiting"
     REQUESTING = "requesting"
     PENDING = "pending"
     RUNNING = "running"
