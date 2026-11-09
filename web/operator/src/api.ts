@@ -4,8 +4,10 @@ import {
   AgentEventKindV2,
   AgentTraceStatusV2,
   PageOrderV2,
+  RunSnapshotV2 as RunSnapshotV2Message,
   StartRunTriggerV2,
 } from "./generated/operator";
+import { runKeyLabel } from "./runKey";
 import { DescriptorPageOrder, TRIGGER_KINDS, type TriggerKind } from "./model";
 import { mapEvaluationRecord, type EvaluationRecord } from "./evaluations";
 import { parseTraceHeaderNative } from "./agentTrace/common";
@@ -178,6 +180,7 @@ export interface ClassifierEventDescriptorPage {
 
 import type {
   JsonValue,
+  MachineSpec,
   MachineEventReceipt,
   MachineInstance,
   MachinePage,
@@ -727,7 +730,12 @@ export class GrpcWebOperatorApi implements OperatorApi {
     };
   }
 
-  async listRunWaits(runId: string): Promise<WaitCard[]> {
+  /**
+   * A machine visit's waits are those of its visit-qualified steps (`v<visit>.<step>`);
+   * the host's list holds every visit of the run, so cards of other visits are dropped
+   * here and never reach the visit section.
+   */
+  async listRunWaits(runId: string, visit?: number): Promise<WaitCard[]> {
     const wires: string[] = [];
     let offset = 0;
     for (;;) {
@@ -746,7 +754,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
       if (response.nextOffset <= offset) throw new Error("Invalid wait page offset");
       offset = response.nextOffset;
     }
-    return wires.map((wire) => {
+    const cards = wires.map((wire) => {
       const card: unknown = JSON.parse(wire);
       if (
         !isUnknownRecord(card) ||
@@ -769,8 +777,12 @@ export class GrpcWebOperatorApi implements OperatorApi {
         prompt: card.prompt,
         schema,
         show: parseJsonValue(card.show, "reviewed artifact"),
-      };
+        ...(card.audit != null ? { audit: mapWaitAudit(card.audit) } : {}),
+      } satisfies WaitCard;
     });
+    return visit === undefined
+      ? cards
+      : cards.filter((card) => card.nodeId.startsWith(`v${visit}.`));
   }
 
   async submitDecision(
@@ -793,6 +805,117 @@ export class GrpcWebOperatorApi implements OperatorApi {
 
   async cancelRun(runId: string): Promise<void> {
     await this.client.cancelRun({ runId }).response;
+  }
+
+  // Machine sections and controls: one ControlMachine RPC carrying typed JSON.
+  private async controlMachine(
+    request: Record<string, JsonValue>,
+    signal?: AbortSignal,
+  ): Promise<unknown> {
+    const response = await this.client.controlMachine(
+      { requestJson: JSON.stringify(request) },
+      signal ? { abort: signal } : undefined,
+    ).response;
+    return response.resultJson ? (JSON.parse(response.resultJson) as unknown) : null;
+  }
+
+  async getMachineInstance(runId: string, signal?: AbortSignal): Promise<MachineInstance> {
+    const head = await this.controlMachine({ op: "get", run_id: runId }, signal);
+    if (!isUnknownRecord(head) || head.run_id !== runId || typeof head.state !== "string")
+      throw new Error("Invalid machine instance");
+    return head as unknown as MachineInstance;
+  }
+
+  async getMachineHistory(
+    runId: string,
+    page: MachinePageRequest = {},
+    signal?: AbortSignal,
+  ): Promise<MachinePage<MachineTransition>> {
+    return machinePage<MachineTransition>(
+      await this.controlMachine(
+        { op: "history", run_id: runId, cursor: page.cursor ?? null, limit: page.limit ?? 20 },
+        signal,
+      ),
+    );
+  }
+
+  async getMachineVisit(
+    runId: string,
+    visit: number,
+    signal?: AbortSignal,
+  ): Promise<MachineVisit> {
+    const result = await this.controlMachine({ op: "visit", run_id: runId, visit }, signal);
+    if (!isUnknownRecord(result)) throw new Error("Invalid machine visit");
+    if (result.read_state === "expired") {
+      return {
+        visit,
+        state: "",
+        entered_at: null,
+        left_at: null,
+        disposition: "expired",
+        transition: null,
+        nodes: {},
+      };
+    }
+    if (result.visit !== visit || typeof result.state !== "string")
+      throw new Error("Invalid machine visit");
+    const { snapshot, ...rest } = result;
+    return {
+      ...(rest as unknown as MachineVisit),
+      // The host's own scoped snapshot of this visit, in the RunSnapshotV2 wire form.
+      snapshot:
+        snapshot == null
+          ? undefined
+          : this.mapRunSnapshot(
+              RunSnapshotV2Message.fromJson(snapshot as never, { ignoreUnknownFields: true }),
+            ),
+    };
+  }
+
+  async getMachineVisitEvents(
+    runId: string,
+    visit: number,
+    page: MachinePageRequest = {},
+    signal?: AbortSignal,
+  ): Promise<MachinePage<MachineVisitEvent>> {
+    return machinePage<MachineVisitEvent>(
+      await this.controlMachine(
+        {
+          op: "events",
+          run_id: runId,
+          visit,
+          cursor: page.cursor ?? null,
+          limit: page.limit ?? 20,
+        },
+        signal,
+      ),
+    );
+  }
+
+  async sendMachineEvent(
+    runId: string,
+    event: string,
+    payload: JsonValue,
+    idempotencyKey: string,
+    inputFiles: InputFileAttachment[] = [],
+  ): Promise<MachineEventReceipt> {
+    // ControlMachine carries no file attachments; refuse rather than drop them.
+    if (inputFiles.length > 0)
+      throw new Error("This operator cannot attach files to machine events yet");
+    const receipt = await this.controlMachine({
+      op: "send",
+      run_id: runId,
+      event,
+      payload,
+      idempotency_key: idempotencyKey,
+    });
+    if (!isUnknownRecord(receipt) || typeof receipt.receipt_id !== "string")
+      throw new Error("Invalid machine event receipt");
+    return receipt as unknown as MachineEventReceipt;
+  }
+
+  async retryMachineVisit(runId: string): Promise<void> {
+    await this.controlMachine({ op: "retry", run_id: runId });
   }
 
   private rememberScope(scopeRef: ScopeReferenceV2 | undefined): string {
@@ -1447,6 +1570,41 @@ function mapRunSummary(summary: RunSummaryV2): RunSummaryMsg {
     createdSequence: summary.createdSequence,
     revision: summary.revision,
     triggeredAt: summary.triggeredAt,
+    ...(summary.keyJson ? { label: runKeyLabel(parseRunKey(summary.keyJson)) } : {}),
+    ...(summary.readState === "expired" ? { expired: true } : {}),
+  };
+}
+
+function parseRunKey(keyJson: string): JsonValue[] {
+  const key: unknown = JSON.parse(keyJson);
+  if (!Array.isArray(key)) throw new Error("Run key must be a JSON array");
+  return key.map((part) => parseJsonValue(part, "run key part"));
+}
+
+function machinePage<T>(result: unknown): MachinePage<T> {
+  if (
+    !isUnknownRecord(result) ||
+    !Array.isArray(result.items) ||
+    (result.next_cursor !== null &&
+      result.next_cursor !== undefined &&
+      typeof result.next_cursor !== "string")
+  )
+    throw new Error("Invalid machine page");
+  return { items: result.items as T[], next_cursor: result.next_cursor ?? null };
+}
+
+/** The host's retained decision receipt. It records the payload digest, not the payload. */
+function mapWaitAudit(audit: unknown): NonNullable<WaitCard["audit"]> {
+  if (
+    !isUnknownRecord(audit) ||
+    typeof audit.accepted_at !== "string" ||
+    typeof audit.payload_digest !== "string"
+  )
+    throw new Error("Invalid wait audit");
+  return {
+    outcome: { payload_digest: audit.payload_digest },
+    reason: typeof audit.reason === "string" ? audit.reason : "",
+    at: Date.parse(audit.accepted_at) / 1000,
   };
 }
 
@@ -1503,6 +1661,9 @@ function mapFlowInfo(flow: FlowInfoV2): FlowInfoMsg {
     webhookPath: flow.webhookPath,
     webhookUrl: flow.webhookUrl,
     webhookActive: flow.webhookActive,
+    ...(flow.machineSpecJson
+      ? { machineSpec: JSON.parse(flow.machineSpecJson) as MachineSpec }
+      : {}),
   };
 }
 

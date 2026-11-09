@@ -365,7 +365,7 @@ with the event named, and are passed to `sendMachineEvent` as `inputFiles`
 exactly as `startRun` receives them; the host binds them before it returns the
 accepted receipt. Workspace fields take the same reference value as run inputs.
 A host that cannot stage payload files rejects the pick with an explicit error
-(`GrpcWebOperatorApi` does until its protocol names the event). The host
+(`GrpcWebOperatorApi` does until its protocol names the event and carries attachments). The host
 validates the full schema. A failed send keeps its idempotency key when retried
 with the same event, payload and files.
 
@@ -376,10 +376,17 @@ machine visit has `disposition: "expired"` and no `snapshot`; its waits, facts
 and steps are not read. The state graph (the definition) still draws. Missing write methods hide their controls, so read-only hosts issue no
 mutation; `runActionsEnabled={false}` or `bottomRightPanel={null}` also hide them.
 
-This phase does **not** add machine support to `GrpcWebOperatorApi`, protobuf,
-REST or the Python operator. Phase B connects these methods to the real operator
-after the operator transport change (PR 2) and reruns the browser scenario against
-it before claiming local end-to-end support. The console port follows separately.
+`GrpcWebOperatorApi` implements the machine methods against the local operator's
+`ControlMachine` RPC (typed JSON: `get`, `history`, `visit`, `events`, `send`,
+`retry`). It maps `FlowInfoV2.machine_spec_json` to `FlowInfoMsg.machineSpec`,
+`RunSummaryV2.key_json` to the run label and `read_state: "expired"` to
+`expired`, parses a visit's host snapshot (`RunSnapshotV2` JSON) with the same
+mapping as any run snapshot, keeps only a visit's qualified (`v<visit>.`) wait
+cards for `listRunWaits(runId, visit)` and maps retained decision receipts to
+`WaitCard.audit` (the receipt carries the payload digest, not the payload). It
+does not offer `fireNextMachineTimer` (the operator advertises no development
+capability) and refuses event payload files (`ControlMachine` has no attachment
+field). The console port follows separately.
 
 ### Browser proof
 

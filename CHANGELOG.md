@@ -123,9 +123,14 @@
   `sendMachineEvent` as `inputFiles`. Keyed flow runs show their key as the run
   label like machine runs. Runs whose history expired under their retention
   policy (`RunSummaryMsg.expired`, visit disposition `expired`) read `expired`
-  in the timeline and on the run page and keep their label. This phase is
-  proven in browsers against a typed fake host; local operator transport
-  follows separately.
+  in the timeline and on the run page and keep their label. The local
+  operator's gRPC-web client implements the machine reads and controls over
+  `ControlMachine` (instance, history, visit with its scoped snapshot, visit
+  facts, send, retry), maps `machine_spec_json`, run keys (labels) and expired
+  history, filters wait cards to a visit's qualified steps and maps retained
+  decision audits. Event payload files and the development timer trigger are
+  not offered over this transport (the host has no attachment field or
+  capability for them).
 
 ## 0.20.4
 
