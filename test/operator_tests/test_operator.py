@@ -16,6 +16,62 @@ from runtime.operator.operator import RunAlreadyExistsError
 from runtime.operator.webhooks import WebhookRoute
 
 
+def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path):
+    """A real coordinator per visit, one durable run, stable event admission."""
+    from runtime.operator.state.machines import MachinesTable
+
+    fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
+    journal = tmp_path / "visits.txt"
+    op = Operator(
+        [str(fixture)],
+        watch=False,
+        schedule=False,
+        webhook_port=0,
+        state_db=tmp_path / "state.db",
+    )
+    try:
+        run_id = op.start_run("approval", input={"ticket": 1, "journal": str(journal)})
+        # Existing key lookup validates key fields, not a replacement input document.
+        assert op.start_run("approval", input={"ticket": 1}) == run_id
+        with pytest.raises(ValueError):
+            op.start_run("approval", input={"ticket": "not-an-integer"})
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            if op.get_run(run_id).status == RunStatus.WAITING:
+                break
+            time.sleep(0.03)
+        else:
+            pytest.fail("initial machine visit did not park")
+        receipt = op._machine_host.send(run_id, "approved", {}, "approval-1")
+        replay = op._machine_host.send(run_id, "approved", {}, "approval-1")
+        assert receipt.status == "accepted"
+        assert replay.duplicate and replay.receipt_id == receipt.receipt_id
+        assert wait_terminal(op, run_id).status == RunStatus.SUCCESS
+        with op._state_store.transaction() as connection:
+            instance = MachinesTable.load(connection, run_id)
+            visits = [MachinesTable.visit(connection, run_id, number) for number in (1, 2, 3)]
+            fired = connection.execute(
+                "SELECT COUNT(*) FROM machine_timers WHERE run_id=? AND fired_at IS NOT NULL",
+                (run_id,),
+            ).fetchone()[0]
+        assert instance.state == "done" and instance.visit == 3
+        assert [visit.state for visit in visits] == ["pending", "reviewed", "done"]
+        assert all(visit.catalog_revision for visit in visits)
+        assert fired == 1
+        assert [line.split(":", 1)[1] for line in journal.read_text().splitlines()] == [
+            "v1.observe_1",
+            "v2.observe_1",
+            "v3.observe_1",
+        ]
+        assert {node.node_id for node in visits[1].snapshot.nodes} >= {
+            "v2.mapped_1[0]",
+            "v2.mapped_1[1]",
+        }
+        assert len(op.list_runs("approval")) == 1
+    finally:
+        op.close()
+
+
 @pytest.fixture
 def operator():
     fixtures = Path(__file__).parents[1] / "fixtures" / "sample_workflows.py"
@@ -59,8 +115,7 @@ def test_spawned_run_accepts_early_event_and_typed_decision(tmp_path):
         )
     )
     state_db = tmp_path / "state.db"
-    op = Operator([str(target)], watch=False, schedule=False, webhook_port=0,
-                  state_db=state_db)
+    op = Operator([str(target)], watch=False, schedule=False, webhook_port=0, state_db=state_db)
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         port = sock.getsockname()[1]
@@ -166,8 +221,9 @@ def test_spawned_run_accepts_early_event_and_typed_decision(tmp_path):
         browser.close()
         server.stop(grace=0).wait()
         op.close()
-        op = Operator([str(target)], watch=False, schedule=False, webhook_port=0,
-                      state_db=state_db)
+        op = Operator(
+            [str(target)], watch=False, schedule=False, webhook_port=0, state_db=state_db
+        )
         server = serve(op, port=port, block=False)
         browser = start_browser_server(address, port=0)
         client = GrpcStateProvider(address)
@@ -185,8 +241,9 @@ def test_spawned_run_accepts_early_event_and_typed_decision(tmp_path):
 @pytest.fixture
 def wait_review_operator():
     fixture = Path(__file__).parents[1] / "fixtures" / "wait_review_flows.py"
-    op = Operator([str(fixture)], watch=False, schedule=False, webhook_port=0,
-                  state_db=":memory:")
+    op = Operator(
+        [str(fixture)], watch=False, schedule=False, webhook_port=0, state_db=":memory:"
+    )
     try:
         yield op
     finally:
@@ -571,7 +628,7 @@ def test_refresh_reconciliation_failure_rolls_back_and_can_retry(
 ):
     workflow_file = tmp_path / "flow.py"
     workflow_file.write_text(
-        "import avalanche as ava\n" "@ava.workflow\n" "def flow():\n" "    return None\n"
+        "import avalanche as ava\n@ava.workflow\ndef flow():\n    return None\n"
     )
     operator = Operator(
         workflow_paths=[str(workflow_file)],

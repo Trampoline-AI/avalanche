@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Literal, Mapping
+from typing import Annotated, Literal, Mapping
 
 from pydantic import (
     AfterValidator,
@@ -20,19 +20,16 @@ from pydantic import (
     ValidationError,
 )
 
+from avalanche.agent.declaration import AgentDeclaration
+from avalanche.agent.live import AgentTraceFinished, AgentTraceUnavailable
+from avalanche.agent.native import TraceHeaderNative
+from avalanche.agent.trace import AgentTraceStatus, TokenUsage
 from avalanche.machine_host import MachineOpSpec
 from avalanche.mapping import MapSpec
 from avalanche.policies import StepPolicy, WaitSpec
 from avalanche.run_steps import RunOpSpec
 
-if TYPE_CHECKING:
-    from avalanche.agent.declaration import AgentDeclaration
-    from avalanche.agent.live import AgentTraceFinished, AgentTraceUnavailable
-    from avalanche.agent.native import TraceHeaderNative
-    from avalanche.agent.trace import AgentTraceStatus, TokenUsage
-
-    from .step_io import StepIo
-
+from .step_io import StepIo
 
 # The common kind of an agent live event; "native" when it has no common equivalent.
 AgentEventKind = Literal[

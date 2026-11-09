@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib
 import inspect
+import json
 import logging
 import os
 import sys
@@ -17,7 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 from uuid import uuid4
 
-from pydantic_core import PydanticSerializationError
+from pydantic_core import PydanticSerializationError, to_jsonable_python
 
 from avalanche._agent_evidence import (
     AgentEvidenceObserverEvent,
@@ -29,12 +30,15 @@ from avalanche.classifier import capture_classifier_evidence
 from avalanche.classifier.models import ClassifierInvocation
 from avalanche.dag import Workflow
 from avalanche.evaluation_capture import capture_evaluations
+from avalanche.machine import Machine
+from avalanche.policies import Event
 from avalanche.run_handle import RunHandle
 from avalanche.runtime import BaseInput
 
 from ..executor import LocalExecutor
 from .evaluation_worker import EvaluationRequest, snapshot_evaluation
 from .hooks import RunHooks
+from .machine_visit import qualify_visit
 from .models import display_name_from_id
 from .registry import (
     agent_field_schemas_for_workflow,
@@ -49,6 +53,7 @@ from .result_store import (
     publish_workflow_result,
 )
 from .results import encode_workflow_result
+from .state.machines import InstanceRecord
 from .step_io import preview_step_inputs, preview_value, step_signatures
 from .wait_control import FinalWaitSnapshot, serve_wait_controls
 from .workflow_metadata import (
@@ -79,6 +84,7 @@ def run_worker(
     result_bundle_identity: tuple[int, int],
     control_connection: Connection | None = None,
     cancel_reader: Connection | None = None,
+    machine_visit: InstanceRecord | None = None,
 ) -> None:
     """Detach exactly one inode-bound bundle capability and close it on exit."""
     bundle_descriptor: int | None = None
@@ -102,6 +108,7 @@ def run_worker(
             result_bundle_identity,
             control_connection,
             cancel_reader,
+            machine_visit,
         )
     finally:
         if bundle_descriptor is not None:
@@ -123,6 +130,7 @@ def _run_worker(
     result_bundle_identity: tuple[int, int],
     control_connection: Connection | None = None,
     cancel_reader: Connection | None = None,
+    machine_visit: InstanceRecord | None = None,
 ) -> None:
     """Import/build exactly once, prepare, wait for the parent, and execute."""
     event_queue = _SealableEventQueue(event_queue)
@@ -157,6 +165,15 @@ def _run_worker(
         ):
             raise LookupError(f"Workflow builder is unavailable: {builder_symbol}")
         workflow = builder()
+        if machine_visit is not None:
+            if not isinstance(builder, Machine):
+                raise TypeError("Machine builder was replaced by an ordinary workflow")
+            if machine_visit.state not in builder.spec.states:
+                raise ValueError("state_missing")
+            workflow = qualify_visit(
+                builder.works[builder.spec.states[machine_visit.state].work],
+                machine_visit.visit,
+            )
         if not isinstance(workflow, Workflow):
             raise TypeError("Marked builder did not return a Workflow")
         validated_input: BaseInput | None = None
@@ -211,11 +228,13 @@ def _run_worker(
             for index in range(spec.map_max_items)
         }
 
-        show_groups.update({
-            f"{node_id}.show": node_id
-            for node_id, spec in workflow.node_waits.items()
-            if spec.map_max_items is not None
-        })
+        show_groups.update(
+            {
+                f"{node_id}.show": node_id
+                for node_id, spec in workflow.node_waits.items()
+                if spec.map_max_items is not None
+            }
+        )
 
         def wrap_fn(node_id: str, fn: Callable[..., Any]) -> Callable[..., Any]:
             owner = show_groups.get(node_id, node_id)
@@ -223,37 +242,49 @@ def _run_worker(
 
         _put_run_event(event_queue, {"type": "running", "timestamp": time.monotonic()})
         hooks = RunHooks(
-            on_nodes_expanded=lambda expansion: None
-            if expansion.parent in show_groups
-            else _put_run_event(
-                event_queue,
-                {"type": "nodes_expanded", "expansion": expansion.model_dump_json()},
+            on_nodes_expanded=lambda expansion: (
+                None
+                if expansion.parent in show_groups
+                else _put_run_event(
+                    event_queue,
+                    {"type": "nodes_expanded", "expansion": expansion.model_dump_json()},
+                )
             ),
-            on_node_start=lambda node_id: None
-            if node_id in show_groups or node_id in item_groups
-            else _put_run_event(
-                event_queue,
-                {"type": "node_started", "node_id": node_id, "timestamp": time.monotonic()},
+            on_node_start=lambda node_id: (
+                None
+                if node_id in show_groups or node_id in item_groups
+                else _put_run_event(
+                    event_queue,
+                    {"type": "node_started", "node_id": node_id, "timestamp": time.monotonic()},
+                )
             ),
-            on_node_success=lambda node_id: None
-            if node_id in show_groups or node_id in item_groups
-            else _put_run_event(
-                event_queue,
-                {"type": "node_succeeded", "node_id": node_id, "timestamp": time.monotonic()},
+            on_node_success=lambda node_id: (
+                None
+                if node_id in show_groups or node_id in item_groups
+                else _put_run_event(
+                    event_queue,
+                    {
+                        "type": "node_succeeded",
+                        "node_id": node_id,
+                        "timestamp": time.monotonic(),
+                    },
+                )
             ),
-            on_node_failure=lambda node_id, exc: None
-            if node_id in item_groups
-            else _put_run_event(
-                event_queue,
-                {
-                    "type": "node_failed",
-                    "node_id": show_groups.get(node_id, node_id),
-                    "timestamp": time.monotonic(),
-                    "error": _bounded_event_text(
-                        f"{type(exc).__name__}: {exc}",
-                        65_536,
-                    ),
-                },
+            on_node_failure=lambda node_id, exc: (
+                None
+                if node_id in item_groups
+                else _put_run_event(
+                    event_queue,
+                    {
+                        "type": "node_failed",
+                        "node_id": show_groups.get(node_id, node_id),
+                        "timestamp": time.monotonic(),
+                        "error": _bounded_event_text(
+                            f"{type(exc).__name__}: {exc}",
+                            65_536,
+                        ),
+                    },
+                )
             ),
             cancel_requested=cancel_event.is_set,
             wrap_fn=wrap_fn,
@@ -282,6 +313,16 @@ def _run_worker(
                 terminal_event = {"type": "terminal", "status": "cancelled"}
             else:
                 terminal_event["result_manifest_sha256"] = manifest_sha256
+                if machine_visit is not None:
+                    terminal_event["machine_outcome_json"] = json.dumps(
+                        {
+                            "event": result.name if isinstance(result, Event) else None,
+                            "output": to_jsonable_python(
+                                result.output if isinstance(result, Event) else result
+                            ),
+                        },
+                        allow_nan=False,
+                    )
     except ResultPublicationCancelledError:
         terminal_event = {"type": "terminal", "status": "cancelled"}
     except BaseException as exc:

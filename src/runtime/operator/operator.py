@@ -55,6 +55,7 @@ from .input_files import (
     StagedInputFile,
     StagedInputFileError,
 )
+from .machine_host import MachineHost, VisitFinished
 from .models import (
     AgentEvent,
     AgentEventAppended,
@@ -147,6 +148,7 @@ from .state.agent_events import RunAgentEventsTable
 from .state.classifier_events import RunClassifierEventsTable
 from .state.evaluations import RunEvaluationsTable
 from .state.logs import RunLogsTable
+from .state.machines import InstanceRecord, MachinesTable
 from .state.metadata import OperatorMetadataTable
 from .state.results import RunResultTable
 from .state.run_details import load_run_detail_totals
@@ -258,6 +260,8 @@ class _RunHandle:
     success_quiesced: bool = False
     cancel_writer: Connection | None = None
     controls: RunControls | None = None
+    machine_visit: InstanceRecord | None = None
+    visit_finished: VisitFinished | None = None
 
 
 @dataclass(frozen=True)
@@ -602,6 +606,7 @@ class Operator:
                 self._start_watcher()
             self._start_notification_dispatcher()
             self._fail_interrupted_runs(interrupted_runs)
+            self._machine_host = MachineHost(self)
             if schedule and self._workflow_paths:
                 self._scheduler.start()
         except BaseException as failure:
@@ -672,6 +677,10 @@ class Operator:
                 )
             with self._lock:
                 run = self._runs[run_id]
+                with self._state_store.transaction() as connection:
+                    machine = MachinesTable.load(connection, run_id)
+                if machine is not None:
+                    continue
                 run.status = RunStatus.FAILED
                 # Timestamps are monotonic; a reboot restarts that clock.
                 now = time.monotonic()
@@ -1835,6 +1844,7 @@ class Operator:
         context: dict[str, Any] | None = None,
         expected_version: str = "",
         input_files: tuple[StagedInputFile, ...] = (),
+        _machine_visit: InstanceRecord | None = None,
     ) -> str:
         """Publish a requesting run, then prepare it asynchronously.
 
@@ -1863,6 +1873,12 @@ class Operator:
             and workflow_revision(descriptor_to_info(descriptor)) != expected_version
         ):
             raise ValueError("Workflow version changed; reload the start form")
+        if descriptor.machine_spec_json and _machine_visit is None:
+            return self._machine_host.start(flow_name, request, run_id, triggered_by)
+        if _machine_visit is not None:
+            with self._state_store.transaction() as connection:
+                request = RunsTable.read_request(connection, _machine_visit.run_id)
+            input, context = request.input, request.context
         import_root, workflow_relative_module_file = resolve_live_source(
             configured_root, descriptor.locator
         )
@@ -1872,12 +1888,12 @@ class Operator:
             run_id = run_id or f"run_{str(uuid4())[:8]}"
             # Stored runs are loaded at startup, so this also refuses the ID of a run
             # from before a restart, and of any result such a run stored.
-            if run_id in self._runs or run_id in self._active_runs:
+            if run_id in self._active_runs or (run_id in self._runs and _machine_visit is None):
                 raise RunAlreadyExistsError(f"Run {run_id} already exists")
             # Callers learn about a missing required field now, not from a run that
             # fails while it is prepared. Cron and webhook runs report it as a failed
             # run. A reused run ID still reports the existing run first.
-            if triggered_by in (TriggerKind.MANUAL, TriggerKind.API):
+            if _machine_visit is None and triggered_by in (TriggerKind.MANUAL, TriggerKind.API):
                 missing = missing_required_input(descriptor.input_schema_json, input)
                 if missing:
                     raise MissingRunInputError(missing)
@@ -1909,6 +1925,7 @@ class Operator:
                         (result_bundle.device, result_bundle.inode),
                         control_child,
                         cancel_reader,
+                        _machine_visit,
                     ),
                     name=f"avalanche-run-{run_id}",
                     daemon=False,
@@ -1931,6 +1948,7 @@ class Operator:
                 publication_event=threading.Event(),
                 cancel_writer=cancel_writer,
                 controls=controls,
+                machine_visit=_machine_visit,
             )
             # Reserve the ID before releasing the lock so concurrent callers
             # cannot create a second coordinator with the same caller-owned ID.
@@ -1955,17 +1973,39 @@ class Operator:
                     else identify_run_process(process.pid),
                 )
                 assignment_event.set()
-                run = RunState(
-                    run_id=run_id,
-                    flow_name=descriptor.display_name,
-                    status=RunStatus.REQUESTING,
-                    triggered_at=triggered_at,
-                    triggered_by=triggered_by,
-                    workflow_id=descriptor.workflow_id,
-                    workflow_display_name=descriptor.display_name,
+                run = (
+                    self._runs[run_id]
+                    if _machine_visit is not None
+                    else RunState(
+                        run_id=run_id,
+                        flow_name=descriptor.display_name,
+                        status=RunStatus.REQUESTING,
+                        triggered_at=triggered_at,
+                        triggered_by=triggered_by,
+                        workflow_id=descriptor.workflow_id,
+                        workflow_display_name=descriptor.display_name,
+                    )
                 )
                 self._runs[run_id] = run
-                notifications = self._publish_run_locked(run, start=start)
+                if _machine_visit is None:
+                    notifications = self._publish_run_locked(run, start=start)
+                else:
+
+                    def record_process(connection: sqlite3.Connection) -> None:
+                        process_record = start.process
+                        if process_record is not None:
+                            connection.execute(
+                                "UPDATE runs SET process_group=?, process_started=?, "
+                                "process_booted=? WHERE run_id=?",
+                                (
+                                    process_record.process_group,
+                                    process_record.started,
+                                    process_record.booted,
+                                    run_id,
+                                ),
+                            )
+
+                    notifications = self._publish_run_locked(run, machine_write=record_process)
             self._wait_for_notifications(notifications)
             preparation_thread = threading.Thread(
                 target=self._prepare_requested_run,
@@ -2040,8 +2080,9 @@ class Operator:
                     return
                 if self._closed:
                     raise RuntimeError("Operator closed while preparing run")
-                run.flow_name = prepared_run.flow_name
-                run.workflow_display_name = prepared_run.workflow_display_name
+                if handle.machine_visit is None:
+                    run.flow_name = prepared_run.flow_name
+                    run.workflow_display_name = prepared_run.workflow_display_name
                 run.topology = prepared_run.topology
                 run.input = prepared_run.input
                 run.nodes = prepared_run.nodes
@@ -2051,7 +2092,22 @@ class Operator:
                 else:
                     run.status = RunStatus.PENDING
                 handle.drain_thread = drain
-                notifications = self._publish_run_locked(run)
+
+                def replace_visit_nodes(connection: sqlite3.Connection) -> None:
+                    if handle.machine_visit is not None:
+                        connection.execute(
+                            "DELETE FROM run_nodes WHERE run_id=? AND node_id NOT IN ("
+                            + ",".join("?" for _ in run.nodes)
+                            + ")",
+                            (run_id, *run.nodes),
+                        )
+
+                notifications = self._publish_run_locked(
+                    run,
+                    machine_write=replace_visit_nodes,
+                    nodes_expanded=handle.machine_visit is not None,
+                    changed_node_ids=tuple(run.nodes) if handle.machine_visit else (),
+                )
             self._wait_for_notifications(notifications)
             drain.start()
             handle.publication_event.set()
@@ -2227,6 +2283,8 @@ class Operator:
             self._watcher_stop.set()
             self._result_load_stop.set()
             self._scheduler.stop()
+            if hasattr(self, "_machine_host"):
+                self._machine_host.close()
             self._webhooks.close()
             if self._watcher_thread is not None:
                 self._watcher_thread.join(timeout=2.0)
@@ -2679,6 +2737,8 @@ class Operator:
                     self._release_evidence_checks_locked(run_id)
                 _close_run_controls(handle)
                 _close_event_queue(handle.event_queue)
+                if handle.visit_finished is not None and not self._closed:
+                    self._machine_host.queue.put(handle.visit_finished)
 
     def _apply_event(
         self,
@@ -2738,6 +2798,22 @@ class Operator:
             ) from exc
         if terminal and stored_result is None:
             self._result_store.discard(handle.result_bundle)
+        if terminal and handle.machine_visit is not None:
+            outcome = json.loads(event.get("machine_outcome_json", "null"))
+            handle.visit_finished = VisitFinished(
+                run_id,
+                handle.machine_visit.visit,
+                event["status"],
+                outcome["output"] if outcome is not None else None,
+                outcome["event"] if outcome is not None else None,
+            )
+            if stored_result is not None:
+                if handle.machine_visit.spec.states[handle.machine_visit.state].final:
+                    with self._state_store.transaction() as connection:
+                        RunResultTable.insert(connection, run_id, stored_result)
+                else:
+                    self._result_store.discard(stored_result)
+            return True
 
         discard_stored_result = False
         recorded_result = False
@@ -3462,6 +3538,7 @@ class Operator:
         log_entry: LogEntry | None = None,
         start: _RunStart | None = None,
         terminal_reason: str | None = None,
+        machine_write: Callable[[sqlite3.Connection], None] | None = None,
     ) -> _RunNotifications:
         """Atomically publish one mutation to structural, detail, and update state.
 
@@ -3706,6 +3783,7 @@ class Operator:
                 node_ids=run.nodes.keys() if is_new or summary_changed else changed_node_ids,
                 start=start,
                 update_sequence=publication_sequence,
+                machine_write=machine_write,
                 details=_DetailWrites(
                     log=log_item,
                     agent_events=agent_events,
@@ -3800,6 +3878,7 @@ class Operator:
         start: _RunStart | None,
         update_sequence: int,
         details: _DetailWrites,
+        machine_write: Callable[[sqlite3.Connection], None] | None = None,
     ) -> None:
         if start is not None and not is_new:
             raise RuntimeError(f"Run {run.run_id} was already stored")
@@ -3817,7 +3896,11 @@ class Operator:
                 start = start or _RunStart(request=RunRequest(), process=None)
                 RunsTable.create(connection, stored, start.request, start.process)
             else:
+                if machine_write is not None:
+                    machine_write(connection)
                 RunsTable.update(connection, stored, node_ids)
+            if is_new and machine_write is not None:
+                machine_write(connection)
             if details.log is not None:
                 RunLogsTable.insert(connection, run.run_id, details.log)
             for node_id, agent_event in details.agent_events.items():
@@ -4692,7 +4775,8 @@ def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
         if status == "success":
             _require_exact_event_keys(
                 event,
-                {"type", "status", "result_manifest_sha256"},
+                {"type", "status", "result_manifest_sha256"}
+                | ({"machine_outcome_json"} if "machine_outcome_json" in event else set()),
             )
             if validate_result:
                 _result_manifest_digest_from_event(event)
