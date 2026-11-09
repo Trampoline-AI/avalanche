@@ -12,6 +12,7 @@ from pydantic import BaseModel, JsonValue
 from .local_waits import LocalPrincipal, LocalWaits, WaitReceipt, WaitRefusalError
 from .machine_core import BufferedEvent, InboxFact, consumable_index, retain_inbox
 from .policies import WaitSpec
+from .references import LocalReferenceBinder, bind_references
 
 
 class MachineWaits(LocalWaits):
@@ -117,7 +118,9 @@ class MachineWaits(LocalWaits):
                 if model is not None
                 else None
             )
-            return BufferedEvent(event.name, payload, event.size)
+            return BufferedEvent(
+                event.name, bind_references(payload, LocalReferenceBinder()), event.size
+            )
         return None
 
     def add_visit_waits(

@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
 from .machine_host import MachineOpSpec
 from .mapping import MapSpec
 from .policies import StepPolicy, WaitSpec
+from .run_steps import RunOpSpec
 
 
 class MachineTransitionSpec(BaseModel):
@@ -53,6 +54,9 @@ class MachineWorkSpec(BaseModel):
     node_machines: dict[str, MachineOpSpec] = Field(
         default_factory=dict, exclude_if=lambda value: not value
     )
+    node_runs: dict[str, RunOpSpec] = Field(
+        default_factory=dict, exclude_if=lambda value: not value
+    )
     map_specs: dict[str, MachineMapSpec] = Field(
         default_factory=dict, exclude_if=lambda value: not value
     )
@@ -84,6 +88,8 @@ class MachineWorkSpec(BaseModel):
         )
         if expanded > 64:
             raise ValueError("state visit work exceeds 64 nodes including mapped children")
+        if not set(self.node_runs) <= nodes:
+            raise ValueError("unknown work run node")
         if not set(self.node_machines) <= nodes:
             raise ValueError("unknown work machine node")
         if not set(self.node_waits) <= nodes:

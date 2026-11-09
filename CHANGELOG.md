@@ -8,7 +8,19 @@
   not `await Machine.start(..., host=...)` or the removed transport kwargs.
   Outside workflows, sends require an explicit `MachineHost` via `host=` and
   an idempotency key; declared sends default to the node's stable step key.
-  The declared start node remains pending a router-start API decision.
+  Replace declared `machine.start` with scheduler-owned `ava.start_run(target, input)`
+  for either flows or machines. Both start and send accept `when=`: false skips
+  validation and host calls, yields `None`, and satisfies ordering edges without
+  skipping children. There is no `deliver` or host-start API.
+- Send payloads accept native `File`/`Workspace` models and nested references,
+  handed to host admission before serialization; hosts own run-lifetime binding
+  before accepting them. Send targets accept either a key tuple or a run ID.
+- Key derivation validates only key fields; an existing key ignores replacement
+  non-key input/files. General machine reruns are unsupported; replay requires a
+  new key, while interrupted repair creates a new visit in the same run. Run
+  reads distinguish `expired` terminal evidence from permanent key identity.
+- Forward machine cron/webhook declarations to the normal run carrier and
+  qualify ordinary and mapped visit contexts consistently.
 - **Breaking for 0.20.x:** remove `key_format` from `@ava.machine` and
   `MachineSpec`, including discovery JSON. Keys come from the declared input
   fields via `Machine.key(input)`; remove the decorator argument and any

@@ -39,7 +39,7 @@ from .execution_services import (
 )
 from .input_ref import INPUT as input  # noqa: N811
 from .machine import Machine, machine, state
-from .machine_host import MachineEventReceipt, MachineHost, MachineInstance, MachineStart
+from .machine_host import MachineEventReceipt, MachineHost, MachineInstance
 from .mapping import DEFAULT_MAX_ITEMS, HARD_CAP, MapItemFailure, MapItemsFailed
 from .model_frame import Json
 from .policies import Event, NonRetryableError, OutcomeUnknownError, event
@@ -48,6 +48,7 @@ from .policies import Event, NonRetryableError, OutcomeUnknownError, event
 from .progress import ProgressStore
 from .protocol import PROTOCOL_VERSION, ProtocolVersion
 from .run_handle import RunHandle
+from .run_steps import RunStart, start_run
 
 # Runtime primitives
 from .runtime import (  # noqa: F401
@@ -154,7 +155,8 @@ __all__ = [
     "state",
     "Machine",
     "MachineHost",
-    "MachineStart",
+    "RunStart",
+    "start_run",
     "MachineEventReceipt",
     "MachineInstance",
     "sleep",

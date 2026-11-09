@@ -16,7 +16,7 @@ from typing import overload
 from pydantic import BaseModel, JsonValue
 
 from .dag import MapFuture, Node, NodeFuture, Workflow, WorkflowContext, _workflow_context
-from .machine_host import MachineEventReceipt, MachineHost, MachineKey
+from .machine_host import MachineEventReceipt, MachineHost, MachineKey, MachinePayload
 from .machine_spec import (
     MachineMapSpec,
     MachineSpec,
@@ -26,6 +26,7 @@ from .machine_spec import (
     MachineWorkSpec,
 )
 from .runtime import BaseInput
+from .webhook import Webhook
 
 
 @dataclass
@@ -132,6 +133,7 @@ def work_spec(work: Workflow) -> MachineWorkSpec:
         node_policies={name: ref.node.policy for name, ref in work.nodes.items()},
         node_waits=work.node_waits,
         node_machines=work.node_machines,
+        node_runs=work.node_runs,
         node_output_schemas={
             name: ref.node.step_interface.step_output.json_schema
             for name, ref in work.nodes.items()
@@ -177,11 +179,15 @@ class Machine:
         builder: Callable[[], State | None],
         input_type: type[BaseInput],
         key: tuple[str, ...],
+        cron: str | None = None,
+        webhook: Webhook | bool | None = None,
     ) -> None:
         update_wrapper(self, builder)
         self.builder = builder
         self.input_type = input_type
         self.key_fields = key
+        self.cron = cron
+        self.webhook = webhook
         self._definition: Workflow | None = None
         self.works: dict[str, Workflow] = {}
         self.payloads: dict[str, dict[str, type[BaseModel] | None]] = {}
@@ -284,7 +290,12 @@ class Machine:
             work_graphs=specs,
         )
         result = _MachineWorkflow(
-            defaultdict(list), {}, name=self.__name__, input_type=self.input_type
+            defaultdict(list),
+            {},
+            name=self.__name__,
+            input_type=self.input_type,
+            cron=self.cron,
+            webhook=self.webhook,
         )
         result.machine_spec = spec
         self.works, self.payloads, self._definition = works, payloads, result
@@ -320,32 +331,23 @@ class Machine:
         await driver._drive()
         return driver
 
-    def start(
-        self,
-        input: BaseInput | Mapping[str, JsonValue] | NodeFuture,
-    ) -> NodeFuture:
-        """Declare a start node; router start semantics are pending a ruling."""
-        from .machine_nodes import MachineNode
-
-        if _workflow_context.get() is None:
-            raise TypeError("machine.start is workflow-only; start an instance with ava run")
-        return MachineNode(self, "start")(input)
-
     @overload
     def send(
         self,
-        key: MachineKey | NodeFuture,
+        key: MachineKey | str | NodeFuture,
         event: str | NodeFuture,
-        payload: BaseModel | JsonValue | NodeFuture = None,
+        payload: MachinePayload | NodeFuture = None,
         idempotency_key: str | NodeFuture | None = None,
+        *,
+        when: bool | NodeFuture = True,
     ) -> NodeFuture: ...
 
     @overload
     def send(
         self,
-        key: MachineKey,
+        key: MachineKey | str,
         event: str,
-        payload: BaseModel | JsonValue = None,
+        payload: MachinePayload = None,
         idempotency_key: str | None = None,
         *,
         host: MachineHost,
@@ -353,12 +355,13 @@ class Machine:
 
     def send(
         self,
-        key: MachineKey | NodeFuture,
+        key: MachineKey | str | NodeFuture,
         event: str | NodeFuture,
-        payload: BaseModel | JsonValue | NodeFuture = None,
+        payload: MachinePayload | NodeFuture = None,
         idempotency_key: str | NodeFuture | None = None,
         *,
         host: MachineHost | None = None,
+        when: bool | NodeFuture = True,
     ) -> NodeFuture | Coroutine[None, None, MachineEventReceipt]:
         """Declare a send; outside a workflow both host and replay identity are explicit."""
         from .machine_nodes import MachineNode
@@ -366,14 +369,17 @@ class Machine:
         if _workflow_context.get() is not None:
             if host is not None:
                 raise TypeError("host= is not allowed in a declared machine step")
-            return MachineNode(self, "send")(
+            return MachineNode(self)(
                 key,
                 event,
                 payload=payload,
                 idempotency_key=idempotency_key,
+                when=when,
             )
         if host is None:
             raise TypeError("machine.send outside a workflow requires host=")
+        if when is not True:
+            raise TypeError("when= is only supported in declared graph operations")
         if (
             isinstance(key, NodeFuture)
             or isinstance(event, NodeFuture)
@@ -389,22 +395,23 @@ class Machine:
             raise ValueError("idempotency_key must contain 1-256 printable characters")
         if not event or event in {".", ".."} or "/" in event:
             raise ValueError("event must be a nonempty path segment")
-        if len(key) != len(self.key_fields):
+        if not isinstance(key, str) and len(key) != len(self.key_fields):
             raise ValueError("machine key has the wrong number of fields")
-        wire = payload.model_dump(mode="json") if isinstance(payload, BaseModel) else payload
-        return host.send(self.builder.__name__, key, event, wire, idempotency_key)
+        return host.send(self.builder.__name__, key, event, payload, idempotency_key)
 
     def key(self, input: BaseInput | Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
-        fields = self.spec.key_fields
-        value = self.input_type.model_validate(input).model_dump(mode="json")
-        return tuple(value[field] for field in fields)
+        from .run_keys import derive_run_key
+
+        return derive_run_key(self.input_type, self.spec.key_fields, input)
 
 
 def machine(
     *,
     input: type[BaseInput],
     key: tuple[str, ...],
+    cron: str | None = None,
+    webhook: Webhook | bool | None = None,
 ) -> Callable[[Callable[[], State | None]], Machine]:
     if not issubclass(input, BaseInput):
         raise TypeError("machine input must be a BaseInput model")
-    return lambda builder: Machine(builder, input, key)
+    return lambda builder: Machine(builder, input, key, cron=cron, webhook=webhook)

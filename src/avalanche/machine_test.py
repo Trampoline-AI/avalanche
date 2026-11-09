@@ -35,11 +35,17 @@ from .dag import (
 )
 from .local_waits import LocalPrincipal, Reconcile, WaitReceipt, WaitRefusalError
 from .machine_core import MachineRecord, reduce_machine
-from .machine_host import JsonObject, MachineEventReceipt, MachineKey, MachineStart
+from .machine_host import (
+    MachineEventReceipt,
+    MachineKey,
+    MachinePayload,
+    payload_to_json,
+)
 from .machine_nodes import MachineNode, execute_machine_node
 from .machine_waits import MachineWaits
 from .policies import MAX_GENERATION, Event, NonRetryableError, OutcomeUnknownError, event
 from .run_handle import RunHandle
+from .run_steps import RunNode, RunStart, RunTarget, operation_enabled
 from .runtime import BaseInput, RunContext
 from .runtime.providers import PROVIDERS
 from .waits import WaitNode
@@ -371,6 +377,20 @@ class MachineTest:
                 return TypeAdapter(annotation).validate_python(answer.output)
             if answer.kind == "fail" or self._attempts[ref.future_id] >= MAX_GENERATION:
                 raise OutcomeUnknownError("reconciliation failed or generation ceiling")
+        if isinstance(node, RunNode):
+            if node.definition is not None:
+                self.host.register(node.definition)
+            args = [_resolve_to_ref(value, self._values) for value in ref.args]
+            kwargs = {
+                name: _resolve_to_ref(value, self._values) for name, value in ref.kwargs.items()
+            }
+            args, kwargs = _resolve_input_refs(args, kwargs, self.input, node.name, work.name)
+            bound = inspect.signature(node.fn).bind(*args, **kwargs)
+            bound.apply_defaults()
+            if not operation_enabled(bound.arguments["when"]):
+                return None
+            target = TypeAdapter(str).validate_python(bound.arguments["target"], strict=True)
+            return await self.host._start_run(target, bound.arguments["input"])
         if isinstance(node, MachineNode):
             self.host.register(node.machine)
             context = RunContext(
@@ -394,7 +414,7 @@ class MachineTest:
         context = RunContext(
             run_id=self.handle.run_id,
             workflow_name=work.name,
-            node_id=ref.future_id,
+            node_id=f"v{self._visit}.{ref.future_id}" if self._visit else ref.future_id,
             node_name=node.name,
             node_slug=ref.node_slug,
         )
@@ -514,15 +534,23 @@ class InMemoryMachineHost:
 
     def __init__(self, *, stub: Mapping[Node, list[LocalValue]] | None = None) -> None:
         self.machines: dict[str, Machine] = {}
+        self.flows: dict[str, Workflow] = {}
+        self.flow_runs: list[WorkflowTest] = []
         self.instances: dict[tuple[str, str], MachineTest] = {}
         self.receipts: dict[tuple[str, str, str, str], tuple[str, MachineEventReceipt]] = {}
         self.stub = stub
 
-    def register(self, machine: Machine) -> None:
-        name = machine.builder.__name__
-        if name in self.machines and self.machines[name] is not machine:
-            raise ValueError(f"duplicate machine name {name!r}")
-        self.machines[name] = machine
+    def register(self, target: RunTarget) -> None:
+        from .machine import Machine
+
+        if isinstance(target, Machine):
+            name = target.builder.__name__
+            if name in self.machines and self.machines[name] is not target:
+                raise ValueError(f"duplicate machine name {name!r}")
+            self.machines[name] = target
+        else:
+            flow = target if isinstance(target, Workflow) else target()
+            self.flows[flow.name] = flow
 
     @staticmethod
     def _key(key: MachineKey) -> str:
@@ -530,30 +558,45 @@ class InMemoryMachineHost:
             key, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
         )
 
-    async def start(self, machine: str, key: MachineKey, input: JsonObject) -> MachineStart:
-        address = (machine, self._key(key))
+    async def _start_run(
+        self, target: str, input: BaseInput | dict[str, JsonValue] | None
+    ) -> RunStart:
+        """Test scheduler path, not a public host-start transport API."""
+        if target in self.flows:
+            driver = WorkflowTest(self.flows[target], input, stub=self.stub, host=self)
+            self.flow_runs.append(driver)
+            await driver._drive()
+            return RunStart(run_id=driver.handle.run_id, created=True)
+        definition = self.machines[target]
+        key = definition.key(input)
+        address = (target, self._key(key))
         if address in self.instances:
-            return MachineStart(
+            return RunStart(
                 run_id=self.instances[address].handle.run_id, key=list(key), created=False
             )
-        definition = self.machines[machine]
-        if definition.key(input) != key:
-            raise ValueError("machine key does not match input")
         driver = MachineTest(definition, input, stub=self.stub, host=self)
         self.instances[address] = driver
         await driver._drive()
-        return MachineStart(run_id=driver.handle.run_id, key=list(key), created=True)
+        return RunStart(run_id=driver.handle.run_id, key=list(key), created=True)
 
     async def send(
         self,
         machine: str,
-        key: MachineKey,
+        key: MachineKey | str,
         event: str,
-        payload: JsonValue,
+        payload: MachinePayload,
         idempotency_key: str,
     ) -> MachineEventReceipt:
+        if isinstance(key, str):
+            key = next(
+                definition.key(driver.input)
+                for (name, _), driver in self.instances.items()
+                if name == machine and driver.handle.run_id == key
+                for definition in (self.machines[machine],)
+            )
         encoded = self._key(key)
         address = (machine, encoded, event, idempotency_key)
+        payload = payload_to_json(payload)
         body = json.dumps(
             {} if payload is None else payload,
             sort_keys=True,
@@ -599,9 +642,13 @@ class WorkflowTest(MachineTest):
         input: BaseInput | Mapping[str, JsonValue] | None,
         *,
         stub: Mapping[Node, list[LocalValue]] | None = None,
+        host: InMemoryMachineHost | None = None,
+        targets: tuple[RunTarget, ...] = (),
     ) -> None:
         self._workflow = workflow
-        self.host = InMemoryMachineHost(stub=stub)
+        self.host = host if host is not None else InMemoryMachineHost(stub=stub)
+        for target in targets:
+            self.host.register(target)
         self.input = workflow.input_type.model_validate(input) if workflow.input_type else None
         self.handle: RunHandle[LocalValue] = RunHandle(uuid4().hex)
         self.waits = MachineWaits(self.handle.run_id)

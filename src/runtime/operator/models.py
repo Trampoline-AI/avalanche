@@ -23,6 +23,7 @@ from pydantic import (
 from avalanche.machine_host import MachineOpSpec
 from avalanche.mapping import MapSpec
 from avalanche.policies import StepPolicy, WaitSpec
+from avalanche.run_steps import RunOpSpec
 
 if TYPE_CHECKING:
     from avalanche.agent.declaration import AgentDeclaration
@@ -441,6 +442,8 @@ class RunSnapshot:
     terminal_seal: TerminalSealDescriptor | None = None
     input: RunInput | None = None
     expansions: dict[str, int] = field(default_factory=dict)
+    # Retention is separate from execution status and permanent key identity.
+    read_state: Literal["retained", "expired"] = "retained"
 
 
 @dataclass(frozen=True)
@@ -826,6 +829,7 @@ class WorkflowInfo:
     node_policies: dict[str, StepPolicy] = field(default_factory=dict)
     node_waits: dict[str, WaitSpec] = field(default_factory=dict)
     node_machines: dict[str, MachineOpSpec] = field(default_factory=dict)
+    node_runs: dict[str, RunOpSpec] = field(default_factory=dict)
     machine_spec_json: str = ""
     display_names: dict[str, str] = field(default_factory=dict)  # node_id -> display name
     agent_node_ids: list[str] = field(default_factory=list)
@@ -942,6 +946,7 @@ class WorkflowDescriptor:
     node_policies: tuple[tuple[str, StepPolicy], ...] = ()
     node_waits: tuple[tuple[str, WaitSpec], ...] = ()
     node_machines: tuple[tuple[str, MachineOpSpec], ...] = ()
+    node_runs: tuple[tuple[str, RunOpSpec], ...] = ()
     machine_spec_json: str = ""
     agent_node_ids: tuple[str, ...] = ()
     agent_declarations: tuple[tuple[str, AgentDeclaration], ...] = ()

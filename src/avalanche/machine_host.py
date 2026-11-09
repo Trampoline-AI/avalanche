@@ -9,12 +9,27 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 MachineKey = tuple[JsonValue, ...]
 JsonObject = dict[str, JsonValue]
 
+# Native File/Workspace models and nested references survive until host admission.
+type MachinePayload = (
+    BaseModel
+    | None
+    | bool
+    | int
+    | float
+    | str
+    | list[MachinePayload]
+    | dict[str, MachinePayload]
+)
 
-class MachineStart(BaseModel):
-    model_config = ConfigDict(strict=True, extra="ignore", frozen=True)
-    run_id: str
-    key: list[JsonValue]
-    created: bool
+
+def payload_to_json(payload: MachinePayload) -> JsonValue:
+    if isinstance(payload, BaseModel):
+        return payload.model_dump(mode="json")
+    if isinstance(payload, dict):
+        return {name: payload_to_json(value) for name, value in payload.items()}
+    if isinstance(payload, list):
+        return [payload_to_json(value) for value in payload]
+    return payload
 
 
 class MachineEventReceipt(BaseModel):
@@ -42,14 +57,12 @@ class MachineInstance(BaseModel):
 
 
 class MachineHost(Protocol):
-    async def start(self, machine: str, key: MachineKey, input: JsonObject) -> MachineStart: ...
-
     async def send(
         self,
         machine: str,
-        key: MachineKey,
+        key: MachineKey | str,
         event: str,
-        payload: JsonValue,
+        payload: MachinePayload,
         idempotency_key: str,
     ) -> MachineEventReceipt: ...
 
@@ -59,4 +72,4 @@ class MachineOpSpec(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     machine: str
-    op: Literal["start", "send"]
+    op: Literal["send"] = "send"

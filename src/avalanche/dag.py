@@ -85,6 +85,7 @@ if TYPE_CHECKING:
     from .agent.defaults import AgentDefaults
     from .execution_services import ExecutionServicesSpec
     from .machine_test import WorkflowTest
+    from .run_steps import RunTarget
     from .runtime import BaseInput
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -127,6 +128,7 @@ class NodeType(Enum):
     DEST = "dest"
     WAIT = "wait"
     MACHINE = "machine"
+    RUN = "run"
 
 
 class Node:
@@ -2164,12 +2166,18 @@ class Workflow:
         self.graph = graph
         self.nodes = nodes
         from .machine_nodes import MachineNode
+        from .run_steps import RunNode
         from .waits import WaitNode
 
         self.node_machines = {
             node_id: ref.node.spec
             for node_id, ref in nodes.items()
             if isinstance(ref.node, MachineNode)
+        }
+        self.node_runs = {
+            node_id: ref.node.spec
+            for node_id, ref in nodes.items()
+            if isinstance(ref.node, RunNode)
         }
         self.node_waits = {
             node_id: ref.node.spec
@@ -2312,10 +2320,10 @@ class Workflow:
         The handle is returned immediately. Call ``handle.result()`` to block in
         synchronous code or ``await handle`` from asynchronous code.
         """
-        if self.node_machines:
+        if self.node_machines or self.node_runs:
             raise RuntimeError(
-                "MACHINE nodes require a machine-capable host; the embedded runner has no "
-                "MachineHost. Use workflow.test() for in-memory execution."
+                "Declared RUN/MACHINE nodes require a scheduler host; the embedded runner "
+                "has no run or MachineHost. Use workflow.test() for in-memory execution."
             )
         canonical_run_id = run_id if run_id is not None else str(ULID())
         handle: RunHandle[Any] = RunHandle(canonical_run_id)
@@ -2368,22 +2376,24 @@ class Workflow:
     def test(
         self, input: BaseInput | Mapping[str, JsonValue] | None = None,
         *, stub: Mapping[Node, list[BaseModel | JsonValue]] | None = None,
+        targets: tuple[RunTarget, ...] = (),
     ) -> WorkflowTest:
         """Execute with fake time, stubs and an in-memory machine host."""
         from .machine_test import WorkflowTest
 
-        driver = WorkflowTest(self, input, stub=stub)
+        driver = WorkflowTest(self, input, stub=stub, targets=targets)
         driver._sync(driver._drive())
         return driver
 
     async def test_async(
         self, input: BaseInput | Mapping[str, JsonValue] | None = None,
         *, stub: Mapping[Node, list[BaseModel | JsonValue]] | None = None,
+        targets: tuple[RunTarget, ...] = (),
     ) -> WorkflowTest:
         """Async variant of test(), with the same isolated in-memory host."""
         from .machine_test import WorkflowTest
 
-        driver = WorkflowTest(self, input, stub=stub)
+        driver = WorkflowTest(self, input, stub=stub, targets=targets)
         await driver._drive()
         return driver
 

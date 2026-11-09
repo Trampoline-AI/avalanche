@@ -33,7 +33,7 @@ assert m.state == "closed"
 
 The key consists of the named input fields, in order; the wire representation
 is a JSON array. Derive it with `approval.key(Request(id=42))`, which validates
-against the input model. There is no separate formatted-key parser.
+only those key fields (full input validation belongs to a new run). There is no separate formatted-key parser.
 `approval.spec` is a JSON-only declaration: states reference work graphs,
 transitions optionally declare a Pydantic payload schema, timers hold seconds,
 and graph metadata carries retry policies, waits, maps and emissions.
@@ -78,6 +78,27 @@ is needed. Exhausted step retries fail the instance. `on_uncertain="hold"`
 continues to park for a human reconciliation rather than automatically replaying
 an uncertain external effect.
 
+## Artifact payloads, replay and retention
+
+Event payload models may declare `File`, `Workspace`, lists or nested models,
+just like run inputs. Send preserves native models until host admission; dumping
+JSON references alone does not upload, authorize, copy or retain their contents.
+The host must use the normal upload/reference path and bind accepted payloads
+into the target run before issuing a receipt, including deferred events. A host
+that has not implemented uploads must explicitly refuse them, never accept an
+unusable reference. The in-memory test host can bind locally registered references;
+it is not durable artifact storage.
+
+An existing key is resolved after authorization and validation of key fields only.
+Replacement input/files are ignored, not retained or applied; only a new key needs
+complete input/artifact validation. General machine reruns, from-step reruns and
+from-visit reruns are unsupported. Interrupted-visit repair is a new visit in the
+same state/run, not replay. A whole replay requires a different business key.
+Key-to-run identity is permanent even when terminal evidence expires under the
+host's normal retention policy: reads return `read_state="expired"`, not an empty
+history masquerading as success. Live inputs and deferred payloads must remain
+reachable for the life of their run. No fixed retention duration is promised.
+
 ## Test controls
 
 The [PR lifecycle example](../examples/pr_lifecycle.py) exercises the review,
@@ -107,16 +128,15 @@ The host derives the key from the input and returns the existing run for an
 existing key. Local operator integration is separate work; this SDK change does
 not yet make that path executable for machines.
 
-Inside a workflow, `send` builds a graph node; it does not perform HTTP calls or
-require credentials in worker code. Its arguments may be node futures. The
-following test also uses the retained declared `start` node: how a router starts
-an instance is pending the `ava-router-start` decision. Do not treat that node
-as a settled router API.
+Inside a workflow, `ava.start_run(target, input)` starts either a flow or a
+machine through the same declared run operation. `machine.send` declares the
+only machine-specific operation. Neither performs worker HTTP calls or requires
+worker credentials. Arguments, including a catalog-name target, may be node futures.
 
 ```python
 @ava.workflow
 def router():
-    started = approval.start(Request(id=43))
+    started = ava.start_run(approval, Request(id=43))
     sent = approval.send((43,), "approved")
     started >> sent
     return sent
@@ -125,17 +145,28 @@ run = router().test()
 assert run.handle.result().status == "accepted"
 ```
 
-`start` returns a node whose output is `ava.MachineStart(run_id, key, created)`.
+`ava.start_run` returns `ava.RunStart(run_id, key, created, read_state)`. An
+unkeyed flow has `key=None`; a permanent key may resolve to an `expired` run
+whose terminal history/artifacts have been removed by normal retention.
 `send` returns a node whose output is `ava.MachineEventReceipt`, containing
 `receipt_id`, event `key`, `accepted_at`, `duplicate` and `status` (`accepted` or
 `ignored`). Omitting a declared send's `idempotency_key` uses that node's stable
 `RunContext.step_key`, so retries keep the same delivery identity. Defer/drop
 remain later inbox facts, not additional receipt statuses.
 
+Both operations accept `when=bool_or_future`. The scheduler first resolves a
+strict boolean: false skips other argument validation and host calls and yields
+`None`. It satisfies ordering edges but does not implicitly skip children. A
+consumer of a conditional result must handle `None`; separate predicates express
+start vs send (and false/false for irrelevant deliveries). This is not Python
+branching on a future. The [local router example](../examples/pr_lifecycle.py)
+uses two explicit predicates. For dynamic catalog-name targets, register test
+implementations with `workflow.test(targets=(flow_builder, machine, ...))`.
+
 `workflow.test()` and `await workflow.test_async()` execute these operations
 against an isolated in-memory host, sharing the machine transition reducer.
 These are authoring/test facilities, not restart durability. `workflow.run()`
-refuses MACHINE nodes with a missing-host error; operator-host execution is a
+refuses RUN and MACHINE nodes with a missing-host error; operator-host execution is a
 separate integration. `machine.run()` is not an instance execution API.
 
 Outside a workflow, send to an already started instance with an explicit host:
@@ -148,9 +179,9 @@ async def approve(host: ava.MachineHost):
     )
 ```
 
-The host implements async `send(machine, key, event, payload, idempotency_key)`;
-its `start(machine, key, input)` hook remains only for the retained declared
-start node. There is no explicit-host `Machine.start` API. The standalone SDK
+The host implements async `send(machine, key_or_run_id, event, payload, idempotency_key)`
+only. `Machine.start`, `MachineStart` and a host-start API do not exist. The
+scheduler handles declared starts through its ordinary run path. The standalone SDK
 does not select a host, read hosted environment settings, or ship a hosted HTTP
 client. This breaks 0.20.x callers using API URL/token/organization/project,
 deployment or retry transport kwargs: start through the run path and send with

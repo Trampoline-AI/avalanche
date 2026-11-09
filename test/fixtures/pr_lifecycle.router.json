@@ -1,0 +1,27 @@
+{
+  "graph": {
+    "start_input_1": ["start_run_1"],
+    "is_opened_1": ["start_run_1"],
+    "event_key_1": ["pr_lifecycle_send_1"],
+    "event_name_1": ["pr_lifecycle_send_1"],
+    "delivery_id_1": ["pr_lifecycle_send_1"],
+    "is_event_1": ["pr_lifecycle_send_1"],
+    "start_run_1": ["pr_lifecycle_send_1"]
+  },
+  "node_types": {
+    "start_input_1": "step",
+    "is_opened_1": "step",
+    "start_run_1": "run",
+    "event_key_1": "step",
+    "event_name_1": "step",
+    "delivery_id_1": "step",
+    "is_event_1": "step",
+    "pr_lifecycle_send_1": "machine"
+  },
+  "node_runs": {
+    "start_run_1": {"op": "start"}
+  },
+  "node_machines": {
+    "pr_lifecycle_send_1": {"machine": "pr_lifecycle", "op": "send"}
+  }
+}

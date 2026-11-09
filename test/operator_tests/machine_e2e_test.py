@@ -50,6 +50,27 @@ def test_review_loop():
             )
     # A builder is traced once and discovery never executes its async work.
     assert example.pr_lifecycle() is example.pr_lifecycle()
+    router_graph = example.lifecycle_router()
+    router_topology = {
+        "graph": dict(router_graph.graph),
+        "node_types": {
+            name: ref.node.node_type.value for name, ref in router_graph.nodes.items()
+        },
+        "node_runs": {name: spec.model_dump() for name, spec in router_graph.node_runs.items()},
+        "node_machines": {
+            name: spec.model_dump() for name, spec in router_graph.node_machines.items()
+        },
+    }
+    assert router_topology == json.loads(
+        (GOLDEN.parent / "pr_lifecycle.router.json").read_text()
+    )
+    routed = router_graph.test(
+        example.Delivery(
+            repo="acme/api", number=46, head_sha="a1", action="opened", delivery_id="d46"
+        )
+    )
+    assert routed.handle.result(timeout=1)[0].created
+    assert routed.handle.result(timeout=1)[1] is None
     assert example.pr_lifecycle.key(example.PR(repo="acme/api", number=42, head_sha="a1")) == (
         "acme/api",
         42,
@@ -66,8 +87,8 @@ def test_review_loop():
         return example.PR(repo="acme/api", number=44, head_sha="a1")
 
     @ava.step
-    def instance_key(started: ava.MachineStart) -> tuple[str, int]:
-        return tuple(started.key)
+    def instance_key(started: ava.RunStart) -> str:
+        return started.run_id
 
     @ava.step
     def event_name() -> str:
@@ -76,23 +97,30 @@ def test_review_loop():
     @ava.workflow
     def router():
         value = request()
-        started = example.pr_lifecycle.start(value)
-        again = example.pr_lifecycle.start(value)
+        started = ava.start_run(example.pr_lifecycle, value)
+        # Existing key validates identity only and ignores invalid replacement input.
+        again = ava.start_run(
+            example.pr_lifecycle, {"repo": "acme/api", "number": 44, "head_sha": 123}
+        )
         started >> again
         key = instance_key(again)
         receipt = example.pr_lifecycle.send(key, event_name())
         return started, again, receipt
 
     graph = router()
-    assert {spec.op for spec in graph.node_machines.values()} == {"start", "send"}
+    assert {spec.op for spec in graph.node_machines.values()} == {"send"}
+    assert len(graph.node_runs) == 2
     from runtime.operator.registry import workflow_to_info
 
     info = workflow_to_info(graph, __file__)
     assert info.node_machines == graph.node_machines
+    assert info.node_runs == graph.node_runs
     with pytest.raises(RuntimeError, match="MachineHost"):
         graph.run()
     with pytest.raises(TypeError, match="ava run"):
-        example.pr_lifecycle.start(example.PR(repo="acme/api", number=44, head_sha="a1"))
+        ava.start_run(
+            example.pr_lifecycle, example.PR(repo="acme/api", number=44, head_sha="a1")
+        )
     with pytest.raises(TypeError, match="host="):
         example.pr_lifecycle.send(("acme/api", 44), "merged")
 
@@ -138,7 +166,8 @@ def test_review_loop():
                 host=run.host,
             )
         with pytest.raises(TypeError, match="host"):
-            example.pr_lifecycle.start(
+            ava.start_run(
+                example.pr_lifecycle,
                 example.PR(repo="acme/api", number=44, head_sha="a1"),
                 host=run.host,
             )
@@ -148,6 +177,59 @@ def test_review_loop():
         assert async_run.handle.result(timeout=1)[2].status == "accepted"
 
     asyncio.run(replay_and_explicit_host())
+
+    class RouteInput(ava.BaseInput):
+        start: bool
+
+    @ava.step
+    def should_start(input: RouteInput) -> bool:
+        return input.start
+
+    @ava.step
+    def should_send(input: RouteInput) -> bool:
+        return not input.start
+
+    @ava.step
+    def flow_target() -> str:
+        return "child_flow"
+
+    @ava.step
+    def child_result() -> int:
+        return 42
+
+    @ava.workflow
+    def child_flow():
+        return child_result()
+
+    @ava.workflow(input=RouteInput)
+    def conditional_router():
+        seeded = ava.start_run(
+            example.pr_lifecycle, example.PR(repo="acme/api", number=45, head_sha="a1")
+        )
+        started = ava.start_run(
+            example.pr_lifecycle, {"repo": "acme/api", "number": 45}, when=should_start()
+        )
+        sent = example.pr_lifecycle.send(("acme/api", 45), "merged", when=should_send())
+        # Skipped operations do not validate otherwise invalid arguments or call the host.
+        skipped = ava.start_run("missing", {"invalid": True}, when=False)
+        skipped_send = example.pr_lifecycle.send((), "", when=False)
+        seeded >> started >> sent >> skipped >> skipped_send
+        child = ava.start_run(flow_target())
+        skipped_send >> child
+        return started, sent, skipped, skipped_send, child
+
+    for start in (True, False):
+        conditional = conditional_router().test(RouteInput(start=start), targets=(child_flow,))
+        started, sent, skipped, skipped_send, child = conditional.handle.result(timeout=1)
+        assert (started is not None) == start
+        assert (sent is None) == start
+        assert skipped is None and skipped_send is None
+        assert child.created and child.key is None
+        assert conditional.host.flow_runs[0].handle.result(timeout=1) == 42
+        assert len(conditional.host.instances) == 1
+        assert next(iter(conditional.host.instances.values())).state == (
+            "ready_to_merge" if start else "closed"
+        )
 
 
 @pytest.mark.parametrize(
@@ -199,19 +281,29 @@ def invalid():
 
 
 @pytest.mark.asyncio
-async def test_machine_run_control_early_events_payloads_and_defer():
+async def test_machine_run_control_early_events_payloads_and_defer(tmp_path):
     class Input(ava.BaseInput):
         id: int
 
     class Amended(BaseModel):
         sha: str
+        file: ava.File | None = None
+        tree: ava.Workspace | None = None
 
     entered, release = asyncio.Event(), asyncio.Event()
     received: list[str] = []
+    from avalanche.references import local_workspace
+
+    (tmp_path / "payload.txt").write_text("retained event bytes")
+    tree = local_workspace(tmp_path)
+    file = ava.File.from_path(tmp_path / "payload.txt", workspace=tree)
+
+    effects: set[str] = set()
 
     @ava.step
-    async def idle() -> None:
-        pass
+    async def idle(context: ava.RunContext) -> None:
+        # A recipient dedupes retry identities but must not collapse distinct visits.
+        effects.add(context.step_key)
 
     @ava.step
     async def amend_work() -> None:
@@ -221,6 +313,9 @@ async def test_machine_run_control_early_events_payloads_and_defer():
     @ava.step
     async def close_work(payload: Amended) -> None:
         received.append(payload.sha)
+        if payload.sha == "routed":
+            assert payload.file.read_bytes() == b"retained event bytes"
+            assert (payload.tree.path / "payload.txt").read_text() == "retained event bytes"
 
     @ava.machine(input=Input, key=("id",))
     def lifecycle():
@@ -247,6 +342,7 @@ async def test_machine_run_control_early_events_payloads_and_defer():
     await drive
     assert m.state == "closed"
     assert received == ["queued"]
+    assert len(effects) == 2
     assert [(f.kind, f.event) for f in m.waits.facts] == [
         ("event_ignored", "amended"),
         ("event_dropped", "amended"),
@@ -260,7 +356,7 @@ async def test_machine_run_control_early_events_payloads_and_defer():
 
     @ava.step
     def routed_payload() -> Amended:
-        return Amended(sha="routed")
+        return Amended(sha="routed", file=file, tree=tree)
 
     @ava.step
     def routed_event() -> str:
@@ -272,7 +368,7 @@ async def test_machine_run_control_early_events_payloads_and_defer():
 
     @ava.workflow
     def payload_router():
-        started = lifecycle.start(Input(id=2))
+        started = ava.start_run(lifecycle, Input(id=2))
         buffered = lifecycle.send(
             (2,),
             routed_event(),
@@ -291,6 +387,7 @@ async def test_machine_run_control_early_events_payloads_and_defer():
     routed_instance = next(iter(routed.host.instances.values()))
     assert routed_instance.state == "closed"
     assert received == ["queued", "routed"]
+    assert len(effects) == 4
     assert any(address[-1] == "delivery-2" for address in routed.host.receipts)
 
 
@@ -341,8 +438,11 @@ def test_machine_visit_reconciliation_reuses_local_waits():
     assert m.handle.done()
     assert calls == ["effect"]
 
+    child_keys: set[str] = set()
+
     @ava.step(on_uncertain="hold")
-    async def mapped(value: int) -> int:
+    async def mapped(value: int, context: ava.RunContext) -> int:
+        child_keys.add(context.step_key)
         calls.append(f"mapped:{value}")
         if value == 1:
             raise ava.OutcomeUnknownError("reply lost")
@@ -362,6 +462,7 @@ def test_machine_visit_reconciliation_reuses_local_waits():
     mapped_run.decide("mapped[0]", {"kind": "done", "output": 10}, reason="verified")
     assert mapped_run.handle.result(timeout=1) == [10, 20]
     assert calls == ["effect", "mapped:1", "mapped:2"]
+    assert len(child_keys) == 2
 
 
 def test_machine_discovery_warns_without_executing_work(tmp_path):
@@ -372,13 +473,14 @@ class Input(ava.BaseInput):
 @ava.step(emits=("unhandled",))
 async def work() -> ava.Event[int]:
     raise AssertionError("discovery executed work")
-@ava.machine(input=Input, key=("id",))
+@ava.machine(input=Input, key=("id",), cron="0 * * * *",
+             webhook=ava.Webhook(path="/machine"))
 def warned():
     waiting = ava.state(work, initial=True)
     waiting.on("external") >> waiting
 @ava.workflow
 def router():
-    started = warned.start(Input(id=1))
+    started = ava.start_run(warned, Input(id=1))
     sent = warned.send((1,), "external")
     started >> sent
     return sent
@@ -390,15 +492,21 @@ def router():
     assert "unhandled" in diagnostics[0].message
     raise_for_discovery_diagnostics(diagnostics)
     assert sorted(info.name for info in registry.list_workflows()) == ["router", "warned"]
+    machine_info = next(info for info in registry.list_workflows() if info.name == "warned")
+    assert machine_info.cron == "0 * * * *"
+    assert machine_info.webhook_path == "/machine"
     router = next(info for info in registry.list_workflows() if info.name == "router")
     assert {name: spec.model_dump() for name, spec in router.node_machines.items()} == {
-        "warned_start_1": {"machine": "warned", "op": "start"},
         "warned_send_1": {"machine": "warned", "op": "send"},
+    }
+    assert {name: spec.model_dump() for name, spec in router.node_runs.items()} == {
+        "start_run_1": {"op": "start"},
     }
     cached = WorkflowRegistry(cache_dir=tmp_path / "cache")
     cached.scan([str(fixture)])
     cached_router = next(info for info in cached.list_workflows() if info.name == "router")
     assert cached_router.node_machines == router.node_machines
+    assert cached_router.node_runs == router.node_runs
 
 
 def test_machine_work_failure_retry_and_undeclared_event():

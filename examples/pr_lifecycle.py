@@ -87,6 +87,51 @@ def pr_lifecycle():
     ready_to_merge.after(timedelta(days=30)) >> closed
 
 
+class Delivery(PR):
+    action: str
+    delivery_id: str
+
+
+@ava.step
+def start_input(input: Delivery) -> PR:
+    return PR(repo=input.repo, number=input.number, head_sha=input.head_sha)
+
+
+@ava.step
+def is_opened(input: Delivery) -> bool:
+    return input.action == "opened"
+
+
+@ava.step
+def is_event(input: Delivery) -> bool:
+    return input.action in {"merged", "closed_without_merge", "amended"}
+
+
+@ava.step
+def event_name(input: Delivery) -> str:
+    return input.action
+
+
+@ava.step
+def event_key(input: Delivery) -> tuple[str, int]:
+    return input.repo, input.number
+
+
+@ava.step
+def delivery_id(input: Delivery) -> str:
+    return input.delivery_id
+
+
+@ava.workflow(input=Delivery)
+def lifecycle_router():
+    started = ava.start_run(pr_lifecycle, start_input(), when=is_opened())
+    sent = pr_lifecycle.send(
+        event_key(), event_name(), idempotency_key=delivery_id(), when=is_event()
+    )
+    started >> sent
+    return started, sent
+
+
 def test_review_loop() -> None:
     m = pr_lifecycle.test(
         PR(repo="acme/api", number=42, head_sha="a1"),
@@ -116,3 +161,8 @@ def test_review_loop() -> None:
 
 if __name__ == "__main__":
     test_review_loop()
+    routed = lifecycle_router().test(
+        Delivery(repo="acme/api", number=43, head_sha="a1", action="opened", delivery_id="d43")
+    )
+    started, sent = routed.handle.result()
+    assert started.created and sent is None

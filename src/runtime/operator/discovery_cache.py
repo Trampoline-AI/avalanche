@@ -18,6 +18,7 @@ from avalanche.agent.declaration import AgentDeclaration
 from avalanche.machine_host import MachineOpSpec
 from avalanche.mapping import MapSpec
 from avalanche.policies import StepPolicy, WaitSpec
+from avalanche.run_steps import RunOpSpec
 
 from .discovery import ConfiguredRoot, FileDiscoveryResult
 from .models import WorkflowDescriptor, WorkflowDiscoveryDiagnostic, WorkflowLocator
@@ -25,7 +26,7 @@ from .source import iter_source_paths
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 19
+_CACHE_SCHEMA_VERSION = 20
 
 
 class _CacheModel(BaseModel):
@@ -77,6 +78,7 @@ class _CachedDescriptor(_CacheModel):
     node_policies: tuple[tuple[str, StepPolicy], ...]
     node_waits: tuple[tuple[str, WaitSpec], ...]
     node_machines: tuple[tuple[str, MachineOpSpec], ...]
+    node_runs: tuple[tuple[str, RunOpSpec], ...]
     machine_spec_json: str
     display_names: tuple[tuple[str, str], ...]
     agent_node_ids: tuple[str, ...]
@@ -105,6 +107,7 @@ class _CachedDescriptor(_CacheModel):
             node_policies=descriptor.node_policies,
             node_waits=descriptor.node_waits,
             node_machines=descriptor.node_machines,
+            node_runs=descriptor.node_runs,
             machine_spec_json=descriptor.machine_spec_json,
             display_names=descriptor.display_names,
             agent_node_ids=descriptor.agent_node_ids,
@@ -133,6 +136,7 @@ class _CachedDescriptor(_CacheModel):
             node_policies=self.node_policies,
             node_waits=self.node_waits,
             node_machines=self.node_machines,
+            node_runs=self.node_runs,
             machine_spec_json=self.machine_spec_json,
             display_names=self.display_names,
             agent_node_ids=self.agent_node_ids,
@@ -209,7 +213,7 @@ class _SourceStamp(_CacheModel):
 
 
 class _CacheDocument(_CacheModel):
-    schema_version: Literal[19]
+    schema_version: Literal[20]
     environment: str
     roots: tuple[_CachedRoot, ...]
     watch_roots: tuple[str, ...]
