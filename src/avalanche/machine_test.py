@@ -536,6 +536,7 @@ class InMemoryMachineHost:
         self.machines: dict[str, Machine] = {}
         self.flows: dict[str, Workflow] = {}
         self.flow_runs: list[WorkflowTest] = []
+        self.keyed_flow_runs: dict[tuple[str, str], WorkflowTest] = {}
         self.instances: dict[tuple[str, str], MachineTest] = {}
         self.receipts: dict[tuple[str, str, str, str], tuple[str, MachineEventReceipt]] = {}
         self.stub = stub
@@ -563,10 +564,25 @@ class InMemoryMachineHost:
     ) -> RunStart:
         """Test scheduler path, not a public host-start transport API."""
         if target in self.flows:
-            driver = WorkflowTest(self.flows[target], input, stub=self.stub, host=self)
+            flow = self.flows[target]
+            key = flow.key(input) if flow.key_fields else None
+            address = (target, self._key(key)) if key is not None else None
+            if address is not None and address in self.keyed_flow_runs:
+                return RunStart(
+                    run_id=self.keyed_flow_runs[address].handle.run_id,
+                    key=list(key),
+                    created=False,
+                )
+            driver = WorkflowTest(flow, input, stub=self.stub, host=self)
             self.flow_runs.append(driver)
+            if address is not None:
+                self.keyed_flow_runs[address] = driver
             await driver._drive()
-            return RunStart(run_id=driver.handle.run_id, created=True)
+            return RunStart(
+                run_id=driver.handle.run_id,
+                key=list(key) if key is not None else None,
+                created=True,
+            )
         definition = self.machines[target]
         key = definition.key(input)
         address = (target, self._key(key))

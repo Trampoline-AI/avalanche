@@ -26,7 +26,7 @@ from .source import iter_source_paths
 
 logger = logging.getLogger(__name__)
 
-_CACHE_SCHEMA_VERSION = 20
+_CACHE_SCHEMA_VERSION = 21
 
 
 class _CacheModel(BaseModel):
@@ -80,6 +80,7 @@ class _CachedDescriptor(_CacheModel):
     node_machines: tuple[tuple[str, MachineOpSpec], ...]
     node_runs: tuple[tuple[str, RunOpSpec], ...]
     machine_spec_json: str
+    key_fields: tuple[str, ...]
     display_names: tuple[tuple[str, str], ...]
     agent_node_ids: tuple[str, ...]
     agent_declarations: tuple[tuple[str, AgentDeclaration], ...]
@@ -109,6 +110,7 @@ class _CachedDescriptor(_CacheModel):
             node_machines=descriptor.node_machines,
             node_runs=descriptor.node_runs,
             machine_spec_json=descriptor.machine_spec_json,
+            key_fields=descriptor.key_fields,
             display_names=descriptor.display_names,
             agent_node_ids=descriptor.agent_node_ids,
             agent_declarations=descriptor.agent_declarations,
@@ -138,6 +140,7 @@ class _CachedDescriptor(_CacheModel):
             node_machines=self.node_machines,
             node_runs=self.node_runs,
             machine_spec_json=self.machine_spec_json,
+            key_fields=self.key_fields,
             display_names=self.display_names,
             agent_node_ids=self.agent_node_ids,
             agent_declarations=self.agent_declarations,
@@ -213,7 +216,7 @@ class _SourceStamp(_CacheModel):
 
 
 class _CacheDocument(_CacheModel):
-    schema_version: Literal[20]
+    schema_version: Literal[21]
     environment: str
     roots: tuple[_CachedRoot, ...]
     watch_roots: tuple[str, ...]

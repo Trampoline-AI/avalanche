@@ -2152,6 +2152,7 @@ class Workflow:
         classifier_defaults: dict[str, JsonValue] | None = None,
         output_type: type[BaseModel] | None = None,
         emits: tuple[str, ...] = (),
+        key: tuple[str, ...] = (),
     ):
         """
         Initialize workflow.
@@ -2206,6 +2207,12 @@ class Workflow:
         self.webhook = _normalize_webhook(webhook)
         _validate_workflow_types(input_type, context_type)
         self.input_type = input_type
+        self.key_fields = key
+        if key:
+            if input_type is None or not set(key) <= input_type.model_fields.keys():
+                raise ValueError("workflow key fields must be declared input fields")
+            if len(set(key)) != len(key):
+                raise ValueError("duplicate workflow key fields")
         self.context_type = context_type
         self.agent_defaults = agent_defaults
         from .classifier.models import validate_runtime_defaults
@@ -2221,6 +2228,14 @@ class Workflow:
             raise ValueError(
                 f"Workflow '{name}' contains a cycle involving: {', '.join(sorted(in_cycle))}"
             )
+
+    def key(self, input: BaseInput | Mapping[str, JsonValue]) -> tuple[JsonValue, ...]:
+        """Derive a declared permanent run identity without validating replacement input."""
+        from .run_keys import derive_run_key
+
+        if not self.key_fields:
+            raise ValueError("workflow has no declared key")
+        return derive_run_key(self.input_type, self.key_fields, input)
 
     @property
     def output_node(self) -> NodeFuture | None:
@@ -2320,6 +2335,11 @@ class Workflow:
         The handle is returned immediately. Call ``handle.result()`` to block in
         synchronous code or ``await handle`` from asynchronous code.
         """
+        if self.key_fields:
+            raise RuntimeError(
+                "Keyed workflows require a run-capable scheduler host for idempotent starts; "
+                "use workflow.test() for isolated authoring tests."
+            )
         if self.node_machines or self.node_runs:
             raise RuntimeError(
                 "Declared RUN/MACHINE nodes require a scheduler host; the embedded runner "
@@ -3011,6 +3031,7 @@ def workflow(
     cron: str | None = None,
     webhook: Webhook | bool | None = None,
     input: type | None = None,
+    key: tuple[str, ...] | None = None,
     output: type[BaseModel] | None = None,
     emits: tuple[str, ...] = (),
     context: type | None = None,
@@ -3043,6 +3064,7 @@ def workflow(
             ``AgentDefaults``) shared by agent steps; a step's runtime of the same
             kind is merged over it field by field.
         input: Optional BaseInput subclass validated at run start.
+        key: Optional ordered input-field names for permanent idempotent run starts.
         context: Optional BaseContext subclass validated at run start.
         ctx: Alias for context.
 
@@ -3053,6 +3075,8 @@ def workflow(
     if context is not None and ctx is not None and context is not ctx:
         raise ValueError("Use either context= or ctx=, not both")
     context_type = context or ctx
+    if key is not None and not key:
+        raise ValueError("workflow key must contain at least one input field")
     webhook = _normalize_webhook(webhook)
     validated_agent_defaults: AgentDefaults | None = None
     if agent_defaults is not None:
@@ -3082,6 +3106,7 @@ def workflow(
                     cron=cron,
                     webhook=webhook,
                     input_type=input,
+                    key=key if key is not None else (),
                     output_type=output,
                     emits=emits,
                     context_type=context_type,

@@ -87,6 +87,12 @@ def pr_lifecycle():
     ready_to_merge.after(timedelta(days=30)) >> closed
 
 
+@ava.workflow(input=PR, key=("repo", "number"))
+def keyed_notification():
+    """An ordinary flow can claim the same kind of permanent run identity."""
+    return notify_ready()
+
+
 class Delivery(PR):
     action: str
     delivery_id: str

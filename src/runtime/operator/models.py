@@ -831,6 +831,7 @@ class WorkflowInfo:
     node_machines: dict[str, MachineOpSpec] = field(default_factory=dict)
     node_runs: dict[str, RunOpSpec] = field(default_factory=dict)
     machine_spec_json: str = ""
+    key_fields: tuple[str, ...] = ()
     display_names: dict[str, str] = field(default_factory=dict)  # node_id -> display name
     agent_node_ids: list[str] = field(default_factory=list)
     agent_declarations: dict[str, AgentDeclaration] = field(default_factory=dict)
@@ -948,6 +949,7 @@ class WorkflowDescriptor:
     node_machines: tuple[tuple[str, MachineOpSpec], ...] = ()
     node_runs: tuple[tuple[str, RunOpSpec], ...] = ()
     machine_spec_json: str = ""
+    key_fields: tuple[str, ...] = ()
     agent_node_ids: tuple[str, ...] = ()
     agent_declarations: tuple[tuple[str, AgentDeclaration], ...] = ()
     classifier_metadata_json: tuple[tuple[str, str], ...] = ()

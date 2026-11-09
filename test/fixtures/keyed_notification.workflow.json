@@ -1,0 +1,15 @@
+{
+  "key_fields": ["repo", "number"],
+  "input_schema": {
+    "additionalProperties": false,
+    "properties": {
+      "repo": {"title": "Repo", "type": "string"},
+      "number": {"title": "Number", "type": "integer"},
+      "head_sha": {"title": "Head Sha", "type": "string"}
+    },
+    "required": ["repo", "number", "head_sha"],
+    "title": "PR",
+    "type": "object"
+  },
+  "node_types": {"notify_ready_1": "step"}
+}

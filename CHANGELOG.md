@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add optional `@ava.workflow(input=..., key=(...))` with the same typed key
+  derivation, discovery metadata and existing-key test-host behavior as machines.
+  Host run-ID/`--key` lookup and durable key storage remain integration work;
+  unkeyed flows retain independent start semantics.
 - **Breaking for 0.20.x:** remove the built-in machine HTTP client and all
   `DELTA_*` target/credential/retry environment reads, without deprecation.
   Start an instance through the normal run-start path (`ava run <machine>`),

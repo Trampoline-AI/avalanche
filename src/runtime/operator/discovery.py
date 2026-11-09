@@ -651,6 +651,7 @@ def _descriptor_to_dict(
         "machine_spec_json": workflow.machine_spec.model_dump_json()
         if workflow.machine_spec is not None
         else "",
+        "key_fields": list(workflow.key_fields),
         "input_schema_json": workflow_input_schema(workflow),
         "input_declaration_json": input_declaration_for_workflow(workflow, node_ids),
         "workflow_id": workflow_id,
@@ -706,6 +707,7 @@ def _descriptor_from_dict(item: dict[str, Any]) -> WorkflowDescriptor:
         display_name=item["display_name"],
         locator=WorkflowLocator(**item["locator"]),
         node_ids=tuple(item["node_ids"]),
+        key_fields=tuple(item["key_fields"]),
         node_policies=tuple(
             (key, StepPolicy.model_validate(value)) for key, value in item["node_policies"]
         ),

@@ -294,6 +294,7 @@ class Machine:
             {},
             name=self.__name__,
             input_type=self.input_type,
+            key=self.key_fields,
             cron=self.cron,
             webhook=self.webhook,
         )

@@ -41,6 +41,28 @@ Discovery rejects unknown targets, invalid initial/final states, undeclared
 internal emissions and oversized visits. An event accepted by no state produces
 a non-fatal discovery warning.
 
+## Keys are a run feature
+
+Ordinary workflows can opt into the same permanent run identity:
+
+```python
+@ava.workflow(input=Request, key=("id",))
+def notification():
+    return work()
+
+assert notification().key({"id": 42}) == (42,)
+```
+
+The ordered typed fields and key derivation are identical to machines. Hosts
+start both through the normal run path and resolve run IDs or named
+`--key field=value` arguments with the ordinary input-field parser. Existing
+keys return the original run and ignore replacement non-key input/files; omitted
+`key=` keeps independent ordinary flow starts. Discovery exports `key_fields` for
+both kinds. The embedded runner refuses keyed workflows because it has no durable
+identity index; use `.test()` for isolated authoring or a run-capable host.
+This SDK commit supplies the declaration/discovery/test-host contract; CLI lookup
+and durable local/Delta key storage are host integration work, not credited here.
+
 ## Typed work events
 
 A step declares `emits=("done", ...)` and returns

@@ -50,6 +50,14 @@ def test_review_loop():
             )
     # A builder is traced once and discovery never executes its async work.
     assert example.pr_lifecycle() is example.pr_lifecycle()
+    keyed_graph = example.keyed_notification()
+    assert {
+        "key_fields": list(keyed_graph.key_fields),
+        "input_schema": keyed_graph.input_type.model_json_schema(),
+        "node_types": {
+            name: ref.node.node_type.value for name, ref in keyed_graph.nodes.items()
+        },
+    } == json.loads((GOLDEN.parent / "keyed_notification.workflow.json").read_text())
     router_graph = example.lifecycle_router()
     router_topology = {
         "graph": dict(router_graph.graph),
@@ -177,6 +185,36 @@ def test_review_loop():
         assert async_run.handle.result(timeout=1)[2].status == "accepted"
 
     asyncio.run(replay_and_explicit_host())
+
+    class FlowInput(ava.BaseInput):
+        id: int
+        body: str
+
+    @ava.step
+    def keyed_result(input: FlowInput) -> str:
+        return input.body
+
+    @ava.workflow(input=FlowInput, key=("id",))
+    def keyed_child():
+        return keyed_result()
+
+    @ava.workflow
+    def keyed_router():
+        first = ava.start_run(keyed_child, FlowInput(id=1, body="first"))
+        again = ava.start_run(keyed_child, {"id": "1", "body": 999})
+        second = ava.start_run(keyed_child, FlowInput(id=2, body="second"))
+        first >> again >> second
+        return first, again, second
+
+    keyed = keyed_router().test()
+    first, again, second = keyed.handle.result(timeout=1)
+    assert first.created and not again.created and second.created
+    assert first.run_id == again.run_id and second.run_id != first.run_id
+    assert first.key == [1] and second.key == [2]
+    assert [run.handle.result(timeout=1) for run in keyed.host.flow_runs] == ["first", "second"]
+    assert keyed_child().key({"id": "1"}) == (1,)
+    with pytest.raises(RuntimeError, match="scheduler host"):
+        keyed_child().run(input=FlowInput(id=1, body="first"))
 
     class RouteInput(ava.BaseInput):
         start: bool
@@ -478,6 +516,9 @@ async def work() -> ava.Event[int]:
 def warned():
     waiting = ava.state(work, initial=True)
     waiting.on("external") >> waiting
+@ava.workflow(input=Input, key=("id",), emits=("unhandled",))
+def keyed_flow():
+    return work()
 @ava.workflow
 def router():
     started = ava.start_run(warned, Input(id=1))
@@ -491,7 +532,13 @@ def router():
     assert [d.kind for d in diagnostics] == ["warning"]
     assert "unhandled" in diagnostics[0].message
     raise_for_discovery_diagnostics(diagnostics)
-    assert sorted(info.name for info in registry.list_workflows()) == ["router", "warned"]
+    assert sorted(info.name for info in registry.list_workflows()) == [
+        "keyed_flow",
+        "router",
+        "warned",
+    ]
+    keyed_info = next(info for info in registry.list_workflows() if info.name == "keyed_flow")
+    assert keyed_info.key_fields == ("id",)
     machine_info = next(info for info in registry.list_workflows() if info.name == "warned")
     assert machine_info.cron == "0 * * * *"
     assert machine_info.webhook_path == "/machine"
@@ -507,6 +554,8 @@ def router():
     cached_router = next(info for info in cached.list_workflows() if info.name == "router")
     assert cached_router.node_machines == router.node_machines
     assert cached_router.node_runs == router.node_runs
+    cached_keyed = next(info for info in cached.list_workflows() if info.name == "keyed_flow")
+    assert cached_keyed.key_fields == keyed_info.key_fields
 
 
 def test_machine_work_failure_retry_and_undeclared_event():
