@@ -147,6 +147,7 @@ def workflow_info_to_v2(info: WorkflowInfo) -> pb.FlowInfoV2:
         node_waits_json={
             node: spec.model_dump_json(by_alias=True) for node, spec in info.node_waits.items()
         },
+        machine_spec_json=info.machine_spec_json,
         agent_declarations_json={
             node_id: declaration.model_dump_json()
             for node_id, declaration in info.agent_declarations.items()
@@ -926,6 +927,7 @@ def workflow_info_from_v2(msg: pb.FlowInfoV2) -> WorkflowInfo:
             node: WaitSpec.model_validate_json(value)
             for node, value in msg.node_waits_json.items()
         },
+        machine_spec_json=msg.machine_spec_json,
         display_names=dict(msg.topology.display_names),
         agent_node_ids=list(msg.agent_node_ids),
         agent_declarations={

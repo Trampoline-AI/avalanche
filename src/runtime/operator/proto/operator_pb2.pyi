@@ -58,6 +58,18 @@ AGENT_EVENT_KIND_V2_PROMPT_SENT: AgentEventKindV2
 PAGE_ORDER_V2_FORWARD: PageOrderV2
 PAGE_ORDER_V2_NEWEST_FIRST: PageOrderV2
 
+class ControlMachineRequestV2(_message.Message):
+    __slots__ = ("request_json",)
+    REQUEST_JSON_FIELD_NUMBER: _ClassVar[int]
+    request_json: str
+    def __init__(self, request_json: _Optional[str] = ...) -> None: ...
+
+class ControlMachineResponseV2(_message.Message):
+    __slots__ = ("result_json",)
+    RESULT_JSON_FIELD_NUMBER: _ClassVar[int]
+    result_json: str
+    def __init__(self, result_json: _Optional[str] = ...) -> None: ...
+
 class ControlWaitRequestV2(_message.Message):
     __slots__ = ("run_id", "kind", "address", "payload_json", "idempotency_key", "reason", "offset", "limit")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
@@ -205,7 +217,7 @@ class WorkflowNodeSourceV2(_message.Message):
     def __init__(self, source_code: _Optional[str] = ...) -> None: ...
 
 class FlowInfoV2(_message.Message):
-    __slots__ = ("workflow_selector", "display_name", "manifest_digest", "node_ids", "workflow_id", "file_path", "topology", "agent_node_ids", "agent_declarations_json", "cron", "next_run_at", "last_run_at", "webhook_path", "webhook_url", "webhook_active", "classifier_metadata_json", "evaluation_metadata_json", "input_schema_json", "version", "schedule_enabled", "schedule_input_json", "node_policies_json", "node_waits_json")
+    __slots__ = ("workflow_selector", "display_name", "manifest_digest", "node_ids", "workflow_id", "file_path", "topology", "agent_node_ids", "agent_declarations_json", "cron", "next_run_at", "last_run_at", "webhook_path", "webhook_url", "webhook_active", "classifier_metadata_json", "evaluation_metadata_json", "input_schema_json", "version", "schedule_enabled", "schedule_input_json", "node_policies_json", "node_waits_json", "machine_spec_json")
     class AgentDeclarationsJsonEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -264,6 +276,7 @@ class FlowInfoV2(_message.Message):
     SCHEDULE_INPUT_JSON_FIELD_NUMBER: _ClassVar[int]
     NODE_POLICIES_JSON_FIELD_NUMBER: _ClassVar[int]
     NODE_WAITS_JSON_FIELD_NUMBER: _ClassVar[int]
+    MACHINE_SPEC_JSON_FIELD_NUMBER: _ClassVar[int]
     workflow_selector: str
     display_name: str
     manifest_digest: str
@@ -287,7 +300,8 @@ class FlowInfoV2(_message.Message):
     schedule_input_json: str
     node_policies_json: _containers.ScalarMap[str, str]
     node_waits_json: _containers.ScalarMap[str, str]
-    def __init__(self, workflow_selector: _Optional[str] = ..., display_name: _Optional[str] = ..., manifest_digest: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., workflow_id: _Optional[str] = ..., file_path: _Optional[str] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., agent_node_ids: _Optional[_Iterable[str]] = ..., agent_declarations_json: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., webhook_path: _Optional[str] = ..., webhook_url: _Optional[str] = ..., webhook_active: bool = ..., classifier_metadata_json: _Optional[_Mapping[str, str]] = ..., evaluation_metadata_json: _Optional[_Mapping[str, str]] = ..., input_schema_json: _Optional[str] = ..., version: _Optional[str] = ..., schedule_enabled: bool = ..., schedule_input_json: _Optional[str] = ..., node_policies_json: _Optional[_Mapping[str, str]] = ..., node_waits_json: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    machine_spec_json: str
+    def __init__(self, workflow_selector: _Optional[str] = ..., display_name: _Optional[str] = ..., manifest_digest: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., workflow_id: _Optional[str] = ..., file_path: _Optional[str] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., agent_node_ids: _Optional[_Iterable[str]] = ..., agent_declarations_json: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., webhook_path: _Optional[str] = ..., webhook_url: _Optional[str] = ..., webhook_active: bool = ..., classifier_metadata_json: _Optional[_Mapping[str, str]] = ..., evaluation_metadata_json: _Optional[_Mapping[str, str]] = ..., input_schema_json: _Optional[str] = ..., version: _Optional[str] = ..., schedule_enabled: bool = ..., schedule_input_json: _Optional[str] = ..., node_policies_json: _Optional[_Mapping[str, str]] = ..., node_waits_json: _Optional[_Mapping[str, str]] = ..., machine_spec_json: _Optional[str] = ...) -> None: ...
 
 class DiscoveryDiagnosticV2(_message.Message):
     __slots__ = ("path", "kind", "message")
@@ -757,7 +771,7 @@ class TerminalSealV2(_message.Message):
     def __init__(self, terminal_status: _Optional[str] = ..., reason: _Optional[str] = ...) -> None: ...
 
 class RunSnapshotV2(_message.Message):
-    __slots__ = ("cursor", "summary", "nodes", "topology", "scope_ref", "latest_log_sequence", "log_continuation", "terminal_seal", "input", "expansions")
+    __slots__ = ("cursor", "summary", "nodes", "topology", "scope_ref", "latest_log_sequence", "log_continuation", "terminal_seal", "input", "expansions", "machine_json")
     class ExpansionsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -775,6 +789,7 @@ class RunSnapshotV2(_message.Message):
     TERMINAL_SEAL_FIELD_NUMBER: _ClassVar[int]
     INPUT_FIELD_NUMBER: _ClassVar[int]
     EXPANSIONS_FIELD_NUMBER: _ClassVar[int]
+    MACHINE_JSON_FIELD_NUMBER: _ClassVar[int]
     cursor: LifecycleCursorV2
     summary: RunSummaryV2
     nodes: _containers.RepeatedCompositeFieldContainer[NodeSnapshotV2]
@@ -785,7 +800,8 @@ class RunSnapshotV2(_message.Message):
     terminal_seal: RunActivityDescriptorV2
     input: RunInputV2
     expansions: _containers.ScalarMap[str, int]
-    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., summary: _Optional[_Union[RunSummaryV2, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotV2, _Mapping]]] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., latest_log_sequence: _Optional[int] = ..., log_continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., terminal_seal: _Optional[_Union[RunActivityDescriptorV2, _Mapping]] = ..., input: _Optional[_Union[RunInputV2, _Mapping]] = ..., expansions: _Optional[_Mapping[str, int]] = ...) -> None: ...
+    machine_json: str
+    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., summary: _Optional[_Union[RunSummaryV2, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotV2, _Mapping]]] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., latest_log_sequence: _Optional[int] = ..., log_continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., terminal_seal: _Optional[_Union[RunActivityDescriptorV2, _Mapping]] = ..., input: _Optional[_Union[RunInputV2, _Mapping]] = ..., expansions: _Optional[_Mapping[str, int]] = ..., machine_json: _Optional[str] = ...) -> None: ...
 
 class RunInputV2(_message.Message):
     __slots__ = ("values_json", "supplied_fields")

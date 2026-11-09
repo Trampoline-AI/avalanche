@@ -2335,12 +2335,12 @@ class Workflow:
         The handle is returned immediately. Call ``handle.result()`` to block in
         synchronous code or ``await handle`` from asynchronous code.
         """
-        if self.key_fields:
+        if self.key_fields and (hooks is None or hooks.machine_step is None):
             raise RuntimeError(
                 "Keyed workflows require a run-capable scheduler host for idempotent starts; "
                 "use workflow.test() for isolated authoring tests."
             )
-        if self.node_machines or self.node_runs:
+        if (self.node_machines or self.node_runs) and (hooks is None or hooks.machine_step is None):
             raise RuntimeError(
                 "Declared RUN/MACHINE nodes require a scheduler host; the embedded runner "
                 "has no run or MachineHost. Use workflow.test() for in-memory execution."
@@ -2394,8 +2394,10 @@ class Workflow:
         return handle
 
     def test(
-        self, input: BaseInput | Mapping[str, JsonValue] | None = None,
-        *, stub: Mapping[Node, list[BaseModel | JsonValue]] | None = None,
+        self,
+        input: BaseInput | Mapping[str, JsonValue] | None = None,
+        *,
+        stub: Mapping[Node, list[BaseModel | JsonValue]] | None = None,
         targets: tuple[RunTarget, ...] = (),
     ) -> WorkflowTest:
         """Execute with fake time, stubs and an in-memory machine host."""
@@ -2406,8 +2408,10 @@ class Workflow:
         return driver
 
     async def test_async(
-        self, input: BaseInput | Mapping[str, JsonValue] | None = None,
-        *, stub: Mapping[Node, list[BaseModel | JsonValue]] | None = None,
+        self,
+        input: BaseInput | Mapping[str, JsonValue] | None = None,
+        *,
+        stub: Mapping[Node, list[BaseModel | JsonValue]] | None = None,
         targets: tuple[RunTarget, ...] = (),
     ) -> WorkflowTest:
         """Async variant of test(), with the same isolated in-memory host."""
@@ -2819,6 +2823,54 @@ class Workflow:
 
             return node_ref, result
 
+        def submit_machine(node_id: str):
+            from concurrent.futures import Future
+
+            from runtime.operator.machine_steps import MachineStepRequest
+
+            from .machine_nodes import MachineNode
+
+            ref = nodes[node_id]
+            if (
+                not isinstance(ref.node, MachineNode)
+                or hooks is None
+                or hooks.machine_step is None
+            ):
+                raise RuntimeError("MACHINE nodes require a machine-capable operator")
+            args = [
+                _unwrap_lineaged_tree(
+                    executor.get([_resolve_to_ref(value, result_refs, executor)])[0]
+                )
+                for value in ref.args
+            ]
+            kwargs = {
+                name: _unwrap_lineaged_tree(
+                    executor.get([_resolve_to_ref(value, result_refs, executor)])[0]
+                )
+                for name, value in ref.kwargs.items()
+            }
+            args, kwargs = _resolve_input_refs(
+                args, kwargs, run_input, ref.node.fn.__name__, self.name
+            )
+            node_context = _context_for_node(
+                run_context,
+                node_id=node_id,
+                node_name=ref.node.fn.__name__,
+                node_slug=ref.node_slug,
+            )
+            request = MachineStepRequest.bind(ref.node, args, kwargs, node_context)
+            result = hooks.machine_step(request)
+            task = Future()
+
+            def complete_machine(future):
+                try:
+                    task.set_result((ref, future.result()))
+                except Exception as exc:
+                    task.set_exception(exc)
+
+            result.add_done_callback(complete_machine)
+            return task
+
         def publish_terminal_receipts() -> None:
             if receipt_sink is None:
                 return
@@ -2949,6 +3001,7 @@ class Workflow:
                 cancel_requested,
                 resolve_mapped_list,
                 gather_map,
+                submit_machine,
             )
         else:
             for node_id in execution_order:

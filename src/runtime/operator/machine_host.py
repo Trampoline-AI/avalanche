@@ -21,10 +21,11 @@ from pydantic import JsonValue
 
 from avalanche.local_waits import WaitRefusalError
 from avalanche.machine_core import BufferedEvent, MachineRecord, reduce_machine, retain_inbox
-from avalanche.machine_host import MachineEventReceipt
+from avalanche.machine_host import MachineEventReceipt, MachineStart
 from avalanche.machine_spec import MachineSpec
 from avalanche.policies import event
 
+from .machine_steps import MachineStepRequest
 from .models import RunState, RunStatus, TriggerKind, WorkflowDescriptor
 from .registry import descriptor_to_info, workflow_revision
 from .state.machines import (
@@ -57,6 +58,12 @@ class Send:
     payload: JsonValue
     idempotency_key: str
     reply: Future[MachineEventReceipt]
+
+
+@dataclass(frozen=True)
+class MachineStep:
+    request: MachineStepRequest
+    reply: Future[MachineStart | MachineEventReceipt]
 
 
 @dataclass(frozen=True)
@@ -96,19 +103,19 @@ class Stop:
     reply: Future[None]
 
 
-Command = Start | Send | VisitFinished | Retry | Close | FireNextTimer | Restart | Stop
+Command = (
+    Start | Send | MachineStep | VisitFinished | Retry | Close | FireNextTimer | Restart | Stop
+)
 
 
 def _json_payload(value: JsonValue) -> None:
     """Events have no artifact lifetime/ownership protocol: refuse references."""
     canonical_json(value)
     if isinstance(value, dict):
-        if (
-            value.get("kind") in {"file", "workspace"}
-            or value.get("type") in {"file", "workspace"}
-            or "object_key" in value
-            or "snapshot_id" in value
-        ):
+        if value.get("kind") in {"file", "workspace"} or value.get("type") in {
+            "file",
+            "workspace",
+        }:
             raise WaitRefusalError("machine_events_require_json_not_file_or_workspace", 422)
         for child in value.values():
             _json_payload(child)
@@ -321,18 +328,33 @@ class MachineHost:
         self._commit(record, write, RunStatus.PENDING, request=request)
         self.op.start_run(record.machine, run_id=record.run_id, _machine_visit=record)
 
+    def resolve(self, selector: str, fields: dict[str, JsonValue]) -> str:
+        descriptor, spec = self._descriptor(selector)
+        key = self.key_fields(spec, fields)
+        with self.op._state_store.transaction() as connection:
+            existing = MachinesTable.find(connection, descriptor.workflow_id, key)
+        if existing is None:
+            raise KeyError("Unknown machine key")
+        return existing
+
+    @staticmethod
+    def key_fields(spec: MachineSpec, values: dict[str, JsonValue]) -> list[JsonValue]:
+        properties = spec.input_schema["properties"]
+        _validate(
+            {
+                "type": "object",
+                "properties": {name: properties[name] for name in spec.key_fields},
+                "required": list(spec.key_fields),
+                "$defs": spec.input_schema.get("$defs", {}),
+            },
+            values,
+        )
+        return [values[name] for name in spec.key_fields]
+
     def _start(self, command: Start) -> str:
         descriptor, spec = self._descriptor(command.selector)
         values = command.request.input or {}
-        properties = spec.input_schema["properties"]
-        key_schema: dict[str, JsonValue] = {
-            "type": "object",
-            "properties": {name: properties[name] for name in spec.key_fields},
-            "required": list(spec.key_fields),
-            "$defs": spec.input_schema.get("$defs", {}),
-        }
-        _validate(key_schema, values)
-        key = [values[name] for name in spec.key_fields]
+        key = self.key_fields(spec, values)
         with self.op._state_store.transaction() as connection:
             existing = MachinesTable.find(connection, descriptor.workflow_id, key)
         if existing is not None:
@@ -598,6 +620,48 @@ class MachineHost:
                         command.reply.set_result(self._start(command))
                     case Send():
                         command.reply.set_result(self._send(command))
+                    case MachineStep(request=request, reply=reply):
+                        if request.spec.op == "start":
+                            _, spec = self._descriptor(request.spec.machine)
+                            values = request.input or {}
+                            key = self.key_fields(spec, values)
+                            with self.op._state_store.transaction() as connection:
+                                existing = MachinesTable.find(
+                                    connection,
+                                    self.op._registry.resolve(request.spec.machine).workflow_id,
+                                    key,
+                                )
+                            run_id = self._start(
+                                Start(
+                                    request.spec.machine,
+                                    RunRequest(input=values),
+                                    None,
+                                    TriggerKind.API,
+                                    Future(),
+                                )
+                            )
+                            reply.set_result(
+                                MachineStart(run_id=run_id, key=key, created=existing is None)
+                            )
+                        else:
+                            _, spec = self._descriptor(request.spec.machine)
+                            if request.key is None or len(request.key) != len(spec.key_fields):
+                                raise ValueError("Machine key has the wrong number of fields")
+                            run_id = self.resolve(
+                                request.spec.machine,
+                                dict(zip(spec.key_fields, request.key, strict=True)),
+                            )
+                            reply.set_result(
+                                self._send(
+                                    Send(
+                                        run_id,
+                                        request.event,
+                                        request.payload,
+                                        request.idempotency_key,
+                                        Future(),
+                                    )
+                                )
+                            )
                     case VisitFinished():
                         self._finished(command)
                     case Restart(reply=reply):

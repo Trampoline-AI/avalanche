@@ -85,6 +85,7 @@ def run_worker(
     control_connection: Connection | None = None,
     cancel_reader: Connection | None = None,
     machine_visit: InstanceRecord | None = None,
+    machine_reader: Connection | None = None,
 ) -> None:
     """Detach exactly one inode-bound bundle capability and close it on exit."""
     bundle_descriptor: int | None = None
@@ -109,6 +110,7 @@ def run_worker(
             control_connection,
             cancel_reader,
             machine_visit,
+            machine_reader,
         )
     finally:
         if bundle_descriptor is not None:
@@ -131,6 +133,7 @@ def _run_worker(
     control_connection: Connection | None = None,
     cancel_reader: Connection | None = None,
     machine_visit: InstanceRecord | None = None,
+    machine_reader: Connection | None = None,
 ) -> None:
     """Import/build exactly once, prepare, wait for the parent, and execute."""
     event_queue = _SealableEventQueue(event_queue)
@@ -241,7 +244,19 @@ def _run_worker(
             return _with_local_node_observers(owner, fn, stdout, stderr, event_queue)
 
         _put_run_event(event_queue, {"type": "running", "timestamp": time.monotonic()})
+        from .machine_steps import MachineStepPending
+
+        machine_pending = MachineStepPending()
+
+        def machine_step(request):
+            future = machine_pending.register(request)
+            _put_run_event(
+                event_queue, {"type": "machine_step", "request_json": request.model_dump_json()}
+            )
+            return future
+
         hooks = RunHooks(
+            machine_step=machine_step,
             on_nodes_expanded=lambda expansion: (
                 None
                 if expansion.parent in show_groups
@@ -297,7 +312,9 @@ def _run_worker(
             run_id=run_id,
         )
         if control_connection is not None:
-            serve_wait_controls(run_handle, control_connection, cancel_reader)
+            serve_wait_controls(
+                run_handle, control_connection, cancel_reader, machine_reader, machine_pending
+            )
         result = run_handle.result()
         status = "cancelled" if cancel_event.is_set() else "success"
         terminal_event = {"type": "terminal", "status": status}

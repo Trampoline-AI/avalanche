@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+from concurrent.futures import Future
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from avalanche.machine_host import MachineEventReceipt, MachineStart
 from avalanche.mapping import NodesExpanded
+
+from .machine_steps import MachineStepRequest
 
 
 @dataclass
@@ -17,6 +21,9 @@ class RunHooks:
     still overlap in the thread pool.
     """
 
+    machine_step: (
+        Callable[[MachineStepRequest], Future[MachineStart | MachineEventReceipt]] | None
+    ) = None
     on_nodes_expanded: Callable[[NodesExpanded], None] | None = None
     on_node_start: Callable[[str], None] | None = None
     on_node_success: Callable[[str], None] | None = None

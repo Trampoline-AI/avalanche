@@ -37,6 +37,7 @@ def run_local_schedule(
     cancel_requested: Callable[[], bool] | None,
     resolve_list: Callable[[list[T] | NodeFuture | InputRef], list[T]],
     gather: Callable[[str, tuple[str, ...]], None],
+    submit_machine: Callable[[str], Future[tuple[NodeFuture, T]]],
 ) -> None:
     capacity = max_workers if max_workers is not None else min(32, (os.cpu_count() or 1) + 4)
     remaining = list(order)
@@ -222,8 +223,11 @@ def run_local_schedule(
                     node = ref.node
                     mapped = isinstance(node, WaitNode) and node.spec.map_max_items is not None
                     show_group_id = node.spec.show_node_id if mapped else None
-                    if not all(parent in completed for parent in dependencies.get(node_id, [])
-                               if parent != show_group_id):
+                    if not all(
+                        parent in completed
+                        for parent in dependencies.get(node_id, [])
+                        if parent != show_group_id
+                    ):
                         continue
                     if isinstance(ref.node, WaitNode):
                         if hooks and hooks.on_node_start:
@@ -262,6 +266,13 @@ def run_local_schedule(
                         else:
                             waits.arm(node_id, reviewed(node_id))
                             parked.add(node_id)
+                    elif node.node_type.value == "machine":
+                        if hooks and hooks.on_node_start:
+                            hooks.on_node_start(node_id)
+                        attempts[node_id] = attempts.get(node_id, 0) + 1
+                        task = submit_machine(node_id)
+                        pending[task] = node_id
+                        task.add_done_callback(notify)
                     else:
                         if len(pending) >= capacity:
                             continue

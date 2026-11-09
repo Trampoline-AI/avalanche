@@ -847,7 +847,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             )
             is not None
         }
-        return run_snapshot_to_v2(
+        message = run_snapshot_to_v2(
             snapshot,
             cursor=self._cursor(as_of_sequence),
             scope_ref=self._scope(),
@@ -870,6 +870,14 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 category="logs",
             ),
         )
+        from .machine_control import machine_head
+        from .state.machines import MachinesTable
+
+        with self._op._state_store.transaction() as connection:
+            machine = MachinesTable.load(connection, run_id)
+        if machine is not None:
+            message.machine_json = machine_head(self._op, run_id).model_dump_json()
+        return message
 
     # ── Discovery ─────────────────────────────────────────
 
@@ -992,6 +1000,40 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
 
     # ── Run control ───────────────────────────────────────
 
+    def ControlMachine(self, request, context):  # noqa: N802
+        from google.protobuf.json_format import MessageToDict
+
+        from avalanche.local_waits import WaitRefusalError
+
+        from .machine_control import MachineControlRequest, control_machine
+        from .state.machines import MachinesTable
+
+        try:
+            command = MachineControlRequest.model_validate_json(request.request_json)
+            result = control_machine(self._op, command)
+            if command.op == "visit":
+                with self._op._state_store.transaction() as connection:
+                    visit = MachinesTable.visit(connection, command.run_id, command.visit)
+                snapshot = visit.snapshot or self._op.get_latest_run_snapshot(
+                    command.run_id, operator_instance_id=self._op.operator_instance_id
+                )
+                result["snapshot"] = MessageToDict(
+                    self._run_snapshot_message(snapshot, context),
+                    preserving_proto_field_name=True,
+                )
+            return pb.ControlMachineResponseV2(result_json=json.dumps(result, allow_nan=False))
+        except KeyError as exc:
+            context.abort(grpc.StatusCode.NOT_FOUND, str(exc))
+        except WaitRefusalError as exc:
+            context.abort(
+                grpc.StatusCode.INVALID_ARGUMENT
+                if exc.status == 422
+                else grpc.StatusCode.FAILED_PRECONDITION,
+                exc.code,
+            )
+        except ValueError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+
     def StartRun(self, request, context):  # noqa: N802
         if not request.run_id:
             context.abort(
@@ -1001,6 +1043,19 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         if request.trigger not in _START_RUN_TRIGGERS:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Unknown start trigger")
         trigger = _START_RUN_TRIGGERS[request.trigger]
+        # Identity replay precedes attachment claims: stale/unused uploads are irrelevant.
+        from .machine_control import existing_machine_run
+
+        try:
+            existing = existing_machine_run(
+                self._op,
+                request.workflow_selector,
+                _decode_json_object(request.input_json, "input_json"),
+            )
+            if existing is not None:
+                return pb.StartRunResponseV2(run_id=existing)
+        except (ValueError, UnknownWorkflow, AmbiguousWorkflow) as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
         # A refused run releases its files, so they expire like unused uploads.
         with self._op.input_files.claims() as claims:
             try:

@@ -36,3 +36,19 @@ def approval():
     done = ava.state(observe, final=True)
     pending.on("approved") >> reviewed
     reviewed.after(timedelta(seconds=2)) >> done
+
+
+@ava.step
+def router_input(ticket: Ticket) -> dict:
+    return ticket.model_dump(mode="json")
+
+
+@ava.step
+def started_key(started: ava.MachineStart) -> list:
+    return started.key
+
+
+@ava.workflow(input=Ticket, webhook=ava.Webhook(path="/router"))
+def router():
+    started = approval.start(router_input())
+    return approval.send(started_key(started), "approved")

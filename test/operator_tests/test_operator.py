@@ -68,6 +68,131 @@ def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path)
             "v2.mapped_1[1]",
         }
         assert len(op.list_runs("approval")) == 1
+        # The same run-owned controls cross gRPC, REST and installed CLI boundaries.
+        import http.client
+        import socket
+        import subprocess
+        import sys
+
+        import grpc
+
+        from runtime.operator.machine_control import MachineControlRequest
+        from runtime.operator.proto import operator_pb2 as pb
+        from runtime.operator.proto import operator_pb2_grpc as pb_grpc
+        from runtime.operator.server import serve
+        from runtime.operator.web import start_browser_server
+
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        address = f"127.0.0.1:{port}"
+        server = serve(op, port=port, block=False)
+        browser = start_browser_server(address, port=0)
+        try:
+
+            def cli(*args):
+                result = subprocess.run(
+                    [sys.executable, "-m", "ava_cli", *args, "--connect", address],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                assert result.returncode == 0, result.stderr
+                return result.stdout.strip()
+
+            second = cli(
+                "run", "approval", "--input", json.dumps({"ticket": 2, "journal": str(journal)})
+            )
+            assert cli("run", "approval", "--input", '{"ticket":2}') == second
+            sent = json.loads(
+                cli(
+                    "machine",
+                    "send",
+                    "approval",
+                    "--key",
+                    "ticket=2",
+                    "approved",
+                    "--idempotency-key",
+                    "cli-approval",
+                )
+            )
+            duplicate = json.loads(
+                cli(
+                    "machine",
+                    "send",
+                    "approval",
+                    "--run",
+                    second,
+                    "approved",
+                    "--idempotency-key",
+                    "cli-approval",
+                )
+            )
+            assert sent["receipt_id"] == duplicate["receipt_id"] and duplicate["duplicate"]
+            assert wait_terminal(op, second).status == RunStatus.SUCCESS
+            shown = json.loads(cli("run", "show", second))
+            assert json.loads(shown["machine_json"])["state"] == "done"
+            assert len(json.loads(cli("run", "list", "--flow", "approval"))["runs"]) == 2
+            with grpc.insecure_channel(address) as channel:
+                stub = pb_grpc.OperatorServiceV2Stub(channel)
+                flows = stub.DiscoverFlows(pb.DiscoverFlowsRequestV2())
+                assert next(
+                    flow for flow in flows.flows if flow.display_name == "approval"
+                ).machine_spec_json
+
+                def control(**values):
+                    return json.loads(
+                        stub.ControlMachine(
+                            pb.ControlMachineRequestV2(
+                                request_json=MachineControlRequest(**values).model_dump_json()
+                            )
+                        ).result_json
+                    )
+
+                page = control(op="history", run_id=second, limit=1)
+                assert len(page["items"]) == 1 and page["next_cursor"]
+                assert control(
+                    op="history", run_id=second, cursor=page["next_cursor"], limit=1
+                )["items"]
+                visit = control(op="visit", run_id=second, visit=2)
+                assert {node["node_id"] for node in visit["snapshot"]["nodes"]} >= {
+                    "v2.mapped_1[0]"
+                }
+                facts = control(op="events", run_id=second, visit=1)
+                assert {row["status"] for row in facts["items"]} >= {"accepted", "consumed"}
+                http = http.client.HTTPConnection(browser.host, browser.port, timeout=10)
+                http.request(
+                    "POST",
+                    f"/api/v1/runs/{second}/machine/events/approved",
+                    body="{}",
+                    headers={
+                        "Content-Type": "application/json",
+                        "Idempotency-Key": "cli-approval",
+                    },
+                )
+                response = http.getresponse()
+                assert response.status == 202, response.read()
+                assert json.loads(response.read())["receipt_id"] == sent["receipt_id"]
+                http.close()
+                with pytest.raises(grpc.RpcError):
+                    control(op="fire_next", run_id=second)
+                third = cli(
+                    "run",
+                    "approval",
+                    "--input",
+                    json.dumps({"ticket": 3, "journal": str(journal)}),
+                )
+                cli("run", "cancel", third)
+                assert op.get_run(third).status == RunStatus.CANCELLED
+                router_run = op.start_run(
+                    "router", input={"ticket": 4, "journal": str(journal)}
+                )
+                assert wait_terminal(op, router_run).status == RunStatus.SUCCESS
+                target = op._machine_host.resolve("approval", {"ticket": 4})
+                assert wait_terminal(op, target).status == RunStatus.SUCCESS
+        finally:
+            browser.close()
+            server.stop(grace=0).wait()
     finally:
         op.close()
 

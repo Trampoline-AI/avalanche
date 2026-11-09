@@ -93,6 +93,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(argv) if argv is not None else sys.argv[1:]
     if arguments[:2] in (["event", "send"], ["run", "decide"]):
         return _run_wait_command(arguments)
+    if arguments[:2] == ["machine", "send"] or (
+        len(arguments) >= 2
+        and arguments[0] == "run"
+        and arguments[1] in {"list", "show", "retry", "cancel", "rerun"}
+    ):
+        from .machine_commands import run_command
+
+        return run_command(arguments)
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     if args.command in {"dev", "operator"}:
@@ -1686,6 +1694,7 @@ def _run_dev(args: argparse.Namespace) -> int:
         print("  Discovering workflows...")
         operator = Operator(
             args.flows,
+            machine_dev=True,
             discovery_timeout=args.discovery_timeout,
             schedules_enabled=args.schedules_enabled,
             state_db=args.state_db,

@@ -158,7 +158,11 @@ class RunControls:
 
 
 def serve_wait_controls(
-    handle: RunHandle, connection: Connection, cancel_reader: Connection | None = None
+    handle: RunHandle,
+    connection: Connection,
+    cancel_reader: Connection | None = None,
+    machine_reader: Connection | None = None,
+    machine_pending=None,
 ) -> None:
     """Use the coordinator's existing main thread; one wake pipe per run, not per wait."""
     from multiprocessing import Pipe
@@ -178,7 +182,17 @@ def serve_wait_controls(
             ready = wait(
                 [connection, done_reader]
                 + ([cancel_reader] if cancel_reader is not None else [])
+                + ([machine_reader] if machine_reader is not None else [])
             )
+            if machine_reader is not None and machine_reader in ready:
+                from .machine_steps import MachineStepResponse
+
+                machine_pending.resolve(
+                    MachineStepResponse.model_validate_json(
+                        machine_reader.recv_bytes(MAX_CONTROL_BYTES)
+                    )
+                )
+                continue
             if cancel_reader is not None and cancel_reader in ready:
                 handle.cancel()
                 break

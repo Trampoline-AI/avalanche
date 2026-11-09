@@ -18,6 +18,7 @@ import time
 from bisect import bisect_right
 from collections import OrderedDict, deque
 from collections.abc import Collection, Iterable, Iterator, Mapping
+from concurrent.futures import Future
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass, replace
@@ -261,6 +262,7 @@ class _RunHandle:
     cancel_writer: Connection | None = None
     controls: RunControls | None = None
     machine_visit: InstanceRecord | None = None
+    machine_writer: Connection | None = None
     visit_finished: VisitFinished | None = None
 
 
@@ -442,6 +444,7 @@ class Operator:
         max_run_log_bytes: int = MAX_RUN_LOG_BYTES,
         max_run_log_entries: int = MAX_RUN_LOG_ENTRIES,
         max_run_detail_bytes: int = MAX_RUN_DETAIL_BYTES,
+        machine_dev: bool = False,
     ) -> None:
         """Create an operator with local execution in spawned coordinators.
 
@@ -458,6 +461,7 @@ class Operator:
         them all enabled instead, for this process. Enable and disable choices and
         schedule input are kept in ``state_db`` and apply again after a restart.
         """
+        self._machine_dev = machine_dev
         if not 0 <= webhook_port <= 65535:
             raise ValueError("Webhook port must be between 0 and 65535")
         if cancel_grace < 0:
@@ -1901,6 +1905,7 @@ class Operator:
             event_queue = self._mp.Queue()
             control_parent, control_child = self._mp.Pipe()
             cancel_reader, cancel_writer = self._mp.Pipe(duplex=False)
+            machine_reader, machine_writer = self._mp.Pipe(duplex=False)
             controls = RunControls(control_parent)
             cancel_event = self._mp.Event()
             start_event = self._mp.Event()
@@ -1926,6 +1931,7 @@ class Operator:
                         control_child,
                         cancel_reader,
                         _machine_visit,
+                        machine_reader,
                     ),
                     name=f"avalanche-run-{run_id}",
                     daemon=False,
@@ -1949,6 +1955,7 @@ class Operator:
                 cancel_writer=cancel_writer,
                 controls=controls,
                 machine_visit=_machine_visit,
+                machine_writer=machine_writer,
             )
             # Reserve the ID before releasing the lock so concurrent callers
             # cannot create a second coordinator with the same caller-owned ID.
@@ -1961,6 +1968,7 @@ class Operator:
                 process.start()
                 control_child.close()
                 cancel_reader.close()
+                machine_reader.close()
                 if process.pid is None:
                     raise RuntimeError("Run coordinator did not expose a process ID")
                 assign_process(windows_job, process.pid)
@@ -2173,6 +2181,10 @@ class Operator:
         return controls.request(request)
 
     def cancel_run(self, run_id: str) -> None:
+        with self._state_store.transaction() as connection:
+            machine = MachinesTable.load(connection, run_id)
+        if machine is not None:
+            self._machine_host.cancel(run_id)
         with self._lock:
             handle = self._active_runs.get(run_id)
             run = self._runs.get(run_id)
@@ -2182,11 +2194,16 @@ class Operator:
                 handle.start_event.set()
             else:
                 already_requested = True
-            if run is None or run.status not in {
-                RunStatus.REQUESTING,
-                RunStatus.PENDING,
-                RunStatus.RUNNING,
-            }:
+            if (
+                run is None
+                or run.status
+                not in {
+                    RunStatus.REQUESTING,
+                    RunStatus.PENDING,
+                    RunStatus.RUNNING,
+                }
+                and machine is None
+            ):
                 return
         if handle is not None and not already_requested:
             if handle.cancel_writer is not None:
@@ -2737,6 +2754,8 @@ class Operator:
                     self._release_evidence_checks_locked(run_id)
                 _close_run_controls(handle)
                 _close_event_queue(handle.event_queue)
+                if handle.machine_writer is not None:
+                    handle.machine_writer.close()
                 if handle.visit_finished is not None and not self._closed:
                     self._machine_host.queue.put(handle.visit_finished)
 
@@ -2747,6 +2766,21 @@ class Operator:
         event: dict[str, Any],
     ) -> bool:
         event_type = _validate_run_event(event, validate_result=False)
+        if event_type == "machine_step":
+            from .machine_host import MachineStep
+            from .machine_steps import MachineStepRequest, MachineStepResponse
+
+            request = MachineStepRequest.model_validate_json(event["request_json"])
+            reply = Future()
+            self._machine_host.queue.put(MachineStep(request, reply))
+            try:
+                response = MachineStepResponse(node_id=request.node_id, output=reply.result())
+            except ValueError as exc:
+                response = MachineStepResponse(node_id=request.node_id, error=str(exc))
+            if handle.machine_writer is None:
+                raise _CoordinatorProtocolError("Missing machine reply pipe")
+            handle.machine_writer.send_bytes(response.model_dump_json().encode())
+            return False
         if event_type == "wait_snapshot":
             snapshot = FinalWaitSnapshot.model_validate_json(event["snapshot"])
             with self._lock:
@@ -4316,6 +4350,7 @@ def _replace_queue_contents(subscription: queue.Queue, item: Any) -> None:
 
 
 _RUN_EVENT_TYPES = {
+    "machine_step",
     "nodes_expanded",
     "running",
     "node_started",
@@ -4697,7 +4732,10 @@ def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
     event_type = _event_type(event)
     if event_type not in _RUN_EVENT_TYPES:
         raise _CoordinatorProtocolError(f"unknown run event type {_bounded_ascii(event_type)}")
-    if event_type == "wait_snapshot":
+    if event_type == "machine_step":
+        _require_exact_event_keys(event, {"type", "request_json"})
+        _string_field(event, "request_json", maximum_length=_MAX_EVENT_MESSAGE_LENGTH)
+    elif event_type == "wait_snapshot":
         _require_exact_event_keys(event, {"type", "snapshot"})
         try:
             FinalWaitSnapshot.model_validate_json(_required_field(event, "snapshot"))

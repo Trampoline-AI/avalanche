@@ -10,7 +10,7 @@ from urllib.parse import unquote
 from uuid import uuid4
 
 import grpc
-from fastapi import APIRouter, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Body, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -448,6 +448,64 @@ def create_rest_app(channel: grpc.Channel) -> FastAPI:
                 timeout=_RPC_TIMEOUT_SECONDS,
             )
         )
+
+    def machine_control(**values) -> JsonValue:
+        from .machine_control import MachineControlRequest
+
+        request = MachineControlRequest(**values)
+        try:
+            response = stub.ControlMachine(
+                pb.ControlMachineRequestV2(request_json=request.model_dump_json()),
+                timeout=_RPC_TIMEOUT_SECONDS,
+            )
+        except grpc.RpcError as exc:
+            if exc.code() == grpc.StatusCode.INVALID_ARGUMENT:
+                raise HTTPException(422, exc.details()) from exc
+            raise
+        return json.loads(response.result_json)
+
+    @router.get("/v1/runs/{run_id}/machine")
+    def get_machine(run_id: str) -> JsonValue:
+        return machine_control(op="get", run_id=run_id)
+
+    @router.post("/v1/runs/{run_id}/machine/events/{name}", status_code=202)
+    def send_machine_event(
+        run_id: str,
+        name: str,
+        payload: Annotated[JsonValue, Body()],
+        idempotency_key: Annotated[str, Header(min_length=1, max_length=256)],
+    ) -> JsonValue:
+        return machine_control(
+            op="send",
+            run_id=run_id,
+            event=name,
+            payload=payload,
+            idempotency_key=idempotency_key,
+        )
+
+    @router.get("/v1/runs/{run_id}/machine/history")
+    def machine_history(run_id: str, cursor: str | None = None, limit: int = 20) -> JsonValue:
+        return machine_control(op="history", run_id=run_id, cursor=cursor, limit=limit)
+
+    @router.get("/v1/runs/{run_id}/machine/visits/{visit}")
+    def machine_visit(run_id: str, visit: int) -> JsonValue:
+        return machine_control(op="visit", run_id=run_id, visit=visit)
+
+    @router.get("/v1/runs/{run_id}/machine/visits/{visit}/events")
+    def machine_visit_events(
+        run_id: str, visit: int, cursor: str | None = None, limit: int = 20
+    ) -> JsonValue:
+        return machine_control(
+            op="events", run_id=run_id, visit=visit, cursor=cursor, limit=limit
+        )
+
+    @router.post("/v1/runs/{run_id}/machine/visits:retry")
+    def retry_machine_visit(run_id: str) -> JsonValue:
+        return machine_control(op="retry", run_id=run_id)
+
+    @router.post("/v1/runs/{run_id}/machine/timers:fire-next")
+    def fire_machine_timer(run_id: str) -> JsonValue:
+        return machine_control(op="fire_next", run_id=run_id)
 
     app.include_router(router)
     return app
