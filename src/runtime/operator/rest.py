@@ -346,6 +346,17 @@ def create_rest_app(channel: grpc.Channel) -> FastAPI:
             HTTPStatus.ACCEPTED,
         )
 
+    @router.get("/v1/runs:resolve", summary="Resolve a typed flow or machine key")
+    def resolve_run(workflow_selector: str, key_fields: str) -> Response:
+        return _protobuf_response(
+            stub.ResolveRun(
+                pb.ResolveRunRequestV2(
+                    workflow_selector=workflow_selector, key_fields_json=key_fields
+                ),
+                timeout=_RPC_TIMEOUT_SECONDS,
+            )
+        )
+
     @router.get("/v1/runs/{run_id}", summary="Get a run snapshot")
     def get_run(run_id: str, query: Annotated[_Query, Query()]) -> Response:
         return _protobuf_response(

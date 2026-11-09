@@ -397,6 +397,146 @@ def test_finished_runs_survive_a_restart_with_their_state_revisions_and_sequence
         second.close()
 
 
+def test_keyed_flow_start_restart_and_expired_history(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
+    state_db = tmp_path / "state.db"
+    journal = tmp_path / "flow.txt"
+    address = f"127.0.0.1:{(port := _free_port())}"
+    command = [
+        sys.executable,
+        "-m",
+        "ava_cli",
+        "operator",
+        str(fixture),
+        "--port",
+        str(port),
+        "--webhook-port",
+        "0",
+        "--no-web",
+        "--state-db",
+        str(state_db),
+    ]
+
+    def start(stub, proposed_id, values, attachments=()):
+        return stub.StartRun(
+            pb.StartRunRequestV2(
+                workflow_selector="ordinary_child",
+                run_id=proposed_id,
+                input_json=json.dumps(values),
+                input_files=attachments,
+            ),
+            timeout=60,
+        )
+
+    def stop(process):
+        process.terminate()
+        try:
+            process.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=10)
+
+    # Separate operator process, real spawned workflow work, real gRPC and CLI.
+    with (tmp_path / "operator.log").open("w") as log:
+        process = subprocess.Popen(command, stdout=log, stderr=log)
+        try:
+            with grpc.insecure_channel(address) as channel:
+                grpc.channel_ready_future(channel).result(timeout=30)
+                stub = pb_grpc.OperatorServiceV2Stub(channel)
+                values = {"ticket": 123, "journal": str(journal)}
+                with ThreadPoolExecutor(max_workers=2) as callers:
+                    responses = list(
+                        callers.map(lambda i: start(stub, f"flow-key-{i}", values), range(2))
+                    )
+                run_id = responses[0].run_id
+                assert {value.run_id for value in responses} == {run_id}
+                assert all(value.key_json == "[123]" for value in responses)
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline:
+                    snapshot = stub.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=run_id))
+                    if snapshot.summary.status in {"success", "failed", "cancelled"}:
+                        break
+                    time.sleep(0.05)
+                assert snapshot.summary.status == "success", snapshot
+                assert len(stub.ListRunSummaries(pb.ListRunSummariesRequestV2()).runs) == 1
+                assert journal.read_text().splitlines() == [f"{run_id}:observe_1"]
+                # Replay validates only the typed key, not new input or stale uploads.
+                replay = start(
+                    stub,
+                    "unused",
+                    {"ticket": 123, "pause": "invalid"},
+                    [pb.FileAttachmentV2(field_name="unknown", object_key="expired")],
+                )
+                assert replay.run_id == run_id
+                with pytest.raises(grpc.RpcError) as invalid:
+                    start(stub, "invalid", {"ticket": {"invalid": True}})
+                assert invalid.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+        finally:
+            stop(process)
+
+        for expired in (False, True):
+            if expired:
+                deleted = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "ava_cli",
+                        "state",
+                        "delete",
+                        run_id,
+                        "--state-db",
+                        str(state_db),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                assert deleted.returncode == 0, deleted.stderr
+            process = subprocess.Popen(command, stdout=log, stderr=log)
+            try:
+                with grpc.insecure_channel(address) as channel:
+                    grpc.channel_ready_future(channel).result(timeout=30)
+                    stub = pb_grpc.OperatorServiceV2Stub(channel)
+                    replay = start(stub, "after-restart", {"ticket": 123})
+                    assert replay.run_id == run_id
+                    assert replay.read_state == ("expired" if expired else "retained")
+                    resolved = stub.ResolveRun(
+                        pb.ResolveRunRequestV2(
+                            workflow_selector="ordinary_child", key_fields_json='{"ticket":123}'
+                        ),
+                        timeout=30,
+                    )
+                    assert resolved == replay
+                    shown = subprocess.run(
+                        [
+                            sys.executable,
+                            "-m",
+                            "ava_cli",
+                            "run",
+                            "show",
+                            "--flow",
+                            "ordinary_child",
+                            "--key",
+                            "ticket=123",
+                            "--connect",
+                            address,
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                    )
+                    assert shown.returncode == 0, shown.stderr
+                    summary = json.loads(shown.stdout)["summary"]
+                    assert summary["run_id"] == run_id
+                    assert summary["read_state"] == replay.read_state
+                    assert len(stub.ListRunSummaries(pb.ListRunSummariesRequestV2()).runs) == 1
+                    assert journal.read_text().splitlines() == [f"{run_id}:observe_1"]
+            finally:
+                stop(process)
+
+
 def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_path):
     fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
     state_db = tmp_path / "state.db"

@@ -217,7 +217,7 @@ class WorkflowNodeSourceV2(_message.Message):
     def __init__(self, source_code: _Optional[str] = ...) -> None: ...
 
 class FlowInfoV2(_message.Message):
-    __slots__ = ("workflow_selector", "display_name", "manifest_digest", "node_ids", "workflow_id", "file_path", "topology", "agent_node_ids", "agent_declarations_json", "cron", "next_run_at", "last_run_at", "webhook_path", "webhook_url", "webhook_active", "classifier_metadata_json", "evaluation_metadata_json", "input_schema_json", "version", "schedule_enabled", "schedule_input_json", "node_policies_json", "node_waits_json", "machine_spec_json")
+    __slots__ = ("workflow_selector", "display_name", "manifest_digest", "node_ids", "workflow_id", "file_path", "topology", "agent_node_ids", "agent_declarations_json", "cron", "next_run_at", "last_run_at", "webhook_path", "webhook_url", "webhook_active", "classifier_metadata_json", "evaluation_metadata_json", "input_schema_json", "version", "schedule_enabled", "schedule_input_json", "node_policies_json", "node_waits_json", "machine_spec_json", "node_runs_json", "key_fields")
     class AgentDeclarationsJsonEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -253,6 +253,13 @@ class FlowInfoV2(_message.Message):
         key: str
         value: str
         def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    class NodeRunsJsonEntry(_message.Message):
+        __slots__ = ("key", "value")
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
     DISPLAY_NAME_FIELD_NUMBER: _ClassVar[int]
     MANIFEST_DIGEST_FIELD_NUMBER: _ClassVar[int]
@@ -277,6 +284,8 @@ class FlowInfoV2(_message.Message):
     NODE_POLICIES_JSON_FIELD_NUMBER: _ClassVar[int]
     NODE_WAITS_JSON_FIELD_NUMBER: _ClassVar[int]
     MACHINE_SPEC_JSON_FIELD_NUMBER: _ClassVar[int]
+    NODE_RUNS_JSON_FIELD_NUMBER: _ClassVar[int]
+    KEY_FIELDS_FIELD_NUMBER: _ClassVar[int]
     workflow_selector: str
     display_name: str
     manifest_digest: str
@@ -301,7 +310,9 @@ class FlowInfoV2(_message.Message):
     node_policies_json: _containers.ScalarMap[str, str]
     node_waits_json: _containers.ScalarMap[str, str]
     machine_spec_json: str
-    def __init__(self, workflow_selector: _Optional[str] = ..., display_name: _Optional[str] = ..., manifest_digest: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., workflow_id: _Optional[str] = ..., file_path: _Optional[str] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., agent_node_ids: _Optional[_Iterable[str]] = ..., agent_declarations_json: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., webhook_path: _Optional[str] = ..., webhook_url: _Optional[str] = ..., webhook_active: bool = ..., classifier_metadata_json: _Optional[_Mapping[str, str]] = ..., evaluation_metadata_json: _Optional[_Mapping[str, str]] = ..., input_schema_json: _Optional[str] = ..., version: _Optional[str] = ..., schedule_enabled: bool = ..., schedule_input_json: _Optional[str] = ..., node_policies_json: _Optional[_Mapping[str, str]] = ..., node_waits_json: _Optional[_Mapping[str, str]] = ..., machine_spec_json: _Optional[str] = ...) -> None: ...
+    node_runs_json: _containers.ScalarMap[str, str]
+    key_fields: _containers.RepeatedScalarFieldContainer[str]
+    def __init__(self, workflow_selector: _Optional[str] = ..., display_name: _Optional[str] = ..., manifest_digest: _Optional[str] = ..., node_ids: _Optional[_Iterable[str]] = ..., workflow_id: _Optional[str] = ..., file_path: _Optional[str] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., agent_node_ids: _Optional[_Iterable[str]] = ..., agent_declarations_json: _Optional[_Mapping[str, str]] = ..., cron: _Optional[str] = ..., next_run_at: _Optional[float] = ..., last_run_at: _Optional[float] = ..., webhook_path: _Optional[str] = ..., webhook_url: _Optional[str] = ..., webhook_active: bool = ..., classifier_metadata_json: _Optional[_Mapping[str, str]] = ..., evaluation_metadata_json: _Optional[_Mapping[str, str]] = ..., input_schema_json: _Optional[str] = ..., version: _Optional[str] = ..., schedule_enabled: bool = ..., schedule_input_json: _Optional[str] = ..., node_policies_json: _Optional[_Mapping[str, str]] = ..., node_waits_json: _Optional[_Mapping[str, str]] = ..., machine_spec_json: _Optional[str] = ..., node_runs_json: _Optional[_Mapping[str, str]] = ..., key_fields: _Optional[_Iterable[str]] = ...) -> None: ...
 
 class DiscoveryDiagnosticV2(_message.Message):
     __slots__ = ("path", "kind", "message")
@@ -534,11 +545,23 @@ class StageInputFileRequestV2(_message.Message):
     content: bytes
     def __init__(self, workflow_selector: _Optional[str] = ..., field_name: _Optional[str] = ..., name: _Optional[str] = ..., media_type: _Optional[str] = ..., content: _Optional[bytes] = ...) -> None: ...
 
+class ResolveRunRequestV2(_message.Message):
+    __slots__ = ("workflow_selector", "key_fields_json")
+    WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
+    KEY_FIELDS_JSON_FIELD_NUMBER: _ClassVar[int]
+    workflow_selector: str
+    key_fields_json: str
+    def __init__(self, workflow_selector: _Optional[str] = ..., key_fields_json: _Optional[str] = ...) -> None: ...
+
 class StartRunResponseV2(_message.Message):
-    __slots__ = ("run_id",)
+    __slots__ = ("run_id", "read_state", "key_json")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    READ_STATE_FIELD_NUMBER: _ClassVar[int]
+    KEY_JSON_FIELD_NUMBER: _ClassVar[int]
     run_id: str
-    def __init__(self, run_id: _Optional[str] = ...) -> None: ...
+    read_state: str
+    key_json: str
+    def __init__(self, run_id: _Optional[str] = ..., read_state: _Optional[str] = ..., key_json: _Optional[str] = ...) -> None: ...
 
 class CancelRunRequestV2(_message.Message):
     __slots__ = ("run_id",)
@@ -587,7 +610,7 @@ class EvaluationListV2(_message.Message):
     def __init__(self, records: _Optional[_Iterable[_Union[EvaluationRecordV2, _Mapping]]] = ...) -> None: ...
 
 class RunSummaryV2(_message.Message):
-    __slots__ = ("run_id", "workflow_selector", "workflow_display_name", "status", "started_at", "ended_at", "created_sequence", "revision", "triggered_by", "triggered_at")
+    __slots__ = ("run_id", "workflow_selector", "workflow_display_name", "status", "started_at", "ended_at", "created_sequence", "revision", "triggered_by", "triggered_at", "key_json", "read_state")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
     WORKFLOW_DISPLAY_NAME_FIELD_NUMBER: _ClassVar[int]
@@ -598,6 +621,8 @@ class RunSummaryV2(_message.Message):
     REVISION_FIELD_NUMBER: _ClassVar[int]
     TRIGGERED_BY_FIELD_NUMBER: _ClassVar[int]
     TRIGGERED_AT_FIELD_NUMBER: _ClassVar[int]
+    KEY_JSON_FIELD_NUMBER: _ClassVar[int]
+    READ_STATE_FIELD_NUMBER: _ClassVar[int]
     run_id: str
     workflow_selector: str
     workflow_display_name: str
@@ -608,7 +633,9 @@ class RunSummaryV2(_message.Message):
     revision: int
     triggered_by: str
     triggered_at: float
-    def __init__(self, run_id: _Optional[str] = ..., workflow_selector: _Optional[str] = ..., workflow_display_name: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., created_sequence: _Optional[int] = ..., revision: _Optional[int] = ..., triggered_by: _Optional[str] = ..., triggered_at: _Optional[float] = ...) -> None: ...
+    key_json: str
+    read_state: str
+    def __init__(self, run_id: _Optional[str] = ..., workflow_selector: _Optional[str] = ..., workflow_display_name: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., created_sequence: _Optional[int] = ..., revision: _Optional[int] = ..., triggered_by: _Optional[str] = ..., triggered_at: _Optional[float] = ..., key_json: _Optional[str] = ..., read_state: _Optional[str] = ...) -> None: ...
 
 class ListRunSummariesRequestV2(_message.Message):
     __slots__ = ("workflow_selector", "page_size", "continuation")

@@ -29,7 +29,9 @@ def run_command(argv: list[str]) -> int:
         parser.add_argument("--idempotency-key", default=None)
     else:
         if argv[1] != "list":
-            parser.add_argument("run_id")
+            parser.add_argument("run_id", nargs="?")
+            parser.add_argument("--flow", default="")
+            parser.add_argument("--key", action="append", metavar="FIELD=JSON")
         else:
             parser.add_argument("--flow", default="")
         if argv[1] == "retry":
@@ -51,9 +53,14 @@ def run_command(argv: list[str]) -> int:
                     ).result_json
                 )
 
-            if machine:
-                run_id = args.run
+            if machine or argv[1] != "list":
+                run_id = args.run if machine else args.run_id
+                if run_id is not None and args.key:
+                    raise ValueError("Use a run ID or --key, not both")
                 if run_id is None:
+                    selector = args.machine if machine else args.flow
+                    if not selector or not args.key:
+                        raise ValueError("Provide a run ID or --flow and --key")
                     fields = {}
                     for assignment in args.key:
                         name, raw = _parse_assignment(assignment, "--key")
@@ -63,11 +70,13 @@ def run_command(argv: list[str]) -> int:
                         fields[name] = _parse_json_object(
                             "{" + json.dumps(name) + ":" + raw + "}", "--key"
                         )[name]
-                    run_id = control(
-                        MachineControlRequest(
-                            op="resolve", machine=args.machine, key_fields=fields
-                        )
-                    )
+                    run_id = stub.ResolveRun(
+                        pb.ResolveRunRequestV2(
+                            workflow_selector=selector, key_fields_json=json.dumps(fields)
+                        ),
+                        timeout=30,
+                    ).run_id
+            if machine:
                 raw = (
                     Path(args.data[1:]).read_text() if args.data.startswith("@") else args.data
                 )
@@ -87,7 +96,7 @@ def run_command(argv: list[str]) -> int:
                 print(
                     MessageToJson(
                         stub.GetRunSnapshot(
-                            pb.GetRunSnapshotRequestV2(run_id=args.run_id), timeout=30
+                            pb.GetRunSnapshotRequestV2(run_id=run_id), timeout=30
                         ),
                         preserving_proto_field_name=True,
                     )
@@ -105,10 +114,10 @@ def run_command(argv: list[str]) -> int:
                     )
                 )
             elif argv[1] == "cancel":
-                stub.CancelRun(pb.CancelRunRequestV2(run_id=args.run_id), timeout=30)
+                stub.CancelRun(pb.CancelRunRequestV2(run_id=run_id), timeout=30)
                 print("{}")
             elif argv[1] == "retry":
-                control(MachineControlRequest(op="retry", run_id=args.run_id))
+                control(MachineControlRequest(op="retry", run_id=run_id))
                 print("{}")
             else:
                 raise ValueError(

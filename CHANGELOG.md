@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Persist keyed flow runs in the local operator: concurrent starts with the same
+  declared key return one run, including after restart or history expiry. Resolve
+  flows or machines through the same REST/gRPC key lookup and
+  `ava run show --flow <name> --key field=value`; start and summary responses expose
+  the permanent key and retained/expired history state.
+
 - Add optional `@ava.workflow(input=..., key=(...))` with the same typed key
   derivation, discovery metadata and existing-key test-host behavior as machines.
   Host run-ID/`--key` lookup and durable key storage remain integration work;

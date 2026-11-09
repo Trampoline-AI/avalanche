@@ -55,11 +55,11 @@ class MachineHead(BaseModel):
     read_state: Literal["retained", "expired"] = "retained"
 
 
-def existing_machine_run(
+def existing_keyed_run(
     op: Operator, selector: str, values: dict[str, JsonValue] | None
 ) -> str | None:
     descriptor = op._registry.resolve(selector)
-    if not descriptor.machine_spec_json:
+    if not descriptor.key_fields:
         return None
     key = op._machine_host.key_fields(descriptor.workflow_id, values or {})
     with op._state_store.transaction() as connection:

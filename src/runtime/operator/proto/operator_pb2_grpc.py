@@ -71,6 +71,11 @@ class OperatorServiceV2Stub(object):
                 request_serializer=operator__pb2.StartRunRequestV2.SerializeToString,
                 response_deserializer=operator__pb2.StartRunResponseV2.FromString,
                 _registered_method=True)
+        self.ResolveRun = channel.unary_unary(
+                '/avalanche.operator.OperatorServiceV2/ResolveRun',
+                request_serializer=operator__pb2.ResolveRunRequestV2.SerializeToString,
+                response_deserializer=operator__pb2.StartRunResponseV2.FromString,
+                _registered_method=True)
         self.CancelRun = channel.unary_unary(
                 '/avalanche.operator.OperatorServiceV2/CancelRun',
                 request_serializer=operator__pb2.CancelRunRequestV2.SerializeToString,
@@ -183,6 +188,12 @@ class OperatorServiceV2Servicer(object):
         raise NotImplementedError('Method not implemented!')
 
     def StartRun(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ResolveRun(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -306,6 +317,11 @@ def add_OperatorServiceV2Servicer_to_server(servicer, server):
             'StartRun': grpc.unary_unary_rpc_method_handler(
                     servicer.StartRun,
                     request_deserializer=operator__pb2.StartRunRequestV2.FromString,
+                    response_serializer=operator__pb2.StartRunResponseV2.SerializeToString,
+            ),
+            'ResolveRun': grpc.unary_unary_rpc_method_handler(
+                    servicer.ResolveRun,
+                    request_deserializer=operator__pb2.ResolveRunRequestV2.FromString,
                     response_serializer=operator__pb2.StartRunResponseV2.SerializeToString,
             ),
             'CancelRun': grpc.unary_unary_rpc_method_handler(
@@ -525,6 +541,33 @@ class OperatorServiceV2(object):
             target,
             '/avalanche.operator.OperatorServiceV2/StartRun',
             operator__pb2.StartRunRequestV2.SerializeToString,
+            operator__pb2.StartRunResponseV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ResolveRun(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/avalanche.operator.OperatorServiceV2/ResolveRun',
+            operator__pb2.ResolveRunRequestV2.SerializeToString,
             operator__pb2.StartRunResponseV2.FromString,
             options,
             channel_credentials,

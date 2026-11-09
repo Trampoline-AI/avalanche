@@ -331,7 +331,9 @@ class MachineHost:
         self.op.start_run(record.machine, run_id=record.run_id, _machine_visit=record)
 
     def resolve(self, selector: str, fields: dict[str, JsonValue]) -> str:
-        descriptor, spec = self._descriptor(selector)
+        descriptor = self.op._registry.resolve(selector)
+        if not descriptor.key_fields:
+            raise ValueError("Workflow does not declare a run key")
         key = self.key_fields(descriptor.workflow_id, fields)
         with self.op._state_store.transaction() as connection:
             existing = MachinesTable.find(connection, descriptor.workflow_id, key)
@@ -345,7 +347,35 @@ class MachineHost:
             validate_native(descriptor, root, "key", values)
         )
 
+    def _start_keyed_flow(self, command: Start) -> str:
+        descriptor, root = self.op._registry.resolve_source(command.selector)
+        values = command.request.input or {}
+        key = self.key_fields(descriptor.workflow_id, values)
+        with self.op._state_store.transaction() as connection:
+            existing = MachinesTable.find(connection, descriptor.workflow_id, key)
+        if existing is not None:
+            return existing
+        values = TypeAdapter(dict[str, JsonValue]).validate_python(
+            validate_native(descriptor, root, "input", values)
+        )
+        from .run_input_capture import capture_keyed_input
+
+        captured = capture_keyed_input(
+            self.op, command.request.model_copy(update={"input": values})
+        )
+        return self.op.start_run(
+            command.selector,
+            command.trigger,
+            run_id=command.run_id,
+            input=captured.input,
+            context=captured.context,
+            input_files=captured.input_files,
+            _key_claim=key,
+        )
+
     def _start(self, command: Start) -> str:
+        if not self.op._registry.resolve(command.selector).machine_spec_json:
+            return self._start_keyed_flow(command)
         descriptor, spec = self._descriptor(command.selector)
         values = command.request.input or {}
         key = self.key_fields(descriptor.workflow_id, values)
@@ -638,7 +668,7 @@ class MachineHost:
             existing = existing or (proposed if self.op.get_run(proposed) is not None else None)
             if existing is not None:
                 run_id = existing
-            elif descriptor.machine_spec_json:
+            elif descriptor.machine_spec_json or descriptor.key_fields:
                 run_id = self._start(
                     Start(
                         request.target,

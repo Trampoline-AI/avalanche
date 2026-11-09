@@ -1849,6 +1849,7 @@ class Operator:
         expected_version: str = "",
         input_files: tuple[StagedInputFile, ...] = (),
         _machine_visit: InstanceRecord | None = None,
+        _key_claim: list[JsonValue] | None = None,
     ) -> str:
         """Publish a requesting run, then prepare it asynchronously.
 
@@ -1877,7 +1878,9 @@ class Operator:
             and workflow_revision(descriptor_to_info(descriptor)) != expected_version
         ):
             raise ValueError("Workflow version changed; reload the start form")
-        if descriptor.machine_spec_json and _machine_visit is None:
+        if (descriptor.machine_spec_json or descriptor.key_fields) and (
+            _machine_visit is None and _key_claim is None
+        ):
             return self._machine_host.start(flow_name, request, run_id, triggered_by)
         if _machine_visit is not None:
             with self._state_store.transaction() as connection:
@@ -1996,7 +1999,21 @@ class Operator:
                 )
                 self._runs[run_id] = run
                 if _machine_visit is None:
-                    notifications = self._publish_run_locked(run, start=start)
+
+                    def claim_key(connection: sqlite3.Connection) -> None:
+                        if _key_claim is not None:
+                            from .state.machines import canonical_json
+
+                            connection.execute(
+                                "UPDATE runs SET key=? WHERE run_id=?",
+                                (canonical_json(_key_claim), run_id),
+                            )
+
+                    notifications = self._publish_run_locked(
+                        run,
+                        start=start,
+                        machine_write=claim_key if _key_claim is not None else None,
+                    )
                 else:
 
                     def record_process(connection: sqlite3.Connection) -> None:

@@ -13,9 +13,10 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError, create_model
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
 from avalanche.machine import Machine
+from avalanche.run_keys import derive_run_key
 
 from .discovery import ConfiguredRoot
 from .models import WorkflowDescriptor
@@ -85,29 +86,26 @@ def main() -> None:
             root = Path(request.root)
             sys.path.insert(0, str(root))
             module = _import_workflow_module(root, request.relative_file)
-            machine = vars(module)[request.builder]
-            if not isinstance(machine, Machine):
-                raise ValueError("Target is no longer a machine")
-            machine()
+            builder = vars(module)[request.builder]
+            workflow = builder()
             wire = json.dumps(request.value, allow_nan=False)
             if request.op == "key":
-                fields = machine.input_type.model_fields
-                key_model = create_model(
-                    "MachineKeyFields",
-                    __config__=ConfigDict(extra="ignore"),
-                    **{
-                        name: (fields[name].annotation, fields[name])
-                        for name in machine.key_fields
-                    },
-                )
-                validated = key_model.model_validate_json(wire, strict=True)
-                values = validated.model_dump(mode="json")
-                value = [values[name] for name in machine.key_fields]
+                if workflow.input_type is None or not workflow.key_fields:
+                    raise ValueError("Workflow does not declare a run key")
+                values = TypeAdapter(dict[str, JsonValue]).validate_python(request.value)
+                value = list(derive_run_key(workflow.input_type, workflow.key_fields, values))
             elif request.op == "input":
-                value = machine.input_type.model_validate_json(wire, strict=True).model_dump(
-                    mode="json"
+                value = (
+                    workflow.input_type.model_validate_json(wire, strict=True).model_dump(
+                        mode="json"
+                    )
+                    if workflow.input_type is not None
+                    else request.value
                 )
             else:
+                if not isinstance(builder, Machine):
+                    raise ValueError("Target is not a machine")
+                machine = builder
                 if request.state not in machine.spec.states:
                     raise ValueError("state_missing")
                 model = machine.payloads[request.state][request.event]

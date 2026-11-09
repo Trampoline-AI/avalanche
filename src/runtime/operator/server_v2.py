@@ -52,6 +52,7 @@ from .models import (
     RunCreated,
     RunNodesExpanded,
     RunSnapshot,
+    RunSummary,
     TriggerKind,
 )
 from .operator import (
@@ -823,6 +824,16 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             )
         return data
 
+    def _summary_message(self, summary: RunSummary) -> pb.RunSummaryV2:
+        message = run_summary_to_v2(summary)
+        with self._op._state_store.transaction() as connection:
+            row = connection.execute(
+                "SELECT key, read_state FROM runs WHERE run_id=?", (summary.run_id,)
+            ).fetchone()
+        message.key_json = row["key"] or ""
+        message.read_state = row["read_state"]
+        return message
+
     def _run_snapshot_message(self, snapshot: RunSnapshot, context) -> pb.RunSnapshotV2:
         run_id = snapshot.summary.run_id
         as_of_sequence = snapshot.as_of_sequence
@@ -870,6 +881,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 category="logs",
             ),
         )
+        message.summary.CopyFrom(self._summary_message(snapshot.summary))
         from .machine_control import machine_head
         from .state.machines import MachinesTable
 
@@ -1038,6 +1050,25 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         except ValueError as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
 
+    def _start_response(self, run_id: str) -> pb.StartRunResponseV2:
+        with self._op._state_store.transaction() as connection:
+            row = connection.execute(
+                "SELECT key, read_state FROM runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+        return pb.StartRunResponseV2(
+            run_id=run_id, key_json=row["key"] or "", read_state=row["read_state"]
+        )
+
+    def ResolveRun(self, request, context):  # noqa: N802
+        try:
+            fields = _decode_json_object(request.key_fields_json, "key_fields_json")
+            run_id = self._op._machine_host.resolve(request.workflow_selector, fields or {})
+            return self._start_response(run_id)
+        except (UnknownWorkflow, KeyError) as exc:
+            context.abort(grpc.StatusCode.NOT_FOUND, str(exc))
+        except (ValueError, AmbiguousWorkflow) as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+
     def StartRun(self, request, context):  # noqa: N802
         if not request.run_id:
             context.abort(
@@ -1048,16 +1079,16 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "Unknown start trigger")
         trigger = _START_RUN_TRIGGERS[request.trigger]
         # Identity replay precedes attachment claims: stale/unused uploads are irrelevant.
-        from .machine_control import existing_machine_run
+        from .machine_control import existing_keyed_run
 
         try:
-            existing = existing_machine_run(
+            existing = existing_keyed_run(
                 self._op,
                 request.workflow_selector,
                 _decode_json_object(request.input_json, "input_json"),
             )
             if existing is not None:
-                return pb.StartRunResponseV2(run_id=existing)
+                return self._start_response(existing)
         except (ValueError, UnknownWorkflow, AmbiguousWorkflow) as exc:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
         # A refused run releases its files, so they expire like unused uploads.
@@ -1087,7 +1118,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                     expected_version=request.expected_version,
                     input_files=claims.files,
                 )
-                return pb.StartRunResponseV2(run_id=run_id)
+                return self._start_response(run_id)
             except (InvalidRunIdError, MissingRunInputError) as exc:
                 context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
             except RunAlreadyExistsError as exc:
@@ -1201,7 +1232,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         cursor = self._cursor(page.as_of_sequence)
         message = pb.RunSummaryPageV2(
             cursor=cursor,
-            runs=[run_summary_to_v2(item) for item in page.runs],
+            runs=[self._summary_message(item) for item in page.runs],
             scope_ref=self._scope(),
         )
         next_page = self._continuation(

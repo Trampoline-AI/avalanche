@@ -434,6 +434,16 @@ export interface FlowInfoV2 {
      * @generated from protobuf field: string machine_spec_json = 32
      */
     machineSpecJson: string;
+    /**
+     * @generated from protobuf field: map<string, string> node_runs_json = 33
+     */
+    nodeRunsJson: {
+        [key: string]: string;
+    };
+    /**
+     * @generated from protobuf field: repeated string key_fields = 34
+     */
+    keyFields: string[];
 }
 /**
  * @generated from protobuf message avalanche.operator.DiscoveryDiagnosticV2
@@ -779,6 +789,19 @@ export interface StageInputFileRequestV2 {
     content: Uint8Array;
 }
 /**
+ * @generated from protobuf message avalanche.operator.ResolveRunRequestV2
+ */
+export interface ResolveRunRequestV2 {
+    /**
+     * @generated from protobuf field: string workflow_selector = 1
+     */
+    workflowSelector: string;
+    /**
+     * @generated from protobuf field: string key_fields_json = 2
+     */
+    keyFieldsJson: string;
+}
+/**
  * @generated from protobuf message avalanche.operator.StartRunResponseV2
  */
 export interface StartRunResponseV2 {
@@ -786,6 +809,14 @@ export interface StartRunResponseV2 {
      * @generated from protobuf field: string run_id = 1
      */
     runId: string;
+    /**
+     * @generated from protobuf field: string read_state = 2
+     */
+    readState: string; // retained | expired
+    /**
+     * @generated from protobuf field: string key_json = 3
+     */
+    keyJson: string; // absent for unkeyed runs
 }
 /**
  * @generated from protobuf message avalanche.operator.CancelRunRequestV2
@@ -921,6 +952,14 @@ export interface RunSummaryV2 {
      * @generated from protobuf field: double triggered_at = 10
      */
     triggeredAt: number;
+    /**
+     * @generated from protobuf field: string key_json = 11
+     */
+    keyJson: string;
+    /**
+     * @generated from protobuf field: string read_state = 12
+     */
+    readState: string;
 }
 /**
  * @generated from protobuf message avalanche.operator.ListRunSummariesRequestV2
@@ -3109,7 +3148,9 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
             { no: 21, name: "schedule_input_json", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 30, name: "node_policies_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
             { no: 31, name: "node_waits_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
-            { no: 32, name: "machine_spec_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+            { no: 32, name: "machine_spec_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 33, name: "node_runs_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
+            { no: 34, name: "key_fields", kind: "scalar", repeat: 2 /*RepeatType.UNPACKED*/, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<FlowInfoV2>): FlowInfoV2 {
@@ -3136,6 +3177,8 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         message.nodePoliciesJson = {};
         message.nodeWaitsJson = {};
         message.machineSpecJson = "";
+        message.nodeRunsJson = {};
+        message.keyFields = [];
         if (value !== undefined)
             reflectionMergePartial<FlowInfoV2>(this, message, value);
         return message;
@@ -3216,6 +3259,12 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
                     break;
                 case /* string machine_spec_json */ 32:
                     message.machineSpecJson = reader.string();
+                    break;
+                case /* map<string, string> node_runs_json */ 33:
+                    this.binaryReadMap33(message.nodeRunsJson, reader, options);
+                    break;
+                case /* repeated string key_fields */ 34:
+                    message.keyFields.push(reader.string());
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -3308,6 +3357,22 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         }
         map[key ?? ""] = val ?? "";
     }
+    private binaryReadMap33(map: FlowInfoV2["nodeRunsJson"], reader: IBinaryReader, options: BinaryReadOptions): void {
+        let len = reader.uint32(), end = reader.pos + len, key: keyof FlowInfoV2["nodeRunsJson"] | undefined, val: FlowInfoV2["nodeRunsJson"][any] | undefined;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case 1:
+                    key = reader.string();
+                    break;
+                case 2:
+                    val = reader.string();
+                    break;
+                default: throw new globalThis.Error("unknown map entry field for avalanche.operator.FlowInfoV2.node_runs_json");
+            }
+        }
+        map[key ?? ""] = val ?? "";
+    }
     internalBinaryWrite(message: FlowInfoV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
         /* string workflow_selector = 1; */
         if (message.workflowSelector !== "")
@@ -3381,6 +3446,12 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         /* string machine_spec_json = 32; */
         if (message.machineSpecJson !== "")
             writer.tag(32, WireType.LengthDelimited).string(message.machineSpecJson);
+        /* map<string, string> node_runs_json = 33; */
+        for (let k of globalThis.Object.keys(message.nodeRunsJson))
+            writer.tag(33, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.nodeRunsJson[k]).join();
+        /* repeated string key_fields = 34; */
+        for (let i = 0; i < message.keyFields.length; i++)
+            writer.tag(34, WireType.LengthDelimited).string(message.keyFields[i]);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -4417,15 +4488,74 @@ class StageInputFileRequestV2$Type extends MessageType<StageInputFileRequestV2> 
  */
 export const StageInputFileRequestV2 = new StageInputFileRequestV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class ResolveRunRequestV2$Type extends MessageType<ResolveRunRequestV2> {
+    constructor() {
+        super("avalanche.operator.ResolveRunRequestV2", [
+            { no: 1, name: "workflow_selector", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "key_fields_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+    create(value?: PartialMessage<ResolveRunRequestV2>): ResolveRunRequestV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.workflowSelector = "";
+        message.keyFieldsJson = "";
+        if (value !== undefined)
+            reflectionMergePartial<ResolveRunRequestV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: ResolveRunRequestV2): ResolveRunRequestV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string workflow_selector */ 1:
+                    message.workflowSelector = reader.string();
+                    break;
+                case /* string key_fields_json */ 2:
+                    message.keyFieldsJson = reader.string();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: ResolveRunRequestV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string workflow_selector = 1; */
+        if (message.workflowSelector !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.workflowSelector);
+        /* string key_fields_json = 2; */
+        if (message.keyFieldsJson !== "")
+            writer.tag(2, WireType.LengthDelimited).string(message.keyFieldsJson);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.ResolveRunRequestV2
+ */
+export const ResolveRunRequestV2 = new ResolveRunRequestV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class StartRunResponseV2$Type extends MessageType<StartRunResponseV2> {
     constructor() {
         super("avalanche.operator.StartRunResponseV2", [
-            { no: 1, name: "run_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+            { no: 1, name: "run_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "read_state", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "key_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<StartRunResponseV2>): StartRunResponseV2 {
         const message = globalThis.Object.create((this.messagePrototype!));
         message.runId = "";
+        message.readState = "";
+        message.keyJson = "";
         if (value !== undefined)
             reflectionMergePartial<StartRunResponseV2>(this, message, value);
         return message;
@@ -4437,6 +4567,12 @@ class StartRunResponseV2$Type extends MessageType<StartRunResponseV2> {
             switch (fieldNo) {
                 case /* string run_id */ 1:
                     message.runId = reader.string();
+                    break;
+                case /* string read_state */ 2:
+                    message.readState = reader.string();
+                    break;
+                case /* string key_json */ 3:
+                    message.keyJson = reader.string();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -4453,6 +4589,12 @@ class StartRunResponseV2$Type extends MessageType<StartRunResponseV2> {
         /* string run_id = 1; */
         if (message.runId !== "")
             writer.tag(1, WireType.LengthDelimited).string(message.runId);
+        /* string read_state = 2; */
+        if (message.readState !== "")
+            writer.tag(2, WireType.LengthDelimited).string(message.readState);
+        /* string key_json = 3; */
+        if (message.keyJson !== "")
+            writer.tag(3, WireType.LengthDelimited).string(message.keyJson);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -4772,7 +4914,9 @@ class RunSummaryV2$Type extends MessageType<RunSummaryV2> {
             { no: 7, name: "created_sequence", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
             { no: 8, name: "revision", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
             { no: 9, name: "triggered_by", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 10, name: "triggered_at", kind: "scalar", T: 1 /*ScalarType.DOUBLE*/ }
+            { no: 10, name: "triggered_at", kind: "scalar", T: 1 /*ScalarType.DOUBLE*/ },
+            { no: 11, name: "key_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 12, name: "read_state", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<RunSummaryV2>): RunSummaryV2 {
@@ -4787,6 +4931,8 @@ class RunSummaryV2$Type extends MessageType<RunSummaryV2> {
         message.revision = "0";
         message.triggeredBy = "";
         message.triggeredAt = 0;
+        message.keyJson = "";
+        message.readState = "";
         if (value !== undefined)
             reflectionMergePartial<RunSummaryV2>(this, message, value);
         return message;
@@ -4825,6 +4971,12 @@ class RunSummaryV2$Type extends MessageType<RunSummaryV2> {
                     break;
                 case /* double triggered_at */ 10:
                     message.triggeredAt = reader.double();
+                    break;
+                case /* string key_json */ 11:
+                    message.keyJson = reader.string();
+                    break;
+                case /* string read_state */ 12:
+                    message.readState = reader.string();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -4868,6 +5020,12 @@ class RunSummaryV2$Type extends MessageType<RunSummaryV2> {
         /* double triggered_at = 10; */
         if (message.triggeredAt !== 0)
             writer.tag(10, WireType.Bit64).double(message.triggeredAt);
+        /* string key_json = 11; */
+        if (message.keyJson !== "")
+            writer.tag(11, WireType.LengthDelimited).string(message.keyJson);
+        /* string read_state = 12; */
+        if (message.readState !== "")
+            writer.tag(12, WireType.LengthDelimited).string(message.readState);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -8006,6 +8164,7 @@ export const OperatorServiceV2 = new ServiceType("avalanche.operator.OperatorSer
     { name: "ReadTuiArtifact", serverStreaming: true, options: {}, I: ReadTuiArtifactRequestV2, O: RunOutputArtifactChunkV2 },
     { name: "GetWorkflowNodeSource", options: {}, I: GetWorkflowNodeSourceRequestV2, O: WorkflowNodeSourceV2 },
     { name: "StartRun", options: {}, I: StartRunRequestV2, O: StartRunResponseV2 },
+    { name: "ResolveRun", options: {}, I: ResolveRunRequestV2, O: StartRunResponseV2 },
     { name: "CancelRun", options: {}, I: CancelRunRequestV2, O: CancelRunResponseV2 },
     { name: "ControlWait", options: {}, I: ControlWaitRequestV2, O: ControlWaitResponseV2 },
     { name: "ControlMachine", options: {}, I: ControlMachineRequestV2, O: ControlMachineResponseV2 },

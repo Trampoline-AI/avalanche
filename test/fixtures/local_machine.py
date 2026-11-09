@@ -88,7 +88,7 @@ def retry_after_send(
     return receipt
 
 
-@ava.workflow(input=Ticket)
+@ava.workflow(input=Ticket, key=("ticket",))
 def ordinary_child():
     return observe()
 

@@ -16,6 +16,7 @@ from avalanche.agent.native import TraceHeaderNative
 from avalanche.agent.trace import AgentTraceStatus, TokenUsage
 from avalanche.mapping import MapSpec
 from avalanche.policies import StepPolicy, WaitSpec
+from avalanche.run_steps import RunOpSpec
 
 from .models import (
     AgentEventAppended,
@@ -148,6 +149,8 @@ def workflow_info_to_v2(info: WorkflowInfo) -> pb.FlowInfoV2:
             node: spec.model_dump_json(by_alias=True) for node, spec in info.node_waits.items()
         },
         machine_spec_json=info.machine_spec_json,
+        node_runs_json={node: spec.model_dump_json() for node, spec in info.node_runs.items()},
+        key_fields=info.key_fields,
         agent_declarations_json={
             node_id: declaration.model_dump_json()
             for node_id, declaration in info.agent_declarations.items()
@@ -928,6 +931,11 @@ def workflow_info_from_v2(msg: pb.FlowInfoV2) -> WorkflowInfo:
             for node, value in msg.node_waits_json.items()
         },
         machine_spec_json=msg.machine_spec_json,
+        node_runs={
+            node: RunOpSpec.model_validate_json(value)
+            for node, value in msg.node_runs_json.items()
+        },
+        key_fields=tuple(msg.key_fields),
         display_names=dict(msg.topology.display_names),
         agent_node_ids=list(msg.agent_node_ids),
         agent_declarations={

@@ -21,6 +21,7 @@ service OperatorServiceV2 {
   rpc GetWorkflowNodeSource(GetWorkflowNodeSourceRequestV2)
       returns (WorkflowNodeSourceV2);
   rpc StartRun(StartRunRequestV2) returns (StartRunResponseV2);
+  rpc ResolveRun(ResolveRunRequestV2) returns (StartRunResponseV2);
   rpc CancelRun(CancelRunRequestV2) returns (CancelRunResponseV2);
   // Local/test controls. Caller identity is derived by the serving host, never the body.
   rpc ControlWait(ControlWaitRequestV2) returns (ControlWaitResponseV2);
@@ -188,6 +189,8 @@ message FlowInfoV2 {
   map<string, string> node_policies_json = 30;
   map<string, string> node_waits_json = 31;
   string machine_spec_json = 32;
+  map<string, string> node_runs_json = 33;
+  repeated string key_fields = 34;
 }
 
 message DiscoveryDiagnosticV2 {
@@ -311,8 +314,15 @@ message StageInputFileRequestV2 {
   bytes content = 5;
 }
 
+message ResolveRunRequestV2 {
+  string workflow_selector = 1;
+  string key_fields_json = 2;
+}
+
 message StartRunResponseV2 {
   string run_id = 1;
+  string read_state = 2; // retained | expired
+  string key_json = 3; // absent for unkeyed runs
 }
 
 message CancelRunRequestV2 {
@@ -361,6 +371,8 @@ message RunSummaryV2 {
   // One of "scheduled", "manual", "webhook", or "api".
   string triggered_by = 9;
   double triggered_at = 10;
+  string key_json = 11;
+  string read_state = 12;
 }
 
 message ListRunSummariesRequestV2 {
