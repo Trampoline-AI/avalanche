@@ -505,6 +505,7 @@ message RunSnapshotV2 {
   RunInputV2 input = 9;
   map<string, uint32> expansions = 10;
   string machine_json = 11;
+  string read_state = 12; // retained | expired; key identity never expires
 }
 
 // The validated input a run started with, after defaults were applied.

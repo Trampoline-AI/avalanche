@@ -247,7 +247,7 @@ one). Next to it are three folders:
 So run history, traces, logs, evaluations, results and schedules survive an
 operator restart, including a crash or `kill -9`. What does not survive:
 
-- A run that was still running when the operator stopped is **not resumed**. The
+- An ordinary flow run that was still running when the operator stopped is **not resumed**. The
   next start stops any of its processes still alive, then marks it and its
   unfinished steps failed with "Operator restarted before the run finished; it was
   not resumed". An evaluation still pending is marked failed the same way.
@@ -272,14 +272,46 @@ uv run ava state delete RUN_ID           # delete one finished run and its files
 uv run ava state clear                   # delete every run (asks first)
 ```
 
-This is local development storage, not durable recovery: there is no shared or
-multi-operator database, no authentication, and no backup.
+Machine runs additionally keep their key, visits, inbox, receipts and absolute
+timer deadlines in this database. A waiting machine re-arms its timers after a
+restart; an overdue timer fires once. A visit interrupted in the middle of work
+has an unknown outcome and is not replayed automatically. Use
+`ava run retry RUN_ID --visit` to start a new visit in the same state, or
+`ava run cancel RUN_ID`. This does not resume arbitrary unfinished flow DAGs.
+See [state machines](docs/state-machines.md#run-locally).
+
+SQLite uses WAL and `synchronous=FULL`; accepted receipts and transitions commit
+before being acknowledged or published. There is no shared/multi-operator
+recovery, authentication, encryption or backup. Keep a backup of the database
+and its sibling folders together. Manual `ava state` deletion is destructive,
+but retains permanent keyed-run identity and reports the data as `expired`;
+it is not a machine rerun mechanism. Removing the database itself resets identity.
+
+### Application environment for self-hosters
+
+Visits inherit the environment of the operator process, like ordinary flow runs.
+There is no local hosted-secret manager. Load a private environment file before
+starting the operator (or use your service manager's environment-file facility):
+
+```sh
+# Trusted shell assignments; never source an untrusted file.
+set -a
+. ./operator.env
+set +a
+ava operator ./flows --state-db .avalanche/operator/state.db
+```
+
+Keep `operator.env` out of version control and restrict its permissions to its
+owner (`chmod 600 operator.env`). Do not print its contents in logs. Changing an
+environment file requires restarting the operator; waiting machine timers and
+records survive, but an in-flight visit becomes interrupted.
 
 ### Development REST API
 
 The built-in API is available under `/api/v1` on the same listener as the Web UI.
 It translates JSON requests into the existing operator gRPC calls; it does not
-add a deployment service, separate run store, or durable recovery.
+add a deployment service or a separate run store. Machine sections and controls
+are subordinate to their normal run IDs.
 FastAPI defines the REST routes, and Uvicorn serves the shared HTTP listener.
 Both are regular runtime dependencies installed with Avalanche, not contributor-only
 development dependencies. Interactive API documentation is available at `/api/docs`,

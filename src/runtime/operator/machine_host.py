@@ -16,18 +16,18 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 from uuid import uuid4
 
-from jsonschema import Draft202012Validator
-from pydantic import JsonValue
+from pydantic import JsonValue, TypeAdapter
 
 from avalanche.local_waits import WaitRefusalError
 from avalanche.machine_core import BufferedEvent, MachineRecord, reduce_machine, retain_inbox
-from avalanche.machine_host import MachineEventReceipt, MachineStart
+from avalanche.machine_host import MachineEventReceipt
 from avalanche.machine_spec import MachineSpec
 from avalanche.policies import event
+from avalanche.run_steps import RunOpSpec, RunStart
 
-from .machine_steps import MachineStepRequest
-from .models import RunState, RunStatus, TriggerKind, WorkflowDescriptor
-from .registry import descriptor_to_info, workflow_revision
+from .machine_steps import HostStepOutput, MachineStepRequest
+from .machine_validation import validate_native
+from .models import RunState, RunStatus, TriggerKind, WorkflowDescriptor, WorkflowTopology
 from .state.machines import (
     InstanceRecord,
     MachinesTable,
@@ -63,7 +63,7 @@ class Send:
 @dataclass(frozen=True)
 class MachineStep:
     request: MachineStepRequest
-    reply: Future[MachineStart | MachineEventReceipt]
+    reply: Future[HostStepOutput]
 
 
 @dataclass(frozen=True)
@@ -112,24 +112,19 @@ def _json_payload(value: JsonValue) -> None:
     """Events have no artifact lifetime/ownership protocol: refuse references."""
     canonical_json(value)
     if isinstance(value, dict):
-        if value.get("kind") in {"file", "workspace"} or value.get("type") in {
-            "file",
-            "workspace",
-        }:
+        if (
+            value.get("kind") in {"file", "workspace"}
+            or value.get("type") in {"file", "workspace"}
+            or (value.get("version") == 1 and "entries" in value)
+            or "input_files" in value
+            or "uploads" in value
+        ):
             raise WaitRefusalError("machine_events_require_json_not_file_or_workspace", 422)
         for child in value.values():
             _json_payload(child)
     elif isinstance(value, list):
         for child in value:
             _json_payload(child)
-
-
-def _validate(schema: dict[str, JsonValue], value: JsonValue) -> None:
-    errors = sorted(Draft202012Validator(schema).iter_errors(value), key=lambda e: e.json_path)
-    if errors:
-        raise ValueError(
-            f"Invalid machine input/payload at {errors[0].json_path}: {errors[0].validator}"
-        )
 
 
 class MachineHost:
@@ -153,6 +148,12 @@ class MachineHost:
     def send(
         self, run_id: str, name: str, payload: JsonValue, idempotency_key: str
     ) -> MachineEventReceipt:
+        reply: Future[MachineEventReceipt] = Future()
+        self.queue.put(Send(run_id, name, payload, idempotency_key, reply))
+        return reply.result()
+
+    @staticmethod
+    def validate_send(name: str, payload: JsonValue, idempotency_key: str) -> None:
         if not name or name in {".", ".."} or "/" in name:
             raise ValueError("event must be a nonempty path segment")
         if (
@@ -162,9 +163,6 @@ class MachineHost:
         ):
             raise ValueError("idempotency_key must contain 1-256 printable characters")
         _json_payload(payload)
-        reply: Future[MachineEventReceipt] = Future()
-        self.queue.put(Send(run_id, name, payload, idempotency_key, reply))
-        return reply.result()
 
     def retry(self, run_id: str) -> None:
         reply: Future[None] = Future()
@@ -217,6 +215,7 @@ class MachineHost:
         with self.op._lock:
             run = self.op._runs[record.run_id]
             run.status = status
+            record.run_status = status
             if status in {RunStatus.SUCCESS, RunStatus.CANCELLED, RunStatus.FAILED}:
                 run.ended_at = time.monotonic()
             notifications = self.op._publish_run_locked(
@@ -237,13 +236,12 @@ class MachineHost:
         fired: TimerRecord | None = None,
     ) -> None:
         descriptor, spec = self._descriptor(record.machine)
+        record.spec = spec
         if record.state not in spec.states:
-            record.status = "needs_attention"
             record.reason = "state_missing"
             self._commit(record, lambda connection: None, RunStatus.WAITING, request=request)
             return
-        record.spec = spec
-        record.status = "active"
+        record.reason = None
         record.outcome = None
         record.internal_event = None
         record.internal_consumed = False
@@ -252,20 +250,17 @@ class MachineHost:
             visit=record.visit,
             state=record.state,
             entered_at=now,
-            catalog_revision=workflow_revision(descriptor_to_info(descriptor)),
+            catalog_revision=str(self.op.get_catalog().revision),
         )
 
         def write(connection: sqlite3.Connection) -> None:
+            connection.execute("DELETE FROM run_nodes WHERE run_id=?", (record.run_id,))
             if previous is not None:
                 previous.left_at = now
                 previous.disposition = "retained"
                 previous.transition = transition
                 MachinesTable.write_visit(connection, record.run_id, previous)
-                connection.execute(
-                    "UPDATE machine_timers SET reason='cancelled' "
-                    "WHERE run_id=? AND visit=? AND reason IS NULL",
-                    (record.run_id, previous.visit),
-                )
+                MachinesTable.cancel_timers(connection, record.run_id, previous.visit)
             if fired is not None:
                 MachinesTable.write_timer(connection, fired)
                 MachinesTable.fact(
@@ -327,41 +322,49 @@ class MachineHost:
 
         self.heap = [entry for entry in self.heap if entry[1] != record.run_id]
         heapq.heapify(self.heap)
+        with self.op._lock:
+            run = self.op._runs[record.run_id]
+            run.nodes = {}
+            run.topology = WorkflowTopology()
+            run.expansions = {}
         self._commit(record, write, RunStatus.PENDING, request=request)
         self.op.start_run(record.machine, run_id=record.run_id, _machine_visit=record)
 
     def resolve(self, selector: str, fields: dict[str, JsonValue]) -> str:
         descriptor, spec = self._descriptor(selector)
-        key = self.key_fields(spec, fields)
+        key = self.key_fields(descriptor.workflow_id, fields)
         with self.op._state_store.transaction() as connection:
             existing = MachinesTable.find(connection, descriptor.workflow_id, key)
         if existing is None:
             raise KeyError("Unknown machine key")
         return existing
 
-    @staticmethod
-    def key_fields(spec: MachineSpec, values: dict[str, JsonValue]) -> list[JsonValue]:
-        properties = spec.input_schema["properties"]
-        _validate(
-            {
-                "type": "object",
-                "properties": {name: properties[name] for name in spec.key_fields},
-                "required": list(spec.key_fields),
-                "$defs": spec.input_schema.get("$defs", {}),
-            },
-            values,
+    def key_fields(self, selector: str, values: dict[str, JsonValue]) -> list[JsonValue]:
+        descriptor, root = self.op._registry.resolve_source(selector)
+        return TypeAdapter(list[JsonValue]).validate_python(
+            validate_native(descriptor, root, "key", values)
         )
-        return [values[name] for name in spec.key_fields]
 
     def _start(self, command: Start) -> str:
         descriptor, spec = self._descriptor(command.selector)
         values = command.request.input or {}
-        key = self.key_fields(spec, values)
+        key = self.key_fields(descriptor.workflow_id, values)
         with self.op._state_store.transaction() as connection:
             existing = MachinesTable.find(connection, descriptor.workflow_id, key)
         if existing is not None:
             return existing
-        _validate(spec.input_schema, values)
+        _, root = self.op._registry.resolve_source(command.selector)
+        values = TypeAdapter(dict[str, JsonValue]).validate_python(
+            validate_native(descriptor, root, "input", values)
+        )
+        from .run_input_capture import capture_keyed_input
+
+        captured = capture_keyed_input(
+            self.op, command.request.model_copy(update={"input": values})
+        )
+        command = Start(
+            command.selector, captured, command.run_id, command.trigger, command.reply
+        )
         run_id = command.run_id or f"run_{uuid4().hex[:8]}"
         with self.op._lock:
             if run_id in self.op._runs:
@@ -380,13 +383,13 @@ class MachineHost:
             key=key,
             state=spec.initial,
             visit=1,
-            status="active",
             spec=spec,
         )
         self._enter(record, request=command.request)
         return run_id
 
     def _send(self, command: Send) -> MachineEventReceipt:
+        self.validate_send(command.event, command.payload, command.idempotency_key)
         record = self._load(command.run_id)
         request_json = canonical_json(command.payload)
         with self.op._state_store.transaction() as connection:
@@ -401,14 +404,14 @@ class MachineHost:
             return MachineEventReceipt.model_validate_json(replay["response_json"]).model_copy(
                 update={"duplicate": True}
             )
-        if record.status in {"final", "closed"}:
+        if record.phase in {"final", "closed"}:
             raise WaitRefusalError("run_closed", 409)
         _, spec = self._descriptor(record.machine)
+        record.spec = spec
         if record.state not in spec.states:
-            record.status, record.reason = "needs_attention", "state_missing"
+            record.reason = "state_missing"
             self._commit(record, lambda connection: None, RunStatus.WAITING)
             raise WaitRefusalError("state_missing", 409)
-        record.spec = spec
         state = spec.states[record.state]
         edge = next((edge for edge in state.transitions if edge.event == command.event), None)
         accepted = edge is not None or command.event in state.defer
@@ -417,7 +420,15 @@ class MachineHost:
                 if command.payload not in ({}, None):
                     raise WaitRefusalError("event_payload_must_be_empty", 422)
             else:
-                _validate(edge.payload_schema, command.payload)
+                descriptor, root = self.op._registry.resolve_source(record.machine)
+                validate_native(
+                    descriptor,
+                    root,
+                    "event",
+                    command.payload,
+                    state=record.state,
+                    event=command.event,
+                )
         receipt = MachineEventReceipt(
             receipt_id=uuid4().hex,
             key=command.idempotency_key,
@@ -463,21 +474,24 @@ class MachineHost:
                 receipt_id=receipt.receipt_id,
                 at=receipt.accepted_at,
             )
-        # The receipt is durable before driving work. Reply is filled by the loop.
+        # The receipt is durable before publication or driving work.
+        with self.op._lock:
+            run_status = self.op._runs[record.run_id].status
+        self._commit(record, lambda connection: None, run_status)
         self._drive(record)
         return receipt
 
     def _drive(
         self, record: InstanceRecord, *, manual: bool = False, catchup: bool = False
     ) -> None:
-        if record.status != "waiting":
+        if record.phase != "waiting":
             return
         _, spec = self._descriptor(record.machine)
+        record.spec = spec
         if record.state not in spec.states:
-            record.status, record.reason = "needs_attention", "state_missing"
+            record.reason = "state_missing"
             self._commit(record, lambda connection: None, RunStatus.WAITING)
             return
-        record.spec = spec
         with self.op._state_store.transaction() as connection:
             timers = MachinesTable.timers(connection, record.run_id, record.visit)
             inbox = MachinesTable.inbox(connection, record.run_id)
@@ -499,17 +513,12 @@ class MachineHost:
             work_done=True,
         )
         if reduction.finished:
-            record.status = "final"
             visit.left_at = time.time()
             visit.disposition = "retained"
 
             def finish(connection: sqlite3.Connection) -> None:
                 MachinesTable.write_visit(connection, record.run_id, visit)
-                connection.execute(
-                    "UPDATE machine_timers SET reason='cancelled' "
-                    "WHERE run_id=? AND reason IS NULL",
-                    (record.run_id,),
-                )
+                MachinesTable.cancel_timers(connection, record.run_id)
 
             self._commit(record, finish, RunStatus.SUCCESS)
         elif reduction.transition is not None:
@@ -552,7 +561,7 @@ class MachineHost:
 
     def _finished(self, command: VisitFinished) -> None:
         record = self._load(command.run_id)
-        if record.visit != command.visit or record.status != "active":
+        if record.visit != command.visit or record.phase != "active":
             return
         with self.op._state_store.transaction() as connection:
             visit = MachinesTable.visit(connection, record.run_id, record.visit)
@@ -560,7 +569,6 @@ class MachineHost:
             record.run_id, operator_instance_id=self.op._operator_instance_id
         )
         if command.status == "success":
-            record.status = "waiting"
             record.outcome, record.internal_event = command.output, command.internal_event
             self._commit(
                 record,
@@ -569,7 +577,7 @@ class MachineHost:
             )
             self._drive(record)
         else:
-            record.status, record.reason = "interrupted", "outcome_unknown"
+            record.reason = "outcome_unknown"
             visit.disposition = "indeterminate"
             self._commit(
                 record,
@@ -587,8 +595,8 @@ class MachineHost:
             return timers[0].due if timers else float("inf")
 
         for record in sorted(records, key=next_due):
-            if record.status == "active":
-                record.status, record.reason = "interrupted", "outcome_unknown"
+            if record.phase == "active":
+                record.reason = "outcome_unknown"
                 with self.op._state_store.transaction() as connection:
                     visit = MachinesTable.visit(connection, record.run_id, record.visit)
                 visit.disposition = "indeterminate"
@@ -602,8 +610,70 @@ class MachineHost:
                     ),
                     RunStatus.WAITING,
                 )
-            elif record.status == "waiting":
+            elif record.phase == "waiting":
                 self._drive(record, catchup=True)
+
+    def _step(self, request: MachineStepRequest) -> HostStepOutput:
+        if not request.enabled:
+            return None
+        if isinstance(request.spec, RunOpSpec):
+            import hashlib
+
+            descriptor = self.op._registry.resolve(request.target)
+            values = request.input or {}
+            key = (
+                self.key_fields(descriptor.workflow_id, values)
+                if descriptor.key_fields
+                else None
+            )
+            with self.op._state_store.transaction() as connection:
+                existing = (
+                    MachinesTable.find(connection, descriptor.workflow_id, key)
+                    if key is not None
+                    else None
+                )
+            proposed = (
+                "run_" + hashlib.sha256(request.idempotency_key.encode()).hexdigest()[:32]
+            )
+            existing = existing or (proposed if self.op.get_run(proposed) is not None else None)
+            if existing is not None:
+                run_id = existing
+            elif descriptor.machine_spec_json:
+                run_id = self._start(
+                    Start(
+                        request.target,
+                        RunRequest(input=values),
+                        proposed,
+                        TriggerKind.API,
+                        Future(),
+                    )
+                )
+            else:
+                run_id = self.op.start_run(
+                    request.target, TriggerKind.API, input=values, run_id=proposed
+                )
+            with self.op._state_store.transaction() as connection:
+                read_state = connection.execute(
+                    "SELECT read_state FROM runs WHERE run_id=?", (run_id,)
+                ).fetchone()[0]
+            return RunStart(
+                run_id=run_id, key=key, created=existing is None, read_state=read_state
+            )
+        descriptor, spec = self._descriptor(request.spec.machine)
+        if isinstance(request.key, str):
+            run_id = request.key
+            record = self._load(run_id)
+            if record.machine != descriptor.workflow_id:
+                raise ValueError("Run does not belong to the selected machine")
+        else:
+            if request.key is None or len(request.key) != len(spec.key_fields):
+                raise ValueError("Machine key has the wrong number of fields")
+            run_id = self.resolve(
+                request.spec.machine, dict(zip(spec.key_fields, request.key, strict=True))
+            )
+        return self._send(
+            Send(run_id, request.event, request.payload, request.idempotency_key, Future())
+        )
 
     def _loop(self) -> None:
         while True:
@@ -614,7 +684,7 @@ class MachineHost:
                 _, run_id, visit, index = heapq.heappop(self.heap)
                 try:
                     record = self._load(run_id)
-                    if record.status == "waiting" and record.visit == visit:
+                    if record.phase == "waiting" and record.visit == visit:
                         with self.op._state_store.transaction() as connection:
                             timers = MachinesTable.timers(connection, run_id, visit)
                         if any(timer.timer_index == index for timer in timers):
@@ -632,47 +702,7 @@ class MachineHost:
                     case Send():
                         command.reply.set_result(self._send(command))
                     case MachineStep(request=request, reply=reply):
-                        if request.spec.op == "start":
-                            _, spec = self._descriptor(request.spec.machine)
-                            values = request.input or {}
-                            key = self.key_fields(spec, values)
-                            with self.op._state_store.transaction() as connection:
-                                existing = MachinesTable.find(
-                                    connection,
-                                    self.op._registry.resolve(request.spec.machine).workflow_id,
-                                    key,
-                                )
-                            run_id = self._start(
-                                Start(
-                                    request.spec.machine,
-                                    RunRequest(input=values),
-                                    None,
-                                    TriggerKind.API,
-                                    Future(),
-                                )
-                            )
-                            reply.set_result(
-                                MachineStart(run_id=run_id, key=key, created=existing is None)
-                            )
-                        else:
-                            _, spec = self._descriptor(request.spec.machine)
-                            if request.key is None or len(request.key) != len(spec.key_fields):
-                                raise ValueError("Machine key has the wrong number of fields")
-                            run_id = self.resolve(
-                                request.spec.machine,
-                                dict(zip(spec.key_fields, request.key, strict=True)),
-                            )
-                            reply.set_result(
-                                self._send(
-                                    Send(
-                                        run_id,
-                                        request.event,
-                                        request.payload,
-                                        request.idempotency_key,
-                                        Future(),
-                                    )
-                                )
-                            )
+                        reply.set_result(self._step(request))
                     case VisitFinished():
                         self._finished(command)
                     case Restart(reply=reply):
@@ -680,7 +710,7 @@ class MachineHost:
                         reply.set_result(None)
                     case Retry(run_id=run_id, reply=reply):
                         record = self._load(run_id)
-                        if record.status != "interrupted":
+                        if record.phase != "interrupted":
                             raise ValueError("Only an interrupted machine visit can be retried")
                         with self.op._state_store.transaction() as connection:
                             previous = MachinesTable.visit(connection, run_id, record.visit)
@@ -689,15 +719,10 @@ class MachineHost:
                         reply.set_result(None)
                     case Close(run_id=run_id, reply=reply):
                         record = self._load(run_id)
-                        if record.status not in {"closed", "final"}:
-                            record.status = "closed"
+                        if record.phase not in {"closed", "final"}:
 
                             def cancel(connection: sqlite3.Connection) -> None:
-                                connection.execute(
-                                    "UPDATE machine_timers SET reason='cancelled' "
-                                    "WHERE run_id=? AND reason IS NULL",
-                                    (run_id,),
-                                )
+                                MachinesTable.cancel_timers(connection, run_id)
 
                             self._commit(record, cancel, RunStatus.CANCELLED)
                         reply.set_result(None)

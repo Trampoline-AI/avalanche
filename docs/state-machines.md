@@ -147,8 +147,8 @@ only queues the event; it never re-enters the driver.
 An instance is a run: starting it belongs to the normal run-start path,
 `ava run <machine> --input ...`, with the same file/workspace inputs as flows.
 The host derives the key from the input and returns the existing run for an
-existing key. Local operator integration is separate work; this SDK change does
-not yet make that path executable for machines.
+existing key. The local operator executes machines through this same run path;
+see [Run locally](#run-locally).
 
 Inside a workflow, `ava.start_run(target, input)` starts either a flow or a
 machine through the same declared run operation. `machine.send` declares the
@@ -187,9 +187,10 @@ implementations with `workflow.test(targets=(flow_builder, machine, ...))`.
 
 `workflow.test()` and `await workflow.test_async()` execute these operations
 against an isolated in-memory host, sharing the machine transition reducer.
-These are authoring/test facilities, not restart durability. `workflow.run()`
-refuses RUN and MACHINE nodes with a missing-host error; operator-host execution is a
-separate integration. `machine.run()` is not an instance execution API.
+These are authoring/test facilities, not restart durability. The operator parks
+RUN and MACHINE nodes and performs their operations on its host; no step executor
+or tenant credential is used. Bare embedded `workflow.run()` still refuses these
+nodes without that host. `machine.run()` is not an instance execution API.
 
 Outside a workflow, send to an already started instance with an explicit host:
 
@@ -215,3 +216,97 @@ The decorator and discovery spec no longer accept formatted-key templates.
 Remove that argument from 0.20.x declarations. Hosts address instances by run ID
 or named key fields parsed with the ordinary flow input-field parsing; the SDK
 only derives keys from validated input with `Machine.key(input)`.
+
+## Run locally
+
+Save the [approval example](../examples/approval.py) as `approval.py`. Its input
+is `{"ticket":44}`; an `approved` event carries `{"reviewer":"Ada"}`. It runs
+`pending -> cooling -> done`, with a two-second real timer in `cooling`.
+
+```sh
+ava operator approval.py
+# In another terminal, using the same operator:
+ava run approval --input '{"ticket":44}'
+# Prints a run ID. Repeating this command returns that same run.
+ava machine send approval --key ticket=44 approved \
+  --data '{"reviewer":"Ada"}' --idempotency-key approval-44
+ava run list --flow approval
+ava run show RUN_ID
+ava result RUN_ID --wait --output-dir ./approved-result
+```
+
+Use `--run RUN_ID` instead of `--key ticket=44` when the run ID is available.
+`--key` is repeated for multiple key fields. Values use the ordinary flow-input
+JSON field grammar: numbers stay numbers, booleans stay booleans, and strings
+must be JSON quoted (for example `--key 'repo="acme/api"'`). `--data @event.json`
+reads a JSON payload from a file. It does not upload an artifact. Event bodies
+are JSON only: File/Workspace reference objects are explicitly refused.
+`ava run` retains the ordinary `--file FIELD=PATH` and `--workspace FIELD=DIR`
+input facilities. Captured input belongs to the original run, not to a visit's
+temporary directory. Repeating an existing key validates the key first, then
+returns the existing run without replacing its input or claiming new files.
+
+A send returns `receipt_id`, `key` (the delivery's idempotency key),
+`accepted_at`, `status` (`accepted` or `ignored`), and `duplicate`. Retrying the
+same event/body/key returns the same receipt with `duplicate=true`, even after
+the run finishes. Reusing the key with different JSON is a conflict. Admission
+is not consumption: deferred, consumed and dropped events are later facts.
+
+`after()` uses an absolute UTC deadline from state entry. It never interrupts
+unfinished visit work. The shared reducer chooses final completion first, then
+the earliest expired timer, a returned internal event, and the first consumable
+external event. A state transition cancels its remaining timers. `ava dev`
+additionally enables the run-owned `timers:fire-next` control; the normal
+operator refuses it.
+
+The database retains machine runs, visit snapshots, receipts, inbox and timers.
+Restarting while waiting re-arms the original deadlines; overdue timers fire
+once through the transition transaction, in deadline order. Restarting in the
+middle of visit work stops its old process and marks that visit `interrupted`
+with an unknown outcome. It does **not** repeat side effects automatically:
+
+```sh
+ava run retry RUN_ID --visit  # explicit new visit, same run/key/state
+ava run cancel RUN_ID         # also works while parked on a timer/event
+```
+
+Check an uncertain external effect before retrying. General machine reruns are
+not supported; a distinct business instance requires a different input key.
+Ordinary unfinished flow runs still fail on restart rather than resume (P10).
+Finished decision cards and receipts remain readable after restart, including
+cards from earlier machine visits. Stored records have no automatic expiry;
+normal state pruning/deletion removes retained data but keeps the key-to-run
+link, and history reads explicitly report `expired`. Removing the database
+itself is a destructive identity reset.
+
+Each visit imports the latest source code on disk and records the operator's
+catalog revision. A state removed from the current definition becomes
+`needs_attention` with `state_missing`; cancel it and start with a new key.
+Editing a timer delay does not move an already-entered state's deadline; the
+new delay applies on the next entry. Local visits are therefore different from
+Delta, where an instance remains pinned to its starting deployment. Application
+environment comes from the operator; see [self-hosting environment files](
+../README.md#application-environment-for-self-hosters).
+
+### Run-owned transport
+
+The browser REST prefix is `/api/v1`. Start/list/show/cancel use the normal run
+routes, not a separate machine start or list product. A run snapshot includes
+`machine_json`; discovery includes `machine_spec_json`.
+
+- `POST /runs/{run}/machine/events/{name}`: JSON body and `Idempotency-Key`,
+  returns the receipt with HTTP 202.
+- `GET /runs/{run}/machine`: current state/visit, accepts, absolute `due`,
+  pending events and the most recent 100 receipts.
+- `GET /runs/{run}/machine/history?limit=20&cursor=...`: bounded transitions.
+- `GET /runs/{run}/machine/visits/{visit}`: scoped snapshot, qualified nodes,
+  entry/exit clocks, catalog revision and transition.
+- `GET /runs/{run}/machine/visits/{visit}/events?limit=20&cursor=...`: bounded
+  event facts. An empty page can still have a continuation.
+- `POST /runs/{run}/machine/visits:retry`: explicit interrupted-visit repair.
+- `POST /runs/{run}/machine/timers:fire-next`: dev-only timer control.
+
+The gRPC `ControlMachine` method carries these typed operations as JSON, next
+to ordinary `StartRun`, `CancelRun`, `GetRunSnapshot` and `ControlWait`. These
+are local APIs, not an authentication boundary: keep the operator on loopback
+or behind an authenticated trusted proxy.

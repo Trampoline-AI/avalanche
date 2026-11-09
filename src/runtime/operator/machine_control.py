@@ -28,6 +28,14 @@ class MachineControlRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=100)
 
 
+class MachinePageCursor(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    op: Literal["history", "events"]
+    run_id: str
+    visit: int
+    after: int = Field(ge=0)
+
+
 class MachineHead(BaseModel):
     machine: str
     key: list[JsonValue]
@@ -44,18 +52,16 @@ class MachineHead(BaseModel):
     pending_events: list[dict[str, JsonValue]]
     receipts: list[MachineEventReceipt]
     reason: str | None = None
+    read_state: Literal["retained", "expired"] = "retained"
 
 
 def existing_machine_run(
     op: Operator, selector: str, values: dict[str, JsonValue] | None
 ) -> str | None:
-    from avalanche.machine_spec import MachineSpec
-
     descriptor = op._registry.resolve(selector)
     if not descriptor.machine_spec_json:
         return None
-    spec = MachineSpec.model_validate_json(descriptor.machine_spec_json)
-    key = op._machine_host.key_fields(spec, values or {})
+    key = op._machine_host.key_fields(descriptor.workflow_id, values or {})
     with op._state_store.transaction() as connection:
         return MachinesTable.find(connection, descriptor.workflow_id, key)
 
@@ -65,6 +71,9 @@ def machine_head(op: Operator, run_id: str) -> MachineHead:
         record = MachinesTable.load(connection, run_id)
         if record is None:
             raise KeyError(f"Run {run_id} is not a machine")
+        read_state = connection.execute(
+            "SELECT read_state FROM runs WHERE run_id=?", (run_id,)
+        ).fetchone()[0]
         timers = MachinesTable.timers(connection, run_id, record.visit)
         inbox = MachinesTable.inbox(connection, run_id)
         receipts = [
@@ -80,16 +89,17 @@ def machine_head(op: Operator, run_id: str) -> MachineHead:
         machine=record.machine,
         key=record.key,
         run_id=run_id,
-        status=record.status,
+        status=record.run_status.value,
         state=record.state,
         visit=record.visit,
         accepts=[] if state is None else [edge.event for edge in state.transitions],
         due=timers[0].due if timers else None,
-        finished=record.status in {"final", "closed"},
+        finished=record.phase in {"final", "closed"},
         machine_spec=record.spec.model_dump(mode="json"),
         pending_events=[row.model_dump(mode="json", exclude={"size_bytes"}) for row in inbox],
         receipts=receipts,
         reason=record.reason,
+        read_state=read_state,
     )
 
 
@@ -99,8 +109,18 @@ def control_machine(op: Operator, request: MachineControlRequest) -> JsonValue:
     # Resolve every operation to the ordinary run before reading its child records.
     if op.get_run(request.run_id) is None:
         raise KeyError(f"Unknown run {request.run_id}")
+    with op._state_store.transaction() as connection:
+        read_state = connection.execute(
+            "SELECT read_state FROM runs WHERE run_id=?", (request.run_id,)
+        ).fetchone()[0]
+    if read_state == "expired" and request.op in {"history", "events", "visit"}:
+        return {"read_state": "expired", "items": [], "next_cursor": None}
     host = op._machine_host
     if request.op == "send":
+        if request.machine:
+            descriptor = op._registry.resolve(request.machine)
+            if descriptor.workflow_id != op.get_run(request.run_id).workflow_id:
+                raise ValueError("Run does not belong to the selected machine")
         return host.send(
             request.run_id, request.event, request.payload, request.idempotency_key
         ).model_dump(mode="json")
@@ -114,16 +134,19 @@ def control_machine(op: Operator, request: MachineControlRequest) -> JsonValue:
         return None
     if request.op == "get":
         return machine_head(op, request.run_id).model_dump(mode="json")
+    # Never acquire the operator lock while holding the store transaction lock.
+    current_snapshot = (
+        op.get_latest_run_snapshot(request.run_id, operator_instance_id=op.operator_instance_id)
+        if request.op == "visit"
+        else None
+    )
     with op._state_store.transaction() as connection:
         if MachinesTable.load(connection, request.run_id) is None:
             raise ValueError("not_machine")
         if request.op == "visit":
             visit = MachinesTable.visit(connection, request.run_id, request.visit)
-            snapshot = visit.snapshot
-            if snapshot is None:
-                snapshot = op.get_latest_run_snapshot(
-                    request.run_id, operator_instance_id=op._operator_instance_id
-                )
+            snapshot = visit.snapshot or current_snapshot
+            assert snapshot is not None
             # The full domain snapshot retains qualified topology, I/O and detail tokens.
             result = visit.model_dump(mode="json", by_alias=True)
             from pydantic import TypeAdapter
@@ -148,13 +171,14 @@ def control_machine(op: Operator, request: MachineControlRequest) -> JsonValue:
             return result
         offset = 0
         if request.cursor is not None:
-            parts = request.cursor.split(":")
-            binding = f"{request.op}:{request.run_id}:{request.visit}"
-            if len(parts) != 4 or ":".join(parts[:3]) != binding:
+            cursor = MachinePageCursor.model_validate_json(request.cursor)
+            if (cursor.op, cursor.run_id, cursor.visit) != (
+                request.op,
+                request.run_id,
+                request.visit,
+            ):
                 raise ValueError("invalid_machine_cursor")
-            offset = int(parts[3])
-            if offset < 0:
-                raise ValueError("invalid_machine_cursor")
+            offset = cursor.after
         if request.op == "history":
             rows = connection.execute(
                 "SELECT record_json FROM machine_visits WHERE run_id=? AND visit>? "
@@ -185,7 +209,9 @@ def control_machine(op: Operator, request: MachineControlRequest) -> JsonValue:
             last = facts[-1].tseq if facts else offset
     return {
         "items": items,
-        "next_cursor": f"{request.op}:{request.run_id}:{request.visit}:{last}"
+        "next_cursor": MachinePageCursor(
+            op=request.op, run_id=request.run_id, visit=request.visit, after=last
+        ).model_dump_json()
         if len(rows) > request.limit
         else None,
     }

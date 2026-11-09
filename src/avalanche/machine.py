@@ -179,7 +179,6 @@ class Machine:
         builder: Callable[[], State | None],
         input_type: type[BaseInput],
         key: tuple[str, ...],
-        *,
         cron: str | None = None,
         webhook: Webhook | bool | None = None,
     ) -> None:

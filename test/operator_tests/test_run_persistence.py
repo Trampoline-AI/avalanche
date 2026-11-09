@@ -397,6 +397,125 @@ def test_finished_runs_survive_a_restart_with_their_state_revisions_and_sequence
         second.close()
 
 
+def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_path):
+    fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
+    state_db = tmp_path / "state.db"
+    journal = tmp_path / "artifacts.txt"
+    document = tmp_path / "document.txt"
+    document.write_text("document")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "data.txt").write_text("captured")
+    op = Operator(
+        [str(fixture)], watch=False, schedule=False, webhook_port=0, state_db=state_db
+    )
+    server = serve_operator(op, port=(port := _free_port()), block=False)
+    try:
+        created = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ava_cli",
+                "run",
+                "artifact_approval",
+                "--connect",
+                f"127.0.0.1:{port}",
+                "--input",
+                json.dumps({"ticket": 11, "journal": str(journal)}),
+                "--file",
+                f"document={document}",
+                "--workspace",
+                f"workspace={workspace}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert created.returncode == 0, created.stderr
+        run_id = created.stdout.strip()
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and op.get_run(run_id).status != RunStatus.WAITING:
+            time.sleep(0.03)
+        assert op.get_run(run_id).status == RunStatus.WAITING
+        with grpc.insecure_channel(f"127.0.0.1:{port}") as channel:
+            stub = pb_grpc.OperatorServiceV2Stub(channel)
+            existing = stub.StartRun(
+                pb.StartRunRequestV2(
+                    run_id="unused-id",
+                    workflow_selector=op._registry.resolve("artifact_approval").workflow_id,
+                    input_json='{"ticket":11}',
+                    context_json="{}",
+                    input_files=[
+                        pb.FileAttachmentV2(field_name="document", object_key="expired")
+                    ],
+                )
+            )
+            assert existing.run_id == run_id
+        document.unlink()
+        (workspace / "data.txt").unlink()
+        workspace.rmdir()
+        server.stop(grace=0).wait()
+        op.close()
+        op = Operator(
+            [str(fixture)], watch=False, schedule=False, webhook_port=0, state_db=state_db
+        )
+        op._machine_host.send(run_id, "approved", {}, "late-visit")
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and op.get_run(run_id).status != RunStatus.SUCCESS:
+            time.sleep(0.03)
+        assert op.get_run(run_id).status == RunStatus.SUCCESS
+        assert journal.read_text().splitlines() == [
+            "v1.inspect_artifacts_1:document:captured",
+            "v2.inspect_artifacts_1:document:captured",
+        ]
+        op.close()
+        expired = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ava_cli",
+                "state",
+                "delete",
+                run_id,
+                "--state-db",
+                str(state_db),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert expired.returncode == 0, expired.stderr
+        op = Operator(
+            [str(fixture)], watch=False, schedule=False, webhook_port=0, state_db=state_db
+        )
+        assert op.start_run("artifact_approval", input={"ticket": 11}) == run_id
+        from runtime.operator.machine_control import MachineControlRequest, control_machine
+
+        history = control_machine(op, MachineControlRequest(op="history", run_id=run_id))
+        assert history["read_state"] == "expired"
+        with op._state_store.transaction() as connection:
+            assert (
+                connection.execute(
+                    "SELECT key, read_state FROM runs WHERE run_id=?", (run_id,)
+                ).fetchone()["read_state"]
+                == "expired"
+            )
+            names = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+        assert not names.intersection({"machine_instances", "machine_timers"})
+        assert journal.read_text().splitlines() == [
+            "v1.inspect_artifacts_1:document:captured",
+            "v2.inspect_artifacts_1:document:captured",
+        ]
+    finally:
+        server.stop(grace=0).wait()
+        op.close()
+
+
 _KILLED_MACHINE_OPERATOR = """
 import json, sys, time
 from pathlib import Path
@@ -412,14 +531,17 @@ while time.monotonic() < deadline:
     with op._state_store.transaction() as c:
         record = MachinesTable.load(c, run_id)
     active = mode == "active" and Path(journal).exists()
-    waiting = mode == "waiting" and record.visit == 2 and record.status == "waiting"
+    waiting = mode == "waiting" and record.visit == 2 and record.phase == "waiting"
     if active or waiting:
         break
     time.sleep(0.03)
 else:
     raise AssertionError("machine did not reach crash point")
 handle = op._active_runs.get(run_id)
+with op._state_store.transaction() as c:
+    timers = MachinesTable.timers(c, run_id, record.visit)
 print(json.dumps({"run_id": run_id, "coordinator": handle.process.pid if handle else None,
+                  "due": timers[0].due if timers else None,
                   "receipt": receipt.model_dump(mode="json")}), flush=True)
 sys.stdin.read()
 """
@@ -429,7 +551,12 @@ sys.stdin.read()
 def test_machine_timer_and_interrupted_visit_survive_sigkill(tmp_path):
     from runtime.operator.state.machines import MachinesTable
 
-    fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
+    fixture = tmp_path / "machine.py"
+    fixture.write_text(
+        (Path(__file__).parents[1] / "fixtures" / "local_machine.py")
+        .read_text()
+        .replace("seconds=2", "seconds=10")
+    )
     for mode in ("waiting", "active"):
         root = tmp_path / mode
         root.mkdir()
@@ -456,7 +583,8 @@ def test_machine_timer_and_interrupted_visit_survive_sigkill(tmp_path):
             child.wait(timeout=10)
             before = journal.read_text()
             if mode == "waiting":
-                time.sleep(2.2)  # Absolute deadline is overdue, not restarted from now.
+                # Restart past the actual persisted entry deadline, not a guessed sleep.
+                time.sleep(max(0, report["due"] - time.time()) + 0.1)
             op = Operator(
                 [str(fixture)], watch=False, schedule=False, webhook_port=0, state_db=state_db
             )
@@ -469,11 +597,14 @@ def test_machine_timer_and_interrupted_visit_survive_sigkill(tmp_path):
                 with op._state_store.transaction() as c:
                     instance = MachinesTable.load(c, run_id)
                     visit = MachinesTable.visit(c, run_id, 1)
-                assert instance.status == "interrupted" and instance.reason == "outcome_unknown"
+                assert (
+                    instance.run_status == RunStatus.WAITING
+                    and instance.reason == "outcome_unknown"
+                )
                 assert visit.disposition == "indeterminate" and visit.snapshot is not None
                 Path(str(journal) + ".release").touch()
                 op._machine_host.retry(run_id)
-            deadline = time.monotonic() + 15
+            deadline = time.monotonic() + 30
             while (
                 time.monotonic() < deadline and op.get_run(run_id).status != RunStatus.SUCCESS
             ):
@@ -481,11 +612,10 @@ def test_machine_timer_and_interrupted_visit_survive_sigkill(tmp_path):
             assert op.get_run(run_id).status == RunStatus.SUCCESS
             with op._state_store.transaction() as c:
                 assert (
-                    c.execute(
-                        "SELECT COUNT(*) FROM machine_timers "
-                        "WHERE run_id=? AND fired_at IS NOT NULL",
-                        (run_id,),
-                    ).fetchone()[0]
+                    sum(
+                        timer.fired_at is not None
+                        for timer in MachinesTable.all_timers(c, run_id)
+                    )
                     == 1
                 )
                 instance = MachinesTable.load(c, run_id)

@@ -6,10 +6,11 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from avalanche.machine_host import MachineEventReceipt, MachineStart
+from pydantic import JsonValue
+
 from avalanche.mapping import NodesExpanded
 
-from .machine_steps import MachineStepRequest
+from .machine_steps import HostStepOutput, MachineStepRequest
 
 
 @dataclass
@@ -22,8 +23,9 @@ class RunHooks:
     """
 
     machine_step: (
-        Callable[[MachineStepRequest], Future[MachineStart | MachineEventReceipt]] | None
+        Callable[[MachineStepRequest], Future[HostStepOutput]] | None
     ) = None
+    machine_payload: JsonValue = None
     on_nodes_expanded: Callable[[NodesExpanded], None] | None = None
     on_node_start: Callable[[str], None] | None = None
     on_node_success: Callable[[str], None] | None = None

@@ -257,6 +257,7 @@ def _run_worker(
 
         hooks = RunHooks(
             machine_step=machine_step,
+            machine_payload=machine_visit.payload if machine_visit is not None else None,
             on_nodes_expanded=lambda expansion: (
                 None
                 if expansion.parent in show_groups

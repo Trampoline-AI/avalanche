@@ -1,0 +1,135 @@
+"""Validate native machine input/event types in an isolated latest-source process.
+
+The operator retains descriptors, never live tenant classes. JSON Schema cannot
+validate runtime File/Workspace wire values, so reuse the machine's Pydantic types
+at this import boundary instead of reverse-compiling schemas or forking validators.
+"""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import sys
+from pathlib import Path
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError, create_model
+
+from avalanche.machine import Machine
+
+from .discovery import ConfiguredRoot
+from .models import WorkflowDescriptor
+from .source import resolve_live_source
+
+
+class ValidationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    op: Literal["key", "input", "event"]
+    root: str
+    relative_file: str
+    builder: str
+    value: JsonValue
+    state: str = ""
+    event: str = ""
+
+
+class ValidationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    value: JsonValue = None
+    error: str | None = None
+
+
+def validate_native(
+    descriptor: WorkflowDescriptor,
+    configured_root: ConfiguredRoot,
+    op: Literal["key", "input", "event"],
+    value: JsonValue,
+    *,
+    state: str = "",
+    event: str = "",
+) -> JsonValue:
+    root, relative_file = resolve_live_source(configured_root, descriptor.locator)
+    request = ValidationRequest(
+        op=op,
+        root=str(root),
+        relative_file=relative_file,
+        builder=descriptor.locator.builder_symbol,
+        value=value,
+        state=state,
+        event=event,
+    )
+    completed = subprocess.run(
+        [sys.executable, "-m", "runtime.operator.machine_validation"],
+        input=request.model_dump_json(),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if completed.returncode != 0:
+        raise ValueError("Machine validation process failed before returning a result")
+    response = ValidationResponse.model_validate_json(completed.stdout)
+    if response.error is not None:
+        raise ValueError(response.error)
+    return response.value
+
+
+def main() -> None:
+    from .run_worker import _import_workflow_module
+
+    request = ValidationRequest.model_validate_json(sys.stdin.read())
+    # Keep incidental tenant-import output out of the control frame.
+    from contextlib import redirect_stdout
+
+    try:
+        with redirect_stdout(sys.stderr):
+            root = Path(request.root)
+            sys.path.insert(0, str(root))
+            module = _import_workflow_module(root, request.relative_file)
+            machine = vars(module)[request.builder]
+            if not isinstance(machine, Machine):
+                raise ValueError("Target is no longer a machine")
+            machine()
+            wire = json.dumps(request.value, allow_nan=False)
+            if request.op == "key":
+                fields = machine.input_type.model_fields
+                key_model = create_model(
+                    "MachineKeyFields",
+                    __config__=ConfigDict(extra="ignore"),
+                    **{
+                        name: (fields[name].annotation, fields[name])
+                        for name in machine.key_fields
+                    },
+                )
+                validated = key_model.model_validate_json(wire, strict=True)
+                values = validated.model_dump(mode="json")
+                value = [values[name] for name in machine.key_fields]
+            elif request.op == "input":
+                value = machine.input_type.model_validate_json(wire, strict=True).model_dump(
+                    mode="json"
+                )
+            else:
+                if request.state not in machine.spec.states:
+                    raise ValueError("state_missing")
+                model = machine.payloads[request.state][request.event]
+                if model is None:
+                    if request.value not in (None, {}):
+                        raise ValueError("event_payload_must_be_empty")
+                    value = request.value
+                else:
+                    value = model.model_validate_json(wire, strict=True).model_dump(mode="json")
+        response = ValidationResponse(value=value)
+    except ValidationError as exc:
+        issues = [
+            ".".join(map(str, issue["loc"])) + ": " + issue["type"]
+            for issue in exc.errors(include_input=False, include_url=False)
+        ]
+        response = ValidationResponse(
+            error="Invalid machine input/payload: " + "; ".join(issues)
+        )
+    except (ValueError, KeyError) as exc:
+        response = ValidationResponse(error=str(exc))
+    sys.stdout.write(response.model_dump_json())
+
+
+if __name__ == "__main__":
+    main()

@@ -266,7 +266,7 @@ def run_local_schedule(
                         else:
                             waits.arm(node_id, reviewed(node_id))
                             parked.add(node_id)
-                    elif node.node_type.value == "machine":
+                    elif node.node_type.value in {"machine", "run"}:
                         if hooks and hooks.on_node_start:
                             hooks.on_node_start(node_id)
                         attempts[node_id] = attempts.get(node_id, 0) + 1

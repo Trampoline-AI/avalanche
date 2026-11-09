@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import time
 
 from avalanche.local_waits import WaitRefusalError
 
@@ -52,7 +53,13 @@ class WaitsTable:
                    ORDER BY position LIMIT ? OFFSET ?""",
                 (run_id, request.limit + 1, request.offset),
             ).fetchall()
-            cards = tuple(row["card_json"] for row in rows[: request.limit])
+            cards = []
+            for row in rows[: request.limit]:
+                card = json.loads(row["card_json"])
+                if "machine_timer" in card:
+                    card["remaining_seconds"] = max(0.0, card["until"] - time.time())
+                cards.append(json.dumps(card, allow_nan=False))
+            cards = tuple(cards)
             response = FinalWaitSnapshot(cards=cards).read(
                 request.model_copy(update={"offset": 0})
             )

@@ -308,26 +308,15 @@ MIGRATIONS += (
             .replace("'cancelled')", "'cancelled', 'waiting')")
             .replace(
                 "process_booted TEXT,",
-                "process_booted TEXT, expansions_json TEXT NOT NULL DEFAULT '{}',",
+                "process_booted TEXT, expansions_json TEXT NOT NULL DEFAULT '{}', "
+                "key TEXT, machine_json TEXT, read_state TEXT NOT NULL DEFAULT 'retained' "
+                "CHECK (read_state IN ('retained', 'expired')),",
             ),
-            "INSERT INTO runs_replacement SELECT * FROM runs",
+            "INSERT INTO runs_replacement SELECT *, NULL, NULL, 'retained' FROM runs",
             "DROP TABLE runs",
             "ALTER TABLE runs_replacement RENAME TO runs",
             "CREATE INDEX runs_by_created_sequence ON runs (created_sequence)",
-            """
-            CREATE TABLE machine_instances (
-                run_id TEXT PRIMARY KEY REFERENCES runs (run_id) ON DELETE CASCADE,
-                machine TEXT NOT NULL,
-                key_json TEXT NOT NULL,
-                state TEXT NOT NULL,
-                visit INTEGER NOT NULL CHECK (visit > 0),
-                status TEXT NOT NULL CHECK (status IN (
-                    'active', 'waiting', 'interrupted', 'needs_attention', 'final', 'closed'
-                )),
-                record_json TEXT NOT NULL,
-                UNIQUE (machine, key_json)
-            ) STRICT
-            """,
+            "CREATE UNIQUE INDEX runs_by_key ON runs (workflow_id, key) WHERE key IS NOT NULL",
             """
             CREATE TABLE machine_visits (
                 run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
@@ -340,19 +329,6 @@ MIGRATIONS += (
                 PRIMARY KEY (run_id, visit)
             ) STRICT
             """,
-            """
-            CREATE TABLE machine_timers (
-                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
-                visit INTEGER NOT NULL,
-                timer_index INTEGER NOT NULL CHECK (timer_index >= 0),
-                due REAL NOT NULL,
-                target TEXT NOT NULL,
-                fired_at REAL,
-                reason TEXT CHECK (reason IN ('due', 'catchup', 'manual', 'cancelled')),
-                PRIMARY KEY (run_id, visit, timer_index)
-            ) STRICT
-            """,
-            "CREATE INDEX machine_timers_due ON machine_timers (due) WHERE reason IS NULL",
             """
             CREATE TABLE machine_facts (
                 run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,

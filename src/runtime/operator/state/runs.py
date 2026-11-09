@@ -275,12 +275,45 @@ class RunsTable:
     @staticmethod
     def delete(connection: sqlite3.Connection, run_id: str) -> None:
         """Remove a run with its nodes and input files."""
-        connection.execute(f"DELETE FROM {_RUNS} WHERE run_id = ?", (run_id,))
+        row = connection.execute("SELECT key FROM runs WHERE run_id=?", (run_id,)).fetchone()
+        if row is None:
+            return
+        if row["key"] is None:
+            connection.execute(f"DELETE FROM {_RUNS} WHERE run_id = ?", (run_id,))
+            return
+        # A keyed run is a permanent identity. Expire retained data, not its key.
+        for table in (
+            "run_nodes",
+            "run_input_files",
+            "run_logs",
+            "run_agent_events",
+            "run_classifier_events",
+            "run_traces",
+            "run_trace_bodies",
+            "run_trace_revisions",
+            "run_evaluations",
+            "wait_decisions",
+            "wait_receipts",
+            "wait_inbox",
+            "machine_visits",
+            "machine_facts",
+        ):
+            connection.execute(f"DELETE FROM {table} WHERE run_id=?", (run_id,))
+        connection.execute(
+            "UPDATE runs SET read_state='expired', input_json=NULL, "
+            "request_json=?, topology_json='{}', expansions_json='{}', "
+            "machine_json=CASE WHEN machine_json IS NULL THEN NULL ELSE "
+            "json_set(machine_json, '$.payload', NULL, '$.outcome', NULL) END WHERE run_id=?",
+            ('{"input":null,"context":null}', run_id),
+        )
 
     @staticmethod
     def delete_all(connection: sqlite3.Connection) -> int:
         """Remove every run with its nodes, input files and details; return the count."""
-        return connection.execute(f"DELETE FROM {_RUNS}").rowcount
+        rows = connection.execute("SELECT run_id FROM runs").fetchall()
+        for row in rows:
+            RunsTable.delete(connection, row[0])
+        return len(rows)
 
     @staticmethod
     def list_summaries(connection: sqlite3.Connection) -> tuple[RunSummary, ...]:

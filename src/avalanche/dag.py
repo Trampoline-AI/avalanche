@@ -2340,7 +2340,9 @@ class Workflow:
                 "Keyed workflows require a run-capable scheduler host for idempotent starts; "
                 "use workflow.test() for isolated authoring tests."
             )
-        if (self.node_machines or self.node_runs) and (hooks is None or hooks.machine_step is None):
+        if (self.node_machines or self.node_runs) and (
+            hooks is None or hooks.machine_step is None
+        ):
             raise RuntimeError(
                 "Declared RUN/MACHINE nodes require a scheduler host; the embedded runner "
                 "has no run or MachineHost. Use workflow.test() for in-memory execution."
@@ -2718,6 +2720,22 @@ class Workflow:
                     node_id,
                     executor=executor,
                 )
+                if not upstream_values and hooks and hooks.machine_payload is not None:
+                    from pydantic import TypeAdapter
+
+                    unbound = [
+                        parameter
+                        for parameter in inspect.signature(node_ref.node.fn).parameters.values()
+                        if parameter.name not in skip_param_names
+                        and parameter.name not in position_consuming_params
+                        and parameter.name not in resolved_kwargs
+                    ]
+                    if unbound:
+                        upstream_values = [
+                            TypeAdapter(unbound[0].annotation).validate_python(
+                                hooks.machine_payload
+                            )
+                        ]
                 implicit_args, implicit_kwargs = _bind_implicit_parent_results(
                     node_ref.node.fn,
                     upstream_values,
@@ -2829,10 +2847,11 @@ class Workflow:
             from runtime.operator.machine_steps import MachineStepRequest
 
             from .machine_nodes import MachineNode
+            from .run_steps import RunNode
 
             ref = nodes[node_id]
             if (
-                not isinstance(ref.node, MachineNode)
+                not isinstance(ref.node, (MachineNode, RunNode))
                 or hooks is None
                 or hooks.machine_step is None
             ):

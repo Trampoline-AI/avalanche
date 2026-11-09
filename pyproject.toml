@@ -18,7 +18,6 @@ dependencies = [
     "fastapi>=0.115,<1",
     "filelock>=4.2.1,<5",
     "grpcio>=1.75.1",
-    "jsonschema>=4,<5",
     "polars>=1.34,<1.35",
     "predict-rlm[codex-lm]>=0.13.2,<0.14",
     "protobuf>=6.31.1",

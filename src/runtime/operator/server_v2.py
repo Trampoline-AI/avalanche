@@ -877,6 +877,10 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             machine = MachinesTable.load(connection, run_id)
         if machine is not None:
             message.machine_json = machine_head(self._op, run_id).model_dump_json()
+        with self._op._state_store.transaction() as connection:
+            message.read_state = connection.execute(
+                "SELECT read_state FROM runs WHERE run_id=?", (run_id,)
+            ).fetchone()[0]
         return message
 
     # ── Discovery ─────────────────────────────────────────
@@ -1011,7 +1015,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         try:
             command = MachineControlRequest.model_validate_json(request.request_json)
             result = control_machine(self._op, command)
-            if command.op == "visit":
+            if command.op == "visit" and result.get("read_state") != "expired":
                 with self._op._state_store.transaction() as connection:
                     visit = MachinesTable.visit(connection, command.run_id, command.visit)
                 snapshot = visit.snapshot or self._op.get_latest_run_snapshot(

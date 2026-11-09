@@ -771,7 +771,7 @@ class TerminalSealV2(_message.Message):
     def __init__(self, terminal_status: _Optional[str] = ..., reason: _Optional[str] = ...) -> None: ...
 
 class RunSnapshotV2(_message.Message):
-    __slots__ = ("cursor", "summary", "nodes", "topology", "scope_ref", "latest_log_sequence", "log_continuation", "terminal_seal", "input", "expansions", "machine_json")
+    __slots__ = ("cursor", "summary", "nodes", "topology", "scope_ref", "latest_log_sequence", "log_continuation", "terminal_seal", "input", "expansions", "machine_json", "read_state")
     class ExpansionsEntry(_message.Message):
         __slots__ = ("key", "value")
         KEY_FIELD_NUMBER: _ClassVar[int]
@@ -790,6 +790,7 @@ class RunSnapshotV2(_message.Message):
     INPUT_FIELD_NUMBER: _ClassVar[int]
     EXPANSIONS_FIELD_NUMBER: _ClassVar[int]
     MACHINE_JSON_FIELD_NUMBER: _ClassVar[int]
+    READ_STATE_FIELD_NUMBER: _ClassVar[int]
     cursor: LifecycleCursorV2
     summary: RunSummaryV2
     nodes: _containers.RepeatedCompositeFieldContainer[NodeSnapshotV2]
@@ -801,7 +802,8 @@ class RunSnapshotV2(_message.Message):
     input: RunInputV2
     expansions: _containers.ScalarMap[str, int]
     machine_json: str
-    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., summary: _Optional[_Union[RunSummaryV2, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotV2, _Mapping]]] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., latest_log_sequence: _Optional[int] = ..., log_continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., terminal_seal: _Optional[_Union[RunActivityDescriptorV2, _Mapping]] = ..., input: _Optional[_Union[RunInputV2, _Mapping]] = ..., expansions: _Optional[_Mapping[str, int]] = ..., machine_json: _Optional[str] = ...) -> None: ...
+    read_state: str
+    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., summary: _Optional[_Union[RunSummaryV2, _Mapping]] = ..., nodes: _Optional[_Iterable[_Union[NodeSnapshotV2, _Mapping]]] = ..., topology: _Optional[_Union[WorkflowTopologyV2, _Mapping]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., latest_log_sequence: _Optional[int] = ..., log_continuation: _Optional[_Union[ContinuationRefV2, _Mapping]] = ..., terminal_seal: _Optional[_Union[RunActivityDescriptorV2, _Mapping]] = ..., input: _Optional[_Union[RunInputV2, _Mapping]] = ..., expansions: _Optional[_Mapping[str, int]] = ..., machine_json: _Optional[str] = ..., read_state: _Optional[str] = ...) -> None: ...
 
 class RunInputV2(_message.Message):
     __slots__ = ("values_json", "supplied_fields")

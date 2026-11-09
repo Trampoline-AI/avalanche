@@ -68,17 +68,6 @@ def run_command(argv: list[str]) -> int:
                             op="resolve", machine=args.machine, key_fields=fields
                         )
                     )
-                head = control(MachineControlRequest(op="get", run_id=run_id))
-                # Resolve the caller's selector through the ordinary catalog.
-                flows = stub.DiscoverFlows(pb.DiscoverFlowsRequestV2(page_size=100), timeout=30)
-                matches = [
-                    flow
-                    for flow in flows.flows
-                    if args.machine
-                    in {flow.workflow_selector, flow.workflow_id, flow.display_name}
-                ]
-                if len(matches) != 1 or matches[0].workflow_id != head["machine"]:
-                    raise ValueError("Run does not belong to the selected machine")
                 raw = (
                     Path(args.data[1:]).read_text() if args.data.startswith("@") else args.data
                 )
@@ -86,6 +75,7 @@ def run_command(argv: list[str]) -> int:
                 result = control(
                     MachineControlRequest(
                         op="send",
+                        machine=args.machine,
                         run_id=run_id,
                         event=args.event,
                         payload=payload,

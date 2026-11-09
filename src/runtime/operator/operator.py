@@ -2179,9 +2179,52 @@ class Operator:
                 with self._state_store.transaction() as connection:
                     return WaitsTable.read(connection, run_id, request)
             controls = self._wait_controls.get(run_id)
+            with self._state_store.transaction() as connection:
+                machine = MachinesTable.load(connection, run_id)
+                if machine is not None and request.kind != "list":
+                    replay = connection.execute(
+                        "SELECT 1 FROM wait_receipts WHERE run_id=? AND scope=? "
+                        "AND address=? AND idempotency_key=?",
+                        (run_id, request.kind, request.address, request.idempotency_key),
+                    ).fetchone()
+                    if replay is not None:
+                        return WaitsTable.read(connection, run_id, request)
+                stored = (
+                    WaitsTable.read(connection, run_id, request)
+                    if machine is not None and request.kind == "list"
+                    else None
+                )
+                stored_count = (
+                    connection.execute(
+                        "SELECT COUNT(*) FROM wait_decisions WHERE run_id=?", (run_id,)
+                    ).fetchone()[0]
+                    if stored is not None
+                    else 0
+                )
             if controls is None:
+                if stored is not None:
+                    return stored
                 raise WaitRefusalError("coordinator_unavailable", 503)
-        return controls.request(request)
+            finished_cards = controls.final_snapshot is not None
+        if stored is None:
+            return controls.request(request)
+        if stored.next_offset is not None or finished_cards:
+            return stored
+        available = request.limit - len(stored.waits)
+        if available <= 0:
+            # A subsequent page can inspect live visit waits without losing the stored prefix.
+            return stored.model_copy(update={"next_offset": request.offset + request.limit})
+        live = controls.request(
+            request.model_copy(
+                update={"offset": max(0, request.offset - stored_count), "limit": available}
+            )
+        )
+        return WaitControlResponse(
+            waits=stored.waits + live.waits,
+            next_offset=stored_count + live.next_offset
+            if live.next_offset is not None
+            else None,
+        )
 
     def cancel_run(self, run_id: str) -> None:
         with self._state_store.transaction() as connection:

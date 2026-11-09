@@ -14,6 +14,24 @@ import { MessageType } from "@protobuf-ts/runtime";
 /**
  * Bounded JSON DTOs for optional TuiExtensions v1 resources. No file bodies.
  *
+ * @generated from protobuf message avalanche.operator.ControlMachineRequestV2
+ */
+export interface ControlMachineRequestV2 {
+    /**
+     * @generated from protobuf field: string request_json = 1
+     */
+    requestJson: string;
+}
+/**
+ * @generated from protobuf message avalanche.operator.ControlMachineResponseV2
+ */
+export interface ControlMachineResponseV2 {
+    /**
+     * @generated from protobuf field: string result_json = 1
+     */
+    resultJson: string;
+}
+/**
  * @generated from protobuf message avalanche.operator.ControlWaitRequestV2
  */
 export interface ControlWaitRequestV2 {
@@ -412,6 +430,10 @@ export interface FlowInfoV2 {
     nodeWaitsJson: {
         [key: string]: string;
     };
+    /**
+     * @generated from protobuf field: string machine_spec_json = 32
+     */
+    machineSpecJson: string;
 }
 /**
  * @generated from protobuf message avalanche.operator.DiscoveryDiagnosticV2
@@ -1272,6 +1294,14 @@ export interface RunSnapshotV2 {
     expansions: {
         [key: string]: number;
     };
+    /**
+     * @generated from protobuf field: string machine_json = 11
+     */
+    machineJson: string;
+    /**
+     * @generated from protobuf field: string read_state = 12
+     */
+    readState: string; // retained | expired; key identity never expires
 }
 /**
  * The validated input a run started with, after defaults were applied.
@@ -2105,6 +2135,100 @@ export enum PageOrderV2 {
      */
     NEWEST_FIRST = 1
 }
+// @generated message type with reflection information, may provide speed optimized methods
+class ControlMachineRequestV2$Type extends MessageType<ControlMachineRequestV2> {
+    constructor() {
+        super("avalanche.operator.ControlMachineRequestV2", [
+            { no: 1, name: "request_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+    create(value?: PartialMessage<ControlMachineRequestV2>): ControlMachineRequestV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.requestJson = "";
+        if (value !== undefined)
+            reflectionMergePartial<ControlMachineRequestV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: ControlMachineRequestV2): ControlMachineRequestV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string request_json */ 1:
+                    message.requestJson = reader.string();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: ControlMachineRequestV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string request_json = 1; */
+        if (message.requestJson !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.requestJson);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.ControlMachineRequestV2
+ */
+export const ControlMachineRequestV2 = new ControlMachineRequestV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class ControlMachineResponseV2$Type extends MessageType<ControlMachineResponseV2> {
+    constructor() {
+        super("avalanche.operator.ControlMachineResponseV2", [
+            { no: 1, name: "result_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+        ]);
+    }
+    create(value?: PartialMessage<ControlMachineResponseV2>): ControlMachineResponseV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.resultJson = "";
+        if (value !== undefined)
+            reflectionMergePartial<ControlMachineResponseV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: ControlMachineResponseV2): ControlMachineResponseV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string result_json */ 1:
+                    message.resultJson = reader.string();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: ControlMachineResponseV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string result_json = 1; */
+        if (message.resultJson !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.resultJson);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.ControlMachineResponseV2
+ */
+export const ControlMachineResponseV2 = new ControlMachineResponseV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
 class ControlWaitRequestV2$Type extends MessageType<ControlWaitRequestV2> {
     constructor() {
@@ -2984,7 +3108,8 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
             { no: 20, name: "schedule_enabled", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
             { no: 21, name: "schedule_input_json", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ },
             { no: 30, name: "node_policies_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
-            { no: 31, name: "node_waits_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } }
+            { no: 31, name: "node_waits_json", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 9 /*ScalarType.STRING*/ } },
+            { no: 32, name: "machine_spec_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<FlowInfoV2>): FlowInfoV2 {
@@ -3010,6 +3135,7 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         message.scheduleEnabled = false;
         message.nodePoliciesJson = {};
         message.nodeWaitsJson = {};
+        message.machineSpecJson = "";
         if (value !== undefined)
             reflectionMergePartial<FlowInfoV2>(this, message, value);
         return message;
@@ -3087,6 +3213,9 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
                     break;
                 case /* map<string, string> node_waits_json */ 31:
                     this.binaryReadMap31(message.nodeWaitsJson, reader, options);
+                    break;
+                case /* string machine_spec_json */ 32:
+                    message.machineSpecJson = reader.string();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -3249,6 +3378,9 @@ class FlowInfoV2$Type extends MessageType<FlowInfoV2> {
         /* map<string, string> node_waits_json = 31; */
         for (let k of globalThis.Object.keys(message.nodeWaitsJson))
             writer.tag(31, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.LengthDelimited).string(message.nodeWaitsJson[k]).join();
+        /* string machine_spec_json = 32; */
+        if (message.machineSpecJson !== "")
+            writer.tag(32, WireType.LengthDelimited).string(message.machineSpecJson);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -5628,7 +5760,9 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
             { no: 7, name: "log_continuation", kind: "message", T: () => ContinuationRefV2 },
             { no: 8, name: "terminal_seal", kind: "message", T: () => RunActivityDescriptorV2 },
             { no: 9, name: "input", kind: "message", T: () => RunInputV2 },
-            { no: 10, name: "expansions", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 13 /*ScalarType.UINT32*/ } }
+            { no: 10, name: "expansions", kind: "map", K: 9 /*ScalarType.STRING*/, V: { kind: "scalar", T: 13 /*ScalarType.UINT32*/ } },
+            { no: 11, name: "machine_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 12, name: "read_state", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<RunSnapshotV2>): RunSnapshotV2 {
@@ -5636,6 +5770,8 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
         message.nodes = [];
         message.latestLogSequence = "0";
         message.expansions = {};
+        message.machineJson = "";
+        message.readState = "";
         if (value !== undefined)
             reflectionMergePartial<RunSnapshotV2>(this, message, value);
         return message;
@@ -5674,6 +5810,12 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
                     break;
                 case /* map<string, uint32> expansions */ 10:
                     this.binaryReadMap10(message.expansions, reader, options);
+                    break;
+                case /* string machine_json */ 11:
+                    message.machineJson = reader.string();
+                    break;
+                case /* string read_state */ 12:
+                    message.readState = reader.string();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -5733,6 +5875,12 @@ class RunSnapshotV2$Type extends MessageType<RunSnapshotV2> {
         /* map<string, uint32> expansions = 10; */
         for (let k of globalThis.Object.keys(message.expansions))
             writer.tag(10, WireType.LengthDelimited).fork().tag(1, WireType.LengthDelimited).string(k).tag(2, WireType.Varint).uint32(message.expansions[k]).join();
+        /* string machine_json = 11; */
+        if (message.machineJson !== "")
+            writer.tag(11, WireType.LengthDelimited).string(message.machineJson);
+        /* string read_state = 12; */
+        if (message.readState !== "")
+            writer.tag(12, WireType.LengthDelimited).string(message.readState);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -7860,6 +8008,7 @@ export const OperatorServiceV2 = new ServiceType("avalanche.operator.OperatorSer
     { name: "StartRun", options: {}, I: StartRunRequestV2, O: StartRunResponseV2 },
     { name: "CancelRun", options: {}, I: CancelRunRequestV2, O: CancelRunResponseV2 },
     { name: "ControlWait", options: {}, I: ControlWaitRequestV2, O: ControlWaitResponseV2 },
+    { name: "ControlMachine", options: {}, I: ControlMachineRequestV2, O: ControlMachineResponseV2 },
     { name: "SetScheduleEnabled", options: {}, I: SetScheduleEnabledRequestV2, O: FlowInfoV2 },
     { name: "StageInputFile", options: {}, I: StageInputFileRequestV2, O: FileAttachmentV2 },
     { name: "ListRunSummaries", options: {}, I: ListRunSummariesRequestV2, O: RunSummaryPageV2 },

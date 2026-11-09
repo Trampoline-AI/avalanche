@@ -67,6 +67,7 @@ def qualify_visit(workflow: Workflow, visit: int) -> Workflow:
         if not isinstance(node, WaitNode):
             raise TypeError("Wait declaration belongs to a non-wait node")
         node.spec = spec
+    graph.node_runs = {identities[node_id]: spec for node_id, spec in graph.node_runs.items()}
     graph.node_machines = {
         identities[node_id]: spec for node_id, spec in graph.node_machines.items()
     }

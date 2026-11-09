@@ -6,6 +6,17 @@
   derivation, discovery metadata and existing-key test-host behavior as machines.
   Host run-ID/`--key` lookup and durable key storage remain integration work;
   unkeyed flows retain independent start semantics.
+- Run state machines locally through `ava run`: one durable keyed run with
+  visit-qualified work, real `after()` timers, event receipts, and paged visit
+  reads. `ava machine send` accepts a run ID or typed key fields; REST/gRPC
+  expose the same run-owned controls. Generic `ava.start_run` and machine send
+  nodes execute on the operator host, with explicit conditional skips and no
+  tenant credentials.
+- Waiting machine timers survive operator restart. Interrupted visits are not
+  replayed automatically: explicitly retry the visit or cancel the run. Each
+  new visit imports current code; removed states need attention and existing
+  timer deadlines do not move. Machine reruns are refused.
+
 - Keep completed local runs' wait decision cards, audits and replay receipts in
   `state.db`; inspect or replay them after restarting the operator.
 - Accept `cron=` and `webhook=` on machine declarations and forward them to the

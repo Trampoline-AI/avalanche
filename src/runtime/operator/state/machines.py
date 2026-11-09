@@ -10,7 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from avalanche.machine_spec import MachineSpec
 
-from ..models import RunSnapshot
+from ..models import RunSnapshot, RunStatus
 
 
 class JournalModel(BaseModel):
@@ -18,18 +18,33 @@ class JournalModel(BaseModel):
 
 
 class InstanceRecord(JournalModel):
-    run_id: str
-    machine: str
-    key: list[JsonValue]
+    run_id: str = Field(exclude=True)
+    machine: str = Field(exclude=True)
+    key: list[JsonValue] = Field(exclude=True)
+    run_status: RunStatus = Field(default=RunStatus.PENDING, exclude=True)
     state: str
     visit: int = Field(ge=1)
-    status: Literal["active", "waiting", "interrupted", "needs_attention", "final", "closed"]
     spec: MachineSpec
     payload: JsonValue = None
     outcome: JsonValue = None
     internal_event: str | None = None
     internal_consumed: bool = False
     reason: str | None = None
+
+    @property
+    def phase(self) -> str:
+        """Derived execution detail, never a second persisted lifecycle status."""
+        if self.run_status == RunStatus.SUCCESS:
+            return "final"
+        if self.run_status in {RunStatus.CANCELLED, RunStatus.FAILED}:
+            return "closed"
+        if self.run_status != RunStatus.WAITING:
+            return "active"
+        if self.reason == "outcome_unknown":
+            return "interrupted"
+        if self.reason == "state_missing":
+            return "needs_attention"
+        return "waiting"
 
 
 class TransitionRecord(JournalModel):
@@ -86,21 +101,37 @@ class MachinesTable:
     @staticmethod
     def load(connection: sqlite3.Connection, run_id: str) -> InstanceRecord | None:
         row = connection.execute(
-            "SELECT record_json FROM machine_instances WHERE run_id = ?", (run_id,)
+            "SELECT run_id, workflow_id, key, status, machine_json FROM runs "
+            "WHERE run_id=? AND machine_json IS NOT NULL",
+            (run_id,),
         ).fetchone()
-        return None if row is None else InstanceRecord.model_validate_json(row["record_json"])
+        if row is None:
+            return None
+        return InstanceRecord.model_validate(
+            {
+                **json.loads(row["machine_json"]),
+                "run_id": row["run_id"],
+                "machine": row["workflow_id"],
+                "key": json.loads(row["key"]),
+                "run_status": RunStatus(row["status"]),
+            }
+        )
 
     @staticmethod
     def all(connection: sqlite3.Connection) -> tuple[InstanceRecord, ...]:
-        return tuple(
-            InstanceRecord.model_validate_json(row["record_json"])
-            for row in connection.execute("SELECT record_json FROM machine_instances")
-        )
+        records = []
+        for row in connection.execute(
+            "SELECT run_id FROM runs WHERE machine_json IS NOT NULL AND read_state='retained'"
+        ):
+            record = MachinesTable.load(connection, row[0])
+            assert record is not None
+            records.append(record)
+        return tuple(records)
 
     @staticmethod
     def find(connection: sqlite3.Connection, machine: str, key: list[JsonValue]) -> str | None:
         row = connection.execute(
-            "SELECT run_id FROM machine_instances WHERE machine = ? AND key_json = ?",
+            "SELECT run_id FROM runs WHERE workflow_id=? AND key=?",
             (machine, canonical_json(key)),
         ).fetchone()
         return None if row is None else row["run_id"]
@@ -108,18 +139,8 @@ class MachinesTable:
     @staticmethod
     def write(connection: sqlite3.Connection, record: InstanceRecord) -> None:
         connection.execute(
-            "INSERT INTO machine_instances VALUES (?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(run_id) DO UPDATE SET state=excluded.state, visit=excluded.visit, "
-            "status=excluded.status, record_json=excluded.record_json",
-            (
-                record.run_id,
-                record.machine,
-                canonical_json(record.key),
-                record.state,
-                record.visit,
-                record.status,
-                record.model_dump_json(),
-            ),
+            "UPDATE runs SET key=?, machine_json=? WHERE run_id=?",
+            (canonical_json(record.key), record.model_dump_json(), record.run_id),
         )
 
     @staticmethod
@@ -150,34 +171,79 @@ class MachinesTable:
         )
 
     @staticmethod
+    def all_timers(connection: sqlite3.Connection, run_id: str) -> tuple[TimerRecord, ...]:
+        rows = connection.execute(
+            "SELECT card_json FROM wait_decisions WHERE run_id=? "
+            "AND json_type(card_json, '$.machine_timer')='object' ORDER BY position",
+            (run_id,),
+        )
+        return tuple(
+            TimerRecord.model_validate(json.loads(row[0])["machine_timer"]) for row in rows
+        )
+
+    @staticmethod
     def timers(
         connection: sqlite3.Connection, run_id: str, visit: int
     ) -> tuple[TimerRecord, ...]:
         return tuple(
-            TimerRecord.model_validate(dict(row))
-            for row in connection.execute(
-                "SELECT * FROM machine_timers WHERE run_id = ? AND visit = ? "
-                "AND reason IS NULL ORDER BY due, timer_index",
-                (run_id, visit),
+            sorted(
+                (
+                    timer
+                    for timer in MachinesTable.all_timers(connection, run_id)
+                    if timer.visit == visit and timer.reason is None
+                ),
+                key=lambda timer: (timer.due, timer.timer_index),
             )
         )
 
     @staticmethod
     def write_timer(connection: sqlite3.Connection, record: TimerRecord) -> None:
-        connection.execute(
-            "INSERT INTO machine_timers VALUES (?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(run_id, visit, timer_index) DO UPDATE SET "
-            "fired_at=excluded.fired_at, reason=excluded.reason",
-            (
-                record.run_id,
-                record.visit,
-                record.timer_index,
-                record.due,
-                record.target,
-                record.fired_at,
-                record.reason,
-            ),
+        node_id = f"v{record.visit}.after_{record.timer_index}"
+        row = connection.execute(
+            "SELECT position FROM wait_decisions WHERE run_id=? "
+            "AND json_extract(card_json, '$.node_id')=?",
+            (record.run_id, node_id),
+        ).fetchone()
+        position = (
+            row[0]
+            if row is not None
+            else connection.execute(
+                "SELECT COALESCE(MAX(position), -1) + 1 FROM wait_decisions WHERE run_id=?",
+                (record.run_id,),
+            ).fetchone()[0]
         )
+        card = {
+            "node_id": node_id,
+            "kind": "sleep",
+            "state": "waiting"
+            if record.reason is None
+            else "withdrawn"
+            if record.reason == "cancelled"
+            else "resolved",
+            "schema": {},
+            "audit": None,
+            "prompt": None,
+            "show": None,
+            "key": None,
+            "until": record.due,
+            "remaining_seconds": None,
+            "machine_timer": record.model_dump(mode="json"),
+        }
+        connection.execute(
+            "INSERT INTO wait_decisions VALUES (?, ?, ?) "
+            "ON CONFLICT(run_id, position) DO UPDATE SET card_json=excluded.card_json",
+            (record.run_id, position, canonical_json(card)),
+        )
+
+    @staticmethod
+    def cancel_timers(
+        connection: sqlite3.Connection, run_id: str, visit: int | None = None
+    ) -> None:
+        for timer in MachinesTable.all_timers(connection, run_id):
+            if timer.reason is None and (visit is None or timer.visit == visit):
+                MachinesTable.write_timer(
+                    connection, timer.model_copy(update={"reason": "cancelled"})
+                )
 
     @staticmethod
     def inbox(connection: sqlite3.Connection, run_id: str) -> tuple[InboxRecord, ...]:
