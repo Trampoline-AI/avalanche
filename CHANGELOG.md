@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.20.2
+
+- No SDK change since 0.20.1; versions move together.
+
 ## 0.20.1
 
 - First published state-machines release; 0.20.0 was tagged but never
