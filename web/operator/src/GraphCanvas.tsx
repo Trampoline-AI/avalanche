@@ -51,6 +51,7 @@ import {
   layoutMachine,
   machineArcHandles,
   machineArcPath,
+  routeMachineArcs,
   type MachineArcData,
   type MachineGraphView,
 } from "./machineGraph";
@@ -731,11 +732,10 @@ const MachineArc = memo(
     style,
   }: EdgeProps<Edge<MachineArcData, "machine">>) => {
     if (data === undefined) throw new Error("Machine arc is missing its data");
-    const { path, label } = machineArcPath(
-      data,
-      { x: sourceX, y: sourceY },
-      { x: targetX, y: targetY },
-    );
+    // State arcs come routed around the cards; only the input dot's edge uses handles.
+    const { path, label, anchor } =
+      data.route ??
+      machineArcPath(data, { x: sourceX, y: sourceY }, { x: targetX, y: targetY });
     return (
       <>
         <BaseEdge id={id} path={path} markerEnd={markerEnd} style={style} />
@@ -744,7 +744,7 @@ const MachineArc = memo(
             <div
               className={`machine-arc-label nodrag nopan pointer-events-none absolute inline-flex items-center gap-1 rounded border bg-panel px-1.5 py-0.5 font-mono text-[10px] whitespace-nowrap ${data.live ? "border-line-strong text-ink" : "border-line text-secondary"}`}
               style={{
-                transform: `translate(-50%, -50%) translate(${label.x}px, ${label.y}px)`,
+                transform: `translate(${anchor === "start" ? "0" : anchor === "end" ? "-100%" : "-50%"}, -50%) translate(${label.x}px, ${label.y}px)`,
               }}
               data-arc-kind={data.kind}
               data-arc-live={data.live || undefined}
@@ -1294,8 +1294,20 @@ function GraphCanvasView({
   const machineGraph = useMemo(() => {
     if (!machine || !machineLayout) return undefined;
     const { spec } = machine;
-    const { positions, links } = machineLayout;
+    const { positions, links, ranks } = machineLayout;
     const horizontal = orientation === "horizontal";
+    // Arcs route around the cards as measured (nodes anchor at left edge, mid height).
+    const boxes = Object.fromEntries(
+      Object.keys(spec.states).map((name) => {
+        const { width, height } = nodeMeasurements.get(name) ?? DEFAULT_NODE_SIZE;
+        const { x, y } = positions[name];
+        return [
+          name,
+          { left: x, right: x + width, top: y - height / 2, bottom: y + height / 2 },
+        ];
+      }),
+    );
+    const routes = routeMachineArcs(links, boxes, ranks, orientation);
     const states: Node<CardData>[] = Object.entries(spec.states).map(([name, declaration]) => {
       const current = name === machine.state;
       return {
@@ -1333,6 +1345,7 @@ function GraphCanvasView({
     });
     const arcs: Edge<MachineArcData, "machine">[] = links.map((link) => ({
       ...link,
+      data: { ...link.data, route: routes[link.id] },
       type: "machine",
       ...machineArcHandles(link.data.kind, orientation),
     }));

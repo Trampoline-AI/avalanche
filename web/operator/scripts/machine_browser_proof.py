@@ -85,6 +85,102 @@ def shared_canvas(page) -> dict:
     }
 
 
+# Samples every rendered machine edge path (getPointAtLength, mapped to the screen)
+# against every state card's DOMRect, and every arc label's rect against the cards.
+ARC_GEOMETRY = """(tolerance) => {
+  const shell = document.querySelector('.run-graph-shell');
+  const boxes = [...shell.querySelectorAll('.react-flow__node-workflow')].map(node => ({
+    id: node.getAttribute('data-id'), rect: node.getBoundingClientRect(),
+  }));
+  const inside = (x, y, r) => x > r.left + tolerance && x < r.right - tolerance
+    && y > r.top + tolerance && y < r.bottom - tolerance;
+  const edges = [...shell.querySelectorAll('.react-flow__edge-machine')];
+  const hits = [];
+  for (const edge of edges) {
+    const path = edge.querySelector('.react-flow__edge-path');
+    const matrix = path.getScreenCTM();
+    const length = path.getTotalLength();
+    const points = [];
+    for (let at = 0; at <= length; at += 1) {
+      const p = path.getPointAtLength(at);
+      points.push(new DOMPoint(p.x, p.y).matrixTransform(matrix));
+    }
+    for (const box of boxes) {
+      if (points.some(p => inside(p.x, p.y, box.rect)))
+        hits.push(`${edge.getAttribute('data-id')} crosses ${box.id}`);
+    }
+  }
+  const labels = [...shell.querySelectorAll('.machine-arc-label')];
+  for (const label of labels) {
+    const r = label.getBoundingClientRect();
+    for (const box of boxes) {
+      const b = box.rect;
+      if (r.left < b.right && r.right > b.left && r.top < b.bottom && r.bottom > b.top)
+        hits.push(`label ${label.textContent} on ${box.id}`);
+    }
+  }
+  return { edges: edges.length, boxes: boxes.length, labels: labels.length,
+           pairs: edges.length * boxes.length, intersections: hits };
+}"""
+
+
+def arc_geometry(page, name: str, expected_edges: int) -> dict:
+    """Asserts no machine arc or arc label touches a state card on the canvas."""
+    graph = page.locator(".run-graph-shell")
+    expect(graph.locator(".react-flow__edge-machine")).to_have_count(expected_edges)
+    page.wait_for_timeout(300)
+    result = page.evaluate(ARC_GEOMETRY, 1.5)
+    assert result["boxes"] > 0 and result["edges"] == expected_edges, result
+    assert result["intersections"] == [], (name, result)
+    return {"view": name, **result}
+
+
+def set_orientation(page, orientation: str) -> None:
+    viewport = page.locator(".run-graph-shell .graph-viewport")
+    if viewport.get_attribute("data-orientation") != orientation:
+        page.get_by_role("button", name=f"Switch to {orientation} workflow").click()
+    expect(viewport).to_have_attribute("data-orientation", orientation)
+
+
+def arc_spacing(page, url: str, evidence: Path) -> list[dict]:
+    """Both orientations of the harness machine, pr_lifecycle and the flow canvas."""
+    checks = []
+    page.set_viewport_size({"width": 1440, "height": 1100})
+    # The harness machine (self-loop, back arc, timer) plus the input dot's edge.
+    page.goto(url)
+    for orientation in ("horizontal", "vertical"):
+        set_orientation(page, orientation)
+        checks.append(arc_geometry(page, f"harness-{orientation}", 5))
+        page.screenshot(path=str(evidence / f"20-harness-machine-{orientation}.png"))
+    # pr_lifecycle: a back arc out of a shared rank, three triggers into closed.
+    page.goto(url + "?workflow=pr_lifecycle")
+    expect(page.locator(".run-graph-shell .node-card")).to_have_count(4)
+    for orientation in ("horizontal", "vertical"):
+        set_orientation(page, orientation)
+        checks.append(arc_geometry(page, f"pr_lifecycle-{orientation}", 7))
+        labels = page.locator(".run-graph-shell .machine-arc-label").all_inner_texts()
+        assert sorted(labels) == sorted(
+            [
+                "review_done_with_nits",
+                "review_done",
+                "amended",
+                "merged",
+                "closed_without_merge",
+                "after 30d",
+            ]
+        ), labels
+        page.screenshot(path=str(evidence / f"21-pr-lifecycle-{orientation}.png"))
+    # The flow canvas in both orientations: its look is unchanged.
+    page.goto(url)
+    page.get_by_test_id("flow-nav").click()
+    expect(page.locator(".run-graph-shell .node-card")).to_have_count(3)
+    for orientation in ("horizontal", "vertical"):
+        set_orientation(page, orientation)
+        page.wait_for_timeout(300)
+        page.screenshot(path=str(evidence / f"22-flow-{orientation}.png"))
+    return checks
+
+
 def compose(page, evidence: Path, pair: tuple[str, str], out: str, captions: tuple) -> None:
     images = [base64.b64encode((evidence / name).read_bytes()).decode() for name in pair]
     page.set_viewport_size({"width": 2900, "height": 1140})
@@ -117,6 +213,7 @@ def scenario(page, url: str, evidence: Path) -> dict:
     expect(page.locator(".react-flow__edge-machine")).to_have_count(0)
     page.get_by_test_id("machine-nav").click()
 
+    arcs = [arc_geometry(page, "definition-horizontal", 5)]
     start_run(page, 44, 2, files=True, evidence=evidence)
     actions = page.get_by_role("group", name="Machine actions")
     waits = page.get_by_label("Machine run waits")
@@ -156,6 +253,7 @@ def scenario(page, url: str, evidence: Path) -> dict:
     expect(page.get_by_role("table")).to_have_count(0)
     expect(page.get_by_role("button", name="Refresh instances")).to_have_count(0)
     expect(waits.locator("[data-wait-kind]")).to_have_count(1)
+    arcs.append(arc_geometry(page, "run-horizontal", 4))
     page.screenshot(path=str(evidence / "01-machine-run.png"))
 
     actions.get_by_role("button", name="Retry visit", exact=True).click()
@@ -414,7 +512,13 @@ def scenario(page, url: str, evidence: Path) -> dict:
         "12-flow-vs-machine-definition.png",
         ("Workflow definition", "Machine definition"),
     )
-    return {"machine_canvas": machine_look, "flow_canvas": flow_look, "run_page": run_look}
+    arcs += arc_spacing(page, url, evidence)
+    return {
+        "machine_canvas": machine_look,
+        "flow_canvas": flow_look,
+        "run_page": run_look,
+        "arc_geometry": arcs,
+    }
 
 
 def main() -> None:

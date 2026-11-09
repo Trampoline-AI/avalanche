@@ -8,6 +8,9 @@ import {
   type GraphLayout,
 } from "./graphLayout";
 import type { GraphOrientation } from "./useGraphOrientation";
+import { DEFAULT_NODE_SIZE } from "./graphLayout";
+import { layoutMachine, routeMachineArcs, type Box } from "./machineGraph";
+import type { MachineSpec, MachineState } from "./machine";
 import type { WorkflowTopologyMsg } from "./model";
 
 const topology = {
@@ -605,5 +608,209 @@ describe("placeInOrder", () => {
     expect(placeInOrder([0, 50, 100], [20, 20], undefined, { low: 10, high: 60 })).toEqual([
       10, 40, 60,
     ]);
+  });
+});
+
+// Machine arcs: every arc and label stays clear of every state card.
+function machineSpec(
+  initial: string,
+  states: Record<
+    string,
+    { on?: [string, string][]; after?: [number, string][]; final?: boolean }
+  >,
+): MachineSpec {
+  return {
+    schema_version: "avalanche.machine/v1",
+    name: "fixture",
+    input_schema: { type: "object" },
+    key_fields: [],
+    initial,
+    work_graphs: {},
+    states: Object.fromEntries(
+      Object.entries(states).map(([name, { on = [], after = [], final = false }]) => [
+        name,
+        {
+          work: `${name}_work`,
+          initial: name === initial,
+          final,
+          defer: [],
+          transitions: on.map(([event, target]) => ({ event, target, payload_schema: null })),
+          timers: after.map(([delay_seconds, target]) => ({ delay_seconds, target })),
+        } satisfies MachineState,
+      ]),
+    ),
+  };
+}
+
+// docs/state-machines.md's pr_lifecycle: two states in rank 1, three triggers into closed.
+const prLifecycle = machineSpec("in_review", {
+  in_review: {
+    on: [
+      ["review_done_with_nits", "amend"],
+      ["review_done", "ready_to_merge"],
+    ],
+  },
+  amend: { on: [["amended", "in_review"]] },
+  ready_to_merge: {
+    on: [
+      ["merged", "closed"],
+      ["closed_without_merge", "closed"],
+    ],
+    after: [[2_592_000, "closed"]],
+  },
+  closed: { final: true },
+});
+// The browser harness machine: a self-loop, a back arc and a timer.
+const harnessMachine = machineSpec("review", {
+  review: {
+    on: [
+      ["amend", "review"],
+      ["advance", "ready"],
+    ],
+  },
+  ready: { on: [["back", "review"]], after: [[6, "closed"]] },
+  closed: { final: true },
+});
+// A middle state with back arcs and stacked self-loops boxed in by its neighbours.
+const crowdedMachine = machineSpec("start", {
+  start: {
+    on: [
+      ["a", "a"],
+      ["b", "b"],
+      ["c", "c"],
+    ],
+  },
+  a: { on: [["retry", "a"]] },
+  b: {
+    on: [
+      ["undo", "start"],
+      ["redo", "b"],
+      ["again", "b"],
+      ["skip", "c"],
+    ],
+  },
+  c: {
+    on: [
+      ["swap", "a"],
+      ["reset", "start"],
+    ],
+    after: [[60, "c"]],
+  },
+});
+
+function samplePath(path: string): { x: number; y: number }[] {
+  const tokens = path.match(/[MLC]|-?[\d.]+(?:e-?\d+)?/g)!;
+  const samples: { x: number; y: number }[] = [];
+  let current = { x: 0, y: 0 };
+  let index = 0;
+  const next = () => ({ x: Number(tokens[index++]), y: Number(tokens[index++]) });
+  while (index < tokens.length) {
+    const command = tokens[index++];
+    if (command === "M") current = next();
+    else if (command === "L") {
+      const end = next();
+      for (let step = 0; step <= 40; step++) {
+        const t = step / 40;
+        samples.push({
+          x: current.x + (end.x - current.x) * t,
+          y: current.y + (end.y - current.y) * t,
+        });
+      }
+      current = end;
+    } else {
+      const [b, c, d] = [next(), next(), next()];
+      for (let step = 0; step <= 80; step++) {
+        const t = step / 80;
+        const u = 1 - t;
+        const at = (key: "x" | "y") =>
+          u * u * u * current[key] +
+          3 * u * u * t * b[key] +
+          3 * u * t * t * c[key] +
+          t * t * t * d[key];
+        samples.push({ x: at("x"), y: at("y") });
+      }
+      current = d;
+    }
+  }
+  return samples;
+}
+
+function machineGeometry(
+  spec: MachineSpec,
+  orientation: GraphOrientation,
+  size: { width: number; height: number },
+) {
+  const { positions, links, ranks } = layoutMachine({ spec }, orientation);
+  const boxes: Record<string, Box> = Object.fromEntries(
+    Object.entries(positions).map(([name, { x, y }]) => [
+      name,
+      { left: x, right: x + size.width, top: y - size.height / 2, bottom: y + size.height / 2 },
+    ]),
+  );
+  return { links, boxes, routes: routeMachineArcs(links, boxes, ranks, orientation) };
+}
+
+describe("routeMachineArcs", () => {
+  const cases = [
+    ["pr_lifecycle", prLifecycle],
+    ["harness", harnessMachine],
+    ["crowded", crowdedMachine],
+  ] as const;
+  const orientations: GraphOrientation[] = ["horizontal", "vertical"];
+  // The default size and a measured compact card.
+  const sizes = [DEFAULT_NODE_SIZE, { width: 300, height: 92 }];
+
+  for (const [name, spec] of cases) {
+    for (const orientation of orientations) {
+      for (const size of sizes) {
+        it(`keeps ${name} arcs and labels off every card (${orientation}, ${size.width}x${size.height})`, () => {
+          const { links, boxes, routes } = machineGeometry(spec, orientation, size);
+          const tolerance = 1;
+          const hits: string[] = [];
+          for (const link of links) {
+            const route = routes[link.id];
+            for (const [state, box] of Object.entries(boxes)) {
+              const inside = samplePath(route.path).some(
+                ({ x, y }) =>
+                  x > box.left + tolerance &&
+                  x < box.right - tolerance &&
+                  y > box.top + tolerance &&
+                  y < box.bottom - tolerance,
+              );
+              if (inside) hits.push(`${link.id} (${link.data.label}) crosses ${state}`);
+              // A generous label box: 150 x 22, as anchored on its point.
+              const width = 150;
+              const left =
+                route.anchor === "start"
+                  ? route.label.x
+                  : route.anchor === "end"
+                    ? route.label.x - width
+                    : route.label.x - width / 2;
+              const labelHits =
+                orientation === "horizontal" || route.anchor !== undefined
+                  ? left < box.right && left + width > box.left
+                  : route.label.x - 50 < box.right && route.label.x + 50 > box.left;
+              if (labelHits && route.label.y - 11 < box.bottom && route.label.y + 11 > box.top)
+                hits.push(`${link.id} (${link.data.label}) label on ${state}`);
+            }
+          }
+          expect(hits).toEqual([]);
+        });
+      }
+    }
+  }
+
+  it("keeps one arc per trigger, each with its own ends", () => {
+    for (const orientation of orientations) {
+      const { links, routes } = machineGeometry(prLifecycle, orientation, DEFAULT_NODE_SIZE);
+      const intoClosed = links.filter((link) => link.target === "closed");
+      expect(intoClosed.map((link) => link.data.label)).toEqual([
+        "merged",
+        "closed_without_merge",
+        "after 30d",
+      ]);
+      const ends = intoClosed.map((link) => routes[link.id].path.split(" ").at(-1));
+      expect(new Set(ends).size).toBe(3);
+    }
   });
 });

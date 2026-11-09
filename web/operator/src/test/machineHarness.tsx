@@ -108,6 +108,68 @@ const flow = FlowInfoMsg.create({
     consumer_node_ids: [],
   }),
 });
+// docs/state-machines.md's pr_lifecycle, definition only: a back arc from a shared
+// rank and three triggers (two events and a timer) into one state.
+const lifecycleState = (
+  work: string,
+  transitions: [string, string][],
+  extra: Partial<MachineSpec["states"][string]> = {},
+) => ({
+  work,
+  initial: false,
+  final: false,
+  defer: [],
+  timers: [],
+  transitions: transitions.map(([event, target]) => ({ event, target, payload_schema: null })),
+  ...extra,
+});
+const lifecycleSpec: MachineSpec = {
+  schema_version: "avalanche.machine/v1",
+  name: "pr_lifecycle",
+  key_fields: ["repo", "number"],
+  input_schema: {
+    type: "object",
+    properties: {
+      repo: { type: "string" },
+      number: { type: "integer" },
+      head_sha: { type: "string" },
+    },
+    required: ["repo", "number", "head_sha"],
+  },
+  initial: "in_review",
+  states: {
+    in_review: lifecycleState(
+      "review_round",
+      [
+        ["review_done_with_nits", "amend"],
+        ["review_done", "ready_to_merge"],
+      ],
+      { initial: true },
+    ),
+    amend: lifecycleState("amend_round", [["amended", "in_review"]]),
+    ready_to_merge: lifecycleState(
+      "notify_ready",
+      [
+        ["merged", "closed"],
+        ["closed_without_merge", "closed"],
+      ],
+      { timers: [{ target: "closed", delay_seconds: 2_592_000 }] },
+    ),
+    closed: lifecycleState("cleanup", [], { final: true }),
+  },
+  work_graphs: {},
+};
+const lifecycle = FlowInfoMsg.create({
+  name: "pr_lifecycle",
+  displayName: "PR lifecycle",
+  workflowId: "pr_lifecycle",
+  machineSpec: lifecycleSpec,
+  inputDeclarationJson: JSON.stringify({
+    type_name: "PR",
+    json_schema: lifecycleSpec.input_schema,
+    consumer_node_ids: [],
+  }),
+});
 const ordinary = FlowInfoMsg.create({
   name: "ordinary",
   displayName: "Ordinary flow",
@@ -203,7 +265,7 @@ const catalog = CatalogSnapshotMsg.create({
   operatorInstanceId: "machine-browser",
   revision: "1",
   asOfEventUlid: "00000000000000000000000001",
-  workflows: [flow, ordinary],
+  workflows: [flow, ordinary, lifecycle],
 });
 const calls: { method: string; args: JsonValue[] }[] = [];
 const instances = new Map<string, MachineInstance>();
@@ -810,7 +872,7 @@ function App() {
   const [selectedRunId, select] = useState<string | undefined>(
     readOnly || expired ? "machine-1" : (params.get("run") ?? undefined),
   );
-  const [workflowId, setWorkflow] = useState("review");
+  const [workflowId, setWorkflow] = useState(params.get("workflow") ?? "review");
   return (
     <div className="avalanche-operator-ui h-screen bg-canvas text-ink">
       <nav className="flex h-10 gap-4 border-b border-line px-4 text-xs">

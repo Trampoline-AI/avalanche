@@ -22,10 +22,22 @@ export interface MachineArcData extends Record<string, unknown> {
   orientation: GraphOrientation;
   /** Index among arcs between the same pair of states, so parallel arcs fan out. */
   lane: number;
+  /** How many arcs join the same pair of states (one per trigger). */
+  lanes?: number;
+  /** Geometry routed around the state cards; absent for the input dot's edge. */
+  route?: MachineArcRoute;
   label: string;
   timer?: { delaySeconds: number; due?: number };
   /** The arc leaves the current state, so the run can take it now. */
   live: boolean;
+}
+
+/** An arc's SVG path and where its label sits, clear of every state card. */
+export interface MachineArcRoute {
+  path: string;
+  label: Point;
+  /** Which side of `label` the label box extends to; centred when omitted. */
+  anchor?: "start" | "end";
 }
 
 export interface MachineLink {
@@ -35,8 +47,10 @@ export interface MachineLink {
   data: MachineArcData;
 }
 
-const COLUMN_GAP = { horizontal: 220, vertical: 120 };
-const RANK_GAP = { horizontal: 200, vertical: 190 };
+// Wide enough between ranks for a forward arc's label, and between the states of
+// one rank for a self-loop and its label, so no arc or label ever reaches a card.
+const COLUMN_GAP = { horizontal: 260, vertical: 260 };
+const RANK_GAP = { horizontal: 300, vertical: 260 };
 
 /**
  * Ranks states by breadth-first distance from the initial state, so a cycle never
@@ -107,6 +121,11 @@ export function layoutMachine(
     });
   }
   const lanes = new Map<string, number>();
+  const pairCounts = new Map<string, number>();
+  for (const link of links) {
+    const pair = JSON.stringify([link.source, link.target]);
+    pairCounts.set(pair, (pairCounts.get(pair) ?? 0) + 1);
+  }
   return {
     ranks,
     positions,
@@ -128,6 +147,7 @@ export function layoutMachine(
           kind,
           orientation,
           lane,
+          lanes: pairCounts.get(pair),
           label: link.label,
           timer: link.timer,
           live: link.source === view.state,
@@ -146,76 +166,279 @@ export function formatDelay(seconds: number): string {
 
 type Point = { x: number; y: number };
 
-function cubic(points: [Point, Point, Point, Point]): { path: string; label: Point } {
+/** A state card's bounding box in flow coordinates. */
+export interface Box {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+function cubicAt([a, b, c, d]: readonly [Point, Point, Point, Point], t: number): Point {
+  const u = 1 - t;
+  const at = (key: "x" | "y") =>
+    u * u * u * a[key] + 3 * u * u * t * b[key] + 3 * u * t * t * c[key] + t * t * t * d[key];
+  return { x: at("x"), y: at("y") };
+}
+
+function cubic(points: [Point, Point, Point, Point], labelAt = 0.5): MachineArcRoute {
   const [a, b, c, d] = points;
   return {
     path: `M ${a.x},${a.y} C ${b.x},${b.y} ${c.x},${c.y} ${d.x},${d.y}`,
-    // The curve's point at t = 0.5.
-    label: { x: (a.x + 3 * b.x + 3 * c.x + d.x) / 8, y: (a.y + 3 * b.y + 3 * c.y + d.y) / 8 },
+    label: cubicAt(points, labelAt),
   };
 }
 
-/** Cubic arc geometry for a machine edge between two handle points. */
+/** Forward cubic between two handle points (the input dot's edge into the initial state). */
 export function machineArcPath(
-  data: Pick<MachineArcData, "kind" | "orientation" | "lane">,
+  data: Pick<MachineArcData, "orientation">,
   source: Point,
   target: Point,
-): { path: string; label: Point } {
-  const horizontal = data.orientation === "horizontal";
-  // Parallel arcs fan out alternately on either side of the straight line.
-  const fan = (data.lane % 2 === 0 ? 1 : -1) * Math.ceil(data.lane / 2) * 46;
-  if (data.kind === "forward") {
-    if (horizontal) {
-      const pull = Math.max(70, Math.abs(target.x - source.x) / 2);
-      return cubic([
-        source,
-        { x: source.x + pull, y: source.y + fan },
-        { x: target.x - pull, y: target.y + fan },
-        target,
-      ]);
-    }
-    const pull = Math.max(60, Math.abs(target.y - source.y) / 2);
+): MachineArcRoute {
+  if (data.orientation === "horizontal") {
+    const pull = Math.max(70, Math.abs(target.x - source.x) / 2);
     return cubic([
       source,
-      { x: source.x + fan, y: source.y + pull },
-      { x: target.x + fan, y: target.y - pull },
+      { x: source.x + pull, y: source.y },
+      { x: target.x - pull, y: target.y },
       target,
     ]);
   }
-  if (data.kind === "self") {
-    // From the card's outgoing side round its corner into the adjacent side, clear of
-    // forward arcs (which use the opposite sides) and back arcs (which bow away).
-    const reach = 110 + data.lane * 44;
-    return horizontal
-      ? cubic([
-          source,
-          { x: source.x + reach, y: source.y },
-          { x: target.x, y: target.y - reach },
-          target,
-        ])
-      : cubic([
-          source,
-          { x: source.x, y: source.y + reach },
-          { x: target.x - reach, y: target.y },
-          target,
-        ]);
+  const pull = Math.max(60, Math.abs(target.y - source.y) / 2);
+  return cubic([
+    source,
+    { x: source.x, y: source.y + pull },
+    { x: target.x, y: target.y - pull },
+    target,
+  ]);
+}
+
+// Clearances, in flow pixels, between routed arcs and the cards they pass.
+/** Distance from the cards to the first back-arc lane; more than a self-loop and its label. */
+const LANE_CLEARANCE = 72;
+const LANE_SPACING = 30;
+/** Where a back arc that cannot go straight out turns into the gap beside its rank. */
+const DETOUR_STEP = 26;
+const DETOUR_GAP = 40;
+const CORNER = 18;
+const SELF_LOOP_REACH = 40;
+const SELF_LOOP_STEP = 24;
+/** Parallel arcs between one pair of states attach this far apart on the card side. */
+const PORT_SPREAD = 18;
+const FAN = 46;
+
+/**
+ * An orthogonal polyline as a path whose corners are short cubic curves.
+ * Collinear and repeated points are dropped first.
+ */
+function roundedPath(points: readonly Point[]): string {
+  const kept: Point[] = [];
+  for (const point of points) {
+    const last = kept.at(-1);
+    if (last && Math.abs(last.x - point.x) < 0.01 && Math.abs(last.y - point.y) < 0.01)
+      continue;
+    const before = kept.at(-2);
+    if (
+      before &&
+      last &&
+      ((Math.abs(before.x - last.x) < 0.01 && Math.abs(last.x - point.x) < 0.01) ||
+        (Math.abs(before.y - last.y) < 0.01 && Math.abs(last.y - point.y) < 0.01))
+    )
+      kept.pop();
+    kept.push(point);
   }
-  // Back arcs leave and re-enter on the same side, bowing out further for longer jumps.
-  const span = horizontal ? Math.abs(target.x - source.x) : Math.abs(target.y - source.y);
-  const lift = 80 + data.lane * 40 + span * 0.07;
-  return horizontal
-    ? cubic([
-        source,
-        { x: source.x, y: Math.max(source.y, target.y) + lift },
-        { x: target.x, y: Math.max(source.y, target.y) + lift },
-        target,
-      ])
-    : cubic([
-        source,
-        { x: Math.max(source.x, target.x) + lift, y: source.y },
-        { x: Math.max(source.x, target.x) + lift, y: target.y },
-        target,
-      ]);
+  const round = (value: number) => Math.round(value * 10) / 10;
+  const at = ({ x, y }: Point) => `${round(x)},${round(y)}`;
+  let path = `M ${at(kept[0])}`;
+  for (let index = 1; index < kept.length - 1; index++) {
+    const [a, b, c] = [kept[index - 1], kept[index], kept[index + 1]];
+    const inLength = Math.hypot(b.x - a.x, b.y - a.y);
+    const outLength = Math.hypot(c.x - b.x, c.y - b.y);
+    const radius = Math.min(CORNER, inLength / 2, outLength / 2);
+    const enter = {
+      x: b.x - ((b.x - a.x) / inLength) * radius,
+      y: b.y - ((b.y - a.y) / inLength) * radius,
+    };
+    const leave = {
+      x: b.x + ((c.x - b.x) / outLength) * radius,
+      y: b.y + ((c.y - b.y) / outLength) * radius,
+    };
+    path += ` L ${at(enter)} C ${at(b)} ${at(b)} ${at(leave)}`;
+  }
+  return `${path} L ${at(kept.at(-1)!)}`;
+}
+
+/**
+ * Routes every machine arc around the state cards, from their measured boxes.
+ *
+ * Forward arcs stay in the empty gap between two adjacent ranks. Back arcs run in a
+ * lane outside every card of the ranks they span, on the outer side of their state
+ * (detouring through the gap beside the rank when another card of the same rank is
+ * in the way). Self-loops sit outside the card on the side away from its back
+ * arcs. Each label lies on its own arc, in empty space.
+ */
+export function routeMachineArcs(
+  links: readonly MachineLink[],
+  boxes: Readonly<Record<string, Box>>,
+  ranks: ReadonlyMap<string, number>,
+  orientation: GraphOrientation,
+): Record<string, MachineArcRoute> {
+  const horizontal = orientation === "horizontal";
+  // Work in (along, across): along runs with the ranks, across between a rank's states.
+  type Span = { alongLow: number; alongHigh: number; acrossLow: number; acrossHigh: number };
+  const spans: Record<string, Span> = {};
+  for (const [name, box] of Object.entries(boxes)) {
+    spans[name] = horizontal
+      ? { alongLow: box.left, alongHigh: box.right, acrossLow: box.top, acrossHigh: box.bottom }
+      : {
+          alongLow: box.top,
+          alongHigh: box.bottom,
+          acrossLow: box.left,
+          acrossHigh: box.right,
+        };
+  }
+  const point = (along: number, across: number): Point =>
+    horizontal ? { x: along, y: across } : { x: across, y: along };
+  const names = Object.keys(spans);
+  const inRank = (rank: number) => names.filter((name) => ranks.get(name) === rank);
+  const rankExtent = (rank: number) => {
+    const members = inRank(rank).map((name) => spans[name]);
+    return {
+      alongLow: Math.min(...members.map((span) => span.alongLow)),
+      alongHigh: Math.max(...members.map((span) => span.alongHigh)),
+    };
+  };
+  // A state on the near half of its rank keeps its back arcs on the near side.
+  const sideOf = (name: string): 1 | -1 => {
+    const members = inRank(ranks.get(name)!).map((other) => spans[other]);
+    const middle =
+      (Math.min(...members.map((span) => span.acrossLow)) +
+        Math.max(...members.map((span) => span.acrossHigh))) /
+      2;
+    const span = spans[name];
+    return (span.acrossLow + span.acrossHigh) / 2 < middle - 0.5 ? -1 : 1;
+  };
+  const middleAcross = (span: Span) => (span.acrossLow + span.acrossHigh) / 2;
+  const middleAlong = (span: Span) => (span.alongLow + span.alongHigh) / 2;
+  const edgeAcross = (span: Span, side: 1 | -1) =>
+    side === 1 ? span.acrossHigh : span.acrossLow;
+  // Another card of the same rank lies between this state and the lane on `side`.
+  const blocked = (name: string, side: 1 | -1) =>
+    inRank(ranks.get(name)!).some(
+      (other) =>
+        other !== name &&
+        (side === 1
+          ? spans[other].acrossLow >= spans[name].acrossHigh
+          : spans[other].acrossHigh <= spans[name].acrossLow),
+    );
+
+  const routes: Record<string, MachineArcRoute> = {};
+  const lanesTaken: { side: 1 | -1; low: number; high: number; lane: number }[] = [];
+  const back = links
+    .filter((link) => link.data.kind === "back")
+    .sort(
+      (left, right) =>
+        Math.abs(ranks.get(left.source)! - ranks.get(left.target)!) -
+        Math.abs(ranks.get(right.source)! - ranks.get(right.target)!),
+    );
+  for (const link of back) {
+    const source = spans[link.source];
+    const target = spans[link.target];
+    const side = sideOf(link.source);
+    const low = Math.min(ranks.get(link.source)!, ranks.get(link.target)!);
+    const high = Math.max(ranks.get(link.source)!, ranks.get(link.target)!);
+    const lane = lanesTaken.filter(
+      (taken) => taken.side === side && taken.low <= high && low <= taken.high,
+    ).length;
+    lanesTaken.push({ side, low, high, lane });
+    const spanned = names.filter((name) => {
+      const rank = ranks.get(name)!;
+      return rank >= low && rank <= high;
+    });
+    const outer =
+      side === 1
+        ? Math.max(...spanned.map((name) => spans[name].acrossHigh))
+        : Math.min(...spanned.map((name) => spans[name].acrossLow));
+    const laneAcross = outer + side * (LANE_CLEARANCE + lane * LANE_SPACING);
+    // Attach a little apart from the centre so two arcs between a pair never share an end.
+    const shift = (link.data.lane - ((link.data.lanes ?? 1) - 1) / 2) * PORT_SPREAD;
+    const sourceAlong = middleAlong(source) + PORT_SPREAD + shift;
+    const targetAlong = middleAlong(target) - PORT_SPREAD + shift;
+    const sourceGap = rankExtent(ranks.get(link.source)!).alongHigh + DETOUR_GAP;
+    const targetGap = rankExtent(ranks.get(link.target)!).alongLow - DETOUR_GAP;
+    const sourceBlocked = blocked(link.source, side);
+    const targetBlocked = blocked(link.target, side);
+    const laneStart = sourceBlocked ? sourceGap : sourceAlong;
+    const laneEnd = targetBlocked ? targetGap : targetAlong;
+    const points: Point[] = [point(sourceAlong, edgeAcross(source, side))];
+    if (sourceBlocked) {
+      const out = edgeAcross(source, side) + side * DETOUR_STEP;
+      points.push(point(sourceAlong, out), point(sourceGap, out));
+    }
+    points.push(point(laneStart, laneAcross), point(laneEnd, laneAcross));
+    if (targetBlocked) {
+      const out = edgeAcross(target, side) + side * DETOUR_STEP;
+      points.push(point(targetGap, out), point(targetAlong, out));
+    }
+    points.push(point(targetAlong, edgeAcross(target, side)));
+    // The label sits on the lane, halfway along it.
+    const labelAlong = (laneStart + laneEnd) / 2;
+    routes[link.id] = {
+      path: roundedPath(points),
+      label: point(labelAlong, laneAcross + (horizontal ? 0 : side * 8)),
+      anchor: horizontal ? undefined : side === 1 ? "start" : "end",
+    };
+  }
+
+  for (const link of links) {
+    const source = spans[link.source];
+    const target = spans[link.target];
+    if (link.data.kind === "self") {
+      // A loop off the card's free side, away from its back arcs, nested per trigger.
+      const side = -sideOf(link.source) as 1 | -1;
+      const edge = edgeAcross(source, side);
+      const reach = SELF_LOOP_REACH + link.data.lane * SELF_LOOP_STEP;
+      const half = (source.alongHigh - source.alongLow) / 2;
+      const leave = middleAlong(source) + half * 0.6 + link.data.lane * 14;
+      const enter = middleAlong(source) + half * 0.25 - link.data.lane * 14;
+      const loop = edge + side * reach;
+      routes[link.id] = {
+        path: roundedPath([
+          point(leave, edge),
+          point(leave, loop),
+          point(enter, loop),
+          point(enter, edge),
+        ]),
+        label: horizontal
+          ? point((leave + enter) / 2, loop)
+          : point((leave + enter) / 2, loop + side * 8),
+        anchor: horizontal ? undefined : side === 1 ? "start" : "end",
+      };
+    } else if (link.data.kind === "forward") {
+      // Forward arcs only join adjacent ranks, so they stay in the empty gap between.
+      const position = link.data.lane - ((link.data.lanes ?? 1) - 1) / 2;
+      const from = {
+        along: source.alongHigh,
+        across: middleAcross(source) + position * PORT_SPREAD,
+      };
+      const to = {
+        along: target.alongLow,
+        across: middleAcross(target) + position * PORT_SPREAD,
+      };
+      const pull = Math.max(40, (to.along - from.along) / 2);
+      routes[link.id] = cubic(
+        [
+          point(from.along, from.across),
+          point(from.along + pull, from.across + position * FAN),
+          point(to.along - pull, to.across + position * FAN),
+          point(to.along, to.across),
+        ],
+        // Stacked labels would overlap side by side in a vertical gap; stagger them.
+        horizontal ? 0.5 : 0.5 + position * 0.22,
+      );
+    }
+  }
+  return routes;
 }
 
 /** Handles on the shared node card that each arc kind attaches to. */
