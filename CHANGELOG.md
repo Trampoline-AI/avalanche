@@ -108,7 +108,8 @@
   and input dot), one arc per trigger, with the current state highlighted.
   Machine arcs route around the state cards: back arcs run in a lane outside
   the ranks they span, self-loops sit off the card edge, and no arc or label
-  crosses a card in either orientation. Visits are a section of the run timeline
+  crosses a card in either orientation. In the vertical layout the input dot's
+  `inputs` label sits above the dot (flows and machines); horizontal unchanged. Visits are a section of the run timeline
   and open in the normal graph, side inspector and log pane. Send, retry visit
   and a development timer trigger sit beside Cancel in the run controls; the
   send form opens in the side panel; pending timers, deferred events, receipts

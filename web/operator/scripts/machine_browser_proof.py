@@ -170,14 +170,28 @@ def arc_spacing(page, url: str, evidence: Path) -> list[dict]:
             ]
         ), labels
         page.screenshot(path=str(evidence / f"21-pr-lifecycle-{orientation}.png"))
-    # The flow canvas in both orientations: its look is unchanged.
+    # The flow canvas in both orientations: its look is unchanged, and in the vertical
+    # layout the input dot's label sits above the dot (its edge leaves below).
     page.goto(url)
     page.get_by_test_id("flow-nav").click()
     expect(page.locator(".run-graph-shell .node-card")).to_have_count(3)
     for orientation in ("horizontal", "vertical"):
         set_orientation(page, orientation)
         page.wait_for_timeout(300)
+        dot = page.locator(".run-graph-shell .node-input-dot").bounding_box()
+        label = page.locator(".run-graph-shell .node-input-label").bounding_box()
+        if orientation == "vertical":
+            assert label["y"] + label["height"] <= dot["y"], (label, dot)
+        else:
+            assert label["y"] >= dot["y"] + dot["height"], (label, dot)
         page.screenshot(path=str(evidence / f"22-flow-{orientation}.png"))
+    page.get_by_test_id("machine-nav").click()
+    set_orientation(page, "vertical")
+    page.wait_for_timeout(300)
+    dot = page.locator(".run-graph-shell .node-input-dot").bounding_box()
+    label = page.locator(".run-graph-shell .node-input-label").bounding_box()
+    assert label["y"] + label["height"] <= dot["y"], (label, dot)
+    page.screenshot(path=str(evidence / "23-machine-vertical-input-label.png"))
     return checks
 
 

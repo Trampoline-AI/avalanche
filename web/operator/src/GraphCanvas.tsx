@@ -638,12 +638,10 @@ const WorkflowInputDot = memo(({ data, selected }: NodeProps<Node<InputDotData>>
       <span aria-hidden="true" className="node-input-dot size-6 rounded-full" />
       <span
         aria-hidden="true"
-        className="node-input-label pointer-events-none absolute top-full left-1/2 mt-1 font-mono text-[11px] whitespace-nowrap"
+        // Under the dot, or above it in a top-to-bottom graph where its edge leaves below.
+        className="node-input-label pointer-events-none absolute top-full left-1/2 mt-1 origin-top font-mono text-[11px] whitespace-nowrap [[data-orientation=vertical]_&]:top-auto [[data-orientation=vertical]_&]:bottom-full [[data-orientation=vertical]_&]:mt-0 [[data-orientation=vertical]_&]:mb-1 [[data-orientation=vertical]_&]:origin-bottom"
         // Readable at any canvas zoom.
-        style={{
-          transform: `translateX(-50%) scale(${1 / zoom})`,
-          transformOrigin: "top center",
-        }}
+        style={{ transform: `translateX(-50%) scale(${1 / zoom})` }}
       >
         inputs
       </span>
