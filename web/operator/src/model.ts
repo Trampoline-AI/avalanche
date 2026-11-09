@@ -275,8 +275,16 @@ export const CatalogSnapshotMsg = {
 };
 
 export interface RunSummaryMsg {
-  /** Host-supplied run label, e.g. a machine's input-derived key. */
+  /**
+   * Host-supplied run label: the input-derived key of a keyed run, machine or
+   * flow alike (format it with `runKeyLabel`). It never expires.
+   */
   label?: string;
+  /**
+   * The run's history and artifacts expired under its retention policy. The run,
+   * its status and its label stay readable; snapshots and visits read back `expired`.
+   */
+  expired?: boolean;
   /**
    * @generated from protobuf field: string run_id = 1
    */
@@ -1513,4 +1521,9 @@ export interface InputFileAttachment extends StagedInputFile {
 export interface InputFileTarget {
   workflow: string;
   field: string;
+  /**
+   * Set for a machine send: `field` is a field of this event's payload, not of
+   * the run input. Hosts that cannot stage payload files reject it explicitly.
+   */
+  event?: string;
 }

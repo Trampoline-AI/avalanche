@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { useState } from "react";
 import { WorkflowWorkspace } from "../WorkflowWorkspace";
-import { machineKeyLabel } from "../MachineWorkspace";
+import { runKeyLabel } from "../runKey";
 import type { LogPageRequest, OperatorApi } from "../api";
 import type { WaitCard } from "../RunWaitPanel";
 import type {
@@ -65,8 +65,14 @@ const spec: MachineSpec = {
               note: { type: "string", minLength: 2 },
               score: { type: "integer", minimum: 0 },
               approved: { type: "boolean" },
+              // R2: payloads carry File/Workspace values like run inputs.
+              evidence: { anyOf: [{ $ref: "#/$defs/File" }, { type: "null" }], default: null },
+              workspace: { type: "object", additionalProperties: true },
             },
             required: ["note", "score", "approved"],
+            $defs: {
+              File: { type: "object", properties: { kind: { const: "file" } } },
+            },
           },
         },
         { event: "advance", target: "ready", payload_schema: null },
@@ -115,8 +121,9 @@ const ordinary = FlowInfoMsg.create({
     score: "Score the document.",
     notify: "Tell the reviewer.",
   },
+  // A keyed flow (`key=("id",)`): its runs carry the key as their label, like machines.
   inputDeclarationJson: JSON.stringify({
-    type_name: "ReviewInput",
+    type_name: "DocumentInput",
     json_schema: { type: "object", properties: { id: { type: "string" } } },
     consumer_node_ids: ["fetch"],
   }),
@@ -319,6 +326,13 @@ class FakeOperatorApi implements OperatorApi {
   }
   async getLatestRunSnapshot(runId: string) {
     record("snapshot", runId);
+    // Retention removed the history; the summary (status, label) stays readable.
+    if (runs.get(runId)?.expired)
+      return RunSnapshotMsg.create({
+        operatorInstanceId: catalog.operatorInstanceId,
+        asOfEventUlid: String(sequence).padStart(26, "0"),
+        summary: structuredClone(runs.get(runId)),
+      });
     return RunSnapshotMsg.create({
       operatorInstanceId: catalog.operatorInstanceId,
       asOfEventUlid: String(sequence).padStart(26, "0"),
@@ -534,7 +548,14 @@ class FakeOperatorApi implements OperatorApi {
     };
   }
   async stageInputFile(file: File, target: InputFileTarget) {
-    record("stage", target.workflow, target.field, file.name, await file.text());
+    record(
+      "stage",
+      target.workflow,
+      target.field,
+      target.event ?? null,
+      file.name,
+      await file.text(),
+    );
     return {
       name: file.name,
       mediaType: file.type,
@@ -551,13 +572,20 @@ class FakeOperatorApi implements OperatorApi {
     inputFiles?: InputFileAttachment[],
   ) {
     if (machine !== "review") {
-      record("flow-start", machine);
+      record("flow-start", machine, JSON.parse(JSON.stringify(input ?? null)));
+      // R4 for keyed flows: an existing key returns its run, new input ignored.
+      const label = typeof input?.id === "string" ? runKeyLabel([input.id]) : undefined;
+      const existing = [...runs.values()].find(
+        (run) => label !== undefined && run.workflowId === machine && run.label === label,
+      );
+      if (existing) return existing.runId;
       const runId = `flow-${runs.size + 1}`;
       const now = Date.now() / 1000;
       const summary = RunSummaryMsg.create({
         runId,
         workflowId: machine,
         flowName: machine,
+        label,
         status: "succeeded",
         createdSequence: String(runs.size + 1),
         revision: "1",
@@ -640,7 +668,7 @@ class FakeOperatorApi implements OperatorApi {
       runId: run_id,
       workflowId: machine,
       flowName: machine,
-      label: machineKeyLabel(key),
+      label: runKeyLabel(key),
       status: "interrupted",
       createdSequence: String(instances.size),
       revision: "1",
@@ -658,8 +686,27 @@ class FakeOperatorApi implements OperatorApi {
     event: string,
     payload: JsonValue,
     idempotencyKey: string,
+    inputFiles?: InputFileAttachment[],
   ) {
-    record("send", runId, event, payload, idempotencyKey);
+    record(
+      "send",
+      runId,
+      event,
+      payload,
+      idempotencyKey,
+      (inputFiles ?? []).map((file) => ({
+        field: file.fieldName,
+        name: file.name,
+        bytes: Array.from(file.inlineBytes ?? []),
+      })),
+    );
+    // Files bind before the receipt: an unknown payload field is refused, not dropped.
+    const declared = spec.states[instance(runId).state!]?.transitions.find(
+      (t) => t.event === event,
+    )?.payload_schema?.properties;
+    for (const file of inputFiles ?? [])
+      if (!declared || !Object.hasOwn(declared, file.fieldName))
+        throw new Error(`Event ${event} declares no payload field ${file.fieldName}`);
     const prior = receipts.get(idempotencyKey);
     if (prior) return { ...prior, duplicate: true };
     const item = instance(runId);
@@ -720,6 +767,22 @@ class FakeOperatorApi implements OperatorApi {
 const api: OperatorApi = new FakeOperatorApi();
 const params = new URLSearchParams(location.search);
 const readOnly = params.has("readonly");
+const expired = params.has("expired");
+if (expired) {
+  // R5: a finished machine run and a keyed flow run whose history expired by run
+  // policy. Their run, status and key label stay; history reads back `expired`.
+  await api.startRun("review", { repo: "acme/api", pr: 7, priority: 1 });
+  enter("machine-1", "closed", "external", "advance");
+  for (const visit of visits.get("machine-1")!.values()) {
+    visit.disposition = "expired";
+    delete visit.snapshot;
+    visit.nodes = {};
+  }
+  runs.get("machine-1")!.expired = true;
+  await api.startRun("ordinary", { id: "doc-3" });
+  runs.get("flow-2")!.expired = true;
+  calls.length = 0;
+}
 if (readOnly) {
   await api.startRun("review", { repo: "acme/api", pr: 1, priority: 1 });
   calls.length = 0;
@@ -745,7 +808,7 @@ window.machineHarness = {
 };
 function App() {
   const [selectedRunId, select] = useState<string | undefined>(
-    readOnly ? "machine-1" : (params.get("run") ?? undefined),
+    readOnly || expired ? "machine-1" : (params.get("run") ?? undefined),
   );
   const [workflowId, setWorkflow] = useState("review");
   return (

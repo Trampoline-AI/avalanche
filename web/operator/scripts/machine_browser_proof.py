@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import socket
 import subprocess
 import time
@@ -60,6 +61,8 @@ def start_run(
     inputs.get_by_role("button", name="Close", exact=True).click()
     page.get_by_role("button", name="Run", exact=True).click()
 
+
+RERUN = re.compile(r"re-?run|run again|replay", re.IGNORECASE)
 
 CARD_STYLE = """els => els.map(e => {
   const s = getComputedStyle(e);
@@ -148,6 +151,8 @@ def scenario(page, url: str, evidence: Path) -> dict:
     assert first == viewport.get_attribute("style"), "First-frame viewport moved"
     # Normal run controls stay on the machine run page; no instance table or refresh.
     expect(page.get_by_role("button", name="Cancel run", exact=True)).to_be_visible()
+    # R3: no rerun of a machine run; retry is a new visit in the same run.
+    expect(page.get_by_role("button", name=RERUN)).to_have_count(0)
     expect(page.get_by_role("table")).to_have_count(0)
     expect(page.get_by_role("button", name="Refresh instances")).to_have_count(0)
     expect(waits.locator("[data-wait-kind]")).to_have_count(1)
@@ -198,9 +203,18 @@ def scenario(page, url: str, evidence: Path) -> dict:
     actions.get_by_role("button", name="Send event", exact=True).click()
     send_panel = page.get_by_role("complementary", name="Send event")
     send = send_panel.get_by_role("form", name="Send event")
-    send.get_by_label("note", exact=False).fill("revise")
-    send.get_by_label("score", exact=False).fill("3")
-    send.get_by_label("approved", exact=False).select_option("true")
+    # R2: the run input form's own fields, File picker included, upload path included.
+    send.get_by_label("note value", exact=True).fill("revise")
+    send.get_by_label("score value", exact=True).fill("3")
+    send.get_by_label("approved value", exact=True).fill("true")
+    send.get_by_label("workspace value", exact=True).fill(
+        '{"kind":"workspace","version":1,"reference":"proof"}'
+    )
+    send.get_by_label("evidence file", exact=True).set_input_files(
+        {"name": "evidence.txt", "mimeType": "text/plain", "buffer": b"send proof\n"}
+    )
+    expect(send.locator('[data-file-status="staged"]')).to_contain_text("evidence.txt")
+    page.screenshot(path=str(evidence / "13-send-form-file.png"))
     send.get_by_role("button", name="Send event").click()
     expect(send.get_by_role("alert")).to_be_visible()
     send.get_by_role("button", name="Send event").click()
@@ -208,7 +222,18 @@ def scenario(page, url: str, evidence: Path) -> dict:
     expect(visits.locator('[data-visit="3"]')).to_be_visible()
     sends = page.evaluate("window.machineHarness.calls.filter(c => c.method === 'send')")
     assert len(sends) == 2 and sends[0]["args"][3] == sends[1]["args"][3], sends
-    assert sends[0]["args"][2] == {"note": "revise", "score": 3, "approved": True}, sends
+    assert sends[0]["args"][2] == {
+        "note": "revise",
+        "score": 3,
+        "approved": True,
+        "workspace": {"kind": "workspace", "version": 1, "reference": "proof"},
+    }, sends
+    sent_files = [{"field": "evidence", "name": "evidence.txt", "bytes": list(b"send proof\n")}]
+    assert sends[0]["args"][4] == sends[1]["args"][4] == sent_files, sends
+    stages = page.evaluate("window.machineHarness.calls.filter(c => c.method === 'stage')")
+    assert ["review", "evidence", "amend", "evidence.txt", "send proof\n"] in [
+        stage["args"] for stage in stages
+    ], stages
     expect(send_panel.locator('[data-receipt-status="accepted"]')).to_be_visible()
     expect(send_panel.locator('[data-receipt-duplicate="true"]')).to_have_count(1)
     expect(waits.locator('[data-receipt-status="accepted"]')).to_have_count(1)
@@ -288,10 +313,17 @@ def scenario(page, url: str, evidence: Path) -> dict:
     assert any(call["method"] == "baseline" for call in calls), calls
     (evidence / "calls.json").write_text(json.dumps(calls, indent=2) + "\n")
 
-    # A workflow run on the same page: same timeline, canvas, side inspector, logs.
+    # A keyed workflow run on the same page: same timeline, canvas, side inspector,
+    # logs, and its key as the run label exactly like a machine run.
     page.get_by_test_id("flow-nav").click()
+    page.get_by_role("button", name="Inspect workflow input DocumentInput").click()
+    flow_inputs = page.get_by_role("complementary", name="Workflow input declaration")
+    flow_inputs.get_by_label("id value", exact=True).fill("doc-9")
+    flow_inputs.get_by_role("button", name="Close", exact=True).click()
     page.get_by_role("button", name="Run", exact=True).click()
     expect(page.locator(".run-list-row")).to_have_count(1)
+    expect(page.locator(".run-list-row")).to_contain_text("doc-9")
+    expect(page.get_by_role("button", name=RERUN)).to_have_count(0)
     expect(page.locator(".react-flow__edge-machine")).to_have_count(0)
     expect(graph.locator(".node-card")).to_have_count(3)
     expect(page.get_by_text("fetched document")).to_be_visible()
@@ -307,6 +339,7 @@ def scenario(page, url: str, evidence: Path) -> dict:
     page.wait_for_timeout(300)
     page.screenshot(path=str(evidence / "side-flow-run.png"))
     page.screenshot(path=str(evidence / "08-flow-run.png"))
+    page.screenshot(path=str(evidence / "15-keyed-flow-run.png"))
 
     # No optional methods means genuinely read-only; no mutation request is made.
     page.goto(url + "?readonly")
@@ -324,6 +357,45 @@ def scenario(page, url: str, evidence: Path) -> dict:
     assert not writes, writes
     page.locator(".run-list-row").click()
     page.screenshot(path=str(evidence / "09-read-only.png"))
+    # R5: expired history reads back `expired`; the run and its key label stay.
+    page.goto(url + "?expired")
+    row = page.locator(".run-list-row")
+    expect(row).to_have_count(1)
+    expect(row).to_have_attribute("data-run-history", "expired")
+    expect(row).to_contain_text("acme/api #7")
+    expect(row).to_contain_text("expired")
+    badge = page.locator('.run-graph-shell [data-run-history="expired"]')
+    expect(badge).to_be_visible()
+    expect(page.get_by_role("group", name="Machine actions")).to_have_count(0)
+    expect(page.get_by_role("button", name=RERUN)).to_have_count(0)
+    # The definition graph is not history: the state machine still draws.
+    expect(page.locator('.run-graph-shell .node-card[data-current="true"]')).to_contain_text(
+        "closed"
+    )
+    page.wait_for_timeout(300)
+    page.screenshot(path=str(evidence / "14-expired-machine-run.png"))
+    visits = page.get_by_role("region", name="Machine visits")
+    visits.locator('[data-visit="1"]').click()
+    expect(page.get_by_role("navigation", name="Machine visit")).to_contain_text("expired")
+    expect(
+        page.get_by_label("Machine run waits").locator('[data-run-history="expired"]')
+    ).to_be_visible()
+    expect(page.locator(".run-graph-shell .react-flow__edge-machine")).to_have_count(0)
+    page.screenshot(path=str(evidence / "14b-expired-visit.png"))
+    page.get_by_test_id("flow-nav").click()
+    flow_row = page.locator('.run-list-row[data-run-history="expired"]')
+    expect(flow_row).to_contain_text("doc-3")
+    flow_row.click()
+    expect(badge).to_be_visible()
+    expect(page.locator(".run-list-row.active")).to_contain_text("doc-3")
+    page.screenshot(path=str(evidence / "16-expired-keyed-flow-run.png"))
+    expired_calls = page.evaluate("window.machineHarness.calls")
+    assert not [
+        call
+        for call in expired_calls
+        if call["method"] in ("waits", "facts", "logs") and call["args"][0] == "machine-1"
+    ], expired_calls
+
     # Deep-link failure is explicit, not a fallback to an unrelated run.
     page.goto(url + "?run=missing")
     expect(page.get_by_role("alert").last).to_be_visible()

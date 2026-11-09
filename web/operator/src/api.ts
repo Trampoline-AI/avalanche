@@ -202,11 +202,17 @@ export interface OperatorApi {
     page?: MachinePageRequest,
     signal?: AbortSignal,
   ): Promise<MachinePage<MachineVisitEvent>>;
+  /**
+   * `inputFiles` fill File fields of `payload` exactly as they fill a run input
+   * (staged with `stageInputFile({ ..., event })`); the host binds them before it
+   * returns the accepted receipt.
+   */
   sendMachineEvent?(
     runId: string,
     event: string,
     payload: JsonValue,
     idempotencyKey: string,
+    inputFiles?: InputFileAttachment[],
   ): Promise<MachineEventReceipt>;
   retryMachineVisit?(runId: string): Promise<void>;
   fireNextMachineTimer?(runId: string): Promise<void>;
@@ -701,6 +707,9 @@ export class GrpcWebOperatorApi implements OperatorApi {
 
   /** Upload the file to the operator's staging folder. */
   async stageInputFile(file: File, target: InputFileTarget): Promise<StagedInputFile> {
+    // StageInputFileRequestV2 has no event field yet; never stage a payload file as an input file.
+    if (target.event !== undefined)
+      throw new Error("This operator cannot upload files for machine events yet");
     const staged = await this.client.stageInputFile({
       workflowSelector: target.workflow,
       fieldName: target.field,

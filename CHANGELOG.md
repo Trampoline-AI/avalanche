@@ -112,9 +112,15 @@
   send form opens in the side panel; pending timers, deferred events, receipts
   and visit waits show in the run waits panel. Instances start from the normal
   run input form (including files and workspaces) and close with the normal run
-  cancel. New optional `OperatorApi` methods: machine reads, event send (JSON
-  payloads), interrupted-visit retry and the development timer trigger; there is
-  no machine start, list or close method, and no `key_format`. This phase is
+  cancel. New optional `OperatorApi` methods: machine reads, event send,
+  interrupted-visit retry and the development timer trigger; there is no
+  machine start, list, close or rerun method or control, and no `key_format`.
+  The send form is the run input form over the event payload schema, so `File`
+  and `Workspace` payload fields pick and upload like run inputs and reach
+  `sendMachineEvent` as `inputFiles`. Keyed flow runs show their key as the run
+  label like machine runs. Runs whose history expired under their retention
+  policy (`RunSummaryMsg.expired`, visit disposition `expired`) read `expired`
+  in the timeline and on the run page and keep their label. This phase is
   proven in browsers against a typed fake host; local operator transport
   follows separately.
 

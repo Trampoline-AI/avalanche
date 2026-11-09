@@ -1,17 +1,25 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import type { OperatorApi } from "./api";
 import type {
   MachineEventReceipt,
   MachineInstance,
   MachinePage,
-  MachineKey,
   MachineSpec,
   MachineTransition,
   MachineVisit,
   MachineVisitEvent,
 } from "./machine";
-import { MachinePayloadForm, machineButton } from "./MachinePayloadForm";
+import type { FlowInfoMsg, InputFileAttachment } from "./model";
+import { parseRunInput } from "./RunControls";
+import { runKeyLabel } from "./runKey";
+import { parseJsonValue, type JsonSchema, type JsonValue } from "./stepInterface";
+import { applyInputFiles, useInputDraft } from "./useInputDraft";
+import { InputFieldList } from "./WorkflowInputInspector";
+import { workflowInputFields } from "./workflowInput";
 import { RunWaitPanel } from "./RunWaitPanel";
+
+const machineButton =
+  "rounded border border-line bg-panel px-3 py-2 text-xs text-ink disabled:opacity-50";
 
 function useRead<T>(load: ((signal: AbortSignal) => Promise<T>) | undefined, poll = false) {
   const [result, setResult] = useState<{ load: typeof load; value: T }>();
@@ -60,23 +68,6 @@ function ReadError({ error, retry }: { error?: string; retry: () => void }) {
 function clock(value: number | null) {
   return value === null ? "Not recorded" : new Date(value * 1000).toLocaleString();
 }
-/**
- * A readable instance key: text parts joined by " / ", numbers as "#n"
- * (["acme/api", 44] is "acme/api #44"). Hosts use it for RunSummaryMsg.label.
- */
-export function machineKeyLabel(key: MachineKey): string {
-  return key.reduce<string>((label, part, index) => {
-    const text =
-      typeof part === "number"
-        ? `#${part}`
-        : typeof part === "string"
-          ? part
-          : JSON.stringify(part);
-    if (index === 0) return text;
-    return `${label}${typeof part === "number" ? " " : " / "}${text}`;
-  }, "");
-}
-
 function EventFacts({
   api,
   runId,
@@ -251,7 +242,7 @@ export function MachineVisitTimeline({
     <section aria-label="Machine visits" className="shrink-0 border-t border-run-list-line">
       <div className="flex h-7 items-center justify-between pl-[16px] pr-[30px] font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase">
         <span>Visits</span>
-        <span>{machineKeyLabel(instance.key)}</span>
+        <span>{runKeyLabel(instance.key)}</span>
       </div>
       <div className={`overflow-auto overscroll-contain ${expanded ? "max-h-80" : "max-h-40"}`}>
         <button
@@ -424,6 +415,7 @@ export function MachineRunActions({
 export function MachineSendPanel({
   api,
   runId,
+  workflow,
   spec: catalogSpec,
   instance,
   onClose,
@@ -431,6 +423,8 @@ export function MachineSendPanel({
 }: {
   api: OperatorApi;
   runId: string;
+  /** The machine's catalog entry; payload files stage against it like run input files. */
+  workflow: FlowInfoMsg;
   spec: MachineSpec;
   instance: MachineInstance | undefined;
   onClose: () => void;
@@ -465,9 +459,7 @@ export function MachineSendPanel({
           <span className="eyebrow block font-mono text-[9px] tracking-[.16em] text-acid uppercase">
             Send event · Run <span className="normal-case">{runId}</span>
           </span>
-          <h2 className="m-0 mt-1 text-lg">
-            {instance ? machineKeyLabel(instance.key) : runId}
-          </h2>
+          <h2 className="m-0 mt-1 text-lg">{instance ? runKeyLabel(instance.key) : runId}</h2>
         </div>
         <button
           type="button"
@@ -498,12 +490,18 @@ export function MachineSendPanel({
               Accepts now: {instance?.accepts.join(", ") || "nothing"}. Other events may be
               deferred or ignored by the host.
             </p>
-            <MachinePayloadForm
+            <SendEventForm
               key={`${chosen}:${JSON.stringify(events.get(chosen)!.payload_schema)}`}
+              api={api}
+              workflow={workflow}
+              event={chosen}
               schema={events.get(chosen)!.payload_schema}
-              label="Send event"
-              onSubmit={async (payload) => {
-                const signature = JSON.stringify([chosen, payload]);
+              onSend={async (payload, inputFiles) => {
+                const signature = JSON.stringify([
+                  chosen,
+                  payload,
+                  (inputFiles ?? []).map((file) => [file.fieldName, file.name, file.sha256]),
+                ]);
                 if (idempotency.current?.signature !== signature)
                   idempotency.current = {
                     signature,
@@ -517,6 +515,7 @@ export function MachineSendPanel({
                   chosen,
                   payload,
                   idempotency.current.key,
+                  inputFiles,
                 );
                 if (!scope.current) return;
                 setReceipt(result);
@@ -541,6 +540,81 @@ export function MachineSendPanel({
         )}
       </div>
     </aside>
+  );
+}
+
+/**
+ * One event's payload form: the run input form's fields over a payload draft, so
+ * File fields pick and upload exactly like run inputs. The host validates the
+ * complete payload schema.
+ */
+function SendEventForm({
+  api,
+  workflow,
+  event,
+  schema,
+  onSend,
+}: {
+  api: OperatorApi;
+  workflow: FlowInfoMsg;
+  event: string;
+  schema: JsonSchema | null;
+  onSend: (payload: JsonValue, inputFiles?: InputFileAttachment[]) => Promise<void>;
+}) {
+  const draft = useInputDraft(workflow, api, event);
+  const fields = useMemo(
+    () =>
+      schema
+        ? workflowInputFields({ typeName: event, jsonSchema: schema, consumerNodeIds: [] })
+        : [],
+    [event, schema],
+  );
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  async function submit(formEvent: FormEvent) {
+    formEvent.preventDefault();
+    setError(undefined);
+    const invalid = Object.keys(draft.pending);
+    if (invalid.length > 0) {
+      setError(`Fix the payload before sending: ${invalid.join(", ")} is not valid JSON`);
+      return;
+    }
+    let payload: JsonValue = null;
+    let inputFiles: InputFileAttachment[] | undefined;
+    try {
+      if (schema !== null) {
+        let values = parseRunInput(draft.text);
+        if (Object.keys(draft.files).length > 0)
+          ({ input: values, inputFiles } = applyInputFiles(values, draft.files));
+        payload = parseJsonValue(values, "payload");
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The payload is not valid.");
+      return;
+    }
+    setBusy(true);
+    try {
+      await onSend(payload, inputFiles);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "The request failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form className="grid gap-3" onSubmit={(e) => void submit(e)} aria-label="Send event">
+      <fieldset disabled={busy} className="m-0 grid min-w-0 gap-3 border-0 p-0">
+        {fields.length > 0 && <InputFieldList fields={fields} draft={draft} />}
+        <button className={machineButton} type="submit">
+          {busy ? "Sending…" : "Send event"}
+        </button>
+      </fieldset>
+      {error && (
+        <p role="alert" className="m-0 text-xs text-danger [overflow-wrap:anywhere]">
+          {error}
+        </p>
+      )}
+    </form>
   );
 }
 
@@ -662,17 +736,26 @@ export function MachineVisitWaits({
           </>
         )}
       </dl>
-      {api.listRunWaits && (
-        <RunWaitPanel
-          key={`${runId}:${visit.visit}`}
-          api={api}
-          runId={runId}
-          visit={visit.visit}
-          readOnly={!enabled || !current}
-          live={current}
-        />
+      {visit.disposition === "expired" ? (
+        <p className="m-0 text-secondary" data-run-history="expired">
+          This visit&apos;s waits, event facts and steps expired under the run&apos;s retention
+          policy.
+        </p>
+      ) : (
+        <>
+          {api.listRunWaits && (
+            <RunWaitPanel
+              key={`${runId}:${visit.visit}`}
+              api={api}
+              runId={runId}
+              visit={visit.visit}
+              readOnly={!enabled || !current}
+              live={current}
+            />
+          )}
+          <EventFacts api={api} runId={runId} visit={visit.visit} live={current} />
+        </>
       )}
-      <EventFacts api={api} runId={runId} visit={visit.visit} live={current} />
     </section>
   );
 }

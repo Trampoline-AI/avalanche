@@ -465,7 +465,8 @@ export function RunListPanel({
                         aria-pressed={selectedRunId === summary.runId}
                         style={rowStyle}
                         title={summary.runId}
-                        aria-label={`${summary.label ? `${summary.label}, ` : ""}${summary.runId}, ${summary.status}, ${runDuration(elapsedSeconds)}, ${
+                        data-run-history={summary.expired ? "expired" : undefined}
+                        aria-label={`${summary.label ? `${summary.label}, ` : ""}${summary.runId}, ${summary.status}${summary.expired ? ", expired" : ""}, ${runDuration(elapsedSeconds)}, ${
                           TRIGGER_LABELS[summary.triggeredBy]
                         } trigger, ${
                           triggeredAt
@@ -476,6 +477,10 @@ export function RunListPanel({
                         <span className="min-w-0 truncate font-mono text-secondary">
                           {summary.label && (
                             <span className="text-ink">{summary.label} · </span>
+                          )}
+                          {/* Beside the label, so truncation never hides it. */}
+                          {summary.expired && (
+                            <span className="run-expired text-amber">expired · </span>
                           )}
                           <time
                             className="run-triggered-at"

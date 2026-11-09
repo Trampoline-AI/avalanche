@@ -407,6 +407,12 @@ export function WorkflowWorkspaceSurface({
       : undefined;
   // A selected visit's steps are shown exactly like a flow run's.
   const visitRun = visit?.snapshot;
+  // Retention removed this visit's steps; say so instead of drawing another graph.
+  const visitExpired = visit?.disposition === "expired";
+  // The key-to-run link outlives history: the run stays, its history reads `expired`.
+  const runExpired =
+    run?.summary?.expired === true ||
+    (selectedRunId !== undefined && state.runs[selectedRunId]?.expired === true);
   const [sendFor, setSendFor] = useState<string>();
   const sendOpen = machineRunId !== undefined && sendFor === machineRunId;
   const openSend = useCallback(() => {
@@ -603,13 +609,21 @@ export function WorkflowWorkspaceSurface({
                   className={`run-graph-shell relative min-w-0 flex-1 overflow-hidden ${machineRunId ? "min-h-[300px]" : "min-h-0"}`}
                 >
                   <GraphCanvas
-                    machine={visitRun ? undefined : machineView}
+                    machine={visitRun || visitExpired ? undefined : machineView}
                     workflow={!run || previewWorkflow ? workflow : undefined}
                     runTopology={
-                      visitRun ? visitRun.topology : previewWorkflow ? undefined : run?.topology
+                      visitRun
+                        ? visitRun.topology
+                        : previewWorkflow || visitExpired
+                          ? undefined
+                          : run?.topology
                     }
                     runNodes={
-                      visitRun ? visitRun.nodes : requestingRun ? undefined : run?.nodes
+                      visitRun
+                        ? visitRun.nodes
+                        : requestingRun || visitExpired
+                          ? undefined
+                          : run?.nodes
                     }
                     expansions={visitRun ? visitRun.expansions : run?.expansions}
                     runTriggeredBy={previewWorkflow ? undefined : run?.summary?.triggeredBy}
@@ -638,6 +652,7 @@ export function WorkflowWorkspaceSurface({
                       <span className="text-ink">
                         Visit {selectedVisit}
                         {visit ? ` · ${visit.state}` : ""}
+                        {visitExpired ? " · expired" : ""}
                       </span>
                       {!visit && <span role="status">Loading visit…</span>}
                     </nav>
@@ -681,6 +696,17 @@ export function WorkflowWorkspaceSurface({
                       <span className="mt-1 block">
                         Preparing execution. Nodes will become available when ready.
                       </span>
+                    </div>
+                  ) : run && (runExpired || visitExpired) ? (
+                    <div
+                      role="status"
+                      data-run-history="expired"
+                      className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[280px] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase"
+                    >
+                      <span>expired</span>
+                      {visitExpired && !runExpired ? "This visit's" : "This run's"} history and
+                      artifacts expired under the run&apos;s retention policy. The run and its
+                      label remain.
                     </div>
                   ) : run ? (
                     <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
@@ -793,6 +819,7 @@ export function WorkflowWorkspaceSurface({
                   key={machineRunId}
                   api={api}
                   runId={machineRunId}
+                  workflow={workflow!}
                   spec={machineSpec!}
                   instance={machineInstance}
                   onClose={() => setSendFor(undefined)}

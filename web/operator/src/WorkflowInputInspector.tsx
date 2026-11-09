@@ -176,7 +176,7 @@ export function WorkflowInputInspector({
                 <section aria-label="Input fields" className="min-w-0">
                   <h3 className="inspector-section-title">Fields</h3>
                   {inputDraft && !run ? (
-                    <EditableFieldList fields={inspected.fields} draft={inputDraft} />
+                    <InputFieldList fields={inspected.fields} draft={inputDraft} />
                   ) : (
                     <FieldList fields={inspected.fields} />
                   )}
@@ -194,7 +194,11 @@ export function WorkflowInputInspector({
   );
 }
 
-function EditableFieldList({
+/**
+ * The run input form's editable fields over an input draft. The machine send form
+ * reuses it for event payloads, so File fields upload the same way.
+ */
+export function InputFieldList({
   fields,
   draft,
 }: {

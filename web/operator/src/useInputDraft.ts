@@ -43,17 +43,24 @@ export interface InputDraft {
 /**
  * One input draft for a workflow, shared by the run controls and the input panel. It starts from the input the schedule already uses or the
  * declared defaults, and follows those as they change elsewhere until it is edited.
+ *
+ * With `event`, the draft is a machine send payload for that event instead: it
+ * starts empty and stages its files for the event's payload fields, through the
+ * same upload path as run input files.
  */
 export function useInputDraft(
   workflow: FlowInfoMsg | undefined,
   api?: Pick<OperatorApi, "stageInputFile">,
+  event?: string,
 ): InputDraft {
-  const seed = inputDraftSeed(workflow);
+  const seed = event === undefined ? inputDraftSeed(workflow) : "{}";
   const [text, setText] = useState(seed);
   const [pending, setPending] = useState<Record<string, string>>({});
   const [files, setFiles] = useState<Record<string, FieldFiles>>({});
   const workflowId = workflow?.workflowId;
-  const draftWorkflow = useRef(workflowId);
+  // A different workflow or event is a different draft.
+  const draftScope = workflowId === undefined ? undefined : `${workflowId}\0${event ?? ""}`;
+  const draftWorkflow = useRef(draftScope);
   const seededDraft = useRef(seed);
   // The latest pick per field; an older upload that finishes later is dropped.
   const picks = useRef<Record<string, number>>({});
@@ -62,8 +69,8 @@ export function useInputDraft(
     const previousSeed = seededDraft.current;
     seededDraft.current = seed;
     // A replaced draft drops text typed and files picked against the old one.
-    if (draftWorkflow.current !== workflowId) {
-      draftWorkflow.current = workflowId;
+    if (draftWorkflow.current !== draftScope) {
+      draftWorkflow.current = draftScope;
       picks.current = {};
       setText(seed);
       setPending({});
@@ -74,7 +81,7 @@ export function useInputDraft(
       setText(seed);
       setPending({});
     }
-  }, [seed, text, files, workflowId]);
+  }, [seed, text, files, draftScope]);
 
   const pickFiles = useMemo(() => {
     if (!api?.stageInputFile || workflowId === undefined) return undefined;
@@ -89,7 +96,13 @@ export function useInputDraft(
       };
       settle({ status: "staging", kind, names });
       Promise.all(
-        picked.map((file) => stageInputFile(file, { workflow: workflowId, field })),
+        picked.map((file) =>
+          stageInputFile(file, {
+            workflow: workflowId,
+            field,
+            ...(event === undefined ? {} : { event }),
+          }),
+        ),
       ).then(
         (staged) => settle({ status: "staged", kind, files: staged }),
         (reason: unknown) =>
@@ -101,7 +114,7 @@ export function useInputDraft(
           }),
       );
     };
-  }, [api, workflowId]);
+  }, [api, workflowId, event]);
 
   const clearFiles = useCallback((field: string) => {
     delete picks.current[field];

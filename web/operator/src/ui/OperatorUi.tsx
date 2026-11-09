@@ -154,7 +154,12 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
               {selection?.kind === "run" && (
                 <>
                   <i>/</i>
+                  {/* A keyed run (machine or flow) reads by its key label first. */}
+                  {state.runs[selection.runId]?.label && (
+                    <span>{state.runs[selection.runId].label} · </span>
+                  )}
                   <strong>{selection.runId}</strong>
+                  {state.runs[selection.runId]?.expired && <span> · expired</span>}
                 </>
               )}
             </bdi>

@@ -35,11 +35,11 @@ export {
   MachineSendPanel,
   MachineVisitTimeline,
   MachineVisitWaits,
-  machineKeyLabel,
   machineVisits,
   useMachineHistory,
   useMachineInstance,
   useMachineVisit,
 } from "./MachineWorkspace";
 export type { MachineHistory } from "./MachineWorkspace";
+export { runKeyLabel } from "./runKey";
 export type { MachineGraphView } from "./machineGraph";

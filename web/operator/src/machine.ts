@@ -71,13 +71,15 @@ export interface MachineVisitNode {
 export interface MachineVisit {
   /** Host-provided bounded snapshot: this run ID, only this visit's qualified
    * nodes/topology/expansions, retained I/O/trace tokens, scoped log token and seal.
-   * Never synthesize it from the status-only nodes below. */
-  snapshot: RunSnapshotMsg;
+   * Never synthesize it from the status-only nodes below. Absent only when the
+   * visit's history expired (`disposition: "expired"`). */
+  snapshot?: RunSnapshotMsg;
   visit: number;
   state: string;
   entered_at: number | null;
   left_at: number | null;
-  disposition: "current" | "retained" | "archived" | "indeterminate";
+  /** `expired`: the run's retention policy removed this visit's history and artifacts. */
+  disposition: "current" | "retained" | "archived" | "indeterminate" | "expired";
   transition: MachineTransition | null;
   nodes: Record<string, MachineVisitNode>;
   /** Local operator extension: catalog revision that actually executed this visit. */

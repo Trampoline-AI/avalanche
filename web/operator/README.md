@@ -306,8 +306,9 @@ timeline, graph canvas, side inspector, log pane and run controls. A catalog flo
 can supply `machineSpec: MachineSpec`, the parsed discovery `machine_spec_json`
 (`avalanche.machine/v1`). Instances are ordinary rows in the run timeline,
 labelled by `RunSummaryMsg.label`; hosts derive it from the key with
-`machineKeyLabel` (`["acme/api", 44]` reads `acme/api #44`). Ordinary workflows
-are unchanged.
+`runKeyLabel` (`["acme/api", 44]` reads `acme/api #44`). Keyed flow runs
+(`@ava.workflow(key=...)`) use the same label, in the same places (timeline row
+and breadcrumb). Ordinary workflows are otherwise unchanged.
 
 Machine-only elements extend the nearest run component; there is no machine
 page, instance table or extra panel type:
@@ -325,6 +326,8 @@ page, instance table or extra panel type:
 | A visit's clocks, waits, decisions, audits, event facts | The run waits panel                                                      |
 | Close a waiting run                                     | The normal Cancel run (`cancelRun`)                                      |
 | Start                                                   | The normal run input form and Run (`startRun`, files and workspaces)     |
+| Send payload fields, File and Workspace included        | The run input form's fields (`InputFieldList`) and upload path           |
+| Expired history                                         | The run row and run page read `expired`; the key label stays             |
 
 Clicking a state on the graph opens its latest visit; "State machine" in the
 timeline section or the canvas breadcrumb returns to the state graph. The host
@@ -332,19 +335,21 @@ supplies `MachineVisit.snapshot`, a run snapshot scoped to that visit (qualified
 node IDs, retained I/O, trace and log tokens); the UI never synthesizes step
 detail. The pieces are exported for hosts composing the page (`MachineRunActions`,
 `MachineSendPanel`, `MachineRunWaits`, `MachineVisitWaits`, `MachineVisitTimeline`,
-the `useMachine*` hooks and `machineKeyLabel`).
+the `useMachine*` hooks and `runKeyLabel`).
 
 All machine methods on `OperatorApi` are optional:
 
 - Reads: `getMachineInstance(runId, signal?)`, `getMachineHistory(runId, page?, signal?)`,
   `getMachineVisit(runId, visit, signal?)`, and
   `getMachineVisitEvents(runId, visit, page?, signal?)`.
-- Machine-only writes: `sendMachineEvent(runId, event, payload, idempotencyKey)`,
+- Machine-only writes: `sendMachineEvent(runId, event, payload, idempotencyKey, inputFiles?)`,
   `retryMachineVisit(runId)` (interrupted visits) and `fireNextMachineTimer(runId)`
   (development hosts only).
 - `listRunWaits(runId, visit?)` takes an optional visit, filtered by the host.
 
-There is no machine start, list or close method. The exported types in
+There is no machine start, list, close or rerun method, and the run page has no
+rerun control for machine runs: retrying an interrupted visit makes a new visit
+in the same run, and a replay is a new key. Cancel is the normal run cancel. The exported types in
 `src/machine.ts` follow the public machine JSON field names (`run_id`,
 `next_cursor`, `entered_at`, etc.). A deployment-based host supplies
 `MachineInstance.machine_spec` with the pinned definition; a local host may omit
@@ -352,11 +357,23 @@ it to use the catalog definition. `catalog_revision`, `pending_events` and
 `receipts` are optional local-operator extensions; missing data is shown as not
 reported, never as an empty inbox.
 
-Send forms use each transition's payload JSON schema: typed primitive and enum
-controls, JSON editors for compound values. Payloads are JSON only; file or
-workspace payloads are not supported yet. The host validates the full schema. A
-failed send keeps its idempotency key when retried with the same event and
-payload. Missing write methods hide their controls, so read-only hosts issue no
+The send form is the run input form over each transition's payload schema
+(`InputFieldList` with a payload draft): the same text fields, and the same file
+picker for `ava.File` / `list[ava.File]` fields. Picked files upload right away
+through `stageInputFile({ workflow, field, event })`, the run input upload path
+with the event named, and are passed to `sendMachineEvent` as `inputFiles`
+exactly as `startRun` receives them; the host binds them before it returns the
+accepted receipt. Workspace fields take the same reference value as run inputs.
+A host that cannot stage payload files rejects the pick with an explicit error
+(`GrpcWebOperatorApi` does until its protocol names the event). The host
+validates the full schema. A failed send keeps its idempotency key when retried
+with the same event, payload and files.
+
+Retention: a run whose history and artifacts expired keeps its run, status and
+label; the host sets `RunSummaryMsg.expired` and returns a snapshot without
+topology or nodes. The timeline row and run page read `expired`. An expired
+machine visit has `disposition: "expired"` and no `snapshot`; its waits, facts
+and steps are not read. The state graph (the definition) still draws. Missing write methods hide their controls, so read-only hosts issue no
 mutation; `runActionsEnabled={false}` or `bottomRightPanel={null}` also hide them.
 
 This phase does **not** add machine support to `GrpcWebOperatorApi`, protobuf,
