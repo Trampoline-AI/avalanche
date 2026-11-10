@@ -364,8 +364,8 @@ export function WorkflowWorkspaceSurface({
     return () => animation.cancel();
   }, [timelineExpanded]);
 
-  // The collapsed timeline floats over the canvas's left edge; the machine graph is
-  // fitted clear of its width (expanded, it is a column beside the canvas).
+  // The collapsed timeline floats over the canvas's left edge; every graph (flow or
+  // machine) is fitted clear of its width (expanded, it is a column beside the canvas).
   const [timelineReserve, setTimelineReserve] = useState<CanvasReserve>();
   // The floating timeline stops above the canvas controls (bottom left) and scrolls.
   const [graphShell, setGraphShell] = useState<HTMLDivElement | null>(null);
@@ -773,7 +773,7 @@ export function WorkflowWorkspaceSurface({
                     bottomRightPanel={
                       bottomRightPanel === undefined ? runControlsPanel : bottomRightPanel
                     }
-                    reserve={machineSpec ? timelineReserve : undefined}
+                    reserve={timelineReserve}
                   />
                   {evaluationState.error && (
                     <p

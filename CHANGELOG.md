@@ -150,7 +150,9 @@
   `runStatusLive` and `LOCAL_LIVE_RUN_STATUSES` are exported. The floating
   timeline's height limit and the graph's fit reserve now attach whenever the
   timeline mounts, including after a host's `loadingFallback`, so the timeline
-  no longer covers state cards or the canvas controls there. Long receipt IDs
+  no longer covers state cards or the canvas controls there. Flow-run graphs
+  get the same reserve as machine graphs, so the floating timeline no longer
+  covers flow step cards on narrow windows. Long receipt IDs
   wrap in the send panel and the run waits instead of widening the side panel.
   Machine reads (instance, history, current visit, its event facts) re-read on
   each run revision from the update stream instead of polling every second;
