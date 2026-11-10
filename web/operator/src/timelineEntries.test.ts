@@ -98,7 +98,8 @@ function visitRecord(visit: number, stateName: string, entered: number, left: nu
       nodes: [
         NodeSnapshotMsg.create({
           nodeId: `v${visit}.work`,
-          name: "work",
+          // Some hosts keep the visit prefix in the step's name.
+          name: visit === 2 ? "v2.work" : "work",
           status: "success",
           startedAt: 500 + visit * 10,
           endedAt: 500 + visit * 10 + 1,
@@ -278,6 +279,10 @@ describe("machine run timeline", () => {
       to: "amend",
       event: "review_done_with_nits",
     });
+    // Inside a visit a step is named without the visit prefix.
+    expect(entries.find((entry) => entry.id === "v2:step:v2.work:start")!.title).toBe(
+      "Step work started",
+    );
     // Retries are named on the step.
     expect(entries.find((entry) => entry.id === "v1:step:v1.work:end")!.detail).toBe(
       "after 2 attempts",

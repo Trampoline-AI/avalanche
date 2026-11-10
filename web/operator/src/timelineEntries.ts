@@ -111,12 +111,11 @@ export function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry
   return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
 }
 
+/** A step's name inside its visit: without the `v<visit>.` prefix the visit already says. */
 function stepName(node: Pick<NodeSnapshotMsg, "name" | "nodeId">, visit?: number) {
-  if (node.name) return node.name;
+  const name = node.name || node.nodeId;
   const prefix = visit === undefined ? "" : `v${visit}.`;
-  return prefix && node.nodeId.startsWith(prefix)
-    ? node.nodeId.slice(prefix.length)
-    : node.nodeId;
+  return prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name;
 }
 
 const STEP_DONE: Record<string, { word: string; tone: TimelineTone }> = {
