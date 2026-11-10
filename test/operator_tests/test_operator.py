@@ -304,6 +304,8 @@ def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path)
             time.sleep(0.03)
         else:
             pytest.fail("initial machine visit did not park")
+        initial_logs = op.list_logs(run_id, node_id="v1.observe_1").logs
+        assert initial_logs and all(op.read_detail(log.body_token) for log in initial_logs)
         receipt = op._machine_host.send(run_id, "approved", {}, "approval-1")
         replay = op._machine_host.send(run_id, "approved", {}, "approval-1")
         assert receipt.status == "accepted"
@@ -330,6 +332,23 @@ def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path)
             "v2.mapped_1[1]",
         }
         assert len(op.list_runs("approval")) == 1
+        # Earlier visit logs remain readable after event and timer transitions. The same
+        # log API and exact step filter apply to ordinary flows, with nonempty bodies.
+        assert {log.node_id for log in op.list_logs(run_id).logs} >= {
+            "v1.observe_1", "v2.observe_1", "v3.observe_1"
+        }
+        reread_logs = op.list_logs(run_id, node_id="v1.observe_1").logs
+        assert [op.read_detail(log.body_token) for log in reread_logs] == [
+            op.read_detail(log.body_token) for log in initial_logs
+        ]
+        for node_id in ("v1.observe_1", "v2.observe_1", "v3.observe_1"):
+            logs = op.list_logs(run_id, node_id=node_id).logs
+            assert logs and all(log.node_id == node_id for log in logs)
+            assert all(op.read_detail(log.body_token) for log in logs)
+        flow = op.start_run("ordinary_child", input={"ticket": 11, "journal": str(journal)})
+        assert wait_terminal(op, flow).status is RunStatus.SUCCESS
+        flow_logs = op.list_logs(flow, node_id="observe_1").logs
+        assert flow_logs and all(op.read_detail(log.body_token) for log in flow_logs)
         # The same run-owned controls cross gRPC, REST and installed CLI boundaries.
         import http.client
         import socket

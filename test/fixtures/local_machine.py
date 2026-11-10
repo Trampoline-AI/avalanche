@@ -1,5 +1,6 @@
 """Real local machine fixture: external event, mapped visit work and UTC timer."""
 
+import logging
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -15,6 +16,7 @@ class Ticket(ava.BaseInput):
 
 @ava.step
 def observe(ticket: Ticket, context: ava.RunContext) -> str:
+    logging.getLogger(__name__).warning("Observing ticket %s", ticket.ticket)
     with Path(ticket.journal).open("a") as output:
         output.write(context.step_key + "\n")
     while ticket.pause and not Path(ticket.journal + ".release").exists():
