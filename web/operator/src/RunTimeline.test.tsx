@@ -309,7 +309,10 @@ describe("run timeline in the bottom pane", () => {
     // What the run waits for now stays pinned on top.
     const pending = within(timeline).getByRole("list", { name: "Pending" });
     expect(within(pending).getByText("Timer → closed")).toBeInTheDocument();
-    expect(pending.querySelector("[data-timer-remaining]")).not.toBeNull();
+    // The countdown reads in its two largest units, as on the timer arc.
+    expect(pending.querySelector("[data-timer-remaining]")!.textContent).toMatch(
+      /^\d+(d \d+h|h \d+m|m \d+s|s) left$/,
+    );
     expect(within(pending).getByText("Waiting for event")).toBeInTheDocument();
   });
 

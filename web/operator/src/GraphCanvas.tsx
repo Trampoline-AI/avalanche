@@ -48,7 +48,7 @@ import {
 } from "@xyflow/react";
 
 import {
-  formatDelay,
+  formatRemaining,
   layoutMachine,
   machineArcHandles,
   machineArcPath,
@@ -721,7 +721,7 @@ function TimerRemaining({ due }: { due: number }) {
   return (
     <span className="machine-arc-countdown text-amber" data-arc-remaining={remaining}>
       {" "}
-      · {remaining > 0 ? `${formatDelay(remaining)} left` : "due"}
+      · {remaining > 0 ? `${formatRemaining(remaining)} left` : "due"}
     </span>
   );
 }

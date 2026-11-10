@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { formatElapsedSeconds } from "./elapsedDuration";
-import { formatDelay } from "./machineGraph";
+import { formatRemaining } from "./machineGraph";
 import type { PendingItem, TimelineEntry, TimelineTone } from "./timelineEntries";
 
 /** What a hovered or selected row points at on the graph. */
@@ -32,7 +32,7 @@ function Countdown({ due }: { due: number }) {
   const remaining = Math.max(0, Math.ceil(due - now));
   return (
     <span className="text-amber" data-timer-remaining={remaining}>
-      {remaining > 0 ? `${formatDelay(remaining)} left` : "due, awaiting the host"}
+      {remaining > 0 ? `${formatRemaining(remaining)} left` : "due, awaiting the host"}
     </span>
   );
 }

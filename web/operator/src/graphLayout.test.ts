@@ -9,7 +9,7 @@ import {
 } from "./graphLayout";
 import type { GraphOrientation } from "./useGraphOrientation";
 import { DEFAULT_NODE_SIZE } from "./graphLayout";
-import { layoutMachine, routeMachineArcs, type Box } from "./machineGraph";
+import { formatRemaining, layoutMachine, routeMachineArcs, type Box } from "./machineGraph";
 import type { MachineSpec, MachineState } from "./machine";
 import type { WorkflowTopologyMsg } from "./model";
 
@@ -861,5 +861,16 @@ describe("routeMachineArcs", () => {
       const ends = intoClosed.map((link) => routes[link.id].path.split(" ").at(-1));
       expect(new Set(ends).size).toBe(3);
     }
+  });
+});
+
+describe("countdown text", () => {
+  it("reads in the two largest units, shared by the timer arc and the timeline", () => {
+    expect(formatRemaining(45)).toBe("45s");
+    expect(formatRemaining(60)).toBe("1m 0s");
+    expect(formatRemaining(566)).toBe("9m 26s");
+    expect(formatRemaining(3_600 + 5 * 60 + 9)).toBe("1h 5m");
+    expect(formatRemaining(2 * 86_400 + 3 * 3_600)).toBe("2d 3h");
+    expect(formatRemaining(0.2)).toBe("1s");
   });
 });

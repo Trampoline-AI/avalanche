@@ -179,6 +179,22 @@ export function formatDelay(seconds: number): string {
   return `${seconds}s`;
 }
 
+/**
+ * Time left on a running countdown, in its two largest units ("9m 26s", "2h 5m",
+ * "1d 3h"), the same on the timer arc and the timeline's pending row.
+ */
+export function formatRemaining(seconds: number): string {
+  const total = Math.max(0, Math.ceil(seconds));
+  const days = Math.floor(total / 86_400);
+  const hours = Math.floor((total % 86_400) / 3_600);
+  const minutes = Math.floor((total % 3_600) / 60);
+  const rest = total % 60;
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  if (minutes > 0) return `${minutes}m ${rest}s`;
+  return `${rest}s`;
+}
+
 type Point = { x: number; y: number };
 
 /** A state card's bounding box in flow coordinates. */
