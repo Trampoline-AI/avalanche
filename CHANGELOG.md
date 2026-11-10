@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- **Operator UI: run Timeline tab.** The bottom pane of every run page has two
+  tabs, Logs and Timeline. Timeline is one time-ordered list of the run's
+  events: visits entered and left, steps (with retries), events accepted,
+  deferred, ignored, dropped or delivered with their send receipts, timers
+  armed, fired or cancelled, waits, cancel and outcome; flow runs list their
+  steps, waits and outcome in the same tab. Hovering an entry highlights its
+  state and arc (or step) on the graph; picking a state or step on the graph
+  filters the list. Pending timers, deferred events and open waits (with the
+  decision form) stay pinned on top. The Visits and Waits sections of the
+  runs pane are gone, and so are the exported `MachineRunWaits`,
+  `MachineVisitWaits` and `MachineVisitTimeline` (use `RunTimeline`). Waits are
+  read on run changes instead of a fixed 1.5 s poll.
+- Operator UI: the runs panel is titled **Runs** (was Timeline; its expand and
+  collapse actions read "Expand runs" / "Collapse runs"). Run key labels keep
+  their full width in the list; the date after them truncates instead, and the
+  row tooltip names both. Machine arc labels scale up to stay readable at the
+  fitted zoom. Machine run logs from other visits read "step · visit N" and
+  open that visit's step.
 - **Local operator storage upgrade:** opening an existing `state.db` upgrades it
   one-way to schema v8; older operator versions cannot reopen that database.
   Back up the database before upgrading. Durable writes use SQLite WAL with

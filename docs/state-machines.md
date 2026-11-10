@@ -341,6 +341,23 @@ Delta, where an instance remains pinned to its starting deployment. Application
 environment comes from the operator; see [self-hosting environment files](
 ../README.md#application-environment-for-self-hosters).
 
+### Operator UI
+
+A machine run is a run: `ava operator` opens it on the normal run page. The
+runs panel (titled Runs) lists it by its key label. The bottom pane has two
+tabs, Logs and Timeline. The Timeline lists, in time order: each visit entered
+and left (with the arc it took), the visit's steps, events received (accepted,
+deferred, ignored, dropped, delivered) with their send receipts, timers armed,
+fired or cancelled, waits, a cancel and the outcome. What the run waits for now
+(its timer, deferred events, open waits) stays pinned on top, and Send event
+stays in the run controls.
+
+Hover an entry to light up its state and arc on the graph; click a state on
+the graph to show only its entries. A visit entry's Steps action opens that
+visit's steps; Logs shows its step logs, which the Logs tab also lists for the
+whole run, labelled by visit. Flow runs have the same tab with their steps,
+waits, retries and outcome.
+
 ### Run-owned transport
 
 The browser REST prefix is `/api/v1`. Start/list/show/cancel use the normal run

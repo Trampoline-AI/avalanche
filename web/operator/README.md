@@ -280,14 +280,15 @@ its public `timelineView` / `onTimelineViewChange` value `"runs"` unchanged.
 Only the Status header and status/action column are right-aligned in both lists;
 deployment IDs, created dates and run timestamps stay left-aligned.
 
-The floating timeline's icon-only **Expand timeline** action (also its tooltip and
+The runs panel is titled **Runs** (it was "Timeline"; the run's event timeline
+is now the bottom pane's Timeline tab). The floating panel's icon-only **Expand runs** action (also its tooltip and
 accessible name) expands it into a wider, full-height timeline panel on the left of
 the workspace, independently of node inspection on the right. Above 1000px it
 occupies its own column beside the canvas and logs;
 below that breakpoint it remains an overlay. It paginates the runs supplied by
 the API baseline in 25-run pages, with single-select status count chips and
 inclusive local-date filtering. Run-ID search is available
-under the initially collapsed **Advanced filters** section. **Collapse timeline**
+under the initially collapsed **Advanced filters** section. **Collapse runs**
 or Escape restores the floating timeline and returns focus to its trigger.
 Filters and run selection survive expansion and collapse.
 Expansion and collapse animate the timeline's size and position unless reduced
@@ -318,24 +319,26 @@ page, instance table or extra panel type:
 | State graph                                             | `GraphCanvas` (`machine` mode): same cards, grid, controls, input dot    |
 | Current state                                           | The graph's node card (ring + run status)                                |
 | One arc per trigger, loops, timer arcs                  | The graph's edges (cubic arcs, dotted timers with countdown)             |
-| Visits                                                  | A section of the run timeline under the selected run                     |
+| Visits                                                  | Entries of the run's Timeline tab (bottom pane, beside Logs)             |
 | A visit's steps                                         | The run graph and side inspector (outputs, attempts, trace) and log pane |
 | Send, retry visit, dev timer                            | Run controls, beside Cancel                                              |
 | Send form                                               | The side panel, like the run input form                                  |
-| Pending timer, deferred events, receipts                | The run waits panel                                                      |
-| A visit's clocks, waits, decisions, audits, event facts | The run waits panel                                                      |
+| Pending timer, deferred events, open waits, decisions   | The Timeline tab's pinned Pending rows                                   |
+| Events, receipts, timers, waits, audits, cancel, outcome | Timeline entries, in time order, each naming its state and arc           |
 | Close a waiting run                                     | The normal Cancel run (`cancelRun`)                                      |
 | Start                                                   | The normal run input form and Run (`startRun`, files and workspaces)     |
 | Send payload fields, File and Workspace included        | The run input form's fields (`InputFieldList`) and upload path           |
 | Expired history                                         | The run row and run page read `expired`; the key label stays             |
 
-Clicking a state on the graph opens its latest visit; "State machine" in the
-timeline section or the canvas breadcrumb returns to the state graph. The host
+Clicking a state on the graph filters the Timeline to that state; a visit
+entry's **Steps** action opens that visit's steps on the graph, and "State
+machine" in the Timeline's breadcrumb returns to the state graph. The host
 supplies `MachineVisit.snapshot`, a run snapshot scoped to that visit (qualified
 node IDs, retained I/O, trace and log tokens); the UI never synthesizes step
 detail. The pieces are exported for hosts composing the page (`MachineRunActions`,
-`MachineSendPanel`, `MachineRunWaits`, `MachineVisitWaits`, `MachineVisitTimeline`,
-the `useMachine*` hooks and `runKeyLabel`).
+`MachineSendPanel`, `RunTimeline` and the timeline builders, the `useMachine*` and
+`useRunWaits` hooks and `runKeyLabel`). `MachineRunWaits`, `MachineVisitWaits` and
+`MachineVisitTimeline` were removed with the side-pane sections they drew.
 
 All machine methods on `OperatorApi` are optional:
 
@@ -354,8 +357,41 @@ in the same run, and a replay is a new key. Cancel is the normal run cancel. The
 `next_cursor`, `entered_at`, etc.). A deployment-based host supplies
 `MachineInstance.machine_spec` with the pinned definition; a local host may omit
 it to use the catalog definition. `catalog_revision`, `pending_events` and
-`receipts` are optional local-operator extensions; missing data is shown as not
-reported, never as an empty inbox.
+`receipts` are optional local-operator extensions; when a host omits them (or
+`getMachineVisitEvents`), the Timeline leaves those entries out and shows one
+neutral line ("… aren't listed for this run"), never an empty inbox.
+
+### Run timeline (bottom pane)
+
+The bottom pane has two tabs, **Logs** and **Timeline**, for every run. A
+machine run opens on Timeline and a flow run on Logs until the reader picks a
+tab (kept in the layout storage as `runPaneTab`). The Timeline lists the run's
+events oldest first, newest at the bottom, with what the run waits for now
+pinned on top:
+
+| Run kind | Entries                                                         | Reads (existing `OperatorApi` only)                                        |
+| -------- | --------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| Flow     | run started, step started/finished (attempts), wait opened/resolved, outcome | `getLatestRunSnapshot` (live projection), `listRunWaits`        |
+| Machine  | visit entered/left (with the arc), steps, event accepted/deferred/ignored/dropped/delivered with its receipt, timer armed/fired/cancelled, waits, cancel, outcome | `getMachineInstance`, `getMachineHistory`, `getMachineVisit`, `getMachineVisitEvents`, `listRunWaits` |
+
+Times read as offsets from the run start (`+1m 05s`); a wall-clock time is the
+row's tooltip when the host reports one. Every entry names its state, arc or
+step: hovering it (or selecting it) highlights that state card and transition
+arc on the graph (a flow's step card), and picking a state or step on the graph
+filters the Timeline to its entries. A selected entry offers **Steps** (a
+machine visit) and **Logs** (that visit's step logs). Reads follow the run's
+revision like the other machine reads: a visit the run has left is read once,
+only the live visit re-reads, one read at a time and never on a timer of its
+own. The newest 10 visits are listed first (earlier ones on request) and at
+most 200 rows render at once.
+
+The Logs tab uses the run's ordinary log read: `listLogPage` with the run
+snapshot's `logPageToken` (the machine run's own snapshot covers every visit),
+returning `LogRecordDescriptorMsg` rows whose `nodeId` is the visit-qualified
+step (`v<visit>.<step>`, `.map` items `v<visit>.<step>[i]`). Those rows read
+"step · visit N" and open that visit's step. With a visit open, the pane reads
+that visit's own snapshot token, and an inspected step filters with the exact
+`nodeId`. A host that returns no rows gets the normal empty state.
 
 The send form is the run input form over each transition's payload schema
 (`InputFieldList` with a payload draft): the same text fields, and the same file
