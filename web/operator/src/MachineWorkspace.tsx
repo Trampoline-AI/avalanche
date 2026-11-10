@@ -478,7 +478,14 @@ export function MachineRunActions({
   }
   const actions = [
     api.sendMachineEvent && (
-      <button key="send" type="button" className={runAction} onClick={onSend}>
+      <button
+        key="send"
+        type="button"
+        className={runAction}
+        disabled={instance.accepts.length === 0}
+        title={instance.accepts.length === 0 ? "This run accepts no events now" : undefined}
+        onClick={onSend}
+      >
         Send event
       </button>
     ),
@@ -552,14 +559,34 @@ export function MachineSendPanel({
       scope.current = false;
     };
   }, []);
-  const events = new Map<string, MachineSpec["states"][string]["transitions"][number]>();
+  const declared = new Map<string, MachineSpec["states"][string]["transitions"][number]>();
   for (const state of Object.values(spec.states))
     for (const transition of state.transitions)
-      if (!events.has(transition.event)) events.set(transition.event, transition);
+      if (!declared.has(transition.event)) declared.set(transition.event, transition);
   // Event names may recur with state-specific payload schemas.
   for (const transition of (instance?.state && spec.states[instance.state]?.transitions) || [])
-    events.set(transition.event, transition);
-  const chosen = event && events.has(event) ? event : events.keys().next().value;
+    declared.set(transition.event, transition);
+  // Offer only what the run accepts now, revalidated on every read: after a
+  // transition, a choice the new state does not accept falls back to the first
+  // accepted event, and a run that accepts nothing offers nothing to send.
+  const accepts = instance?.accepts ?? [];
+  const events = new Map(
+    accepts.flatMap((name) => {
+      const transition = declared.get(name);
+      return transition ? [[name, transition] as const] : [];
+    }),
+  );
+  const chosen: string | undefined =
+    event !== undefined && events.has(event) ? event : events.keys().next().value;
+  // The latest accepted events, read when a send starts (a read may land mid-form).
+  const accepted = useRef(accepts);
+  accepted.current = accepts;
+  const acceptsKey = accepts.join("\0");
+  useEffect(() => {
+    setEvent((current) =>
+      current !== undefined && acceptsKey.split("\0").includes(current) ? current : undefined,
+    );
+  }, [acceptsKey]);
   return (
     <aside
       aria-label="Send event"
@@ -582,7 +609,22 @@ export function MachineSendPanel({
         </button>
       </header>
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-auto px-5 py-4 text-xs">
-        {chosen ? (
+        {declared.size === 0 ? (
+          <p className="m-0 text-secondary">This machine declares no events.</p>
+        ) : chosen === undefined ? (
+          <>
+            <p className="m-0 text-secondary">This run accepts no events now.</p>
+            <form
+              className="grid gap-3"
+              aria-label="Send event"
+              onSubmit={(formEvent) => formEvent.preventDefault()}
+            >
+              <button className={machineButton} type="submit" disabled>
+                Send event
+              </button>
+            </form>
+          </>
+        ) : (
           <>
             <label className="grid gap-1 text-secondary">
               Event
@@ -597,10 +639,7 @@ export function MachineSendPanel({
                 ))}
               </select>
             </label>
-            <p className="m-0 text-secondary">
-              Accepts now: {instance?.accepts.join(", ") || "nothing"}. Other events may be
-              deferred or ignored by the host.
-            </p>
+            <p className="m-0 text-secondary">Accepts now: {accepts.join(", ")}.</p>
             <SendEventForm
               key={`${chosen}:${JSON.stringify(events.get(chosen)!.payload_schema)}`}
               api={api}
@@ -608,6 +647,8 @@ export function MachineSendPanel({
               event={chosen}
               schema={events.get(chosen)!.payload_schema}
               onSend={async (payload, inputFiles) => {
+                if (!accepted.current.includes(chosen))
+                  throw new Error(`This run no longer accepts ${chosen}.`);
                 const signature = JSON.stringify([
                   chosen,
                   payload,
@@ -634,20 +675,19 @@ export function MachineSendPanel({
                 onSent();
               }}
             />
-            {receipt && (
-              <p
-                role="status"
-                className="m-0 min-w-0 font-mono text-[11px] [overflow-wrap:anywhere]"
-                data-receipt-status={receipt.status}
-                data-receipt-duplicate={receipt.duplicate}
-              >
-                Receipt {receipt.receipt_id} · {receipt.key} · {receipt.status}
-                {receipt.duplicate ? " · duplicate" : ""}
-              </p>
-            )}
           </>
-        ) : (
-          <p className="m-0 text-secondary">This machine declares no events.</p>
+        )}
+        {/* The last receipt stays after the run moves on (or stops accepting events). */}
+        {receipt && (
+          <p
+            role="status"
+            className="m-0 min-w-0 font-mono text-[11px] [overflow-wrap:anywhere]"
+            data-receipt-status={receipt.status}
+            data-receipt-duplicate={receipt.duplicate}
+          >
+            Receipt {receipt.receipt_id} · {receipt.key} · {receipt.status}
+            {receipt.duplicate ? " · duplicate" : ""}
+          </p>
         )}
       </div>
     </aside>

@@ -164,6 +164,12 @@
   aborts a read). `useMachineInstance` and `useMachineHistory` take
   an optional `{ live, refreshKey }` (`MachineReadRefresh`); without it they
   read once.
+- **operator-ui Send event offers only accepted events:** the machine run's
+  Send event menu lists only the events the run's current state accepts, and it
+  revalidates the choice on every read: after a transition, a choice the new
+  state no longer accepts resets to the first accepted event, so a second click
+  can no longer send a stale event. A run that accepts nothing offers no event
+  and Send is disabled.
 
 ## 0.20.4
 
