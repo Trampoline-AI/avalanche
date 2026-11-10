@@ -523,7 +523,10 @@ def scenario(page, url: str, evidence: Path) -> dict:
     inspector = page.get_by_role("complementary", name="Run inspector")
     expect(inspector.get_by_label("Execution attempts")).to_contain_text("3")
     expect(inspector).to_contain_text("score")
+    # The step's logs are on the run pane's Logs tab, still scoped to the visit.
+    page.get_by_role("tab", name="Logs").click()
     expect(page.get_by_text("visit 2 check finished")).to_be_visible()
+    expect(page.get_by_role("navigation", name="Machine visit")).to_contain_text("Visit 2")
     run_look = {
         "timeline": page.locator(".workspace-timeline").count(),
         "graph": graph.locator(".graph-viewport").count(),
@@ -535,6 +538,7 @@ def scenario(page, url: str, evidence: Path) -> dict:
     page.screenshot(path=str(evidence / "03-visit-step.png"))
     inspector.get_by_role("button", name="Close", exact=True).click()
     # The first, interrupted visit keeps its own graph and paged event facts.
+    run_timeline(page)
     open_visit(page, 1)
     expect(graph.locator(".react-flow__node")).to_have_count(1)
     detail.get_by_role("button", name="More events of visit 1").click()
@@ -683,6 +687,9 @@ def scenario(page, url: str, evidence: Path) -> dict:
     expect(page.get_by_role("button", name=RERUN)).to_have_count(0)
     expect(page.locator(".react-flow__edge-machine")).to_have_count(0)
     expect(graph.locator(".node-card")).to_have_count(3)
+    # The run pane keeps the tab last shown (Timeline): its steps are listed there too.
+    expect(run_timeline(page).locator('[data-timeline-kind="step-started"]').first).to_be_visible()
+    page.get_by_role("tab", name="Logs").click()
     expect(page.get_by_text("fetched document")).to_be_visible()
     graph.get_by_role("button", name="Inspect score", exact=True).click()
     expect(page.get_by_role("complementary", name="Run inspector")).to_contain_text("step")
@@ -733,7 +740,8 @@ def scenario(page, url: str, evidence: Path) -> dict:
     page.screenshot(path=str(evidence / "14-expired-machine-run.png"))
     open_visit(page, 1)
     expect(page.get_by_role("navigation", name="Machine visit")).to_contain_text("expired")
-    expect(badge).to_contain_text("This visit's")
+    # The whole run's history expired, so the badge names the run, not the visit.
+    expect(badge).to_contain_text("This run's")
     expect(page.locator(".run-graph-shell .react-flow__edge-machine")).to_have_count(0)
     page.screenshot(path=str(evidence / "14b-expired-visit.png"))
     page.get_by_test_id("flow-nav").click()

@@ -507,7 +507,19 @@ class FakeOperatorApi implements OperatorApi {
   async listRunWaits(runId: string, visit?: number): Promise<WaitCard[]> {
     record("waits", runId, visit ?? null);
     const item = instances.get(runId);
-    if (!item || visit === undefined || visit < 2) return [];
+    if (!item) return [];
+    // Without a visit, the run's waits of every visit (as the local operator lists them).
+    if (visit === undefined) {
+      const visits = Array.from({ length: item.visit }, (_, index) => index + 1);
+      return (await Promise.all(visits.map((each) => this.visitWaits(item, each)))).flat();
+    }
+    return this.visitWaits(item, visit);
+  }
+  private async visitWaits(
+    item: { visit: number; finished: boolean },
+    visit: number,
+  ): Promise<WaitCard[]> {
+    if (visit < 2) return [];
     const current = visit === item.visit && !item.finished;
     return [
       {
@@ -598,7 +610,8 @@ class FakeOperatorApi implements OperatorApi {
   async getMachineVisitEvents(runId: string, visit: number, request?: MachinePageRequest) {
     record("facts", runId, visit, request?.cursor ?? null);
     // The first archived window is legitimately empty but still advances.
-    if (visit === 1 && request?.cursor === undefined)
+    // (Not once a send recorded facts for the visit: those read on the first page.)
+    if (visit === 1 && request?.cursor === undefined && !facts.has(`${runId}:${visit}`))
       return { items: [], next_cursor: "facts-2" };
     return {
       items: structuredClone(
@@ -817,10 +830,13 @@ class FakeOperatorApi implements OperatorApi {
     };
     receipts.set(idempotencyKey, result);
     item.receipts?.push(result);
+    // The visit's event facts accumulate (a later send never erases an earlier fact).
     const atVisit = item.visit;
+    const visitFacts = facts.get(`${runId}:${atVisit}`) ?? [];
     facts.set(`${runId}:${atVisit}`, [
+      ...visitFacts,
       {
-        tseq: 1,
+        tseq: visitFacts.length + 1,
         at: result.accepted_at,
         status: result.status,
         event,
