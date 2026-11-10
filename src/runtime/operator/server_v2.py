@@ -824,15 +824,33 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             )
         return data
 
-    def _summary_message(self, summary: RunSummary) -> pb.RunSummaryV2:
-        message = run_summary_to_v2(summary)
+    def _summary_messages(self, summaries: tuple[RunSummary, ...]) -> list[pb.RunSummaryV2]:
+        # In-memory admission reserves IDs before its first durable publication.
+        # Read metadata for the entire page in one transaction and omit those IDs
+        # until they have a committed row.
         with self._op._state_store.transaction() as connection:
-            row = connection.execute(
-                "SELECT key, read_state FROM runs WHERE run_id=?", (summary.run_id,)
-            ).fetchone()
-        message.key_json = row["key"] or ""
-        message.read_state = row["read_state"]
-        return message
+            rows = {
+                row["run_id"]: row
+                for row in connection.execute(
+                    "SELECT run_id, key, read_state FROM runs WHERE run_id IN ("
+                    + ",".join("?" for _ in summaries)
+                    + ")",
+                    tuple(summary.run_id for summary in summaries),
+                )
+            }
+        messages = []
+        for summary in summaries:
+            row = rows.get(summary.run_id)
+            if row is None:
+                continue
+            message = run_summary_to_v2(summary)
+            message.key_json = row["key"] or ""
+            message.read_state = row["read_state"]
+            messages.append(message)
+        return messages
+
+    def _summary_message(self, summary: RunSummary) -> pb.RunSummaryV2:
+        return self._summary_messages((summary,))[0]
 
     def _run_snapshot_message(self, snapshot: RunSnapshot, context) -> pb.RunSnapshotV2:
         run_id = snapshot.summary.run_id
@@ -1236,7 +1254,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         cursor = self._cursor(page.as_of_sequence)
         message = pb.RunSummaryPageV2(
             cursor=cursor,
-            runs=[self._summary_message(item) for item in page.runs],
+            runs=self._summary_messages(page.runs),
             scope_ref=self._scope(),
         )
         next_page = self._continuation(

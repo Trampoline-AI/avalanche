@@ -217,6 +217,67 @@ def events():
         op.close()
 
 
+def test_list_runs_during_machine_admission_reads_only_committed_rows(tmp_path, monkeypatch):
+    import socket
+
+    import grpc
+
+    from runtime.operator.proto import operator_pb2 as pb
+    from runtime.operator.proto import operator_pb2_grpc as pb_grpc
+    from runtime.operator.server import serve
+
+    fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
+    op = Operator(
+        [str(fixture)],
+        watch=False,
+        schedule=False,
+        webhook_port=0,
+        state_db=tmp_path / "state.db",
+    )
+    reserved, release = threading.Event(), threading.Event()
+    original_commit = op._machine_host._commit
+
+    def gate_first_commit(record, mutate, status, **kwargs):
+        if not reserved.is_set():
+            reserved.set()
+            assert release.wait(20), "admission gate was not released"
+        return original_commit(record, mutate, status, **kwargs)
+
+    monkeypatch.setattr(op._machine_host, "_commit", gate_first_commit)
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+    server = serve(op, port=port, block=False)
+    try:
+        with (
+            grpc.insecure_channel(f"127.0.0.1:{port}") as channel,
+            ThreadPoolExecutor(max_workers=1) as callers,
+        ):
+            stub = pb_grpc.OperatorServiceV2Stub(channel)
+            starting = callers.submit(
+                stub.StartRun,
+                pb.StartRunRequestV2(
+                    run_id="in-flight-machine",
+                    workflow_selector="approval",
+                    input_json=json.dumps({"ticket": 21, "journal": str(tmp_path / "visits")}),
+                ),
+                timeout=30,
+            )
+            try:
+                assert reserved.wait(10)
+                page = stub.ListRunSummaries(pb.ListRunSummariesRequestV2(), timeout=5)
+                assert not page.runs
+            finally:
+                release.set()
+            run_id = starting.result(timeout=30).run_id
+            page = stub.ListRunSummaries(pb.ListRunSummariesRequestV2(), timeout=5)
+            assert [run.run_id for run in page.runs] == [run_id]
+    finally:
+        release.set()
+        server.stop(grace=0).wait()
+        op.close()
+
+
 def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path):
     """A real coordinator per visit, one durable run, stable event admission."""
     from runtime.operator.state.machines import MachinesTable
