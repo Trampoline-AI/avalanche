@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
 import type { OperatorApi } from "./api";
 import type {
   MachineEventReceipt,
@@ -220,6 +228,21 @@ export function machineVisits(
  * The visits of the selected machine run, as a section of the run timeline. The
  * first row returns to the state graph; each visit row opens that visit's steps.
  */
+/** A state name that may wrap after its underscores (and anywhere, as a last resort). */
+function wrappable(name: string) {
+  const parts = name.split("_");
+  return parts.map((part, index) => (
+    <Fragment key={index}>
+      {part}
+      {index < parts.length - 1 && (
+        <>
+          _<wbr />
+        </>
+      )}
+    </Fragment>
+  ));
+}
+
 export function MachineVisitTimeline({
   instance,
   history,
@@ -235,7 +258,8 @@ export function MachineVisitTimeline({
 }) {
   if (!instance) return null;
   const visits = machineVisits(instance, history.value);
-  const row = `machine-visit-row flex w-full cursor-pointer items-center justify-between gap-3 border-0 border-b border-run-list-line text-left font-mono leading-none ${expanded ? "h-[34px] pl-[28px] pr-[30px] text-[11px]" : "h-[27.5px] pl-[28px] pr-[30px] text-[10px]"}`;
+  // Rows grow to fit: state names and transitions wrap rather than truncate.
+  const row = `machine-visit-row flex w-full cursor-pointer items-start justify-between gap-3 border-0 border-b border-run-list-line text-left font-mono leading-[1.35] ${expanded ? "min-h-[34px] py-[9px] pl-[28px] pr-[30px] text-[11px]" : "min-h-[27.5px] py-[7px] pl-[28px] pr-[30px] text-[10px]"}`;
   const active =
     "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover";
   return (
@@ -251,9 +275,12 @@ export function MachineVisitTimeline({
           className={`${row} ${selectedVisit === undefined ? active : "bg-transparent hover:bg-hover"}`}
           onClick={() => onSelectVisit(undefined)}
         >
-          <span className="truncate text-ink">State machine</span>
-          <span className="text-secondary" data-machine-state={instance.state}>
-            {instance.state ?? "—"}
+          <span className="shrink-0 text-ink">State machine</span>
+          <span
+            className="machine-visit-state min-w-0 text-right text-secondary [overflow-wrap:anywhere]"
+            data-machine-state={instance.state}
+          >
+            {instance.state ? wrappable(instance.state) : "—"}
           </span>
         </button>
         {visits.map((visit) => {
@@ -268,15 +295,17 @@ export function MachineVisitTimeline({
               className={`${row} ${selectedVisit === visit.visit ? active : "bg-transparent hover:bg-hover"}`}
               onClick={() => onSelectVisit(visit.visit)}
             >
-              <span className="min-w-0 truncate">
+              <span className="machine-visit-state min-w-0 max-w-[50%] shrink-0 [overflow-wrap:anywhere]">
                 <span className="text-secondary">#{visit.visit}</span>{" "}
-                <span className="text-ink">{visit.state}</span>
+                <span className="text-ink">{wrappable(visit.state)}</span>
               </span>
-              <span className="shrink-0 text-secondary">
+              <span className="machine-visit-transition min-w-0 text-right text-secondary [overflow-wrap:anywhere]">
                 {current
                   ? "current"
                   : visit.left
-                    ? `→ ${visit.left.to ?? "closed"} · ${visit.left.event ?? visit.left.source}`
+                    ? wrappable(
+                        `→ ${visit.left.to ?? "closed"} · ${visit.left.event ?? visit.left.source}`,
+                      )
                     : ""}
               </span>
             </button>
