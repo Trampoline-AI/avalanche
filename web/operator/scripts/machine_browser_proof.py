@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import re
+import signal
 import socket
 import subprocess
 import time
@@ -94,9 +96,9 @@ ARC_GEOMETRY = """(tolerance) => {
   }));
   const inside = (x, y, r) => x > r.left + tolerance && x < r.right - tolerance
     && y > r.top + tolerance && y < r.bottom - tolerance;
-  const edges = [...shell.querySelectorAll('.react-flow__edge-machine')];
-  const hits = [];
-  for (const edge of edges) {
+  const overlap = (a, b) => a.left < b.right - tolerance && a.right > b.left + tolerance
+    && a.top < b.bottom - tolerance && a.bottom > b.top + tolerance;
+  const edges = [...shell.querySelectorAll('.react-flow__edge-machine')].map(edge => {
     const path = edge.querySelector('.react-flow__edge-path');
     const matrix = path.getScreenCTM();
     const length = path.getTotalLength();
@@ -105,27 +107,41 @@ ARC_GEOMETRY = """(tolerance) => {
       const p = path.getPointAtLength(at);
       points.push(new DOMPoint(p.x, p.y).matrixTransform(matrix));
     }
-    for (const box of boxes) {
-      if (points.some(p => inside(p.x, p.y, box.rect)))
-        hits.push(`${edge.getAttribute('data-id')} crosses ${box.id}`);
-    }
-  }
-  const labels = [...shell.querySelectorAll('.machine-arc-label')];
-  for (const label of labels) {
-    const r = label.getBoundingClientRect();
-    for (const box of boxes) {
-      const b = box.rect;
-      if (r.left < b.right && r.right > b.left && r.top < b.bottom && r.bottom > b.top)
-        hits.push(`label ${label.textContent} on ${box.id}`);
-    }
-  }
+    return { id: edge.getAttribute('data-id'), points };
+  });
+  const arcBox = [];
+  for (const edge of edges)
+    for (const box of boxes)
+      if (edge.points.some(p => inside(p.x, p.y, box.rect)))
+        arcBox.push(`${edge.id} crosses ${box.id}`);
+  const labels = [...shell.querySelectorAll('.machine-arc-label')].map(label => ({
+    arc: label.getAttribute('data-arc-id'), text: label.textContent,
+    rect: label.getBoundingClientRect(),
+  }));
+  const labelBox = [], labelLabel = [], labelArc = [];
+  labels.forEach((label, index) => {
+    for (const box of boxes)
+      if (overlap(label.rect, box.rect)) labelBox.push(`label ${label.text} on ${box.id}`);
+    for (const other of labels.slice(index + 1))
+      if (overlap(label.rect, other.rect))
+        labelLabel.push(`label ${label.text} on label ${other.text}`);
+    // Another arc running through this label (its own arc passes under it by design).
+    for (const edge of edges)
+      if (edge.id !== label.arc && edge.points.some(p => inside(p.x, p.y, label.rect)))
+        labelArc.push(`label ${label.text} on arc ${edge.id}`);
+  });
   return { edges: edges.length, boxes: boxes.length, labels: labels.length,
-           pairs: edges.length * boxes.length, intersections: hits };
+           pairs: edges.length * boxes.length,
+           label_pairs: labels.length * (labels.length - 1) / 2,
+           arc_box: arcBox.length, label_box: labelBox.length,
+           label_label: labelLabel.length, label_arc: labelArc.length,
+           intersections: [...arcBox, ...labelBox, ...labelLabel, ...labelArc] };
 }"""
 
 
 def arc_geometry(page, name: str, expected_edges: int) -> dict:
-    """Asserts no machine arc or arc label touches a state card on the canvas."""
+    """Asserts no arc crosses a state card and no arc label touches a card, another
+    label or another arc on the canvas."""
     graph = page.locator(".run-graph-shell")
     expect(graph.locator(".react-flow__edge-machine")).to_have_count(expected_edges)
     page.wait_for_timeout(300)
@@ -266,7 +282,9 @@ def scenario(page, url: str, evidence: Path) -> dict:
     expect(page.get_by_role("button", name=RERUN)).to_have_count(0)
     expect(page.get_by_role("table")).to_have_count(0)
     expect(page.get_by_role("button", name="Refresh instances")).to_have_count(0)
-    expect(waits.locator("[data-wait-kind]")).to_have_count(1)
+    # The deferred event, plus the events the current state accepts.
+    expect(waits.locator('[data-wait-kind="event"]')).to_have_count(1)
+    expect(waits.locator('[data-wait-kind="accepts"]')).to_have_count(1)
     arcs.append(arc_geometry(page, "run-horizontal", 4))
     page.screenshot(path=str(evidence / "01-machine-run.png"))
 
@@ -566,6 +584,8 @@ def main() -> None:
                 cwd=root,
                 stdout=log,
                 stderr=subprocess.STDOUT,
+                # Own process group: pnpm forks vite, and both must stop afterwards.
+                start_new_session=True,
             )
         )
         try:
@@ -605,7 +625,7 @@ def main() -> None:
                         browser.close()
         finally:
             if server is not None:
-                server.terminate()
+                os.killpg(server.pid, signal.SIGTERM)
                 server.wait(timeout=15)
     (args.evidence / "results.json").write_text(json.dumps(results, indent=2) + "\n")
     print(json.dumps(results, indent=2))

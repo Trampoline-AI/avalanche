@@ -744,6 +744,7 @@ const MachineArc = memo(
               style={{
                 transform: `translate(${anchor === "start" ? "0" : anchor === "end" ? "-100%" : "-50%"}, -50%) translate(${label.x}px, ${label.y}px)`,
               }}
+              data-arc-id={id}
               data-arc-kind={data.kind}
               data-arc-live={data.live || undefined}
             >

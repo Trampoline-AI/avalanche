@@ -225,7 +225,24 @@ const SELF_LOOP_REACH = 40;
 const SELF_LOOP_STEP = 24;
 /** Parallel arcs between one pair of states attach this far apart on the card side. */
 const PORT_SPREAD = 18;
-const FAN = 46;
+/** Arc label box: 10 px monospace text plus padding and border (GraphCanvas `machine-arc-label`). */
+const LABEL_CHAR = 6.3;
+const LABEL_PADDING = 18;
+const LABEL_HEIGHT = 20;
+/**
+ * Clear space between two stacked labels. Wider when labels stack across a horizontal
+ * gap: a neighbouring arc starts to bend toward its target within the label's width.
+ */
+const LABEL_GAP = { horizontal: 20, vertical: 16 };
+
+/** The rendered label box, estimated from its text (clock icon and countdown included). */
+function labelSize(data: MachineArcData): { width: number; height: number } {
+  let chars = data.label.length;
+  // The clock icon, and a running countdown (`· 59m left`).
+  if (data.timer) chars += 2;
+  if (data.timer?.due !== undefined) chars += 12;
+  return { width: chars * LABEL_CHAR + LABEL_PADDING, height: LABEL_HEIGHT };
+}
 
 /**
  * An orthogonal polyline as a path whose corners are short cubic curves.
@@ -390,6 +407,30 @@ export function routeMachineArcs(
     };
   }
 
+  // Where each forward arc's label sits across the gap, relative to the pair's midline:
+  // labels of one pair stack in lane order, each a label's extent plus a gap apart.
+  const fanOffsets = new Map<string, number>();
+  const pairs = new Map<string, MachineLink[]>();
+  for (const link of links) {
+    if (link.data.kind !== "forward") continue;
+    const pair = JSON.stringify([link.source, link.target]);
+    pairs.set(pair, [...(pairs.get(pair) ?? []), link]);
+  }
+  for (const group of pairs.values()) {
+    group.sort((left, right) => left.data.lane - right.data.lane);
+    const extents = group.map((link) => {
+      const size = labelSize(link.data);
+      return horizontal ? size.height : size.width;
+    });
+    const offsets = [0];
+    for (let index = 1; index < group.length; index++)
+      offsets.push(
+        offsets[index - 1] + (extents[index - 1] + extents[index]) / 2 + LABEL_GAP[orientation],
+      );
+    const centre = (offsets[0] + offsets.at(-1)!) / 2;
+    group.forEach((link, index) => fanOffsets.set(link.id, offsets[index] - centre));
+  }
+
   for (const link of links) {
     const source = spans[link.source];
     const target = spans[link.target];
@@ -416,6 +457,9 @@ export function routeMachineArcs(
       };
     } else if (link.data.kind === "forward") {
       // Forward arcs only join adjacent ranks, so they stay in the empty gap between.
+      // Parallel arcs (one per trigger) fan out: each runs level through its own label,
+      // and the labels stack across the gap far enough apart that no label touches
+      // another label or a neighbouring arc.
       const position = link.data.lane - ((link.data.lanes ?? 1) - 1) / 2;
       const from = {
         along: source.alongHigh,
@@ -425,17 +469,24 @@ export function routeMachineArcs(
         along: target.alongLow,
         across: middleAcross(target) + position * PORT_SPREAD,
       };
-      const pull = Math.max(40, (to.along - from.along) / 2);
-      routes[link.id] = cubic(
-        [
-          point(from.along, from.across),
-          point(from.along + pull, from.across + position * FAN),
-          point(to.along - pull, to.across + position * FAN),
-          point(to.along, to.across),
-        ],
-        // Stacked labels would overlap side by side in a vertical gap; stagger them.
-        horizontal ? 0.5 : 0.5 + position * 0.22,
-      );
+      const middle = (from.along + to.along) / 2;
+      const labelAcross =
+        (middleAcross(source) + middleAcross(target)) / 2 + (fanOffsets.get(link.id) ?? 0);
+      const half = Math.max(40, (to.along - from.along) / 2);
+      // Level for most of each half, so the arc stays flat under its whole label.
+      const pull = half * 0.25;
+      const level = half * 0.8;
+      const at = (along: number, across: number) => {
+        const { x, y } = point(along, across);
+        return `${Math.round(x * 10) / 10},${Math.round(y * 10) / 10}`;
+      };
+      routes[link.id] = {
+        path:
+          `M ${at(from.along, from.across)}` +
+          ` C ${at(from.along + pull, from.across)} ${at(middle - level, labelAcross)} ${at(middle, labelAcross)}` +
+          ` C ${at(middle + level, labelAcross)} ${at(to.along - pull, to.across)} ${at(to.along, to.across)}`,
+        label: point(middle, labelAcross),
+      };
     }
   }
   return routes;
