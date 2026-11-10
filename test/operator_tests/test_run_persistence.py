@@ -1021,6 +1021,154 @@ def test_send_storm_owner_latency(tmp_path):
         op.close()
 
 
+@pytest.mark.parametrize("failure", ["timeout", "unknown", "exit", "signal"])
+def test_timer_inbox_validation_failure_is_bounded(tmp_path, monkeypatch, failure):
+    """Real timer delivery, SQLite inbox and validation children, including crashes."""
+    from runtime.operator import machine_validation
+    from runtime.operator.discovery import WorkflowDiscoveryError
+    from runtime.operator.state.machines import MachinesTable
+
+    root = tmp_path / "source"
+    root.mkdir()
+    fixture = root / "machine.py"
+    source = (Path(__file__).parents[1] / "fixtures" / "local_machine.py").read_text()
+    source = source.replace(
+        "import avalanche as ava",
+        """import avalanche as ava
+import os
+import signal
+from pydantic import model_validator
+
+class Approval(ava.BaseInput):
+    gate: str
+    attempts: str
+    failure: str
+
+    @model_validator(mode="after")
+    def check_process(self):
+        with Path(self.attempts).open("a") as output:
+            output.write(f"{time.time()}\\n")
+        if Path(self.gate).exists():
+            if self.failure == "exit":
+                os._exit(23)
+            if self.failure == "signal":
+                os.kill(os.getpid(), signal.SIGKILL)
+            if self.failure == "timeout":
+                time.sleep(65)
+        return self
+""",
+    ).replace('pending.on("approved")', 'pending.on("approved", payload=Approval)')
+    source = source.replace(
+        "    reviewed.after(",
+        "    pending.after(timedelta(seconds=4)) >> pending\n    reviewed.after(",
+    )
+    fixture.write_text(source)
+    gate = tmp_path / "fail-validation"
+    gate.touch()
+    attempts = tmp_path / "attempts"
+    db = tmp_path / "state.db"
+    op = _operator(root, db)
+    try:
+        run_id = op.start_run("approval", input={"ticket": 1, "journal": str(tmp_path / "j")})
+        _wait_until(lambda: _machine_record(op, run_id).phase == "waiting")
+        fixture.write_text("def invalid syntax:\n")
+        with pytest.raises(WorkflowDiscoveryError):
+            op._refresh_workflows()
+        receipt = op._machine_host.send(
+            run_id,
+            "approved",
+            {
+                "gate": str(gate),
+                "attempts": str(attempts),
+                "failure": failure,
+            },
+            "queued-before-repair",
+        )
+        assert receipt.status == "accepted"
+        fixture.write_text(source)
+        op._registry.scan([str(root)])  # No wake: the persisted timer must deliver recovery.
+        if failure == "timeout":
+            run = machine_validation.subprocess.run
+
+            def bounded_child(args, **kwargs):
+                if args[1:] == ["-m", "runtime.operator.machine_validation"]:
+                    kwargs["timeout"] = 1  # Real child timeout, not a synthetic exception.
+                return run(args, **kwargs)
+
+            monkeypatch.setattr(machine_validation.subprocess, "run", bounded_child)
+        if failure == "unknown":
+            validate = op._machine_host._validate_event
+
+            def remove_during_lookup(record, name, payload):
+                # Force the real registry race after _current_spec succeeded.
+                monkeypatch.setattr(op._machine_host, "_validate_event", validate)
+                fixture.rename(root / "removed.txt")
+                op._registry.scan([str(root)])
+                attempts.write_text(f"{time.time()}\n")
+                try:
+                    return validate(record, name, payload)
+                finally:
+                    (root / "removed.txt").rename(fixture)
+                    op._registry.scan([str(root)])
+
+            monkeypatch.setattr(op._machine_host, "_validate_event", remove_during_lookup)
+        _wait_until(lambda: attempts.exists() or op.fatal_error is not None)
+
+        def recovery_observed():
+            with op._state_store.transaction() as c:
+                facts = _machine_facts(c, run_id)
+            return op.fatal_error is not None or any(
+                fact.status == "definition_unavailable"
+                and (
+                    "validation" in (fact.reason or "").lower()
+                    or "UnknownWorkflow" in (fact.reason or "")
+                    or "TimeoutExpired" in (fact.reason or "")
+                )
+                for fact in facts
+            )
+
+        _wait_until(recovery_observed)
+        assert op.fatal_error is None
+        with op._state_store.transaction() as c:
+            assert [row.receipt_id for row in MachinesTable.inbox(c, run_id)] == [
+                receipt.receipt_id
+            ]
+        if failure in {"exit", "signal"}:
+            _wait_until(lambda: len(attempts.read_text().splitlines()) >= 3)
+            time.sleep(4)
+            times = [float(line) for line in attempts.read_text().splitlines()]
+            print("validation crash attempts:", failure, times)
+            assert len(times) == 3
+            assert times[1] - times[0] >= 1 and times[2] - times[1] >= 2
+            with op._state_store.transaction() as c:
+                facts = _machine_facts(c, run_id)
+            assert any("validation_retry_limit" in (fact.reason or "") for fact in facts)
+            op.close()
+            op = _operator(root, db)
+            time.sleep(2)
+            assert len(attempts.read_text().splitlines()) == 3  # Cap survives restart.
+        else:
+            print("transient validation recovery:", failure, attempts.read_text())
+        gate.unlink()
+        if failure in {"exit", "signal"}:
+            op._machine_host.retry(run_id)  # Explicit repair resets the crash budget.
+        assert _wait_terminal(op, run_id).status is RunStatus.SUCCESS
+        with op._state_store.transaction() as c:
+            facts = _machine_facts(c, run_id)
+            assert (
+                sum(
+                    f.status == "consumed" and f.receipt_id == receipt.receipt_id for f in facts
+                )
+                == 1
+            )
+            assert not MachinesTable.inbox(c, run_id)
+            fired = [t for t in MachinesTable.all_timers(c, run_id) if t.fired_at]
+            assert len(fired) == 2  # Overdue pending self-transition, then reviewed -> done.
+        assert op.fatal_error is None
+    finally:
+        op.close()
+
+
 def _count_machine_reloads(op):
     calls = []
     refresh = op._refresh_workflows
@@ -1212,6 +1360,17 @@ def test_transient_syntax_error_at_restart(tmp_path, recovery):
     finally:
         if op is not None:
             op.close()
+
+
+def _machine_facts(connection, run_id):
+    from runtime.operator.state.machines import FactRecord
+
+    return [
+        FactRecord.model_validate({**json.loads(row["record_json"]), "tseq": row["tseq"]})
+        for row in connection.execute(
+            "SELECT tseq, record_json FROM machine_facts WHERE run_id=?", (run_id,)
+        )
+    ]
 
 
 def _machine_record(op, run_id):

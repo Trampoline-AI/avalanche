@@ -16,6 +16,7 @@ from collections import deque
 from concurrent.futures import Future
 from dataclasses import dataclass, field
 from pathlib import Path
+from subprocess import TimeoutExpired
 from typing import TYPE_CHECKING, Callable
 from uuid import uuid4
 
@@ -30,7 +31,11 @@ from avalanche.run_steps import RunOpSpec, RunStart
 
 from .discovery import WorkflowDiscoveryError
 from .machine_steps import HostStepOutput, MachineStepRequest
-from .machine_validation import MachineDefinitionUnavailableError, validate_native
+from .machine_validation import (
+    MachineDefinitionUnavailableError,
+    MachineValidationProcessError,
+    validate_native,
+)
 from .models import RunState, RunStatus, TriggerKind, WorkflowDescriptor, WorkflowTopology
 from .registry import UnknownWorkflow
 from .source import resolve_live_source
@@ -151,6 +156,7 @@ class MachineHost:
         self.heap: list[tuple[float, str, int, int]] = []
         # Shared by machine definition, not run: N keyed runs pay for one retry.
         self._definition_retries: dict[str, DefinitionRetry] = {}
+        self._inbox_retries: dict[str, DefinitionRetry] = {}
         self._last_reload = float("-inf")
         self._pass_reloaded = False
         self._immediate_reload = False
@@ -334,6 +340,19 @@ class MachineHost:
             timers = MachinesTable.timers(connection, record.run_id, record.visit)
         self.heap = [entry for entry in self.heap if entry[1] != record.run_id]
         heapq.heapify(self.heap)
+        inbox_retry = self._inbox_retries.get(record.run_id)
+        if inbox_retry is not None:
+            definition_retry = self._definition_retries.get(record.machine)
+            if definition_retry is not None and self.op._watcher_thread is not None:
+                return  # The watcher will wake validation after the source returns.
+            next_at = max(
+                inbox_retry.next_at,
+                definition_retry.next_at if definition_retry is not None else 0.0,
+            )
+            if next_at != float("inf"):
+                wake = time.time() + max(0.0, next_at - time.monotonic())
+                heapq.heappush(self.heap, (wake, record.run_id, record.visit, -1))
+            return
         retry = (
             self._definition_retries.setdefault(
                 record.machine, DefinitionRetry(next_at=time.monotonic() + 1.0)
@@ -373,6 +392,7 @@ class MachineHost:
             record.run_status = status
             if status in {RunStatus.SUCCESS, RunStatus.CANCELLED, RunStatus.FAILED}:
                 self._definition_retries.pop(record.machine, None)
+                self._inbox_retries.pop(record.run_id, None)
                 run.ended_at = time.monotonic()
             notifications = self.op._publish_run_locked(
                 run,
@@ -592,8 +612,29 @@ class MachineHost:
             descriptor, root = self.op._registry.resolve_source(record.machine)
             validate_native(descriptor, root, "event", payload, state=record.state, event=name)
 
+    def _defer_inbox_validation(
+        self, record: InstanceRecord, summary: str, *, failures: int = 0
+    ) -> None:
+        retry = self._inbox_retries.setdefault(record.run_id, DefinitionRetry())
+        if failures >= 3:
+            retry.next_at = float("inf")
+            summary = "validation_retry_limit: " + summary + "; repair source and retry visit"
+        else:
+            retry.next_at = time.monotonic() + retry.delay
+            retry.delay = min(60.0, retry.delay * 2)
+        self._definition_unavailable(record, summary)
+
     def _recover_inbox(self, record: InstanceRecord) -> bool:
-        """Finish validation deferred during definition loss, without losing receipts."""
+        """Finish deferred validation; one backoff wake, never discard a crashed receipt."""
+        retry = self._inbox_retries.get(record.run_id)
+        if retry is not None and time.monotonic() < retry.next_at:
+            summary = (
+                "validation_retry_limit: repair source and retry visit"
+                if retry.next_at == float("inf")
+                else "Validation recovery pending"
+            )
+            self._definition_unavailable(record, summary)
+            return False
         with self.op._state_store.transaction() as connection:
             inbox = MachinesTable.inbox(connection, record.run_id)
             pending = {
@@ -614,11 +655,25 @@ class MachineHost:
                     (record.run_id,),
                 )
             }
+            failures = dict(
+                connection.execute(
+                    "SELECT json_extract(record_json, '$.receipt_id'), COUNT(*) "
+                    "FROM machine_facts WHERE run_id=? "
+                    "AND json_extract(record_json, '$.status')='validation_failed' "
+                    "AND tseq > COALESCE((SELECT MAX(tseq) FROM machine_facts WHERE run_id=? "
+                    "AND json_extract(record_json, '$.status')='validation_retry_reset'), 0) "
+                    "GROUP BY json_extract(record_json, '$.receipt_id')",
+                    (record.run_id, record.run_id),
+                )
+            )
         state = record.spec.states[record.state]
         accepts = {edge.event for edge in state.transitions}
         for row in inbox:
             if row.receipt_id not in pending - validated:
                 continue
+            if failures.get(row.receipt_id, 0) >= 3:
+                self._defer_inbox_validation(record, "Validation process failed", failures=3)
+                return False
             reason = None
             status = "validated"
             if row.event not in accepts:
@@ -628,8 +683,29 @@ class MachineHost:
             else:
                 try:
                     self._validate_event(record, row.event, row.payload)
-                except (MachineDefinitionUnavailableError, FileNotFoundError) as exc:
-                    self._definition_unavailable(record, str(exc))
+                except MachineValidationProcessError as exc:
+                    with self.op._state_store.transaction() as connection:
+                        MachinesTable.fact(
+                            connection,
+                            record.run_id,
+                            record.visit,
+                            status="validation_failed",
+                            receipt_id=row.receipt_id,
+                            event=row.event,
+                            reason=str(exc),
+                            at=time.time(),
+                        )
+                    self._defer_inbox_validation(
+                        record, str(exc), failures=failures.get(row.receipt_id, 0) + 1
+                    )
+                    return False
+                except (
+                    MachineDefinitionUnavailableError,
+                    FileNotFoundError,
+                    TimeoutExpired,
+                    UnknownWorkflow,
+                ) as exc:
+                    self._defer_inbox_validation(record, f"{type(exc).__name__}: {exc}")
                     return False
                 except ValueError as exc:
                     status, reason = "rejected", str(exc)[:2000]
@@ -649,6 +725,7 @@ class MachineHost:
                     reason=reason,
                     at=time.time(),
                 )
+        self._inbox_retries.pop(record.run_id, None)
         return True
 
     def _send(self, command: Send) -> MachineEventReceipt:
@@ -974,7 +1051,9 @@ class MachineHost:
                         if record.phase == "waiting" and record.visit == visit:
                             with self.op._state_store.transaction() as connection:
                                 timers = MachinesTable.timers(connection, run_id, visit)
-                            if any(timer.timer_index == index for timer in timers):
+                            if index == -1 or any(
+                                timer.timer_index == index for timer in timers
+                            ):
                                 self._drive(record)
                     except Exception as exc:
                         self.op._record_fatal_error(exc)
@@ -1002,9 +1081,6 @@ class MachineHost:
                     case VisitFinished():
                         self._finished(command)
                     case CatalogReloaded():
-                        catalog_ids = self.op._registry.view.by_id.keys()
-                        for machine in self._definition_retries.keys() - catalog_ids:
-                            del self._definition_retries[machine]
                         self._pass_reloaded = True
                         self._last_reload = time.monotonic()
                         with self.op._state_store.transaction() as connection:
@@ -1012,6 +1088,9 @@ class MachineHost:
                         for record in records:
                             if record.phase == "waiting":
                                 self._drive(record, catchup=True)
+                        catalog_ids = self.op._registry.view.by_id.keys()
+                        for machine in self._definition_retries.keys() - catalog_ids:
+                            del self._definition_retries[machine]
                     case Restart(reply=reply):
                         self._restart()
                         reply.set_result(None)
@@ -1028,6 +1107,16 @@ class MachineHost:
                             if record.phase == "waiting":
                                 self._arm_timers(record, unavailable=True)
                             raise
+                        self._inbox_retries.pop(run_id, None)
+                        with self.op._state_store.transaction() as connection:
+                            MachinesTable.fact(
+                                connection,
+                                run_id,
+                                record.visit,
+                                status="validation_retry_reset",
+                                source="internal",
+                                at=time.time(),
+                            )
                         if phase == "interrupted":
                             with self.op._state_store.transaction() as connection:
                                 previous = MachinesTable.visit(connection, run_id, record.visit)

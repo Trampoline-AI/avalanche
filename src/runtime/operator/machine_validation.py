@@ -40,6 +40,10 @@ class MachineDefinitionUnavailableError(ValueError):
     """Source could not be imported/built; no payload validation took place."""
 
 
+class MachineValidationProcessError(RuntimeError):
+    """The validator exited without a definition or payload validation result."""
+
+
 class ValidationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     value: JsonValue = None
@@ -74,8 +78,8 @@ def validate_native(
         timeout=60,
     )
     if completed.returncode != 0:
-        raise MachineDefinitionUnavailableError(
-            "Machine validation process failed before returning a result"
+        raise MachineValidationProcessError(
+            f"Machine validation process exited with status {completed.returncode}"
         )
     response = ValidationResponse.model_validate_json(completed.stdout)
     if response.error is not None:

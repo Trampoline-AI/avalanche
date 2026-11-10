@@ -295,6 +295,10 @@ and operator restart, even when source watching is off. Only the affected
 machine's unavailable definition triggers loading; unrelated broken files do not
 cause reloads on a healthy machine's path. The owner coalesces loading to one
 catalog refresh per loop pass and a shared minimum interval of one second.
+Commands share a refresh completed after they arrived; a newer repair command
+waits in a timed queue until the next allowed refresh, without sleeping on the
+owner thread or blocking unrelated commands. A successful read is usable during
+backoff, and closing a run or removing its catalog entry drops stale retry state.
 Without watching, timer retries share exponential backoff per machine definition
 (not per keyed run): one second, doubling to a 60-second cap. Send, explicit retry
 and restart bypass that timer backoff, subject only to the shared minimum interval.
@@ -310,6 +314,17 @@ with the validation error; events not accepted/deferred by the restored state
 produce an `ignored` fact. Receipts remain replayable, and valid/deferred events
 follow the ordinary reducer/inbox rules. Admission still does not promise a
 transition. If source loading fails during validation, the event stays queued.
+Validation timeouts and source-lookup races also leave the event queued with
+`definition_unavailable`, without stopping the operator. Recovery uses one heap
+wake per run, backing off from one second to 60 seconds even without a user timer
+or while watching. Original timer deadlines are unchanged. If source becomes
+unavailable again, source backoff or the watcher also gates that recovery wake.
+A validation subprocess that exits nonzero or by signal has a separate durable
+budget: three failures per receipt, with the same backoff, then no automatic
+retries. The facts show `validation_retry_limit` and the process exit status;
+the receipt and inbox row remain. Restart does not reset the failure count.
+After repairing the source, `ava run retry RUN_ID --visit` resets that budget and
+validates the queued event again; it does not start a new visit on a waiting run.
 A visit that already started but fails to prepare remains `interrupted` and
 requires explicit retry; restoring a definition never replays uncertain work.
 A retry while source is still unavailable creates no new visit and now fails

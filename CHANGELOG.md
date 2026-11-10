@@ -31,6 +31,12 @@
   `needs_attention`; restore that state and use `ava run retry RUN_ID --visit`.
   Visit preparation/start failures preserve the journal and require explicit
   visit retry; failed, unacknowledged keyed-flow starts release the key.
+- Deferred event validation treats timeout and source-lookup races as temporary
+  definition loss, with one queued recovery wake and one-to-60-second backoff.
+  A validation child exiting nonzero or by signal is retried at most three times
+  per queued receipt; the durable failure count survives restart. The visible
+  `definition_unavailable` facts report `validation_retry_limit`; the event stays
+  queued. Repair the source and explicitly retry the visit to reset that budget.
 - Explicit machine visit retry now fails with `definition_unavailable` or
   `state_missing` when repair cannot start, instead of reporting a successful
   no-op. CLI, REST and gRPC expose the reason without advancing the visit;
