@@ -565,6 +565,37 @@ describe("operator workflows", () => {
     },
   );
 
+  it.each([
+    { declared: ["admitted", "parked"], status: "admitted", live: true },
+    { declared: ["admitted", "parked"], status: "running", live: false },
+    { declared: undefined, status: "admitted", live: false },
+    { declared: undefined, status: "waiting", live: true },
+  ])(
+    "reads run status $status as live=$live from the host's live statuses ($declared)",
+    async ({ declared, status, live }) => {
+      // A host with its own run vocabulary (a queue, an admission step) declares which
+      // statuses are live; the run page never hardcodes another host's names.
+      const run = RunSummaryMsg.create({ ...summary, status });
+      const api = createApi({
+        liveRunStatuses: declared,
+        loadBaseline: async () => ({ ...baseline, runs: [run] }),
+        getLatestRunSnapshot: async () => snapshotFor(run),
+      });
+      render(
+        <WorkflowWorkspace
+          api={api}
+          workflowId={workflow.workflowId}
+          navigation={{ selectedRunId: run.runId, onSelectRun: () => undefined }}
+        />,
+      );
+      await screen.findByRole("button", { name: "Inspect Fetch" });
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: "Cancel run" }) !== null).toBe(live),
+      );
+      expect(screen.queryByText("Viewing a run snapshot") !== null).toBe(!live);
+    },
+  );
+
   it("keeps a collapsed rail available and pins a hovered Explorer", async () => {
     render(<OperatorUi host={{ api: createApi(), presentation }} />);
 

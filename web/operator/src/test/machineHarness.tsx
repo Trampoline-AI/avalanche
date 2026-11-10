@@ -280,7 +280,11 @@ function publish(change: OperatorUpdate["change"]) {
     OperatorUpdate.create({ eventUlid: String(++sequence).padStart(26, "0"), change }),
   );
 }
-let failSend = true;
+// `?host`: a host with its own run vocabulary (queue/admission statuses, 64-hex
+// receipt ids) whose first snapshot arrives late, behind the host's loading fallback.
+const foreignHost = new URLSearchParams(location.search).has("host");
+const FOREIGN_LIVE_STATUSES = ["submitted", "queued", "admitted", "parked"];
+let failSend = !foreignHost;
 let failRead = false;
 
 function record(method: string, ...args: JsonValue[]) {
@@ -343,7 +347,14 @@ function enter(
     },
   });
   const summary = runs.get(runId)!;
-  summary.status = source === "cancel" ? "cancelled" : item.finished ? "succeeded" : "waiting";
+  summary.status =
+    source === "cancel"
+      ? "cancelled"
+      : item.finished
+        ? "succeeded"
+        : foreignHost
+          ? "parked"
+          : "waiting";
   summary.revision = String(item.visit);
   publish({
     oneofKind: "runStatusChanged",
@@ -388,6 +399,8 @@ class FakeOperatorApi implements OperatorApi {
   }
   async getLatestRunSnapshot(runId: string) {
     record("snapshot", runId);
+    // The foreign host answers slowly: the page shows its loading fallback first.
+    if (foreignHost) await new Promise((resolve) => setTimeout(resolve, 800));
     // Retention removed the history; the summary (status, label) stays readable.
     if (runs.get(runId)?.expired)
       return RunSnapshotMsg.create({
@@ -783,7 +796,9 @@ class FakeOperatorApi implements OperatorApi {
     )
       throw new Error("Payload did not satisfy the event schema");
     const result: MachineEventReceipt = {
-      receipt_id: `receipt-${receipts.size + 1}`,
+      receipt_id: foreignHost
+        ? (receipts.size + 1).toString(16).padStart(64, "c")
+        : `receipt-${receipts.size + 1}`,
       key: event,
       accepted_at: Date.now() / 1000,
       status: item.accepts.includes(event) ? "accepted" : "ignored",
@@ -854,13 +869,43 @@ if (readOnly) {
     fireNextMachineTimer: undefined,
   });
 }
+if (foreignHost) {
+  Object.assign(api, { liveRunStatuses: FOREIGN_LIVE_STATUSES });
+  // machine-1 is admitted (a visit executing); machine-2 already closed.
+  await api.startRun("review", { repo: "acme/api", pr: 8, priority: 1 });
+  runs.get("machine-1")!.status = "admitted";
+  await api.startRun("review", { repo: "acme/api", pr: 9, priority: 1 });
+  enter("machine-2", "closed", "external", "advance");
+  calls.length = 0;
+}
+/** A host change the run page learns only from the update stream (a new revision). */
+function touch(runId: string) {
+  const summary = runs.get(runId)!;
+  summary.revision = String(Number(summary.revision) + 1);
+  publish({
+    oneofKind: "runStatusChanged",
+    runStatusChanged: {
+      runId,
+      status: summary.status,
+      revision: summary.revision,
+      startedAt: summary.startedAt,
+      endedAt: summary.endedAt,
+    },
+  });
+}
 declare global {
   interface Window {
-    machineHarness: { calls: typeof calls; failNextRead: () => void; recoverRead: () => void };
+    machineHarness: {
+      calls: typeof calls;
+      failNextRead: () => void;
+      recoverRead: () => void;
+      touch: (runId: string) => void;
+    };
   }
 }
 window.machineHarness = {
   calls,
+  touch,
   failNextRead: () => {
     failRead = true;
   },
@@ -901,6 +946,9 @@ function App() {
           workflowId={workflowId}
           navigation={{ selectedRunId, onSelectRun: select }}
           runActionsEnabled={!readOnly}
+          loadingFallback={
+            foreignHost ? <p data-testid="host-loading">Loading run…</p> : undefined
+          }
         />
       </div>
     </div>

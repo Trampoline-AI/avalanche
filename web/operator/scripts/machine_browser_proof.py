@@ -211,6 +211,138 @@ def arc_spacing(page, url: str, evidence: Path) -> list[dict]:
     return checks
 
 
+# Canvas items and controls under the floating timeline (or clipped by the canvas).
+TIMELINE_COVER = """() => {
+  const timeline = document.querySelector('.workspace-timeline').getBoundingClientRect();
+  const shell = document.querySelector('.run-graph-shell');
+  const hit = (r, o) => r.left < o.right && r.right > o.left && r.top < o.bottom
+    && r.bottom > o.top;
+  const items = [...shell.querySelectorAll('.react-flow__node, .machine-arc-label')];
+  const covered = items.filter(el => hit(el.getBoundingClientRect(), timeline))
+    .map(el => el.getAttribute('data-id') || el.textContent);
+  // A control is covered when the timeline, not the control, receives its center.
+  const controls = [...shell.querySelectorAll('.navpanel button, [role=group] button')]
+    .filter(el => el.getBoundingClientRect().width > 0)
+    .filter(el => {
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return top && top.closest('.workspace-timeline');
+    })
+    .map(el => el.getAttribute('aria-label') || el.textContent);
+  return { covered, controls };
+}"""
+
+
+def history_reads(page, run_id: str) -> int:
+    return page.evaluate(
+        "(id) => window.machineHarness.calls"
+        ".filter(c => c.method === 'history' && c.args[0] === id).length",
+        run_id,
+    )
+
+
+def host_neutral(page, url: str, evidence: Path) -> list[dict]:
+    """A host with its own vocabulary and a slow first snapshot, at both acceptance sizes.
+
+    The timeline mounts after the host's loading fallback, so its sizing must attach
+    late; `admitted`/`parked` are live only because the host declares them; receipt
+    ids are 64 hex characters; machine reads follow the update stream, and poll only
+    while the run is live, with backoff.
+    """
+    checks = []
+    for tag, size in (
+        ("wide", {"width": 1600, "height": 1100}),
+        ("narrow", {"width": 1024, "height": 768}),
+    ):
+        page.set_viewport_size(size)
+        page.goto(url + "?host&run=machine-1")
+        expect(page.get_by_test_id("host-loading")).to_be_visible()
+        timeline = page.locator(".workspace-timeline")
+        expect(timeline).to_be_visible()
+        graph = page.locator(".run-graph-shell")
+        expect(graph.locator(".react-flow__edge-machine")).to_have_count(4)
+        # The late-mounted timeline still bounds its height and reserves the graph fit.
+        expect(timeline).to_have_attribute("style", re.compile(r"max-height"))
+        page.wait_for_timeout(600)
+        cover = page.evaluate(TIMELINE_COVER)
+        assert cover == {"covered": [], "controls": []}, (tag, cover)
+        geometry = arc_geometry(page, f"host-{tag}-run-horizontal", 4)
+        # `admitted` is live on this host: no snapshot banner, Cancel offered.
+        banner = page.get_by_text("Viewing a run snapshot", exact=True)
+        expect(banner).to_have_count(0)
+        expect(page.get_by_role("button", name="Cancel run", exact=True)).to_be_visible()
+        page.screenshot(path=str(evidence / f"30-host-{tag}-late-timeline-live.png"))
+        # No stream change on a live run: backoff reads (1 s, 2 s, 4 s ...), not 1 Hz.
+        before = history_reads(page, "machine-1")
+        page.wait_for_timeout(4500)
+        live_polls = history_reads(page, "machine-1") - before
+        assert live_polls <= 3, (tag, live_polls)
+
+        # A 64-hex receipt wraps inside the side panel instead of widening it.
+        page.get_by_role("group", name="Machine actions").get_by_role(
+            "button", name="Send event", exact=True
+        ).click()
+        panel = page.get_by_role("complementary", name="Send event")
+        panel.get_by_label("Event", exact=True).select_option("advance")
+        form = panel.get_by_role("form", name="Send event")
+        form.get_by_role("button", name="Send event").click()
+        receipt = panel.locator("[data-receipt-status]")
+        expect(receipt).to_contain_text("c" * 40)
+        fit = panel.evaluate(
+            """(aside) => {
+              const box = aside.getBoundingClientRect();
+              const line = aside.querySelector('[data-receipt-status]').getBoundingClientRect();
+              const scrollers = [aside, ...aside.querySelectorAll('*')]
+                .filter(el => el.scrollWidth > el.clientWidth + 1
+                  && getComputedStyle(el).overflowX !== 'visible');
+              return { panel: Math.round(box.width), line_right: Math.round(line.right),
+                       panel_right: Math.round(box.right), overflowing: scrollers.length,
+                       lines: Math.round(line.height / 15) };
+            }"""
+        )
+        assert fit["line_right"] <= fit["panel_right"] and fit["overflowing"] == 0, (tag, fit)
+        # `parked` (the machine waiting between visits) is still live on this host.
+        expect(page.get_by_role("region", name="Machine visits")).to_contain_text("ready")
+        expect(banner).to_have_count(0)
+        page.screenshot(path=str(evidence / f"31-host-{tag}-long-receipt.png"))
+        panel.get_by_role("button", name="Close", exact=True).click()
+
+        # The closed run is settled: banner, no Cancel, and no polling at all.
+        page.locator(".run-list-row", has_text="acme/api #9").click()
+        expect(banner).to_have_count(1)
+        expect(page.get_by_role("button", name="Cancel run", exact=True)).to_have_count(0)
+        page.wait_for_timeout(500)
+        before = history_reads(page, "machine-2")
+        page.wait_for_timeout(3000)
+        settled_polls = history_reads(page, "machine-2") - before
+        assert settled_polls == 0, (tag, settled_polls)
+        # A change on the update stream re-reads at once.
+        page.evaluate("window.machineHarness.touch('machine-2')")
+        page.wait_for_timeout(700)
+        stream_reads = history_reads(page, "machine-2") - before
+        assert stream_reads == 1, (tag, stream_reads)
+        cover_settled = page.evaluate(TIMELINE_COVER)
+        assert cover_settled == {"covered": [], "controls": []}, (tag, cover_settled)
+        page.screenshot(path=str(evidence / f"32-host-{tag}-settled.png"))
+        checks.append(
+            {
+                "view": f"host-{tag}",
+                "late_timeline_covered": len(cover["covered"]),
+                "late_timeline_controls_covered": len(cover["controls"]),
+                "settled_covered": len(cover_settled["covered"]),
+                "live_banner": 0,
+                "settled_banner": 1,
+                "live_history_reads_4_5s_no_change": live_polls,
+                "settled_history_reads_3s": settled_polls,
+                "stream_change_reads": stream_reads,
+                "receipt": fit,
+                "geometry": geometry,
+            }
+        )
+    page.set_viewport_size({"width": 1440, "height": 1100})
+    return checks
+
+
 def compose(page, evidence: Path, pair: tuple[str, str], out: str, captions: tuple) -> None:
     images = [base64.b64encode((evidence / name).read_bytes()).decode() for name in pair]
     page.set_viewport_size({"width": 2900, "height": 1140})
@@ -421,7 +553,9 @@ def scenario(page, url: str, evidence: Path) -> dict:
     expect(page.get_by_role("button", name="Cancel run", exact=True)).to_have_count(0)
     page.screenshot(path=str(evidence / "07-cancelled.png"))
     # A transient read failure is surfaced and recoverable, not a blank page.
+    # The run is settled, so nothing polls; a change on the update stream re-reads.
     page.evaluate("window.machineHarness.failNextRead()")
+    page.evaluate("window.machineHarness.touch('machine-3')")
     expect(waits.get_by_role("alert").first).to_be_visible(timeout=4000)
     page.evaluate("window.machineHarness.recoverRead()")
     waits.get_by_role("button", name="Retry read", exact=True).first.click()
@@ -545,7 +679,9 @@ def scenario(page, url: str, evidence: Path) -> dict:
         ("Workflow definition", "Machine definition"),
     )
     arcs += arc_spacing(page, url, evidence)
+    host = host_neutral(page, url, evidence)
     return {
+        "host_neutral": host,
         "machine_canvas": machine_look,
         "flow_canvas": flow_look,
         "run_page": run_look,
