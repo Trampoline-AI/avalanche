@@ -292,13 +292,21 @@ def host_neutral(page, url: str, evidence: Path) -> list[dict]:
         ).click()
         panel = page.get_by_role("complementary", name="Send event")
         event_menu = panel.get_by_label("Event", exact=True)
-        # The menu offers only what the current state accepts.
+        # The menu offers what the current state accepts, then what it defers.
         menu_before = event_menu.locator("option").all_inner_texts()
-        assert menu_before == ["amend", "advance"], (tag, menu_before)
-        event_menu.select_option("advance")
+        assert menu_before == ["amend", "advance", "later (deferred)"], (tag, menu_before)
         form = panel.get_by_role("form", name="Send event")
-        form.get_by_role("button", name="Send event").click()
         receipt = panel.locator("[data-receipt-status]")
+        # A deferred event is acknowledged as accepted and leaves the run where it is.
+        event_menu.select_option("later")
+        form.get_by_role("button", name="Send event").click()
+        expect(receipt).to_have_attribute("data-receipt-status", "accepted")
+        expect(receipt).to_contain_text("· later · accepted")
+        deferred_receipt = receipt.inner_text()
+        assert event_menu.locator("option").all_inner_texts() == menu_before
+        event_menu.select_option("advance")
+        form.get_by_role("button", name="Send event").click()
+        expect(receipt).to_contain_text("· advance · accepted")
         expect(receipt).to_contain_text("c" * 40)
         # After the transition the stale `advance` is gone: only `back` is offered.
         expect(event_menu).to_have_value("back")
@@ -362,6 +370,7 @@ def host_neutral(page, url: str, evidence: Path) -> list[dict]:
                 "stream_change_reads": stream_reads,
                 "receipt": fit,
                 "send_menu_before": menu_before,
+                "deferred_send_receipt": deferred_receipt,
                 "send_menu_after_transition": menu_after,
                 "live_deferred_wording": "Deferred events unavailable",
                 "settled_outcome": outcome.inner_text(),

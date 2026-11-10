@@ -807,7 +807,11 @@ class FakeOperatorApi implements OperatorApi {
         : `receipt-${receipts.size + 1}`,
       key: event,
       accepted_at: Date.now() / 1000,
-      status: item.accepts.includes(event) ? "accepted" : "ignored",
+      // The current state's `defer=` names are buffered and acknowledged as accepted.
+      status:
+        item.accepts.includes(event) || spec.states[item.state!]!.defer.includes(event)
+          ? "accepted"
+          : "ignored",
       duplicate: false,
     };
     receipts.set(idempotencyKey, result);
@@ -823,7 +827,9 @@ class FakeOperatorApi implements OperatorApi {
         source: "external",
       },
     ]);
-    if (result.status === "accepted")
+    if (result.status === "accepted" && !item.accepts.includes(event))
+      item.pending_events?.push({ event, receipt_id: result.receipt_id, payload });
+    else if (result.status === "accepted")
       enter(
         runId,
         spec.states[item.state!].transitions.find((t) => t.event === event)!.target,

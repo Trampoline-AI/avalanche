@@ -686,6 +686,7 @@ export function WorkflowWorkspaceSurface({
           api={api}
           runId={machineRunId}
           instance={machineInstance}
+          spec={machineSpec}
           enabled={runActionsEnabled}
           onSend={openSend}
           onChanged={() => {

@@ -428,6 +428,50 @@ export function MachineVisitTimeline({
   );
 }
 
+type MachineTransitionSpec = MachineSpec["states"][string]["transitions"][number];
+
+/** An event the run can be sent now, with the payload schema its consumer declares. */
+export interface SendableEvent {
+  name: string;
+  /** In the current state's `defer=` list: buffered for a later accepting state. */
+  deferred: boolean;
+  payload_schema: JsonSchema | null;
+}
+
+/**
+ * The events a run can be sent now, per the machine contract: those its current
+ * state accepts (`instance.accepts`, its transitions), then those it defers (the
+ * state's `defer=` list), which the host buffers and acknowledges as accepted.
+ * Any other name is ignored by the host, so it is never offered. A deferred name
+ * takes its payload schema from its declared consumer edge (none: an empty body).
+ */
+export function sendableEvents(
+  spec: MachineSpec | undefined,
+  instance: MachineInstance | undefined,
+): SendableEvent[] {
+  if (!spec || !instance) return [];
+  const declared = new Map<string, MachineTransitionSpec>();
+  for (const state of Object.values(spec.states))
+    for (const transition of state.transitions)
+      if (!declared.has(transition.event)) declared.set(transition.event, transition);
+  // Event names may recur with state-specific payload schemas.
+  const current = instance.state ? spec.states[instance.state] : undefined;
+  for (const transition of current?.transitions ?? [])
+    declared.set(transition.event, transition);
+  const events: SendableEvent[] = [];
+  const seen = new Set<string>();
+  const offer = (name: string, deferred: boolean) => {
+    const transition = declared.get(name);
+    // An accepted name missing from the spec in hand has no known payload schema.
+    if (seen.has(name) || (!transition && !deferred)) return;
+    seen.add(name);
+    events.push({ name, deferred, payload_schema: transition?.payload_schema ?? null });
+  };
+  for (const name of instance.accepts) offer(name, false);
+  if (!instance.finished) for (const name of current?.defer ?? []) offer(name, true);
+  return events;
+}
+
 const runAction =
   "cursor-pointer rounded border border-line bg-panel px-[11px] py-[7px] text-[10px] text-ink hover:bg-hover disabled:cursor-wait disabled:opacity-50";
 
@@ -440,6 +484,7 @@ export function MachineRunActions({
   api,
   runId,
   instance,
+  spec,
   enabled,
   onSend,
   onChanged,
@@ -447,6 +492,8 @@ export function MachineRunActions({
   api: OperatorApi;
   runId: string;
   instance: MachineInstance | undefined;
+  /** The machine's catalog spec, used when the host's instance omits its own. */
+  spec?: MachineSpec;
   enabled: boolean;
   onSend: () => void;
   onChanged: () => void;
@@ -461,6 +508,7 @@ export function MachineRunActions({
     };
   }, []);
   if (!instance || !enabled || instance.finished) return null;
+  const sendable = sendableEvents(instance.machine_spec ?? spec, instance).length > 0;
   const retryable = ["interrupted", "needs_attention", "indeterminate"].includes(
     instance.status,
   );
@@ -482,8 +530,8 @@ export function MachineRunActions({
         key="send"
         type="button"
         className={runAction}
-        disabled={instance.accepts.length === 0}
-        title={instance.accepts.length === 0 ? "This run accepts no events now" : undefined}
+        disabled={!sendable}
+        title={sendable ? undefined : "This run accepts no events now"}
         onClick={onSend}
       >
         Send event
@@ -559,34 +607,25 @@ export function MachineSendPanel({
       scope.current = false;
     };
   }, []);
-  const declared = new Map<string, MachineSpec["states"][string]["transitions"][number]>();
-  for (const state of Object.values(spec.states))
-    for (const transition of state.transitions)
-      if (!declared.has(transition.event)) declared.set(transition.event, transition);
-  // Event names may recur with state-specific payload schemas.
-  for (const transition of (instance?.state && spec.states[instance.state]?.transitions) || [])
-    declared.set(transition.event, transition);
-  // Offer only what the run accepts now, revalidated on every read: after a
-  // transition, a choice the new state does not accept falls back to the first
-  // accepted event, and a run that accepts nothing offers nothing to send.
-  const accepts = instance?.accepts ?? [];
-  const events = new Map(
-    accepts.flatMap((name) => {
-      const transition = declared.get(name);
-      return transition ? [[name, transition] as const] : [];
-    }),
-  );
+  const declaredEvents = Object.values(spec.states).some((state) => state.transitions.length);
+  // Offer what the run accepts or defers now, revalidated on every read: after a
+  // transition, a choice the new state neither accepts nor defers falls back to
+  // the first offered event, and a run that can take nothing offers nothing.
+  const offered = sendableEvents(spec, instance);
+  const events = new Map(offered.map((item) => [item.name, item] as const));
   const chosen: string | undefined =
-    event !== undefined && events.has(event) ? event : events.keys().next().value;
-  // The latest accepted events, read when a send starts (a read may land mid-form).
-  const accepted = useRef(accepts);
-  accepted.current = accepts;
-  const acceptsKey = accepts.join("\0");
+    event !== undefined && events.has(event) ? event : offered[0]?.name;
+  const accepts = offered.filter((item) => !item.deferred).map((item) => item.name);
+  const defers = offered.filter((item) => item.deferred).map((item) => item.name);
+  // The latest offered events, read when a send starts (a read may land mid-form).
+  const sendable = useRef<string[]>([]);
+  sendable.current = offered.map((item) => item.name);
+  const offeredKey = sendable.current.join("\0");
   useEffect(() => {
     setEvent((current) =>
-      current !== undefined && acceptsKey.split("\0").includes(current) ? current : undefined,
+      current !== undefined && offeredKey.split("\0").includes(current) ? current : undefined,
     );
-  }, [acceptsKey]);
+  }, [offeredKey]);
   return (
     <aside
       aria-label="Send event"
@@ -609,7 +648,7 @@ export function MachineSendPanel({
         </button>
       </header>
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-auto px-5 py-4 text-xs">
-        {declared.size === 0 ? (
+        {!declaredEvents ? (
           <p className="m-0 text-secondary">This machine declares no events.</p>
         ) : chosen === undefined ? (
           <>
@@ -634,12 +673,19 @@ export function MachineSendPanel({
                 value={chosen}
                 onChange={(e) => setEvent(e.target.value)}
               >
-                {[...events.keys()].map((name) => (
-                  <option key={name}>{name}</option>
+                {offered.map((item) => (
+                  <option key={item.name} value={item.name}>
+                    {item.deferred ? `${item.name} (deferred)` : item.name}
+                  </option>
                 ))}
               </select>
             </label>
-            <p className="m-0 text-secondary">Accepts now: {accepts.join(", ")}.</p>
+            <p className="m-0 text-secondary">
+              {accepts.length > 0 && `Accepts now: ${accepts.join(", ")}.`}
+              {accepts.length > 0 && defers.length > 0 && " "}
+              {defers.length > 0 &&
+                `Defers: ${defers.join(", ")} (held until a later state accepts it).`}
+            </p>
             <SendEventForm
               key={`${chosen}:${JSON.stringify(events.get(chosen)!.payload_schema)}`}
               api={api}
@@ -647,7 +693,7 @@ export function MachineSendPanel({
               event={chosen}
               schema={events.get(chosen)!.payload_schema}
               onSend={async (payload, inputFiles) => {
-                if (!accepted.current.includes(chosen))
+                if (!sendable.current.includes(chosen))
                   throw new Error(`This run no longer accepts ${chosen}.`);
                 const signature = JSON.stringify([
                   chosen,
