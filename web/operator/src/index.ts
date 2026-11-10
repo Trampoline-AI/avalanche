@@ -41,6 +41,11 @@ export {
   useMachineVisit,
 } from "./MachineWorkspace";
 export type { MachineHistory, MachineReadRefresh } from "./MachineWorkspace";
-export { LOCAL_LIVE_RUN_STATUSES, runStatusLive } from "./runLiveness";
+export {
+  LOCAL_LIVE_RUN_STATUSES,
+  LOCAL_TERMINAL_RUN_STATUSES,
+  runStatusLive,
+  runStatusTerminal,
+} from "./runLiveness";
 export { runKeyLabel } from "./runKey";
 export type { MachineGraphView } from "./machineGraph";

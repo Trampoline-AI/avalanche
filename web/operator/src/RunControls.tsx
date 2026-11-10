@@ -7,7 +7,7 @@ import { applyInputFiles, type InputDraft } from "./useInputDraft";
 import { workflowInputDraft } from "./workflowInput";
 import type { OperatorProjection } from "./state";
 import { isUnknownRecord } from "./guards";
-import { runStatusLive } from "./runLiveness";
+import { runStatusLive, runStatusTerminal } from "./runLiveness";
 import type { OperatorApi } from "./api";
 
 interface RunControlsProps {
@@ -32,7 +32,7 @@ interface RunControlsProps {
   /** Opens the input panel, offered next to errors when the workflow takes input. */
   onEditInput?: () => void;
   /** The host's API: its live run statuses (`OperatorApi.liveRunStatuses`) offer Cancel. */
-  api?: Pick<OperatorApi, "liveRunStatuses">;
+  api?: Pick<OperatorApi, "liveRunStatuses" | "terminalRunStatuses">;
 }
 
 /** Key-order independent JSON, to tell whether two inputs differ. */
@@ -48,19 +48,22 @@ function canonicalJson(value: unknown): string {
 
 /**
  * A settled run's outcome: its terminal seal when the host reports one, else its
- * settled status from the run summary, which every host supplies, so a host
- * without seals (or a machine run) still shows how the run ended.
+ * settled status from the run summary when that status is one of the host's
+ * terminal outcomes (`OperatorApi.terminalRunStatuses`), so a host without seals
+ * (or a machine run) still shows how the run ended. A live run, a run whose status
+ * is not loaded yet, or a settled sentinel status (`unknown`) shows no outcome.
  */
 function terminalOutcome(
   run: RunSnapshotMsg | undefined,
-  live: boolean,
+  api: Pick<OperatorApi, "liveRunStatuses" | "terminalRunStatuses"> | undefined,
 ): { status: string; reason?: string } | undefined {
+  const status = run?.summary?.status;
+  if (!status || runStatusLive(api, status)) return undefined;
   if (run?.terminalSeal)
     return run.terminalSeal.reason !== undefined
       ? { status: run.terminalSeal.terminalStatus, reason: run.terminalSeal.reason }
       : { status: run.terminalSeal.terminalStatus };
-  const status = run?.summary?.status;
-  return !live && status ? { status } : undefined;
+  return runStatusTerminal(api, status) ? { status } : undefined;
 }
 
 /** Input JSON and the file attachments that fill its file fields. */
@@ -176,7 +179,7 @@ export function RunControls({
   }
 
   const active = runStatusLive(api, run?.summary?.status);
-  const outcome = terminalOutcome(run, active);
+  const outcome = terminalOutcome(run, api);
   const startable = Boolean(workflow && runActionsEnabled);
   const cancellable = Boolean(active && run?.summary && runActionsEnabled);
 

@@ -285,6 +285,7 @@ function publish(change: OperatorUpdate["change"]) {
 // It reports no terminal seals, deferred events or receipts.
 const foreignHost = new URLSearchParams(location.search).has("host");
 const FOREIGN_LIVE_STATUSES = ["submitted", "queued", "admitted", "parked"];
+const FOREIGN_TERMINAL_STATUSES = ["succeeded", "failed", "cancelled"];
 let failSend = !foreignHost;
 let failRead = false;
 
@@ -882,7 +883,10 @@ if (readOnly) {
   });
 }
 if (foreignHost) {
-  Object.assign(api, { liveRunStatuses: FOREIGN_LIVE_STATUSES });
+  Object.assign(api, {
+    liveRunStatuses: FOREIGN_LIVE_STATUSES,
+    terminalRunStatuses: FOREIGN_TERMINAL_STATUSES,
+  });
   // machine-1 is admitted (a visit executing); machine-2 already closed.
   await api.startRun("review", { repo: "acme/api", pr: 8, priority: 1 });
   runs.get("machine-1")!.status = "admitted";

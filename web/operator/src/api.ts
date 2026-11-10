@@ -198,6 +198,13 @@ export interface OperatorApi {
    * (`requesting`, `pending`, `running`, `waiting`, `interrupted`, `needs_attention`).
    */
   readonly liveRunStatuses?: readonly string[];
+  /**
+   * The host's terminal outcomes: a settled run whose status is one of them shows
+   * `Terminal: <status>` when the host reports no terminal seal. Any other settled
+   * status (a sentinel such as `unknown`) shows no outcome. Defaults to the local
+   * operator's outcomes (`success`, `failed`, `cancelled`).
+   */
+  readonly terminalRunStatuses?: readonly string[];
   // Optional capabilities. Run IDs address reads; adapters resolve their host's key/scope.
   getMachineInstance?(runId: string, signal?: AbortSignal): Promise<MachineInstance>;
   getMachineHistory?(
