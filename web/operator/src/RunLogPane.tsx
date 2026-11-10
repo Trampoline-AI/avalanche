@@ -27,6 +27,7 @@ import {
   mergeDescriptorPage,
   SCROLL_LOAD_THRESHOLD_PX,
 } from "./detailProjection";
+import { type PaneScope, ScopeChip, stepScopeLabel, visitStep } from "./ScopeChip";
 import { DescriptorPageOrder, type LogRecordDescriptorMsg, type RunSnapshotMsg } from "./model";
 
 import {
@@ -40,10 +41,10 @@ const LOG_DECODE_BATCH_SIZE = 20;
 const LOG_ROW_ESTIMATE_PX = 48;
 const LOG_ROW_OVERSCAN = 12;
 const LOG_PANE_KEYBOARD_STEP_PX = 16;
-// Only the Logs tab shrinks (its scope truncates); the Timeline tab keeps its width,
-// so a narrow pane never draws it over the record count.
+// Static, fixed-width tab labels: the pane's scope shows in a row under the
+// header, so neither scope, selection nor the record count moves the tabs.
 const TAB_CLASS =
-  "flex cursor-pointer items-center gap-[7px] self-stretch border-0 border-b-2 bg-transparent px-1 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid [&>strong]:flex-none [&>strong]:text-[10px] [&>strong]:tracking-[.08em] [&>strong]:uppercase";
+  "flex w-[76px] flex-none cursor-pointer justify-center items-center gap-[7px] self-stretch border-0 border-b-2 bg-transparent px-1 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid [&>strong]:flex-none [&>strong]:text-[10px] [&>strong]:tracking-[.08em] [&>strong]:uppercase";
 const EMPTY_LOGS: LogRecordDescriptorMsg[] = [];
 const EMPTY_LOG_PAGE: DescriptorPageState<LogRecordDescriptorMsg> = {
   records: EMPTY_LOGS,
@@ -61,6 +62,8 @@ interface RunLogPaneProps {
   nodeId?: string;
   liveLogs?: LogRecordDescriptorMsg[];
   onSelectNode: (nodeId: string) => void;
+  /** Clears the step the logs are scoped to (absent: the scope has no clear button). */
+  onClearNode?: () => void;
   /**
    * The run's timeline, as a second tab beside Logs. Omitted: the pane holds
    * only logs, with its original header.
@@ -69,6 +72,10 @@ interface RunLogPaneProps {
   /** The shown tab when `timeline` is set (default "logs"). */
   tab?: RunPaneTab;
   onTabChange?: (tab: RunPaneTab) => void;
+  /** What the timeline is narrowed to (a graph state or step), with its clear. */
+  timelineScope?: PaneScope;
+  /** The timeline's unscoped label (default "All steps"; "All states" for a machine run). */
+  timelineAll?: string;
   /**
    * Shown under the header on both tabs: what the pane is scoped to (a machine
    * run's visit, with the way back to the state machine).
@@ -78,11 +85,7 @@ interface RunLogPaneProps {
 
 export type RunPaneTab = "logs" | "timeline";
 
-/** A visit-qualified step ID (`v<visit>.<step>`) of a machine run's visit. */
-export function visitStep(nodeId: string): { visit: number; step: string } | undefined {
-  const match = /^v(\d+)\.(.+)$/.exec(nodeId);
-  return match ? { visit: Number(match[1]), step: match[2] } : undefined;
-}
+export { visitStep };
 
 interface ScrollAnchor {
   height: number;
@@ -109,9 +112,12 @@ export function RunLogPane({
   nodeId,
   liveLogs = EMPTY_LOGS,
   onSelectNode,
+  onClearNode,
   timeline,
   tab = "logs",
   onTabChange,
+  timelineScope,
+  timelineAll = "All steps",
   context,
 }: RunLogPaneProps) {
   const timelineShown = timeline !== undefined && tab === "timeline";
@@ -481,11 +487,11 @@ export function RunLogPane({
     }
     return { byId, byUniqueName };
   }, [run.nodes]);
-  const scopeLabel = nodeId
-    ? nodeDisplayNames[nodeId] && nodeDisplayNames[nodeId] !== nodeId
-      ? `${nodeDisplayNames[nodeId]} · ${nodeId}`
-      : nodeId
-    : "All steps";
+  const paneScope = timelineShown
+    ? timelineScope
+    : nodeId
+      ? { label: stepScopeLabel(nodeId, nodeDisplayNames), onClear: onClearNode }
+      : undefined;
 
   const paneStyle = expanded
     ? ({ flexBasis: `${paneHeight}px` } satisfies CSSProperties)
@@ -494,7 +500,7 @@ export function RunLogPane({
   return (
     <section
       ref={paneElement}
-      className={`run-log-pane relative z-[6] grid min-h-0 min-w-0 flex-[0_0_35px] ${expanded && context ? "grid-rows-[35px_auto_minmax(0,1fr)]" : "grid-rows-[35px_minmax(0,1fr)]"} border-t border-line bg-overlay-log shadow-[0_-5px_18px_var(--color-shadow-3)] ${expanded ? "expanded min-h-[140px] max-h-[75%]" : ""}`}
+      className={`run-log-pane relative z-[6] grid min-h-0 min-w-0 flex-[0_0_35px] ${!expanded ? "grid-rows-[35px_minmax(0,1fr)]" : context ? "grid-rows-[35px_auto_auto_minmax(0,1fr)]" : "grid-rows-[35px_auto_minmax(0,1fr)]"} border-t border-line bg-overlay-log shadow-[0_-5px_18px_var(--color-shadow-3)] ${expanded ? "expanded min-h-[140px] max-h-[75%]" : ""}`}
       style={paneStyle}
       aria-label="Run logs"
     >
@@ -555,18 +561,13 @@ export function RunLogPane({
                   role="tab"
                   aria-selected={tab === item}
                   aria-controls="run-log-content"
-                  className={`run-pane-tab ${TAB_CLASS} ${item === "logs" ? "min-w-0" : "flex-none"} ${tab === item ? "border-acid text-ink" : "border-transparent text-secondary hover:text-ink"}`}
+                  className={`run-pane-tab ${TAB_CLASS} ${tab === item ? "border-acid text-ink" : "border-transparent text-secondary hover:text-ink"}`}
                   onClick={() => {
                     if (!expanded) setExpanded(true);
                     onTabChange?.(item);
                   }}
                 >
                   <strong>{item === "logs" ? "Logs" : "Timeline"}</strong>
-                  {item === "logs" && tab === "logs" && (
-                    <span className="run-log-scope min-w-0 truncate font-mono text-[9px] font-normal text-secondary normal-case">
-                      {scopeLabel}
-                    </span>
-                  )}
                 </button>
               ))}
             </div>
@@ -581,9 +582,6 @@ export function RunLogPane({
           >
             <span aria-hidden="true">{expanded ? "▾" : "▸"}</span>
             <strong>Logs</strong>
-            <span className="run-log-scope truncate font-mono text-[9px] text-secondary">
-              {scopeLabel}
-            </span>
           </button>
         )}
         {!timelineShown && (
@@ -614,6 +612,9 @@ export function RunLogPane({
         )}
       </header>
       {expanded && context}
+      {expanded && (
+        <ScopeChip scope={paneScope} all={timelineShown ? timelineAll : "All steps"} />
+      )}
       {expanded && timelineShown && (
         <div
           className="run-log-content run-timeline-panel grid min-h-0 min-w-0"

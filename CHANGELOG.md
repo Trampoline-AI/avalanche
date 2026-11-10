@@ -18,6 +18,10 @@
   runs pane are gone, and so are the exported `MachineRunWaits`,
   `MachineVisitWaits` and `MachineVisitTimeline` (use `RunTimeline`). Waits are
   read on run changes instead of a fixed 1.5 s poll.
+- Operator UI: the bottom pane's Logs and Timeline tabs keep static labels and
+  widths; the pane's scope shows in a chip above its content ("All steps",
+  "Step: apply_nits · visit 2", "All states", "State: amend") with a clear
+  button, replacing the timeline's "Showing … · Show all" row.
 - Operator UI: the runs panel is titled **Runs** (was Timeline; its expand and
   collapse actions read "Expand runs" / "Collapse runs"). Run key labels keep
   their full width in the list; the date after them truncates instead, and the

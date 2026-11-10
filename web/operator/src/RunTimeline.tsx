@@ -42,8 +42,11 @@ export interface RunTimelineProps {
   entries: readonly TimelineEntry[];
   /** What the run waits for now, pinned above the list. */
   pending: readonly PendingItem[];
-  /** The graph selection narrowing the list, with a way to clear it. */
-  filter?: { label: string; onClear: () => void };
+  /**
+   * The graph selection narrowing the list (its label and clear show in the
+   * pane's scope chip).
+   */
+  filter?: { label: string };
   selectedId?: string;
   onHover: (focus: TimelineFocus | undefined) => void;
   onSelect: (entry: TimelineEntry | undefined) => void;
@@ -101,7 +104,7 @@ export function RunTimeline({
   return (
     <section
       aria-label="Run timeline"
-      className="run-timeline grid min-h-0 min-w-0 grid-rows-[auto_auto_auto_minmax(0,1fr)] font-mono text-[10px]"
+      className="run-timeline grid min-h-0 min-w-0 grid-rows-[auto_auto_minmax(0,1fr)] font-mono text-[10px]"
       onMouseLeave={() => onHover(undefined)}
     >
       <div>{header}</div>
@@ -148,22 +151,6 @@ export function RunTimeline({
             </li>
           ))}
         </ul>
-      ) : (
-        <div />
-      )}
-      {filter ? (
-        <div className="run-timeline-filter flex items-center gap-2 border-b border-line px-[9px] py-1 text-secondary">
-          <span>
-            Showing <span className="text-ink">{filter.label}</span>
-          </span>
-          <button
-            type="button"
-            className="cursor-pointer rounded border border-line bg-panel px-1.5 py-0.5 text-[9px] text-acid"
-            onClick={filter.onClear}
-          >
-            Show all
-          </button>
-        </div>
       ) : (
         <div />
       )}

@@ -340,15 +340,15 @@ describe("run timeline in the bottom pane", () => {
     // A state picked on the graph narrows the timeline to that state.
     // (jsdom: React Flow keeps unmeasured cards hidden, so click the card's action.)
     fireEvent.click(cardAction(container, "in_review"));
-    expect(await screen.findByText("state in_review")).toBeInTheDocument();
+    expect(await screen.findByText("State: in_review")).toBeInTheDocument();
     expect(events()).toEqual(["run-started", "v1:enter", "v1:leave", "v2:enter"]);
     const selected = () =>
       [...container.querySelectorAll('.react-flow__node[data-selected="true"]')].map((node) =>
         node.getAttribute("data-id"),
       );
     expect(selected()).toEqual(["in_review"]);
-    // Show all clears the graph's selection too, not only the list's filter.
-    fireEvent.click(screen.getByRole("button", { name: "Show all" }));
+    // The scope chip's clear clears the graph's selection too, not only the list's filter.
+    fireEvent.click(screen.getByRole("button", { name: "Clear scope (State: in_review)" }));
     expect(events()).toContain("v3:enter");
     expect(selected()).toEqual([]);
   });
@@ -386,10 +386,10 @@ describe("run timeline in the bottom pane", () => {
     const { container, rerender } = render(workspace("run-m"));
     await waitFor(() => expect(events()).toContain("v2:enter"));
     fireEvent.click(cardAction(container, "in_review"));
-    expect(await screen.findByText("state in_review")).toBeInTheDocument();
+    expect(await screen.findByText("State: in_review")).toBeInTheDocument();
     expect(container.querySelector('.react-flow__node[data-selected="true"]')).not.toBeNull();
     rerender(workspace("run-n"));
-    await waitFor(() => expect(screen.queryByText("state in_review")).toBeNull());
+    await waitFor(() => expect(screen.queryByText("State: in_review")).toBeNull());
     expect(container.querySelector('.react-flow__node[data-selected="true"]')).toBeNull();
   });
 
@@ -624,7 +624,43 @@ describe("run timeline in the bottom pane", () => {
     );
     expect(screen.getByText("Step Fetch succeeded")).toBeInTheDocument();
     fireEvent.click(cardAction(container, "fetch"));
-    expect(await screen.findByText("step Fetch")).toBeInTheDocument();
+    expect(await screen.findByText("Step: Fetch")).toBeInTheDocument();
     expect(events()).toEqual(["step:fetch:start", "step:fetch:end"]);
+  });
+
+  it("keeps the tab labels static while a scope chip shows and clears the pane's scope", async () => {
+    const { container } = renderRun(machineApi(), machineFlow.workflowId, "run-m");
+    await waitFor(() => expect(events()).toContain("v2:enter"));
+    const tabs = () =>
+      screen.getAllByRole("tab").map((tab) => ({
+        text: tab.textContent,
+        // Width classes, without the selected tab's colors.
+        className: tab.className.replace(
+          /border-(acid|transparent) text-(ink|secondary)( hover:text-ink)?/,
+          "",
+        ),
+      }));
+    const chip = () => container.querySelector(".run-pane-scope-chip")!;
+    const initial = tabs();
+    expect(initial.map((tab) => tab.text)).toEqual(["Logs", "Timeline"]);
+    for (const tab of initial) expect(tab.className).toContain("w-[76px] flex-none");
+    expect(chip()).toHaveTextContent("All states");
+    // A state picked on the graph scopes the timeline: the chip names it, the tabs hold.
+    fireEvent.click(cardAction(container, "in_review"));
+    expect(await screen.findByText("State: in_review")).toBeInTheDocument();
+    expect(tabs()).toEqual(initial);
+    // The Logs tab shows all steps; its label never takes the scope.
+    fireEvent.click(screen.getByRole("tab", { name: "Logs" }));
+    expect(chip()).toHaveTextContent("All steps");
+    expect(chip()).toHaveAttribute("data-scoped", "false");
+    expect(tabs()).toEqual(initial);
+    fireEvent.click(screen.getByRole("tab", { name: "Timeline" }));
+    const clear = screen.getByRole("button", { name: "Clear scope (State: in_review)" });
+    clear.focus();
+    expect(clear).toHaveFocus();
+    fireEvent.click(clear);
+    expect(chip()).toHaveTextContent("All states");
+    expect(screen.queryByRole("button", { name: /^Clear scope/ })).toBeNull();
+    expect(tabs()).toEqual(initial);
   });
 });

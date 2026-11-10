@@ -26,6 +26,7 @@ import { GraphCanvas, type CanvasReserve } from "./GraphCanvas";
 import { Inspector } from "./Inspector";
 import type { FlowInfoMsg, InputFileAttachment, RunSnapshotMsg } from "./model";
 import { RunLogPane, visitStep } from "./RunLogPane";
+import { stepScopeLabel } from "./ScopeChip";
 import { RunControls } from "./RunControls";
 import { DecisionForm, type WaitCard } from "./RunWaitPanel";
 import { RunTimeline, type TimelineFocus } from "./RunTimeline";
@@ -779,10 +780,23 @@ export function WorkflowWorkspaceSurface({
   const shownTopologyNames = (visitRun ?? run)?.topology?.displayNames;
   const filterLabel =
     stateFilter !== undefined
-      ? `state ${stateFilter}`
+      ? `State: ${stateFilter}`
       : filterNode !== undefined
-        ? `step ${shownTopologyNames?.[filterNode] || filterNode}`
+        ? stepScopeLabel(filterNode, shownTopologyNames)
         : undefined;
+  const timelineScope = useMemo(
+    () =>
+      filterLabel
+        ? {
+            label: filterLabel,
+            onClear: () => {
+              setStateSelection(undefined);
+              if (filterNode !== undefined) setInspectedNode(undefined);
+            },
+          }
+        : undefined,
+    [filterLabel, filterNode],
+  );
   // Hovered and selected entries point the graph at their state, arc or step.
   const [hover, setHover] = useState<{ runId?: string; focus?: TimelineFocus }>({});
   const [selectedEntry, setSelectedEntry] = useState<{
@@ -990,17 +1004,7 @@ export function WorkflowWorkspaceSurface({
       key={displayedRunId}
       entries={filteredEntries}
       pending={pendingItems}
-      filter={
-        filterLabel
-          ? {
-              label: filterLabel,
-              onClear: () => {
-                setStateSelection(undefined);
-                if (filterNode !== undefined) setInspectedNode(undefined);
-              },
-            }
-          : undefined
-      }
+      filter={filterLabel ? { label: filterLabel } : undefined}
       selectedId={chosenEntry?.id}
       onHover={onTimelineHover}
       onSelect={onTimelineSelect}
@@ -1251,7 +1255,10 @@ export function WorkflowWorkspaceSurface({
                       displayedRunId && !visitRun ? state.liveLogs[displayedRunId] : undefined
                     }
                     onSelectNode={openLogNode}
+                    onClearNode={() => setInspectedNode(undefined)}
                     timeline={runTimeline}
+                    timelineScope={timelineScope}
+                    timelineAll={machineRunId ? "All states" : "All steps"}
                     tab={runPaneTab}
                     onTabChange={setRunPaneTab}
                     context={visitNav}

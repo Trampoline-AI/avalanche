@@ -190,9 +190,9 @@ describe("run logs", () => {
     );
     await waitFor(() => expect(signals.length).toBeGreaterThan(0));
     const pane = screen.getByRole("region", { name: "Run logs" });
-    fireEvent.click(within(pane).getByRole("button", { name: /Logs.*Fetch/i }));
+    fireEvent.click(within(pane).getByRole("button", { name: /^Logs/ }));
     expect(signals.every((signal) => signal.aborted)).toBe(true);
-    fireEvent.click(within(pane).getByRole("button", { name: /Logs.*Fetch/i }));
+    fireEvent.click(within(pane).getByRole("button", { name: /^Logs/ }));
     view.rerender(
       <RunLogPane api={api} run={run} nodeId="validate" onSelectNode={() => undefined} />,
     );
@@ -203,5 +203,29 @@ describe("run logs", () => {
     });
     expect(screen.queryByText("Obsolete fetched data")).not.toBeInTheDocument();
     expect(screen.getByText("Fresh validation output")).toBeInTheDocument();
+  });
+
+  it("shows a visit step's scope in a chip under the static Logs label, with a clear", async () => {
+    const onClearNode = vi.fn();
+    const api = createApi({ listLogPage: async () => page([]) });
+    render(
+      <RunLogPane
+        api={api}
+        run={RunSnapshotMsg.create({
+          ...run,
+          topology: { ...run.topology!, displayNames: { "v2.apply_nits": "v2.apply_nits" } },
+        })}
+        nodeId="v2.apply_nits"
+        onSelectNode={() => undefined}
+        onClearNode={onClearNode}
+      />,
+    );
+    const pane = screen.getByRole("region", { name: "Run logs" });
+    expect(within(pane).getByRole("button", { name: /^Logs/ })).toHaveTextContent("Logs");
+    expect(within(pane).getByText("Step: apply_nits · visit 2")).toBeInTheDocument();
+    fireEvent.click(
+      within(pane).getByRole("button", { name: "Clear scope (Step: apply_nits · visit 2)" }),
+    );
+    expect(onClearNode).toHaveBeenCalledOnce();
   });
 });
