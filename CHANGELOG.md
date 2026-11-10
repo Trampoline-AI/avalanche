@@ -28,6 +28,10 @@
   without the `v<N>.` prefix. On narrow canvases the Timeline tab no longer
   overlaps the record count, the snapshot banner is hidden rather than drawn
   under the runs panel, and the graph keeps clear of the canvas controls.
+- Operator UI: on a run page narrower than 900 px the runs panel folds to a
+  one-line chip ("Runs · acme/api #45 ▸") so the graph is fitted into the
+  whole canvas; the chip unfolds it, its header folds it again, and the choice
+  is remembered with the rest of the workspace layout.
 - **Local operator storage upgrade:** opening an existing `state.db` upgrades it
   one-way to schema v8; older operator versions cannot reopen that database.
   Back up the database before upgrading. Durable writes use SQLite WAL with

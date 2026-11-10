@@ -255,6 +255,14 @@ def open_visit(page, visit: int) -> None:
     )
 
 
+def show_runs(page) -> None:
+    """Unfolds the runs panel a narrow run page folds to a chip."""
+    chip = page.get_by_role("button", name="Show runs")
+    if chip.count():
+        chip.click()
+        expect(page.get_by_role("region", name="Runs")).to_be_visible()
+
+
 def current_state(page):
     return page.locator('.run-graph-shell .node-card[data-current="true"]')
 
@@ -364,6 +372,7 @@ def host_neutral(page, url: str, evidence: Path) -> list[dict]:
         expect(
             waits.locator('[data-timeline-kind="event"][data-status="deferred"]')
         ).to_have_count(1)
+        show_runs(page)
         status = page.locator(".run-list-row.active [data-status]")
         expect(status).to_have_attribute("data-status", "parked")
         expect(banner).to_have_count(0)

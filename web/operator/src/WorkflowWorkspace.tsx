@@ -171,6 +171,12 @@ interface WorkflowWorkspaceSurfaceProps extends Pick<
 /** Room left under the floating timeline for the canvas controls (zoom, fit, orientation). */
 const TIMELINE_CONTROLS_CLEARANCE = 210;
 const TIMELINE_MIN_HEIGHT = 160;
+/**
+ * Below this canvas width a run page folds the floating runs panel to a one-line
+ * chip by default, so the graph is fitted into the whole canvas (the reader's own
+ * choice, either way, is remembered).
+ */
+export const RUNS_FOLD_WIDTH = 900;
 /** Machine visits the run timeline lists at first; earlier ones load on request. */
 const TIMELINE_VISITS = 10;
 const EMPTY_WAITS: WaitCard[] = [];
@@ -247,6 +253,7 @@ export function WorkflowWorkspaceSurface({
     setLogHeight,
     setLogExpanded,
     setRunPaneTab,
+    setRunsCollapsed,
   } = useWorkspaceLayout(layoutStorageKey);
   const { timelineExpanded, inspectorWidth } = layout;
   const timelineElement = useRef<HTMLDivElement>(null);
@@ -464,6 +471,22 @@ export function WorkflowWorkspaceSurface({
   }, [timelineExpanded, timelineNode, graphShell]);
 
   const historical = selectedRunId !== undefined;
+  // The canvas width decides whether a run page folds the runs panel by default.
+  const [canvasShell, setCanvasShell] = useState<HTMLElement | null>(null);
+  const [canvasShellWidth, setCanvasShellWidth] = useState<number>();
+  useEffect(() => {
+    if (!canvasShell || typeof ResizeObserver === "undefined") return;
+    const update = () => setCanvasShellWidth(canvasShell.clientWidth || undefined);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(canvasShell);
+    return () => observer.disconnect();
+  }, [canvasShell]);
+  const runsFolded =
+    historical &&
+    !timelineExpanded &&
+    (layout.runsCollapsed ??
+      (canvasShellWidth !== undefined && canvasShellWidth < RUNS_FOLD_WIDTH));
   // One input draft for Run, the schedule and the graph's input popup.
   const inputDraft = useInputDraft(!historical ? workflow : undefined, api);
   const loadedRun =
@@ -1005,6 +1028,7 @@ export function WorkflowWorkspaceSurface({
       onSelectRun={selectWorkflowRun}
       onViewAll={openAllRuns}
       onClose={closeAllRuns}
+      onCollapse={historical ? () => setRunsCollapsed(true) : undefined}
       currentLabel={currentLabel}
       currentRowAction={currentRowAction}
       showCurrentRow={showCurrentRow}
@@ -1074,7 +1098,10 @@ export function WorkflowWorkspaceSurface({
         className={`workflow-workspace relative grid min-h-0 min-w-0 w-full flex-1 overflow-hidden grid-cols-[minmax(0,1fr)_var(--workspace-inspector-divider-width)_var(--workspace-inspector-column-width)] max-[1000px]:grid-cols-[minmax(0,1fr)] ${inspectorOpen ? "with-inspector" : ""}`}
         style={workspaceStyle}
       >
-        <section className="canvas-shell relative col-start-1 flex min-h-0 min-w-0 flex-row overflow-hidden bg-canvas-shell">
+        <section
+          ref={setCanvasShell}
+          className="canvas-shell relative col-start-1 flex min-h-0 min-w-0 flex-row overflow-hidden bg-canvas-shell"
+        >
           {runListPanel && (
             <div
               ref={timelineRef}
@@ -1083,9 +1110,29 @@ export function WorkflowWorkspaceSurface({
                   ? undefined
                   : { maxHeight: timelineMaxHeight, overflowY: "auto" }
               }
-              className={`workspace-timeline z-20 ${timelineExpanded ? "relative w-[410px] max-w-full shrink-0 max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:left-0" : "absolute top-3.5 left-3.5 w-[300px] max-w-[calc(100vw-3rem)]"}`}
+              data-runs-folded={runsFolded || undefined}
+              className={`workspace-timeline z-20 ${timelineExpanded ? "relative w-[410px] max-w-full shrink-0 max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:left-0" : runsFolded ? "absolute top-3.5 left-3.5 max-w-[calc(100%-7rem)]" : "absolute top-3.5 left-3.5 w-[300px] max-w-[calc(100vw-3rem)]"}`}
             >
-              {runListPanel}
+              {runsFolded ? (
+                <button
+                  type="button"
+                  aria-label="Show runs"
+                  aria-expanded={false}
+                  title="Show the runs list"
+                  onClick={() => setRunsCollapsed(false)}
+                  className="runs-chip flex max-w-full min-w-0 cursor-pointer items-center gap-1.5 rounded border border-line bg-overlay-panel px-2.5 py-1.5 font-mono text-[10px] text-ink shadow-[0_6px_20px_var(--color-shadow-2)] hover:bg-hover focus-visible:outline-2 focus-visible:outline-acid"
+                >
+                  <strong className="flex-none tracking-[0.16em] uppercase">Runs</strong>
+                  <span className="min-w-0 truncate text-secondary">
+                    · {(selectedRunId && state.runs[selectedRunId]?.label) || selectedRunId}
+                  </span>
+                  <span aria-hidden="true" className="flex-none text-acid">
+                    ▸
+                  </span>
+                </button>
+              ) : (
+                runListPanel
+              )}
             </div>
           )}
           <div

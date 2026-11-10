@@ -1,6 +1,6 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "react";
-import { Maximize2, Minimize2, Workflow } from "lucide-react";
+import { ChevronUp, Maximize2, Minimize2, Workflow } from "lucide-react";
 
 import { formatElapsedSeconds } from "./elapsedDuration";
 import type { RunSummaryMsg, TriggerKind } from "./model";
@@ -39,6 +39,8 @@ interface RunListPanelProps extends Pick<
   onSelectRun: (runId: string | undefined) => void;
   onViewAll?: () => void;
   onClose?: () => void;
+  /** Folds the floating panel to a one-line chip (run pages). */
+  onCollapse?: () => void;
   expanded?: boolean;
   /** Rendered under the run list for the selected run, e.g. a machine run's visits. */
   selectedRunSection?: ReactNode;
@@ -79,6 +81,7 @@ export function RunListPanel({
   onViewAll,
   onClose,
   expanded = false,
+  onCollapse,
   currentLabel,
   currentRowAction,
   showCurrentRow = true,
@@ -269,6 +272,17 @@ export function RunListPanel({
           )}
         </div>
         <div className={`flex items-center ${expanded ? "gap-3" : "gap-2"}`}>
+          {!expanded && onCollapse && (
+            <button
+              type="button"
+              aria-label="Fold runs"
+              title="Fold runs to one line"
+              onClick={onCollapse}
+              className="grid size-5 cursor-pointer place-items-center rounded border-0 bg-transparent text-secondary hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-acid"
+            >
+              <ChevronUp aria-hidden="true" className="size-3" />
+            </button>
+          )}
           {!expanded && onViewAll && (
             <button
               ref={toggleButton}

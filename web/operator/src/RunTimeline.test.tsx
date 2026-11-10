@@ -393,6 +393,58 @@ describe("run timeline in the bottom pane", () => {
     expect(container.querySelector('.react-flow__node[data-selected="true"]')).toBeNull();
   });
 
+  it("folds the runs panel to a chip on a narrow run page; the reader's choice holds", async () => {
+    // A canvas narrower than RUNS_FOLD_WIDTH (jsdom has no layout or ResizeObserver).
+    const width = vi
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockImplementation(function (this: HTMLElement) {
+        return this.classList.contains("canvas-shell") ? 640 : 0;
+      });
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(private callback: () => void) {}
+        // Only the canvas width is measured here; other observers stay idle.
+        observe(element: Element) {
+          if (element.classList.contains("canvas-shell")) this.callback();
+        }
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    try {
+      const key = `timeline-test-fold-${Math.random()}`;
+      const workspace = () => (
+        <WorkflowWorkspace
+          api={machineApi()}
+          workflowId={machineFlow.workflowId}
+          layoutStorageKey={key}
+          navigation={{ selectedRunId: "run-m", onSelectRun: vi.fn() }}
+        />
+      );
+      const { unmount } = render(workspace());
+      const chip = await screen.findByRole("button", { name: "Show runs" });
+      expect(chip).toHaveTextContent("Runs· acme/api #43");
+      expect(screen.queryByRole("region", { name: "Runs" })).toBeNull();
+      fireEvent.click(chip);
+      expect(await screen.findByRole("region", { name: "Runs" })).toBeInTheDocument();
+      unmount();
+      // Unfolded by the reader: it stays unfolded on the next visit, until folded.
+      render(workspace());
+      fireEvent.click(await screen.findByRole("button", { name: "Fold runs" }));
+      expect(await screen.findByRole("button", { name: "Show runs" })).toBeInTheDocument();
+    } finally {
+      width.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("keeps the runs panel open on a wide run page", async () => {
+    renderRun(machineApi(), machineFlow.workflowId, "run-m");
+    expect(await screen.findByRole("region", { name: "Runs" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Show runs" })).toBeNull();
+  });
+
   it("keeps the visit and the way back to the state machine on the Logs tab", async () => {
     const { container } = renderRun(machineApi(), machineFlow.workflowId, "run-m");
     await waitFor(() => expect(events()).toContain("v2:enter"));

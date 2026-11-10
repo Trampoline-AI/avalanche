@@ -24,6 +24,11 @@ export interface WorkspaceLayout {
    * on Timeline, a flow run on Logs.
    */
   runPaneTab?: "logs" | "timeline";
+  /**
+   * The floating runs panel folded to a one-line chip on run pages, once the reader
+   * folds or unfolds it. Unset: folded while the canvas is narrow.
+   */
+  runsCollapsed?: boolean;
 }
 
 export function maximumInspectorWidth() {
@@ -65,6 +70,9 @@ function boundedLayout(value: Partial<WorkspaceLayout> | null): WorkspaceLayout 
     logExpanded: typeof value?.logExpanded === "boolean" ? value.logExpanded : true,
     ...(value?.runPaneTab === "logs" || value?.runPaneTab === "timeline"
       ? { runPaneTab: value.runPaneTab }
+      : {}),
+    ...(typeof value?.runsCollapsed === "boolean"
+      ? { runsCollapsed: value.runsCollapsed }
       : {}),
   };
 }
@@ -147,8 +155,13 @@ export function useWorkspaceLayout(storageKey = DEFAULT_LAYOUT_STORAGE_KEY) {
     (value: "logs" | "timeline") => setField("runPaneTab", value),
     [setField],
   );
+  const setRunsCollapsed = useCallback(
+    (value: boolean) => setField("runsCollapsed", value),
+    [setField],
+  );
   return {
     layout,
+    setRunsCollapsed,
     setInspectorWidth,
     setTimelineExpanded,
     setLogHeight,
