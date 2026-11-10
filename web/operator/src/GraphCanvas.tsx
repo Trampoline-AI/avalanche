@@ -53,6 +53,7 @@ import {
   machineArcHandles,
   machineArcPath,
   machineLabelScale,
+  MIN_ARC_LABEL_PX,
   routeMachineArcs,
   type MachineArcData,
   type MachineGraphView,
@@ -1454,13 +1455,17 @@ function GraphCanvasView({
       )?.viewport.zoom;
       return { layout, side, zoom, scale };
     };
-    let fit = fitFor(1);
+    const plain = fitFor(1);
+    let fit = plain;
     for (let step = 0; step < 6; step++) {
       const wanted = machineLabelScale(fit.zoom);
       if (wanted <= fit.scale) break;
       fit = fitFor(wanted);
     }
-    return fit;
+    if (fit === plain || fit.zoom === undefined) return plain;
+    // Out of reach (a small canvas): wider gaps would only shrink the graph further,
+    // down to the zoom floor where it no longer fits. Keep the plain layout whole.
+    return 10 * fit.scale * fit.zoom >= MIN_ARC_LABEL_PX - 0.05 ? fit : plain;
   }, [
     baseFitViewOptions,
     canvasSize,
