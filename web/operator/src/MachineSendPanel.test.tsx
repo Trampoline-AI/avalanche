@@ -208,6 +208,28 @@ it("keeps a deferred choice across reads and drops it when no longer deferred", 
   expect(screen.getByLabelText<HTMLSelectElement>("Event").value).toBe("back");
 });
 
+it("refuses a send dispatched against a render the run has since moved past", async () => {
+  const sendMachineEvent = vi.fn(receiptFor);
+  const api = { sendMachineEvent } as unknown as OperatorApi;
+  const view = render(panel(at("review", ["amended", "advance"]), api));
+  fireEvent.change(screen.getByLabelText("Event"), { target: { value: "advance" } });
+  // The submit handler of the render that still offers `advance`, as a click
+  // queued before the next read commits would run it.
+  const form = screen.getByRole("form", { name: "Send event" });
+  const propsKey = Object.keys(form).find((key) => key.startsWith("__reactProps$"))!;
+  const staleSubmit = (form as unknown as Record<string, { onSubmit: (e: unknown) => void }>)[
+    propsKey
+  ]!.onSubmit;
+  view.rerender(panel(at("ready", ["back"]), api));
+  staleSubmit({ preventDefault: () => undefined });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(sendMachineEvent).not.toHaveBeenCalled();
+  // The current render sends what the run accepts now.
+  fireEvent.click(sendButton());
+  await waitFor(() => expect(sendMachineEvent).toHaveBeenCalledTimes(1));
+  expect(sendMachineEvent.mock.calls[0]![1]).toBe("back");
+});
+
 it("enables Send event on a run whose state only defers events", () => {
   const api = { sendMachineEvent: vi.fn(receiptFor) } as unknown as OperatorApi;
   const actions = (instance: MachineInstance) => (
