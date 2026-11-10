@@ -130,7 +130,9 @@ export function layoutMachine(
               y: offset * (height + COLUMN_GAP.horizontal),
             }
           : {
-              x: offset * (width + COLUMN_GAP.vertical) - width / 2,
+              // Sibling arcs' labels sit side by side between the ranks: scaled-up
+              // labels need a wider column gap, or they run into each other.
+              x: offset * (width + COLUMN_GAP.vertical + (labelScale - 1) * 100) - width / 2,
               y: rank * (height + rankGap),
             };
     });

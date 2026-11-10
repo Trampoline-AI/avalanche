@@ -849,6 +849,50 @@ describe("routeMachineArcs", () => {
         });
       }
 
+  for (const scale of [1, 1.8, 2.6, 3])
+    for (const orientation of orientations)
+      it(`keeps arc labels off each other at label scale ${scale} (${orientation})`, () => {
+        const { positions, links, ranks } = layoutMachine(
+          { spec: prLifecycle },
+          orientation,
+          scale,
+        );
+        const { width: cardWidth, height: cardHeight } = DEFAULT_NODE_SIZE;
+        const boxes: Record<string, Box> = Object.fromEntries(
+          Object.entries(positions).map(([name, { x, y }]) => [
+            name,
+            {
+              left: x,
+              right: x + cardWidth,
+              top: y - cardHeight / 2,
+              bottom: y + cardHeight / 2,
+            },
+          ]),
+        );
+        const routes = routeMachineArcs(links, boxes, ranks, orientation, scale);
+        // Rendered label boxes (GraphCanvas `machine-arc-label`), centred on the anchor.
+        const box = (link: (typeof links)[number]) => {
+          const width =
+            ((link.data.label.length + (link.data.timer ? 2 : 0)) * 6.3 + 18) * scale;
+          const height = 20 * scale;
+          const { x, y } = routes[link.id].label;
+          const anchor = routes[link.id].anchor ?? "middle";
+          const left = anchor === "start" ? x : anchor === "end" ? x - width : x - width / 2;
+          return { left, right: left + width, top: y - height / 2, bottom: y + height / 2 };
+        };
+        const labelled = links.filter((link) => link.data.label);
+        const hits: string[] = [];
+        labelled.forEach((link, index) => {
+          for (const other of labelled.slice(index + 1)) {
+            const a = box(link);
+            const b = box(other);
+            if (a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top)
+              hits.push(`${link.data.label} on ${other.data.label}`);
+          }
+        });
+        expect(hits).toEqual([]);
+      });
+
   it("keeps one arc per trigger, each with its own ends", () => {
     for (const orientation of orientations) {
       const { links, routes } = machineGeometry(prLifecycle, orientation, DEFAULT_NODE_SIZE);
