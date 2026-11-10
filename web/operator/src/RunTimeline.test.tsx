@@ -27,6 +27,7 @@ import {
   summary,
   workflow,
 } from "./test/fixtures";
+import type { WaitCard } from "./RunWaitPanel";
 import { WorkflowWorkspace } from "./WorkflowWorkspace";
 
 // jsdom has no graph viewport: keep the real cards and node classes, drop React
@@ -349,6 +350,86 @@ describe("run timeline in the bottom pane", () => {
     fireEvent.click(within(nav).getByRole("button", { name: "State machine" }));
     await waitFor(() =>
       expect(screen.queryByRole("navigation", { name: "Machine visit" })).toBeNull(),
+    );
+  });
+
+  it("shows the reviewed artifact in the open Decide panel, then submits", async () => {
+    const card: WaitCard = {
+      nodeId: "v3.approve_1",
+      kind: "decision",
+      state: "waiting",
+      schema: {
+        type: "object",
+        properties: { kind: { enum: ["approve", "reject"] } },
+        required: ["kind"],
+      },
+      prompt: "Merge this PR?",
+      show: { diff: "+ fix lint", files: 2 },
+    };
+    let cards: WaitCard[] = [card];
+    const submitDecision = vi.fn(async () => {
+      cards = [
+        {
+          ...card,
+          state: "resolved",
+          audit: { outcome: { payload_digest: "sha256:ab12" }, reason: "ship it", at: T0 + 40 },
+        },
+      ];
+    });
+    // The live visit's snapshot holds the decision step, so its wait is listed.
+    const live = {
+      ...visitRecord(3, "ready", T0 + 30, null),
+      snapshot: RunSnapshotMsg.create({
+        operatorInstanceId: "operator-1",
+        asOfEventUlid: eventUlid(2),
+        summary: RunSummaryMsg.create({ ...machineRun, runId: "run-m:v3" }),
+        nodes: [
+          NodeSnapshotMsg.create({
+            nodeId: "v3.approve_1",
+            name: "approve",
+            nodeType: "wait",
+            status: "running",
+            startedAt: 31,
+            revision: "1",
+          }),
+        ],
+      }),
+    } as MachineVisit;
+    const base = machineApi();
+    renderRun(
+      machineApi({
+        listRunWaits: async () => cards,
+        submitDecision,
+        getMachineVisit: async (runId, visit) =>
+          visit === 3 ? live : base.getMachineVisit!(runId, visit),
+      }),
+      machineFlow.workflowId,
+      "run-m",
+    );
+    const pending = await screen.findByRole("list", { name: "Pending" });
+    const row = await within(pending).findByText("Waiting: Merge this PR?");
+    expect(screen.queryByRole("region", { name: "Reviewed artifact" })).toBeNull();
+    fireEvent.click(within(row.closest("li")!).getByRole("button", { name: "Decide" }));
+    // Never answered blind: the pinned artifact is in the open panel.
+    const artifact = await screen.findByRole("region", { name: "Reviewed artifact" });
+    expect(artifact).toHaveTextContent('"diff": "+ fix lint"');
+    expect(artifact).toHaveTextContent('"files": 2');
+    fireEvent.change(screen.getByLabelText("kind"), { target: { value: '"approve"' } });
+    fireEvent.change(screen.getByLabelText("Reason"), { target: { value: "ship it" } });
+    fireEvent.click(screen.getByRole("button", { name: "Submit decision" }));
+    await waitFor(() =>
+      expect(submitDecision).toHaveBeenCalledWith(
+        "run-m",
+        "v3.approve_1",
+        { kind: "approve" },
+        "ship it",
+        expect.any(String),
+      ),
+    );
+    // The resolved wait's entry carries the audit outcome.
+    const resolved = await screen.findByText(/Wait resolved: Merge this PR\?/);
+    expect(resolved.closest("button")).toHaveTextContent(
+      'ship it · outcome {"payload_digest":"sha256:ab12"}',
     );
   });
 

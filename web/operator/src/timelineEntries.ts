@@ -229,7 +229,11 @@ function waitEntries(
         offset: closed,
         at: card.audit?.at,
         title: `Wait ${card.state}: ${waitLabel(card)}`,
-        detail: card.audit?.reason,
+        detail: card.audit
+          ? [card.audit.reason, `outcome ${JSON.stringify(card.audit.outcome)}`]
+              .filter(Boolean)
+              .join(" · ")
+          : undefined,
         status: card.state,
         tone: card.state === "resolved" ? "ok" : "muted",
         visit: base.visit || undefined,

@@ -12,9 +12,22 @@ export interface WaitCard {
   audit?: { outcome: JsonValue; reason: string; at: number };
 }
 
+/** A decision's pinned artifact or audit outcome, as indented JSON. */
+export function JsonBlock({ label, value }: { label: string; value: JsonValue }) {
+  return (
+    <section aria-label={label} className="grid gap-1">
+      <span className="text-[8px] tracking-[.12em] text-secondary uppercase">{label}</span>
+      <pre className="m-0 max-h-40 overflow-auto rounded border border-line bg-canvas-shell p-1.5 text-[10px] whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">
+        {JSON.stringify(value, null, 2)}
+      </pre>
+    </section>
+  );
+}
+
 /**
- * Answers a pending decision wait. Uses the pinned server schema and server-side
- * validation, never a payload reviewer ID; the idempotency key is kept for retries.
+ * Answers a pending decision wait, showing the artifact under review first (never
+ * answered blind). Uses the pinned server schema and server-side validation, never
+ * a payload reviewer ID; the idempotency key is kept for retries.
  */
 export function DecisionForm({
   card,
@@ -55,6 +68,9 @@ export function DecisionForm({
   }
   return (
     <form onSubmit={(event) => void decide(event)} className="grid gap-2">
+      {card.show !== null && card.show !== undefined && (
+        <JsonBlock label="Reviewed artifact" value={card.show} />
+      )}
       {Object.entries(properties).map(([name, schema]) => {
         const field = typeof schema === "boolean" ? undefined : schema;
         return (

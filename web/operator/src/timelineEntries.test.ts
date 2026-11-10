@@ -524,7 +524,10 @@ describe("flow run timeline", () => {
     expect(entries.find((entry) => entry.id === "step:lint:end")!.detail).toBe(
       "after 3 attempts",
     );
-    expect(entries.find((entry) => entry.kind === "wait-resolved")!.detail).toBe("looks good");
+    // The audit: who-why and what was decided, on the resolved wait's entry.
+    expect(entries.find((entry) => entry.kind === "wait-resolved")!.detail).toBe(
+      'looks good · outcome {"ok":true}',
+    );
     expect(entries.at(-1)!.offset).toBe(9);
   });
 
