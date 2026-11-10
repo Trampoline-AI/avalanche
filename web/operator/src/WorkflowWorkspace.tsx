@@ -833,32 +833,34 @@ export function WorkflowWorkspaceSurface({
         </button>
       </p>
     ) : undefined;
+  // On both tabs of the run pane: a step entry's Logs action opens the visit there too.
+  const visitNav =
+    machineRunId && selectedVisit !== undefined ? (
+      <nav
+        aria-label="Machine visit"
+        className="flex flex-wrap items-center gap-2 border-b border-line px-[9px] py-1.5 font-mono text-[10px] text-secondary"
+      >
+        <button
+          type="button"
+          className="cursor-pointer border-0 bg-transparent p-0 text-acid underline underline-offset-2"
+          onClick={() => selectVisit(undefined)}
+        >
+          State machine
+        </button>
+        <span aria-hidden="true">/</span>
+        <span className="text-ink">
+          Visit {selectedVisit}
+          {visit && !visitExpired ? ` · ${visit.state}` : ""}
+          {visitExpired ? " · expired" : ""}
+          {visit?.catalog_revision ? ` · revision ${visit.catalog_revision}` : ""}
+        </span>
+        <span>steps on the graph</span>
+        {!visit && <span role="status">Loading visit…</span>}
+      </nav>
+    ) : undefined;
   const timelineHeader =
-    machineRunId && (selectedVisit !== undefined || hiddenVisits > 0) ? (
+    machineRunId && hiddenVisits > 0 ? (
       <>
-        {selectedVisit !== undefined && (
-          <nav
-            aria-label="Machine visit"
-            className="flex flex-wrap items-center gap-2 border-b border-line px-[9px] py-1.5 font-mono text-[10px] text-secondary"
-          >
-            <button
-              type="button"
-              className="cursor-pointer border-0 bg-transparent p-0 text-acid underline underline-offset-2"
-              onClick={() => selectVisit(undefined)}
-            >
-              State machine
-            </button>
-            <span aria-hidden="true">/</span>
-            <span className="text-ink">
-              Visit {selectedVisit}
-              {visit && !visitExpired ? ` · ${visit.state}` : ""}
-              {visitExpired ? " · expired" : ""}
-              {visit?.catalog_revision ? ` · revision ${visit.catalog_revision}` : ""}
-            </span>
-            <span>steps on the graph</span>
-            {!visit && <span role="status">Loading visit…</span>}
-          </nav>
-        )}
         {hiddenVisits > 0 && (
           <div className="px-[9px] py-1.5">
             <button
@@ -1156,6 +1158,7 @@ export function WorkflowWorkspaceSurface({
                     timeline={runTimeline}
                     tab={runPaneTab}
                     onTabChange={setRunPaneTab}
+                    context={visitNav}
                   />
                 ) : (
                   emptyRunPanel

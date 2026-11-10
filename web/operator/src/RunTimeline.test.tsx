@@ -335,6 +335,23 @@ describe("run timeline in the bottom pane", () => {
     expect(events()).toContain("v3:enter");
   });
 
+  it("keeps the visit and the way back to the state machine on the Logs tab", async () => {
+    const { container } = renderRun(machineApi(), machineFlow.workflowId, "run-m");
+    await waitFor(() => expect(events()).toContain("v2:enter"));
+    const row = container.querySelector('[data-entry-id="v2:enter"]')!;
+    fireEvent.click(within(row as HTMLElement).getByRole("button", { name: /Entered amend/ }));
+    fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "Logs" }));
+    expect(
+      await screen.findByRole("tab", { name: /Logs/, selected: true }),
+    ).toBeInTheDocument();
+    const nav = await screen.findByRole("navigation", { name: "Machine visit" });
+    expect(nav).toHaveTextContent("Visit 2");
+    fireEvent.click(within(nav).getByRole("button", { name: "State machine" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("navigation", { name: "Machine visit" })).toBeNull(),
+    );
+  });
+
   it("omits entries a host does not report, with one neutral note", async () => {
     // No event facts, receipts or deferred events (the Delta console's host).
     renderRun(machineApi({}, true), machineFlow.workflowId, "run-m");

@@ -67,6 +67,11 @@ interface RunLogPaneProps {
   /** The shown tab when `timeline` is set (default "logs"). */
   tab?: RunPaneTab;
   onTabChange?: (tab: RunPaneTab) => void;
+  /**
+   * Shown under the header on both tabs: what the pane is scoped to (a machine
+   * run's visit, with the way back to the state machine).
+   */
+  context?: ReactNode;
 }
 
 export type RunPaneTab = "logs" | "timeline";
@@ -105,6 +110,7 @@ export function RunLogPane({
   timeline,
   tab = "logs",
   onTabChange,
+  context,
 }: RunLogPaneProps) {
   const timelineShown = timeline !== undefined && tab === "timeline";
   const [localExpanded, setLocalExpanded] = useState(true);
@@ -486,7 +492,7 @@ export function RunLogPane({
   return (
     <section
       ref={paneElement}
-      className={`run-log-pane relative z-[6] grid min-h-0 min-w-0 flex-[0_0_35px] grid-rows-[35px_minmax(0,1fr)] border-t border-line bg-overlay-log shadow-[0_-5px_18px_var(--color-shadow-3)] ${expanded ? "expanded min-h-[140px] max-h-[75%]" : ""}`}
+      className={`run-log-pane relative z-[6] grid min-h-0 min-w-0 flex-[0_0_35px] ${expanded && context ? "grid-rows-[35px_auto_minmax(0,1fr)]" : "grid-rows-[35px_minmax(0,1fr)]"} border-t border-line bg-overlay-log shadow-[0_-5px_18px_var(--color-shadow-3)] ${expanded ? "expanded min-h-[140px] max-h-[75%]" : ""}`}
       style={paneStyle}
       aria-label="Run logs"
     >
@@ -605,6 +611,7 @@ export function RunLogPane({
           </button>
         )}
       </header>
+      {expanded && context}
       {expanded && timelineShown && (
         <div
           className="run-log-content run-timeline-panel grid min-h-0 min-w-0"
