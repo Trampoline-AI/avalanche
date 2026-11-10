@@ -27,8 +27,9 @@ from avalanche.machine_spec import MachineSpec
 from avalanche.policies import event
 from avalanche.run_steps import RunOpSpec, RunStart
 
+from .discovery import WorkflowDiscoveryError
 from .machine_steps import HostStepOutput, MachineStepRequest
-from .machine_validation import validate_native
+from .machine_validation import MachineDefinitionUnavailableError, validate_native
 from .models import RunState, RunStatus, TriggerKind, WorkflowDescriptor, WorkflowTopology
 from .registry import UnknownWorkflow
 from .source import resolve_live_source
@@ -186,29 +187,87 @@ class MachineHost:
         return descriptor, MachineSpec.model_validate_json(descriptor.machine_spec_json)
 
     def _current_spec(
-        self, record: InstanceRecord, *, request: RunRequest | None = None
+        self, record: InstanceRecord, *, reload: bool = False
     ) -> MachineSpec | None:
-        """Definition loss is a repairable persisted state, not a host failure."""
+        """Only a loaded graph can establish that the current state is missing.
+
+        Discovery keeps the last valid descriptors after an import failure. Retry
+        discovery on every subsequent trigger, even with watching disabled; never
+        execute those stale descriptors while their source is unavailable.
+        """
+        diagnostics = self.op._registry.view.diagnostics
+        if (
+            reload
+            or record.reason in {"definition_unavailable", "state_missing"}
+            or any(item.kind in {"import_error", "build_error"} for item in diagnostics)
+        ):
+            try:
+                self.op._refresh_workflows()
+            except WorkflowDiscoveryError:
+                # Inspect this machine's source diagnostic below. An unrelated
+                # broken file must not prevent a valid machine from progressing.
+                pass
         try:
             descriptor, root = self.op._registry.resolve_source(record.machine)
             source = (root.path / descriptor.locator.relative_file).resolve()
-            unavailable = any(
-                item.kind in {"import_error", "build_error"}
-                and Path(item.path).resolve() == source
+            errors = [
+                item.message
                 for item in self.op._registry.view.diagnostics
-            )
+                if item.kind in {"import_error", "build_error"}
+                and Path(item.path).resolve() == source
+            ]
+            if errors:
+                raise ValueError("; ".join(errors))
             resolve_live_source(root, descriptor.locator)
             _, spec = self._descriptor(record.machine)
-            if unavailable:
-                spec = None
-        except (UnknownWorkflow, FileNotFoundError):
-            spec = None
-        if spec is None or record.state not in spec.states:
-            record.reason = "state_missing"
-            self._commit(record, lambda connection: None, RunStatus.WAITING, request=request)
+        except (UnknownWorkflow, FileNotFoundError, ValueError) as exc:
+            summary = f"{type(exc).__name__}: {exc}"
+            if isinstance(exc, UnknownWorkflow):
+                summary += "; " + "; ".join(
+                    item.message
+                    for item in self.op._registry.view.diagnostics
+                    if item.kind in {"import_error", "build_error"}
+                )
+            self._definition_unavailable(record, summary)
             return None
         record.spec = spec
+        if record.state not in spec.states:
+            if record.reason != "outcome_unknown":
+                record.reason = "state_missing"
+            self._commit(record, lambda connection: None, record.run_status)
+            return None
+        if record.reason in {"definition_unavailable", "state_missing"}:
+            record.reason = None
         return spec
+
+    def _definition_unavailable(self, record: InstanceRecord, summary: str) -> None:
+        # Never implicitly replay interrupted work when its definition returns.
+        if record.reason != "outcome_unknown":
+            record.reason = "definition_unavailable"
+        self._commit(
+            record,
+            lambda connection: MachinesTable.fact(
+                connection,
+                record.run_id,
+                record.visit,
+                status="definition_unavailable",
+                source="internal",
+                reason=summary[:2000],
+                at=time.time(),
+            ),
+            record.run_status,
+        )
+
+    def _arm_timers(self, record: InstanceRecord, *, unavailable: bool = False) -> None:
+        with self.op._state_store.transaction() as connection:
+            timers = MachinesTable.timers(connection, record.run_id, record.visit)
+        self.heap = [entry for entry in self.heap if entry[1] != record.run_id]
+        heapq.heapify(self.heap)
+        for timer in timers:
+            # Preserve the persisted absolute deadline. Back off a failed load,
+            # rather than spinning on an overdue timer or forgetting it entirely.
+            wake = max(timer.due, time.time() + 1) if unavailable else timer.due
+            heapq.heappush(self.heap, (wake, record.run_id, record.visit, timer.timer_index))
 
     def _commit(
         self,
@@ -247,9 +306,10 @@ class MachineHost:
         consumed_receipt: str | None = None,
         fired: TimerRecord | None = None,
     ) -> None:
-        spec = self._current_spec(record, request=request)
-        if spec is None:
-            return
+        # Callers resolve the definition before changing state/visit. Once entry
+        # starts, always persist its visit row; a source race becomes an interrupted
+        # spawned visit, never a visit number with no journal row.
+        spec = record.spec
         record.reason = None
         record.outcome = None
         record.internal_event = None
@@ -435,6 +495,76 @@ class MachineHost:
         self._enter(record, request=command.request)
         return run_id
 
+    def _validate_event(self, record: InstanceRecord, name: str, payload: JsonValue) -> None:
+        state = record.spec.states[record.state]
+        edge = next((edge for edge in state.transitions if edge.event == name), None)
+        if edge is None:
+            return
+        if edge.payload_schema is None:
+            if payload not in ({}, None):
+                raise WaitRefusalError("event_payload_must_be_empty", 422)
+        else:
+            descriptor, root = self.op._registry.resolve_source(record.machine)
+            validate_native(descriptor, root, "event", payload, state=record.state, event=name)
+
+    def _recover_inbox(self, record: InstanceRecord) -> bool:
+        """Finish validation deferred during definition loss, without losing receipts."""
+        with self.op._state_store.transaction() as connection:
+            inbox = MachinesTable.inbox(connection, record.run_id)
+            pending = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT json_extract(record_json, '$.receipt_id') FROM machine_facts "
+                    "WHERE run_id=? AND json_extract(record_json, '$.status')='accepted' "
+                    "AND json_extract(record_json, '$.reason')='definition_unavailable'",
+                    (record.run_id,),
+                )
+            }
+            validated = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT json_extract(record_json, '$.receipt_id') FROM machine_facts "
+                    "WHERE run_id=? AND json_extract(record_json, '$.status')='validated'",
+                    (record.run_id,),
+                )
+            }
+        state = record.spec.states[record.state]
+        accepts = {edge.event for edge in state.transitions}
+        for row in inbox:
+            if row.receipt_id not in pending - validated:
+                continue
+            reason = None
+            status = "validated"
+            if row.event not in accepts:
+                if row.event in state.defer:
+                    continue
+                status, reason = "ignored", "not_accepted_by_restored_state"
+            else:
+                try:
+                    self._validate_event(record, row.event, row.payload)
+                except (MachineDefinitionUnavailableError, FileNotFoundError) as exc:
+                    self._definition_unavailable(record, str(exc))
+                    return False
+                except ValueError as exc:
+                    status, reason = "rejected", str(exc)[:2000]
+            with self.op._state_store.transaction() as connection:
+                if status != "validated":
+                    connection.execute(
+                        "DELETE FROM wait_inbox WHERE run_id=? AND receipt_id=?",
+                        (record.run_id, row.receipt_id),
+                    )
+                MachinesTable.fact(
+                    connection,
+                    record.run_id,
+                    record.visit,
+                    status=status,
+                    event=row.event,
+                    receipt_id=row.receipt_id,
+                    reason=reason,
+                    at=time.time(),
+                )
+        return True
+
     def _send(self, command: Send) -> MachineEventReceipt:
         self.validate_send(command.event, command.payload, command.idempotency_key)
         record = self._load(command.run_id)
@@ -448,31 +578,31 @@ class MachineHost:
         if replay is not None:
             if replay["request_json"] != request_json:
                 raise WaitRefusalError("idempotency_conflict", 409)
+            self._drive(record)
             return MachineEventReceipt.model_validate_json(replay["response_json"]).model_copy(
                 update={"duplicate": True}
             )
         if record.phase in {"final", "closed"}:
             raise WaitRefusalError("run_closed", 409)
         spec = self._current_spec(record)
-        if spec is None:
+        if spec is None and record.reason == "state_missing":
             raise WaitRefusalError("state_missing", 409)
-        state = spec.states[record.state]
-        edge = next((edge for edge in state.transitions if edge.event == command.event), None)
-        accepted = edge is not None or command.event in state.defer
-        if edge is not None:
-            if edge.payload_schema is None:
-                if command.payload not in ({}, None):
-                    raise WaitRefusalError("event_payload_must_be_empty", 422)
-            else:
-                descriptor, root = self.op._registry.resolve_source(record.machine)
-                validate_native(
-                    descriptor,
-                    root,
-                    "event",
-                    command.payload,
-                    state=record.state,
-                    event=command.event,
-                )
+        # While the definition is unavailable this is durable JSON ingress, not
+        # schema acceptance. Validate against the restored native model before
+        # the reducer may consume it, and journal any rejection visibly.
+        accepted = True
+        if spec is not None:
+            state = spec.states[record.state]
+            accepted = (
+                any(edge.event == command.event for edge in state.transitions)
+                or command.event in state.defer
+            )
+            try:
+                self._validate_event(record, command.event, command.payload)
+            except (MachineDefinitionUnavailableError, FileNotFoundError) as exc:
+                self._definition_unavailable(record, str(exc))
+                spec = None
+                accepted = True
         receipt = MachineEventReceipt(
             receipt_id=uuid4().hex,
             key=command.idempotency_key,
@@ -516,6 +646,7 @@ class MachineHost:
                 status=receipt.status,
                 event=command.event,
                 receipt_id=receipt.receipt_id,
+                reason="definition_unavailable" if spec is None else None,
                 at=receipt.accepted_at,
             )
         # The receipt is durable before publication or driving work.
@@ -532,6 +663,11 @@ class MachineHost:
             return
         spec = self._current_spec(record)
         if spec is None:
+            if record.phase == "waiting":
+                self._arm_timers(record, unavailable=True)
+            return
+        if not self._recover_inbox(record):
+            self._arm_timers(record, unavailable=True)
             return
         with self.op._state_store.transaction() as connection:
             timers = MachinesTable.timers(connection, record.run_id, record.visit)
@@ -595,10 +731,7 @@ class MachineHost:
         else:
             record.internal_consumed = reduction.record.internal_consumed
             self._commit(record, lambda connection: None, RunStatus.WAITING)
-            for timer in timers:
-                entry = (timer.due, record.run_id, record.visit, timer.timer_index)
-                if entry not in self.heap:
-                    heapq.heappush(self.heap, entry)
+            self._arm_timers(record)
 
     def _finished(self, command: VisitFinished) -> None:
         record = self._load(command.run_id)
@@ -751,12 +884,23 @@ class MachineHost:
                         reply.set_result(None)
                     case Retry(run_id=run_id, reply=reply):
                         record = self._load(run_id)
-                        if record.phase != "interrupted":
-                            raise ValueError("Only an interrupted machine visit can be retried")
-                        with self.op._state_store.transaction() as connection:
-                            previous = MachinesTable.visit(connection, run_id, record.visit)
-                        record.visit += 1
-                        self._enter(record, previous=previous)
+                        phase = record.phase
+                        if phase not in {"interrupted", "waiting", "needs_attention"}:
+                            raise ValueError(
+                                "Only an interrupted or waiting machine can be retried"
+                            )
+                        if self._current_spec(record, reload=True) is None:
+                            if record.phase == "waiting":
+                                self._arm_timers(record, unavailable=True)
+                            if record.reason == "state_missing":
+                                raise ValueError("state_missing")
+                        elif phase == "interrupted":
+                            with self.op._state_store.transaction() as connection:
+                                previous = MachinesTable.visit(connection, run_id, record.visit)
+                            record.visit += 1
+                            self._enter(record, previous=previous)
+                        else:
+                            self._drive(record, catchup=True)
                         reply.set_result(None)
                     case Close(run_id=run_id, reply=reply):
                         record = self._load(run_id)

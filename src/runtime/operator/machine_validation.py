@@ -36,10 +36,15 @@ class ValidationRequest(BaseModel):
     event: str = ""
 
 
+class MachineDefinitionUnavailableError(ValueError):
+    """Source could not be imported/built; no payload validation took place."""
+
+
 class ValidationResponse(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     value: JsonValue = None
     error: str | None = None
+    definition_unavailable: bool = False
 
 
 def validate_native(
@@ -69,9 +74,13 @@ def validate_native(
         timeout=60,
     )
     if completed.returncode != 0:
-        raise ValueError("Machine validation process failed before returning a result")
+        raise MachineDefinitionUnavailableError(
+            "Machine validation process failed before returning a result"
+        )
     response = ValidationResponse.model_validate_json(completed.stdout)
     if response.error is not None:
+        if response.definition_unavailable:
+            raise MachineDefinitionUnavailableError(response.error)
         raise ValueError(response.error)
     return response.value
 
@@ -109,9 +118,14 @@ def main() -> None:
         with redirect_stdout(sys.stderr):
             root = Path(request.root)
             sys.path.insert(0, str(root))
-            module = _import_workflow_module(root, request.relative_file)
-            builder = vars(module)[request.builder]
-            workflow = builder()
+            try:
+                module = _import_workflow_module(root, request.relative_file)
+                builder = vars(module)[request.builder]
+                workflow = builder()
+            except Exception as exc:
+                # This isolated tenant-code boundary distinguishes source/build
+                # failures from a successfully loaded model refusing a payload.
+                raise MachineDefinitionUnavailableError(f"{type(exc).__name__}: {exc}") from exc
             wire = json.dumps(request.value, allow_nan=False)
             if request.op == "key":
                 if workflow.input_type is None or not workflow.key_fields:
@@ -141,6 +155,8 @@ def main() -> None:
                     _require_json_event_model(model)
                     value = model.model_validate_json(wire, strict=True).model_dump(mode="json")
         response = ValidationResponse(value=value)
+    except MachineDefinitionUnavailableError as exc:
+        response = ValidationResponse(error=str(exc), definition_unavailable=True)
     except ValidationError as exc:
         issues = [
             ".".join(map(str, issue["loc"])) + ": " + issue["type"]

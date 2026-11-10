@@ -576,7 +576,26 @@ def test_machine_visits_use_latest_code_keep_deadlines_and_guard_missing_state(t
             record = MachinesTable.load(connection, missing)
         assert record.phase == "needs_attention" and record.reason == "state_missing"
         assert journal.read_text() == before
-        op.cancel_run(missing)
+        with pytest.raises(ValueError, match="state_missing"):
+            op._machine_host.retry(missing)
+        with op._state_store.transaction() as connection:
+            assert MachinesTable.load(connection, missing).visit == 1
+            assert MachinesTable.visit(connection, missing, 1).state == "pending"
+        target.write_text(changed.replace("seconds=15", "seconds=2"))
+        # Explicit retry reloads the restored definition without a catalog rescan.
+        op._machine_host.retry(missing)
+        record = parked(missing, 1)
+        assert record.reason is None
+        assert op.start_run("approval", input={"ticket": 2, "journal": str(journal)}) == missing
+        op._machine_host.send(missing, "approved", {}, "restored")
+        assert wait_terminal(op, missing, timeout=30).status == RunStatus.SUCCESS
+        with op._state_store.transaction() as connection:
+            assert [MachinesTable.visit(connection, missing, i).state for i in (1, 2, 3)] == [
+                "pending",
+                "reviewed",
+                "done",
+            ]
+            assert MachinesTable.load(connection, missing).visit == 3
     finally:
         op.close()
 

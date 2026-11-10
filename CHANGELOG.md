@@ -14,10 +14,14 @@
 - **CLI name collision:** `ava run list|show|retry|cancel|rerun` are now reserved
   command words and shadow workflows with those names. Rename the workflow or
   invoke it using its fully qualified workflow selector (`file.py::symbol`).
-- Missing local machine definitions park their runs as `waiting` /
-  `needs_attention` with reason `state_missing`, including restart and timer
-  delivery. Visit preparation/start failures preserve the journal and require
-  explicit visit retry; failed, unacknowledged keyed-flow starts release the key.
+- Temporary local machine definition loss leaves waiting runs repairable:
+  `definition_unavailable` and its error are visible in the run's event facts;
+  sends remain durable and timers retain their deadlines. Restoring the source
+  resumes the same run/key on send, timer delivery, explicit retry or restart.
+  Only a loaded definition without the current state produces `state_missing` /
+  `needs_attention`; restore that state and use `ava run retry RUN_ID --visit`.
+  Visit preparation/start failures preserve the journal and require explicit
+  visit retry; failed, unacknowledged keyed-flow starts release the key.
 - Local machine sends remain JSON-only until durable artifact-event ownership
   is implemented: admission refuses declared File/Workspace payload fields,
   including nested fields, not ordinary JSON keys such as `type: file`.

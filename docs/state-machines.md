@@ -280,8 +280,32 @@ link, and history reads explicitly report `expired`. Removing the database
 itself is a destructive identity reset.
 
 Each visit imports the latest source code on disk and records the operator's
-catalog revision. A state removed from the current definition becomes
-`needs_attention` with `state_missing`; cancel it and start with a new key.
+catalog revision. Only a successfully loaded definition without the run's current
+state produces `needs_attention` with `state_missing`. Restore that state and run
+`ava run retry RUN_ID --visit` to resume without redoing its completed work or
+changing the run/key. If the state is intentionally retired, cancel the run and
+start with a new key instead.
+
+A missing/renamed file or symbol, import error, or build error is different:
+waiting runs stay `waiting`, with reason `definition_unavailable` and an error
+summary in the event facts. No transition executes against a last-valid catalog
+while the definition is unavailable. Original timers remain armed; source loading
+is retried on sends (including receipt replays), timer delivery, explicit retry,
+and operator restart, even when source watching is off. Restoring the source
+clears the reason and resumes the same run/key; overdue timers retain reducer
+priority and fire once in deadline order.
+
+Sends during definition loss durably queue their JSON and return an `accepted`
+ingress receipt before any processing. The restored definition validates queued
+payloads before consumption. Invalid payloads produce a visible `rejected` fact
+with the validation error; events not accepted/deferred by the restored state
+produce an `ignored` fact. Receipts remain replayable, and valid/deferred events
+follow the ordinary reducer/inbox rules. Admission still does not promise a
+transition. If source loading fails during validation, the event stays queued.
+A visit that already started but fails to prepare remains `interrupted` and
+requires explicit retry; restoring a definition never replays uncertain work.
+A retry while source is still unavailable creates no new visit.
+
 Editing a timer delay does not move an already-entered state's deadline; the
 new delay applies on the next entry. Local visits are therefore different from
 Delta, where an instance remains pinned to its starting deployment. Application

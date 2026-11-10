@@ -780,7 +780,7 @@ def test_machine_timer_and_interrupted_visit_survive_sigkill(tmp_path):
                 os.killpg(report["coordinator"], signal.SIGKILL)
 
 
-@pytest.mark.parametrize("loss", ["deleted", "renamed", "syntax"])
+@pytest.mark.parametrize("loss", ["deleted", "renamed", "syntax", "symbol", "build"])
 @pytest.mark.parametrize("boundary", ["restart", "timer"])
 def test_missing_machine_definition_parks_without_stopping_operator(tmp_path, loss, boundary):
     from runtime.operator.state.machines import MachinesTable
@@ -789,6 +789,10 @@ def test_missing_machine_definition_parks_without_stopping_operator(tmp_path, lo
     root.mkdir()
     fixture = root / "machine.py"
     source = (Path(__file__).parents[1] / "fixtures" / "local_machine.py").read_text()
+    source = source.replace(
+        "import avalanche as ava",
+        "import avalanche as ava\n\nclass Approval(ava.BaseInput):\n    by: str",
+    ).replace('pending.on("approved")', 'pending.on("approved", payload=Approval)')
     fixture.write_text(source.replace("seconds=2", "seconds=4"))
     db = tmp_path / "state.db"
     op = _operator(root, db)
@@ -798,7 +802,7 @@ def test_missing_machine_definition_parks_without_stopping_operator(tmp_path, lo
         )
         _wait_until(lambda: op.get_run(run_id).status is RunStatus.WAITING)
         if boundary == "timer":
-            op._machine_host.send(run_id, "approved", {}, "advance")
+            op._machine_host.send(run_id, "approved", {"by": "Ada"}, "advance")
             _wait_until(
                 lambda: (
                     _machine_record(op, run_id).visit == 2
@@ -814,6 +818,15 @@ def test_missing_machine_definition_parks_without_stopping_operator(tmp_path, lo
             fixture.unlink()
         elif loss == "renamed":
             fixture.rename(root / "renamed.py")
+        elif loss == "symbol":
+            fixture.write_text(source.replace("def approval():", "def renamed_approval():"))
+        elif loss == "build":
+            fixture.write_text(
+                source.replace(
+                    "pending = ava.state(observe, initial=True)",
+                    "raise ValueError('temporary build failure')",
+                )
+            )
         else:
             fixture.write_text("def invalid syntax:\n")
         if boundary == "restart":
@@ -821,11 +834,145 @@ def test_missing_machine_definition_parks_without_stopping_operator(tmp_path, lo
         else:
             op._registry.scan([str(root)])
             time.sleep(max(0, due - time.time()) + 0.3)
-        _wait_until(lambda: _machine_record(op, run_id).reason == "state_missing", seconds=5)
+        _wait_until(
+            lambda: _machine_record(op, run_id).reason == "definition_unavailable", seconds=5
+        )
         record = _machine_record(op, run_id)
-        assert record.phase == "needs_attention" and record.run_status is RunStatus.WAITING
+        assert record.phase == "waiting" and record.run_status is RunStatus.WAITING
         assert op.fatal_error is None
         assert op.list_run_summaries().runs[0].run_id == run_id
+        with op._state_store.transaction() as c:
+            errors = c.execute(
+                "SELECT record_json FROM machine_facts WHERE run_id=?", (run_id,)
+            ).fetchall()
+            assert any(
+                (fact := json.loads(row[0]))["status"] == "definition_unavailable"
+                and fact["reason"]
+                for row in errors
+            )
+            if boundary == "timer":
+                assert MachinesTable.timers(c, run_id, 2)[0].due == due
+        if boundary == "restart":
+            invalid = op._machine_host.send(run_id, "approved", {"by": 42}, "bad-payload")
+            unknown = op._machine_host.send(run_id, "unknown", {}, "unknown-event")
+            receipt = op._machine_host.send(
+                run_id, "approved", {"by": "Ada"}, "while-unavailable"
+            )
+            assert invalid.status == unknown.status == receipt.status == "accepted"
+            assert op._machine_host.send(
+                run_id, "approved", {"by": "Ada"}, "while-unavailable"
+            ).duplicate
+            with op._state_store.transaction() as c:
+                assert [row.receipt_id for row in MachinesTable.inbox(c, run_id)] == [
+                    invalid.receipt_id,
+                    unknown.receipt_id,
+                    receipt.receipt_id,
+                ]
+            op.close()
+            op = None
+        if loss == "renamed":
+            (root / "renamed.py").unlink()
+        fixture.write_text(source.replace("seconds=2", "seconds=4"))
+        if boundary == "restart":
+            op = _operator(root, db)
+            _wait_until(lambda: _machine_record(op, run_id).visit == 2)
+        # Timer recovery deliberately does not rescan or restart the operator.
+        _wait_until(lambda: _machine_record(op, run_id).reason is None)
+        assert (
+            op.start_run("approval", input={"ticket": 17, "journal": str(tmp_path / "visits")})
+            == run_id
+        )
+        assert _wait_terminal(op, run_id).status is RunStatus.SUCCESS
+        record = _machine_record(op, run_id)
+        assert record.reason is None and record.visit == 3 and record.key == [17]
+        with op._state_store.transaction() as c:
+            fired = [
+                timer
+                for timer in MachinesTable.all_timers(c, run_id)
+                if timer.fired_at is not None
+            ]
+            assert len(fired) == 1
+            if boundary == "timer":
+                assert fired[0].due == due
+            else:
+                facts = [
+                    json.loads(row[0])
+                    for row in c.execute(
+                        "SELECT record_json FROM machine_facts WHERE run_id=?", (run_id,)
+                    )
+                ]
+                assert any(
+                    fact["status"] == "rejected"
+                    and fact["reason"]
+                    and fact["receipt_id"] == invalid.receipt_id
+                    for fact in facts
+                )
+                assert any(
+                    fact["status"] == "ignored" and fact["receipt_id"] == unknown.receipt_id
+                    for fact in facts
+                )
+                assert (
+                    sum(
+                        fact["status"] == "consumed"
+                        and fact["receipt_id"] == receipt.receipt_id
+                        for fact in facts
+                    )
+                    == 1
+                )
+                assert not MachinesTable.inbox(c, run_id)
+        assert op.fatal_error is None
+    finally:
+        if op is not None:
+            op.close()
+
+
+@pytest.mark.parametrize("recovery", ["restart", "send", "retry"])
+def test_transient_syntax_error_at_restart(tmp_path, recovery):
+    """Reviewer reproduction: fix a typo, then recover the same keyed live run."""
+    root = tmp_path / "source"
+    root.mkdir()
+    fixture = root / "machine.py"
+    source = (Path(__file__).parents[1] / "fixtures" / "local_machine.py").read_text()
+    fixture.write_text(source)
+    db = tmp_path / "state.db"
+    op = _operator(root, db)
+    try:
+        values = {"ticket": 31, "journal": str(tmp_path / "visits")}
+        run_id = op.start_run("approval", input=values)
+        _wait_until(lambda: op.get_run(run_id).status is RunStatus.WAITING)
+        print("before:", _machine_record(op, run_id).phase)
+        op.close()
+        op = None
+        fixture.write_text("def invalid syntax:\n")
+        op = _operator(root, db)
+        print("broken restart:", _machine_record(op, run_id).phase)
+        if recovery == "restart":
+            op.close()
+            op = None
+        fixture.write_text(source)
+        if recovery == "restart":
+            op = _operator(root, db)
+        print("restored source:", _machine_record(op, run_id).phase)
+        if recovery == "retry":
+            op._machine_host.retry(run_id)
+        receipt = op._machine_host.send(run_id, "approved", {}, "after-fix")
+        _wait_until(lambda: _machine_record(op, run_id).visit == 2, seconds=10)
+        record = _machine_record(op, run_id)
+        same_key = op.start_run("approval", input=values)
+        print(
+            "outcomes:",
+            {
+                "recovery": recovery,
+                "send": receipt.status,
+                "after_send_phase": record.phase,
+                "visit": record.visit,
+                "same_key": same_key == run_id,
+            },
+        )
+        assert receipt.status == "accepted" and same_key == run_id
+        assert record.reason is None and record.phase != "needs_attention"
+        assert _wait_terminal(op, run_id).status is RunStatus.SUCCESS
+        assert op.fatal_error is None
     finally:
         if op is not None:
             op.close()
@@ -859,6 +1006,16 @@ def test_machine_visit_import_failure_is_interrupted_and_retryable(tmp_path):
         _wait_until(lambda: _machine_record(op, run_id).phase in {"interrupted", "closed"})
         assert _machine_record(op, run_id).phase == "interrupted"
         assert op.get_run(run_id).status is RunStatus.WAITING
+        interrupted_visit = _machine_record(op, run_id).visit
+        op._machine_host.retry(run_id)  # Source is still broken: do not invent a visit.
+        assert _machine_record(op, run_id).phase == "interrupted"
+        assert _machine_record(op, run_id).visit == interrupted_visit
+        with op._state_store.transaction() as c:
+            from runtime.operator.state.machines import MachinesTable
+
+            assert (
+                MachinesTable.visit(c, run_id, interrupted_visit).disposition == "indeterminate"
+            )
         fixture.write_text(source)
         op._machine_host.retry(run_id)
         assert _wait_terminal(op, run_id).status is RunStatus.SUCCESS
