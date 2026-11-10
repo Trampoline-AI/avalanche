@@ -785,7 +785,7 @@ it.each([
     `${timestamp} · ${label}`,
   );
   expect(row).toHaveStyle({ height: "27.5px", paddingTop: "8.25px", paddingBottom: "8.25px" });
-  expect(row).toHaveAttribute("title", `${run.runId} · ${timestamp}`);
+  expect(row).toHaveAttribute("title", run.runId);
   expect(row.querySelector(".run-status-text")).toHaveTextContent(run.status);
   expect(row.querySelector(".run-status-text")).toHaveAttribute("data-status", run.status);
   expect(row.querySelector(".run-status-glyph")).toHaveAttribute("data-glyph", "running");
@@ -816,5 +816,6 @@ it("keeps a run's key label whole: the date after it truncates, and the tooltip 
   expect(label).toHaveClass("shrink-0");
   expect(label.contains(row.querySelector(".run-triggered-at"))).toBe(false);
   expect(row.querySelector(".run-triggered-at")!.closest(".truncate")).not.toBe(label);
-  expect(row.getAttribute("title")).toMatch(/^acme\/api #46 · run-1 · /);
+  expect(row).toHaveAttribute("title", "run-1");
+  expect(label.parentElement!.getAttribute("title")).toMatch(/^acme\/api #46 · run-1 · /);
 });

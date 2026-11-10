@@ -464,13 +464,7 @@ export function RunListPanel({
                         onClick={() => onSelectRun(summary.runId)}
                         aria-pressed={selectedRunId === summary.runId}
                         style={rowStyle}
-                        title={[
-                          summary.label,
-                          summary.runId,
-                          triggeredAt ? RUN_TIMESTAMP_FORMAT.format(triggeredAt) : undefined,
-                        ]
-                          .filter(Boolean)
-                          .join(" · ")}
+                        title={summary.runId}
                         data-run-history={summary.expired ? "expired" : undefined}
                         aria-label={`${summary.label ? `${summary.label}, ` : ""}${summary.runId}, ${summary.status}${summary.expired ? ", expired" : ""}, ${runDuration(elapsedSeconds)}, ${
                           TRIGGER_LABELS[summary.triggeredBy]
@@ -480,7 +474,17 @@ export function RunListPanel({
                             : "start time not recorded"
                         }`}
                       >
-                        <span className="flex min-w-0 font-mono text-secondary">
+                        <span
+                          className="flex min-w-0 font-mono text-secondary"
+                          // The whole label and date, whatever the row width truncates.
+                          title={[
+                            summary.label,
+                            summary.runId,
+                            triggeredAt ? RUN_TIMESTAMP_FORMAT.format(triggeredAt) : undefined,
+                          ]
+                            .filter(Boolean)
+                            .join(" · ")}
+                        >
                           {/* The key label comes first and keeps its full width; the date,
                               duration and trigger after it truncate instead. */}
                           {summary.label && (
