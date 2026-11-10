@@ -233,6 +233,32 @@ TIMELINE_COVER = """() => {
 }"""
 
 
+def run_timeline(page):
+    """The run's Timeline tab in the bottom pane (opened if Logs is showing)."""
+    tab = page.get_by_role("tab", name="Timeline", exact=True)
+    if tab.get_attribute("aria-selected") != "true":
+        tab.click()
+    timeline = page.get_by_role("region", name="Run timeline")
+    expect(timeline).to_be_visible()
+    return timeline
+
+
+def open_visit(page, visit: int) -> None:
+    """Opens a visit's steps from its timeline entry (select, then Steps)."""
+    row = run_timeline(page).locator(f'[data-entry-id="v{visit}:enter"]')
+    expect(row).to_be_visible()
+    if row.locator("button[aria-pressed=true]").count() == 0:
+        row.locator("button[aria-pressed]").click()
+    row.get_by_role("button", name="Steps", exact=True).click()
+    expect(page.get_by_role("navigation", name="Machine visit")).to_contain_text(
+        f"Visit {visit}"
+    )
+
+
+def current_state(page):
+    return page.locator('.run-graph-shell .node-card[data-current="true"]')
+
+
 def history_reads(page, run_id: str) -> int:
     return page.evaluate(
         "(id) => window.machineHarness.calls"
@@ -278,12 +304,19 @@ def host_neutral(page, url: str, evidence: Path) -> list[dict]:
         live_polls = history_reads(page, "machine-1") - before
         assert live_polls <= 3, (tag, live_polls)
 
-        # The host omits deferred events: user wording on the live run, no dev text.
-        waits = page.get_by_label("Machine run waits")
-        expect(waits.locator('[data-wait-kind="deferred-unavailable"]')).to_have_text(
-            "Deferred events unavailable"
+        # The host omits deferred events and receipts: their entries are left out,
+        # with one neutral note in user words and no developer text.
+        waits = run_timeline(page)
+        note = waits.locator("[data-note]")
+        expect(note).to_have_count(1)
+        expect(note).to_have_text(
+            "Deferred events and send receipts aren't listed for this run."
         )
+        live_note = note.inner_text()
+        expect(waits.locator('[data-timeline-kind="receipt"]')).to_have_count(0)
+        expect(waits.locator('[data-pending-kind="deferred"]')).to_have_count(0)
         expect(page.get_by_text("not reported by this host")).to_have_count(0)
+        expect(page.get_by_text("unavailable", exact=False)).to_have_count(0)
         expect(page.locator("[data-terminal-status]")).to_have_count(0)
 
         # A 64-hex receipt wraps inside the side panel instead of widening it.
@@ -326,7 +359,11 @@ def host_neutral(page, url: str, evidence: Path) -> list[dict]:
         )
         assert fit["line_right"] <= fit["panel_right"] and fit["overflowing"] == 0, (tag, fit)
         # `parked` (the machine waiting between visits) is still live on this host.
-        expect(page.get_by_role("region", name="Machine visits")).to_contain_text("ready")
+        expect(current_state(page)).to_contain_text("ready")
+        # The deferred event shows in the timeline from the host's event facts.
+        expect(
+            waits.locator('[data-timeline-kind="event"][data-status="deferred"]')
+        ).to_have_count(1)
         status = page.locator(".run-list-row.active [data-status]")
         expect(status).to_have_attribute("data-status", "parked")
         expect(banner).to_have_count(0)
@@ -342,7 +379,12 @@ def host_neutral(page, url: str, evidence: Path) -> list[dict]:
         # a settled run shows no deferred-events line.
         outcome = page.locator("[data-terminal-status]")
         expect(outcome).to_have_text("Terminal: succeeded")
-        expect(waits.locator('[data-wait-kind="deferred-unavailable"]')).to_have_count(0)
+        # Settled: no deferred-events wording, at most the receipts note.
+        waits = run_timeline(page)
+        expect(waits.locator("[data-note]")).to_have_text(
+            "Send receipts aren't listed for this run."
+        )
+        expect(waits.locator("[data-pending-kind]")).to_have_count(0)
         expect(page.get_by_text("not reported by this host")).to_have_count(0)
         page.wait_for_timeout(500)
         before = history_reads(page, "machine-2")
@@ -372,7 +414,7 @@ def host_neutral(page, url: str, evidence: Path) -> list[dict]:
                 "send_menu_before": menu_before,
                 "deferred_send_receipt": deferred_receipt,
                 "send_menu_after_transition": menu_after,
-                "live_deferred_wording": "Deferred events unavailable",
+                "live_omitted_note": live_note,
                 "settled_outcome": outcome.inner_text(),
                 "geometry": geometry,
             }
@@ -416,9 +458,12 @@ def scenario(page, url: str, evidence: Path) -> dict:
     arcs = [arc_geometry(page, "definition-horizontal", 5)]
     start_run(page, 44, 2, files=True, evidence=evidence)
     actions = page.get_by_role("group", name="Machine actions")
-    waits = page.get_by_label("Machine run waits")
+    waits = run_timeline(page)
     selected_row = page.locator(".run-list-row.active")
     expect(waits).to_be_visible()
+    # Visits and waits are no longer sections of the runs pane.
+    expect(page.get_by_role("region", name="Machine visits")).to_have_count(0)
+    expect(page.get_by_label("Run waits section")).to_have_count(0)
     expect(page.locator(".run-list-row")).to_have_count(1)
     # The key reads as fields, never raw JSON.
     expect(page.locator(".run-list-row")).to_contain_text("acme/api #44")
@@ -459,17 +504,19 @@ def scenario(page, url: str, evidence: Path) -> dict:
     page.screenshot(path=str(evidence / "01-machine-run.png"))
 
     actions.get_by_role("button", name="Retry visit", exact=True).click()
-    visits = page.get_by_role("region", name="Machine visits")
-    expect(visits.locator('[data-visit="2"]')).to_be_visible()
-    # A visit row opens that visit's steps on the same canvas, like a flow run.
-    visits.locator('[data-visit="2"]').click()
-    expect(page.get_by_role("navigation", name="Machine visit")).to_contain_text("Visit 2")
+    expect(waits.locator('[data-entry-id="v2:enter"]')).to_be_visible()
+    # Hovering an entry highlights its state on the graph.
+    waits.locator('[data-entry-id="v2:enter"]').hover()
+    expect(graph.locator(".react-flow__node.timeline-highlight")).to_have_count(1)
+    page.screenshot(path=str(evidence / "01b-timeline-hover.png"))
+    # A visit entry opens that visit's steps on the same canvas, like a flow run.
+    open_visit(page, 2)
     expect(graph.locator(".react-flow__edge-machine")).to_have_count(0)
     expect(graph.locator(".react-flow__node")).to_have_count(3)
     expect(graph.get_by_label("Map items")).to_be_visible()
     expect(graph.get_by_role("button", name="Inspect v2.fanout[0]")).to_be_visible()
     detail = waits
-    expect(detail.get_by_role("region", name="Run waits")).to_contain_text("Approve visit 2?")
+    expect(detail.get_by_role("list", name="Pending")).to_contain_text("Approve visit 2?")
     page.screenshot(path=str(evidence / "02-visit-detail.png"))
     # Its steps open in the normal side inspector with real scoped detail and logs.
     graph.get_by_role("button", name="Inspect check", exact=True).click()
@@ -488,12 +535,11 @@ def scenario(page, url: str, evidence: Path) -> dict:
     page.screenshot(path=str(evidence / "03-visit-step.png"))
     inspector.get_by_role("button", name="Close", exact=True).click()
     # The first, interrupted visit keeps its own graph and paged event facts.
-    visits.locator('[data-visit="1"]').click()
+    open_visit(page, 1)
     expect(graph.locator(".react-flow__node")).to_have_count(1)
-    expect(detail.locator("[data-event-status]")).to_have_count(0)
-    detail.get_by_role("button", name="Next facts").click()
-    expect(detail.locator('[data-event-status="ignored"]')).to_be_visible()
-    expect(detail.locator('[data-event-status="dropped"]')).to_be_visible()
+    detail.get_by_role("button", name="More events of visit 1").click()
+    expect(detail.locator('[data-visit="1"][data-status="ignored"]')).to_be_visible()
+    expect(detail.locator('[data-visit="1"][data-status="dropped"]')).to_be_visible()
     page.get_by_role("navigation", name="Machine visit").get_by_role(
         "button", name="State machine"
     ).click()
@@ -519,7 +565,7 @@ def scenario(page, url: str, evidence: Path) -> dict:
     expect(send.get_by_role("alert")).to_be_visible()
     send.get_by_role("button", name="Send event").click()
     expect(send.get_by_role("alert")).to_have_count(0)
-    expect(visits.locator('[data-visit="3"]')).to_be_visible()
+    expect(waits.locator('[data-entry-id="v3:enter"]')).to_be_visible()
     sends = page.evaluate("window.machineHarness.calls.filter(c => c.method === 'send')")
     assert len(sends) == 2 and sends[0]["args"][3] == sends[1]["args"][3], sends
     assert sends[0]["args"][2] == {
@@ -536,23 +582,31 @@ def scenario(page, url: str, evidence: Path) -> dict:
     ], stages
     expect(send_panel.locator('[data-receipt-status="accepted"]')).to_be_visible()
     expect(send_panel.locator('[data-receipt-duplicate="true"]')).to_have_count(1)
-    expect(waits.locator('[data-receipt-status="accepted"]')).to_have_count(1)
+    expect(
+        waits.locator('[data-timeline-kind="event"]', has_text=re.compile(r"receipt \S+ · key"))
+    ).to_have_count(1)
     page.screenshot(path=str(evidence / "04-send-receipt.png"))
     # The visit that just ended keeps its terminal decision audit.
-    visits.locator('[data-visit="2"]').click()
-    expect(detail.get_by_role("region", name="Decision audit")).to_be_visible()
-    # Clicking a state on the machine graph opens its latest visit.
-    visits.get_by_role("button", name="State machine").click()
+    expect(waits.locator('[data-timeline-kind="wait-resolved"][data-visit="2"]')).to_have_count(
+        1
+    )
+    # Clicking a state on the machine graph filters the timeline to that state.
     graph.get_by_role("button", name="Inspect review", exact=True).click()
-    expect(page.get_by_role("navigation", name="Machine visit")).to_contain_text("Visit 3")
-    visits.get_by_role("button", name="State machine").click()
+    expect(waits.locator(".run-timeline-filter")).to_contain_text("state review")
+    states = waits.locator("[data-entry-id]").evaluate_all(
+        "els => els.map(e => [e.dataset.state, e.dataset.entryId])"
+    )
+    assert states and all(
+        state == "review" or "enter" in entry or "leave" in entry for state, entry in states
+    ), states
+    page.screenshot(path=str(evidence / "04b-state-filter.png"))
+    waits.get_by_role("button", name="Show all", exact=True).click()
 
     # The timer advances in the host without a click; the arc counts down too.
     send_panel.get_by_label("Event", exact=True).select_option("advance")
     send.get_by_role("button", name="Send event").click()
-    expect(visits.locator('[data-machine-state="ready"]')).to_be_visible()
-    expect(graph.locator('.node-card[data-current="true"]')).to_contain_text("ready")
-    timer = waits.locator("[data-timer-remaining]")
+    expect(current_state(page)).to_contain_text("ready")
+    timer = waits.get_by_role("list", name="Pending").locator("[data-timer-remaining]")
     arc = graph.locator("[data-arc-remaining]")
     before = int(timer.get_attribute("data-timer-remaining"))
     arc_before = int(arc.get_attribute("data-arc-remaining"))
@@ -560,7 +614,8 @@ def scenario(page, url: str, evidence: Path) -> dict:
     assert int(timer.get_attribute("data-timer-remaining")) < before
     assert int(arc.get_attribute("data-arc-remaining")) < arc_before
     page.screenshot(path=str(evidence / "05-timer.png"))
-    expect(visits.locator('[data-machine-state="closed"]')).to_be_visible(timeout=12000)
+    expect(current_state(page)).to_contain_text("closed", timeout=12000)
+    expect(waits.locator('[data-timeline-kind="timer-fired"]')).to_have_count(1)
     expect(page.locator(".run-list-row")).to_have_count(1)
     expect(actions).to_have_count(0)
     page.screenshot(path=str(evidence / "06-final.png"))
@@ -578,15 +633,15 @@ def scenario(page, url: str, evidence: Path) -> dict:
     actions.get_by_role("button", name="Send event", exact=True).click()
     send_panel.get_by_label("Event", exact=True).select_option("advance")
     send.get_by_role("button", name="Send event").click()
-    expect(visits.locator('[data-machine-state="ready"]')).to_be_visible()
+    expect(current_state(page)).to_contain_text("ready")
     actions.get_by_role("button", name="Fire next timer", exact=True).click()
-    expect(visits.locator('[data-machine-state="closed"]')).to_be_visible()
+    expect(current_state(page)).to_contain_text("closed")
     # A third instance closes through the normal run cancel.
     page.get_by_role("button", name="Current definition", exact=True).click()
     start_run(page, 46, 1)
     expect(selected_row).to_contain_text("acme/api #46")
     page.get_by_role("button", name="Cancel run", exact=True).click()
-    expect(visits.locator('[data-machine-state="closed"]')).to_be_visible()
+    expect(current_state(page)).to_contain_text("closed")
     expect(page.locator(".run-list-row").first).to_contain_text("cancelled", ignore_case=True)
     expect(page.get_by_role("button", name="Cancel run", exact=True)).to_have_count(0)
     page.screenshot(path=str(evidence / "07-cancelled.png"))
@@ -645,7 +700,7 @@ def scenario(page, url: str, evidence: Path) -> dict:
 
     # No optional methods means genuinely read-only; no mutation request is made.
     page.goto(url + "?readonly")
-    expect(page.get_by_label("Machine run waits")).to_be_visible()
+    expect(page.get_by_role("tab", name="Timeline", exact=True)).to_be_visible()
     expect(page.locator('.node-card[data-current="true"]')).to_have_count(1)
     expect(page.get_by_role("group", name="Machine actions")).to_have_count(0)
     expect(page.get_by_role("button", name="Cancel run", exact=True)).to_have_count(0)
@@ -676,12 +731,9 @@ def scenario(page, url: str, evidence: Path) -> dict:
     )
     page.wait_for_timeout(300)
     page.screenshot(path=str(evidence / "14-expired-machine-run.png"))
-    visits = page.get_by_role("region", name="Machine visits")
-    visits.locator('[data-visit="1"]').click()
+    open_visit(page, 1)
     expect(page.get_by_role("navigation", name="Machine visit")).to_contain_text("expired")
-    expect(
-        page.get_by_label("Machine run waits").locator('[data-run-history="expired"]')
-    ).to_be_visible()
+    expect(badge).to_contain_text("This visit's")
     expect(page.locator(".run-graph-shell .react-flow__edge-machine")).to_have_count(0)
     page.screenshot(path=str(evidence / "14b-expired-visit.png"))
     page.get_by_test_id("flow-nav").click()

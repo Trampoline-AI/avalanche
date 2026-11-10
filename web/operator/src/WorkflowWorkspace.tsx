@@ -871,10 +871,26 @@ export function WorkflowWorkspaceSurface({
         )}
       </>
     ) : undefined;
+  // Visits whose event facts continue past the first page (an empty page may too).
+  const moreEvents = shownVisits.filter(
+    (item) => visitDetails.details.get(item)?.eventsCursor != null,
+  );
   const timelineFooter =
     machineRunId &&
-    (machineHistory.cursor !== undefined || historyPage?.next_cursor != null) ? (
-      <div className="flex gap-3 px-[9px] py-1.5">
+    (moreEvents.length > 0 ||
+      machineHistory.cursor !== undefined ||
+      historyPage?.next_cursor != null) ? (
+      <div className="flex flex-wrap gap-3 px-[9px] py-1.5">
+        {moreEvents.map((item) => (
+          <button
+            key={item}
+            type="button"
+            className={paneAction}
+            onClick={() => void visitDetails.loadMoreEvents(item)}
+          >
+            More events of visit {item}
+          </button>
+        ))}
         {machineHistory.cursor !== undefined && (
           <button
             type="button"
