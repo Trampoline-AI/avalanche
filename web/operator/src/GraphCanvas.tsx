@@ -869,6 +869,12 @@ export interface CanvasReserve {
 export type ReserveSide = "beside" | "below";
 
 const RESERVE_GAP = 16;
+/**
+ * Left margin a graph fitted below the runs panel keeps clear of the canvas
+ * controls (bottom left, 15 px in and 32 px wide), with room for the input dot's
+ * label, which is centred under the dot at a fixed screen size.
+ */
+export const CONTROLS_CLEARANCE = 76;
 
 /**
  * Keeps the fitted graph clear of a panel floating over the canvas's left edge (the
@@ -892,9 +898,15 @@ export function reserveFit(
   ) as Record<"top" | "right" | "bottom" | "left", `${number}px`>;
   if (side === "below" && reserve.height !== undefined) {
     const top = Number.parseFloat(base.top ?? "0") || 0;
+    const left = Number.parseFloat(base.left ?? "0") || 0;
     return {
       ...options,
-      padding: { ...base, top: `${reserve.height + RESERVE_GAP + top}px` as const },
+      padding: {
+        ...base,
+        top: `${reserve.height + RESERVE_GAP + top}px` as const,
+        // Below the panel the graph reaches the bottom-left canvas controls.
+        left: `${Math.max(left, CONTROLS_CLEARANCE)}px` as const,
+      },
     };
   }
   const left = Number.parseFloat(base.left ?? "0") || 0;

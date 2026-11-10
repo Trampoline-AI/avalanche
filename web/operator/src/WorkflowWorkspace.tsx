@@ -179,6 +179,32 @@ const paneAction =
   "cursor-pointer rounded border border-line bg-panel px-1.5 py-0.5 font-mono text-[9px] text-acid";
 
 /** "a", "a and b", "a, b and c", capitalised. */
+/**
+ * Whether a badge pinned to the canvas's top-right corner (the snapshot or expired
+ * banner) clears the runs panel floating over its top-left corner. On a narrow
+ * canvas they meet; the badge is then hidden rather than drawn under the panel.
+ */
+function useClearOfPanel(reserve: CanvasReserve | undefined) {
+  const [element, setElement] = useState<HTMLElement | null>(null);
+  const [clear, setClear] = useState(true);
+  useEffect(() => {
+    if (!element) return;
+    const update = () =>
+      setClear(
+        reserve === undefined ||
+          element.offsetLeft >= reserve.width + 8 ||
+          element.offsetTop >= (reserve.height ?? Infinity),
+      );
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    if (element.parentElement) observer.observe(element.parentElement);
+    return () => observer.disconnect();
+  }, [element, reserve]);
+  return [setElement, clear] as const;
+}
+
 function sentenceList(items: readonly string[]) {
   const text =
     items.length <= 1
@@ -403,6 +429,8 @@ export function WorkflowWorkspaceSurface({
   // The floating timeline stops above the canvas controls (bottom left) and scrolls.
   const [graphShell, setGraphShell] = useState<HTMLDivElement | null>(null);
   const [timelineMaxHeight, setTimelineMaxHeight] = useState<number>();
+  const [bannerRef, bannerClear] = useClearOfPanel(timelineReserve);
+  const bannerHidden = bannerClear ? "" : " invisible";
   useEffect(() => {
     const element = timelineNode;
     const shell = graphShell;
@@ -1141,9 +1169,11 @@ export function WorkflowWorkspaceSurface({
                     </div>
                   ) : run && (runExpired || visitExpired) ? (
                     <div
+                      ref={bannerRef}
                       role="status"
                       data-run-history="expired"
-                      className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[280px] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase"
+                      data-under-panel={bannerClear ? undefined : true}
+                      className={`historical-badge${bannerHidden} pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[280px] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase`}
                     >
                       <span>expired</span>
                       {visitExpired && !runExpired ? "This visit's" : "This run's"} history and
@@ -1151,7 +1181,11 @@ export function WorkflowWorkspaceSurface({
                       label remain.
                     </div>
                   ) : run && !runLive ? (
-                    <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
+                    <div
+                      ref={bannerRef}
+                      data-under-panel={bannerClear ? undefined : true}
+                      className={`historical-badge${bannerHidden} pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase`}
+                    >
                       <span>Viewing a run snapshot</span>This view does not represent the
                       workflow&apos;s current state.
                     </div>

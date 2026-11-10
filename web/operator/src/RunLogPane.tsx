@@ -40,8 +40,10 @@ const LOG_DECODE_BATCH_SIZE = 20;
 const LOG_ROW_ESTIMATE_PX = 48;
 const LOG_ROW_OVERSCAN = 12;
 const LOG_PANE_KEYBOARD_STEP_PX = 16;
+// Only the Logs tab shrinks (its scope truncates); the Timeline tab keeps its width,
+// so a narrow pane never draws it over the record count.
 const TAB_CLASS =
-  "flex min-w-0 cursor-pointer items-center gap-[7px] self-stretch border-0 border-b-2 bg-transparent px-1 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid [&>strong]:text-[10px] [&>strong]:tracking-[.08em] [&>strong]:uppercase";
+  "flex cursor-pointer items-center gap-[7px] self-stretch border-0 border-b-2 bg-transparent px-1 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid [&>strong]:flex-none [&>strong]:text-[10px] [&>strong]:tracking-[.08em] [&>strong]:uppercase";
 const EMPTY_LOGS: LogRecordDescriptorMsg[] = [];
 const EMPTY_LOG_PAGE: DescriptorPageState<LogRecordDescriptorMsg> = {
   records: EMPTY_LOGS,
@@ -553,7 +555,7 @@ export function RunLogPane({
                   role="tab"
                   aria-selected={tab === item}
                   aria-controls="run-log-content"
-                  className={`run-pane-tab ${TAB_CLASS} ${tab === item ? "border-acid text-ink" : "border-transparent text-secondary hover:text-ink"}`}
+                  className={`run-pane-tab ${TAB_CLASS} ${item === "logs" ? "min-w-0" : "flex-none"} ${tab === item ? "border-acid text-ink" : "border-transparent text-secondary hover:text-ink"}`}
                   onClick={() => {
                     if (!expanded) setExpanded(true);
                     onTabChange?.(item);
@@ -561,7 +563,7 @@ export function RunLogPane({
                 >
                   <strong>{item === "logs" ? "Logs" : "Timeline"}</strong>
                   {item === "logs" && tab === "logs" && (
-                    <span className="run-log-scope truncate font-mono text-[9px] font-normal text-secondary normal-case">
+                    <span className="run-log-scope min-w-0 truncate font-mono text-[9px] font-normal text-secondary normal-case">
                       {scopeLabel}
                     </span>
                   )}
@@ -585,7 +587,7 @@ export function RunLogPane({
           </button>
         )}
         {!timelineShown && (
-          <span className="run-log-count ml-auto whitespace-nowrap font-mono text-[8px] text-muted">
+          <span className="run-log-count ml-auto flex-none whitespace-nowrap font-mono text-[8px] text-muted">
             {combinedLogs.length} {combinedLogs.length === 1 ? "record" : "records"}
           </span>
         )}

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   bestMachineFit,
+  CONTROLS_CLEARANCE,
   firstFrameFor,
   reserveFit,
   reserveSide,
@@ -49,6 +50,18 @@ describe("fit beside or below the runs panel", () => {
     expect(parseFloat(below.top)).toBeGreaterThanOrEqual(PANEL.height! + 16);
     const beside = reserveFit(OPTIONS, PANEL, "beside").padding as Record<string, string>;
     expect(parseFloat(beside.left)).toBeGreaterThanOrEqual(PANEL.width + 16);
+  });
+
+  it("keeps a graph fitted below the panel clear of the bottom-left canvas controls", () => {
+    // The flow's even 48 px margin would put the input dot's label under the controls.
+    const below = reserveFit(OPTIONS, PANEL, "below").padding as Record<string, string>;
+    expect(parseFloat(below.left)).toBe(CONTROLS_CLEARANCE);
+    const machine = reserveFit(
+      { padding: { top: "120px", bottom: "150px", left: "200px", right: "80px" } },
+      PANEL,
+      "below",
+    ).padding as Record<string, string>;
+    expect(machine.left).toBe("200px");
   });
 
   it("stays beside unless below is more than 5% larger, so small changes do not flip it", () => {
