@@ -179,6 +179,16 @@ function stepEntries(
   return entries;
 }
 
+/**
+ * The host's own wait for a state's timer (`v<visit>.after_<index>`, a sleep wait):
+ * the timer's entries already tell it (armed, fired, cancelled), so it is not listed again.
+ */
+function isTimerWait(card: WaitCard, spec: MachineSpec | undefined, state: string | undefined) {
+  const match = /^v\d+\.after_(\d+)$/.exec(card.nodeId);
+  if (!match || card.kind !== "sleep" || !spec || !state) return false;
+  return spec.states[state]?.timers[Number(match[1])] !== undefined;
+}
+
 function waitLabel(card: WaitCard) {
   return card.prompt ?? (card.kind === "decision" ? "decision" : `${card.kind} wait`);
 }
@@ -471,7 +481,9 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
       const byId = new Map(nodes.map((node) => [node.nodeId, node] as const));
       entries.push(
         ...waitEntries(
-          waits.filter((card) => card.nodeId.startsWith(`v${visit}.`)),
+          waits.filter(
+            (card) => card.nodeId.startsWith(`v${visit}.`) && !isTimerWait(card, spec, state),
+          ),
           byId,
           nodeOffset,
           (at) => wallOffset(at) ?? 0,
@@ -666,7 +678,8 @@ export function machinePending(
   for (const card of waits)
     if (
       (card.state === "pending" || card.state === "waiting") &&
-      card.nodeId.startsWith(`v${instance.visit}.`)
+      card.nodeId.startsWith(`v${instance.visit}.`) &&
+      !isTimerWait(card, spec, state)
     )
       items.push({
         id: `wait:${card.nodeId}`,

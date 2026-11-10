@@ -426,6 +426,23 @@ describe("machine pending row", () => {
     });
   });
 
+  it("lists a state's timer once: not again as the host's own wait for it", () => {
+    // The local operator mirrors ready_to_merge's timer as a sleep wait `v4.after_0`.
+    const timerWait: WaitCard = {
+      nodeId: "v4.after_0",
+      kind: "sleep",
+      state: "waiting",
+      schema: {},
+      prompt: null,
+      show: null,
+    };
+    const titles = machinePending(live, spec, [timerWait], false).map((item) => item.title);
+    expect(titles).toEqual(["Timer → closed", "Deferred merged", "Waiting for event"]);
+    const entries = closedRun({ waits: [{ ...timerWait, state: "withdrawn" }] });
+    expect(entries.filter((entry) => entry.kind.startsWith("wait-"))).toEqual([]);
+    expect(entries.map(line)).toContain("timer-armed: Timer armed → closed");
+  });
+
   it("pins nothing on a settled run, and claims nothing while the status is unknown", () => {
     expect(machinePending(live, spec, [decision], true)).toEqual([]);
     expect(machinePending({ ...live, finished: true }, spec, [], false)).toEqual([]);
