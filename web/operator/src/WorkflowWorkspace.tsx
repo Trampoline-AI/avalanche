@@ -574,6 +574,32 @@ export function WorkflowWorkspaceSurface({
     runStatus === "waiting" ||
     runStatus === "interrupted" ||
     runStatus === "needs_attention";
+  // The run's waits sit beside the graph, never over it: a flow run's pending waits
+  // (decision cards), or a machine run's timer, deferred events and receipts.
+  const waitsPanel =
+    machineRunId && run ? (
+      <div aria-label="Machine run waits">
+        {selectedVisit !== undefined ? (
+          <MachineVisitWaits
+            api={api}
+            runId={machineRunId}
+            visit={visit}
+            readError={visitRead.error}
+            refresh={visitRead.refresh}
+            current={currentVisit}
+            enabled={runActionsEnabled && bottomRightPanel !== null}
+          />
+        ) : (
+          <MachineRunWaits
+            instance={machineInstance}
+            readError={machineRead.error}
+            refresh={machineRead.refresh}
+          />
+        )}
+      </div>
+    ) : run && displayedRunId && runActionsEnabled && runStatus === "running" ? (
+      <RunWaitPanel key={displayedRunId} api={api} runId={displayedRunId} />
+    ) : undefined;
   const liveEventDescriptorKey =
     displayedRunId && inspectedNode ? `${displayedRunId}:${inspectedNode}` : "";
   const workspaceStyle = {
@@ -614,148 +640,125 @@ export function WorkflowWorkspaceSurface({
           >
             {workflow || run ? (
               <>
-                <div
-                  className={`run-graph-shell relative min-w-0 flex-1 overflow-hidden ${machineRunId ? "min-h-[300px]" : "min-h-0"}`}
-                >
-                  <GraphCanvas
-                    machine={visitRun || visitExpired ? undefined : machineView}
-                    workflow={!run || previewWorkflow ? workflow : undefined}
-                    runTopology={
-                      visitRun
-                        ? visitRun.topology
-                        : previewWorkflow || visitExpired
-                          ? undefined
-                          : run?.topology
-                    }
-                    runNodes={
-                      visitRun
-                        ? visitRun.nodes
-                        : requestingRun || visitExpired
-                          ? undefined
-                          : run?.nodes
-                    }
-                    expansions={visitRun ? visitRun.expansions : run?.expansions}
-                    runTriggeredBy={previewWorkflow ? undefined : run?.summary?.triggeredBy}
-                    inspectionDisabled={requestingRun}
-                    evaluations={evaluationState.records}
-                    selectedNodeId={inspectedNode}
-                    onClearNode={closePanel}
-                    onOpenNode={openNode}
-                    bottomRightPanel={
-                      bottomRightPanel === undefined ? runControlsPanel : bottomRightPanel
-                    }
-                  />
-                  {machineRunId && selectedVisit !== undefined && (
-                    <nav
-                      aria-label="Machine visit"
-                      className="absolute top-[18px] left-1/2 z-[6] flex -translate-x-1/2 items-center gap-2 rounded border border-line bg-panel px-3 py-[7px] font-mono text-[10px] text-secondary shadow-[0_4px_14px_var(--color-shadow-4)]"
-                    >
-                      <button
-                        type="button"
-                        className="cursor-pointer border-0 bg-transparent p-0 text-acid underline underline-offset-2"
-                        onClick={() => selectVisit(undefined)}
+                <div className="run-graph-row flex min-h-0 min-w-0 flex-1 flex-row max-[700px]:flex-col">
+                  <div
+                    className={`run-graph-shell relative min-w-0 flex-1 overflow-hidden ${machineRunId ? "min-h-[300px]" : "min-h-0"}`}
+                  >
+                    <GraphCanvas
+                      machine={visitRun || visitExpired ? undefined : machineView}
+                      workflow={!run || previewWorkflow ? workflow : undefined}
+                      runTopology={
+                        visitRun
+                          ? visitRun.topology
+                          : previewWorkflow || visitExpired
+                            ? undefined
+                            : run?.topology
+                      }
+                      runNodes={
+                        visitRun
+                          ? visitRun.nodes
+                          : requestingRun || visitExpired
+                            ? undefined
+                            : run?.nodes
+                      }
+                      expansions={visitRun ? visitRun.expansions : run?.expansions}
+                      runTriggeredBy={previewWorkflow ? undefined : run?.summary?.triggeredBy}
+                      inspectionDisabled={requestingRun}
+                      evaluations={evaluationState.records}
+                      selectedNodeId={inspectedNode}
+                      onClearNode={closePanel}
+                      onOpenNode={openNode}
+                      bottomRightPanel={
+                        bottomRightPanel === undefined ? runControlsPanel : bottomRightPanel
+                      }
+                    />
+                    {machineRunId && selectedVisit !== undefined && (
+                      <nav
+                        aria-label="Machine visit"
+                        className="absolute top-[18px] left-1/2 z-[6] flex -translate-x-1/2 items-center gap-2 rounded border border-line bg-panel px-3 py-[7px] font-mono text-[10px] text-secondary shadow-[0_4px_14px_var(--color-shadow-4)]"
                       >
-                        State machine
-                      </button>
-                      <span aria-hidden="true">/</span>
-                      <span className="text-ink">
-                        Visit {selectedVisit}
-                        {visit ? ` · ${visit.state}` : ""}
-                        {visitExpired ? " · expired" : ""}
-                      </span>
-                      {!visit && <span role="status">Loading visit…</span>}
-                    </nav>
-                  )}
-                  {evaluationState.error && (
-                    <p
-                      role="alert"
-                      className="absolute bottom-4 left-4 z-10 m-0 text-xs text-danger"
-                    >
-                      {evaluationState.error}
-                    </p>
-                  )}
-                  {historical && !loadedRun && (
-                    <div
-                      className="absolute right-3 top-3 max-w-[240px] rounded border border-line bg-panel p-3 text-xs text-secondary"
-                      role={state.selectedRunStatus === "error" ? "alert" : "status"}
-                    >
-                      {state.selectedRunStatus === "error" ? (
-                        <>
-                          <strong className="block text-ink">Run snapshot unavailable</strong>
-                          {state.selectedRunError || "The selected run could not be loaded."}
-                        </>
-                      ) : (
-                        "Loading run snapshot"
-                      )}
-                    </div>
-                  )}
-                  {requestingRun ? (
-                    <div
-                      className="pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[240px] rounded border border-line bg-panel px-3 py-2.5 text-xs text-secondary shadow-sm max-[700px]:top-auto max-[700px]:bottom-16"
-                      role="status"
-                      aria-label="Run preparation"
-                    >
-                      <span className="flex items-center gap-2 font-medium text-ink">
-                        <span
-                          className="size-3 animate-spin rounded-full border-2 border-line border-t-amber motion-reduce:animate-none"
-                          aria-hidden="true"
-                        />
-                        Requesting run
-                      </span>
-                      <span className="mt-1 block">
-                        Preparing execution. Nodes will become available when ready.
-                      </span>
-                    </div>
-                  ) : run && (runExpired || visitExpired) ? (
-                    <div
-                      role="status"
-                      data-run-history="expired"
-                      className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[280px] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase"
-                    >
-                      <span>expired</span>
-                      {visitExpired && !runExpired ? "This visit's" : "This run's"} history and
-                      artifacts expired under the run&apos;s retention policy. The run and its
-                      label remain.
-                    </div>
-                  ) : run && !runLive ? (
-                    <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
-                      <span>Viewing a run snapshot</span>This view does not represent the
-                      workflow&apos;s current state.
-                    </div>
-                  ) : null}
-                  {machineRunId && run && (
-                    <div
-                      aria-label="Machine run waits"
-                      className="absolute right-3 bottom-[72px] z-10 max-h-[55%] w-80 max-w-[calc(100%-24px)] overflow-auto rounded border border-line bg-panel shadow-lg"
-                    >
-                      {selectedVisit !== undefined ? (
-                        <MachineVisitWaits
-                          api={api}
-                          runId={machineRunId}
-                          visit={visit}
-                          readError={visitRead.error}
-                          refresh={visitRead.refresh}
-                          current={currentVisit}
-                          enabled={runActionsEnabled && bottomRightPanel !== null}
-                        />
-                      ) : (
-                        <MachineRunWaits
-                          instance={machineInstance}
-                          readError={machineRead.error}
-                          refresh={machineRead.refresh}
-                        />
-                      )}
-                    </div>
-                  )}
-                  {run &&
-                    displayedRunId &&
-                    runActionsEnabled &&
-                    !machineRunId &&
-                    run.summary?.status === "running" && (
-                      <div className="absolute right-3 bottom-3 z-10 w-80 max-w-[calc(100%-24px)] rounded border border-line bg-panel shadow-lg">
-                        <RunWaitPanel key={displayedRunId} api={api} runId={displayedRunId} />
+                        <button
+                          type="button"
+                          className="cursor-pointer border-0 bg-transparent p-0 text-acid underline underline-offset-2"
+                          onClick={() => selectVisit(undefined)}
+                        >
+                          State machine
+                        </button>
+                        <span aria-hidden="true">/</span>
+                        <span className="text-ink">
+                          Visit {selectedVisit}
+                          {visit ? ` · ${visit.state}` : ""}
+                          {visitExpired ? " · expired" : ""}
+                        </span>
+                        {!visit && <span role="status">Loading visit…</span>}
+                      </nav>
+                    )}
+                    {evaluationState.error && (
+                      <p
+                        role="alert"
+                        className="absolute bottom-4 left-4 z-10 m-0 text-xs text-danger"
+                      >
+                        {evaluationState.error}
+                      </p>
+                    )}
+                    {historical && !loadedRun && (
+                      <div
+                        className="absolute right-3 top-3 max-w-[240px] rounded border border-line bg-panel p-3 text-xs text-secondary"
+                        role={state.selectedRunStatus === "error" ? "alert" : "status"}
+                      >
+                        {state.selectedRunStatus === "error" ? (
+                          <>
+                            <strong className="block text-ink">Run snapshot unavailable</strong>
+                            {state.selectedRunError || "The selected run could not be loaded."}
+                          </>
+                        ) : (
+                          "Loading run snapshot"
+                        )}
                       </div>
                     )}
+                    {requestingRun ? (
+                      <div
+                        className="pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[240px] rounded border border-line bg-panel px-3 py-2.5 text-xs text-secondary shadow-sm max-[700px]:top-auto max-[700px]:bottom-16"
+                        role="status"
+                        aria-label="Run preparation"
+                      >
+                        <span className="flex items-center gap-2 font-medium text-ink">
+                          <span
+                            className="size-3 animate-spin rounded-full border-2 border-line border-t-amber motion-reduce:animate-none"
+                            aria-hidden="true"
+                          />
+                          Requesting run
+                        </span>
+                        <span className="mt-1 block">
+                          Preparing execution. Nodes will become available when ready.
+                        </span>
+                      </div>
+                    ) : run && (runExpired || visitExpired) ? (
+                      <div
+                        role="status"
+                        data-run-history="expired"
+                        className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[280px] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase"
+                      >
+                        <span>expired</span>
+                        {visitExpired && !runExpired ? "This visit's" : "This run's"} history
+                        and artifacts expired under the run&apos;s retention policy. The run and
+                        its label remain.
+                      </div>
+                    ) : run && !runLive ? (
+                      <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
+                        <span>Viewing a run snapshot</span>This view does not represent the
+                        workflow&apos;s current state.
+                      </div>
+                    ) : null}
+                  </div>
+                  {waitsPanel && (
+                    <aside
+                      aria-label="Run waits panel"
+                      className="run-waits-dock flex w-72 shrink-0 flex-col overflow-auto border-l border-line bg-panel empty:hidden max-[700px]:max-h-48 max-[700px]:w-auto max-[700px]:border-t max-[700px]:border-l-0"
+                    >
+                      {waitsPanel}
+                    </aside>
+                  )}
                 </div>
                 {run ? (
                   <RunLogPane

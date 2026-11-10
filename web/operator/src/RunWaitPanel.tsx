@@ -133,12 +133,10 @@ export function RunWaitPanel({
       clearTimeout(timer);
     };
   }, [api, runId, visit, live]);
-  if (!api.listRunWaits) return null;
+  // Nothing pending: render nothing, so the waits dock beside the graph collapses.
+  if (!api.listRunWaits || (cards.length === 0 && !error)) return null;
   return (
-    <section
-      aria-label="Run waits"
-      className="max-h-80 overflow-auto border-t border-line bg-panel p-3 text-xs"
-    >
+    <section aria-label="Run waits" className="bg-panel p-3 text-xs">
       {cards.map((card) => (
         <article key={card.nodeId} className="mb-3 grid gap-2">
           <h3>
