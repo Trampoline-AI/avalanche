@@ -11,12 +11,14 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeAliasType, get_args
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, ValidationError
 
+from avalanche.file import File
 from avalanche.machine import Machine
 from avalanche.run_keys import derive_run_key
+from avalanche.workspace import Workspace
 
 from .discovery import ConfiguredRoot
 from .models import WorkflowDescriptor
@@ -74,6 +76,28 @@ def validate_native(
     return response.value
 
 
+def _require_json_event_model(model: type[BaseModel]) -> None:
+    """Artifact ownership is unsupported for typed event fields, not JSON keys."""
+    pending = [field.annotation for field in model.model_fields.values()]
+    pending.append(model)
+    seen: set[type[BaseModel]] = set()
+    seen_aliases: set[TypeAliasType] = set()
+    while pending:
+        annotation = pending.pop()
+        if isinstance(annotation, TypeAliasType):
+            if annotation not in seen_aliases:
+                seen_aliases.add(annotation)
+                pending.append(annotation.__value__)
+        elif isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            if issubclass(annotation, (File, Workspace)):
+                raise ValueError("machine_events_require_json_not_file_or_workspace")
+            if annotation not in seen:
+                seen.add(annotation)
+                pending.extend(field.annotation for field in annotation.model_fields.values())
+        else:
+            pending.extend(get_args(annotation))
+
+
 def main() -> None:
     from .run_worker import _import_workflow_module
 
@@ -114,6 +138,7 @@ def main() -> None:
                         raise ValueError("event_payload_must_be_empty")
                     value = request.value
                 else:
+                    _require_json_event_model(model)
                     value = model.model_validate_json(wire, strict=True).model_dump(mode="json")
         response = ValidationResponse(value=value)
     except ValidationError as exc:

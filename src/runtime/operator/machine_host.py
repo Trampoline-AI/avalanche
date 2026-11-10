@@ -114,25 +114,6 @@ Command = (
 )
 
 
-def _json_payload(value: JsonValue) -> None:
-    """Events have no artifact lifetime/ownership protocol: refuse references."""
-    canonical_json(value)
-    if isinstance(value, dict):
-        if (
-            value.get("kind") in {"file", "workspace"}
-            or value.get("type") in {"file", "workspace"}
-            or (value.get("version") == 1 and "entries" in value)
-            or "input_files" in value
-            or "uploads" in value
-        ):
-            raise WaitRefusalError("machine_events_require_json_not_file_or_workspace", 422)
-        for child in value.values():
-            _json_payload(child)
-    elif isinstance(value, list):
-        for child in value:
-            _json_payload(child)
-
-
 class MachineHost:
     def __init__(self, operator: Operator) -> None:
         self.op = operator
@@ -168,7 +149,7 @@ class MachineHost:
             or not all(char.isprintable() for char in idempotency_key)
         ):
             raise ValueError("idempotency_key must contain 1-256 printable characters")
-        _json_payload(payload)
+        canonical_json(payload)
 
     def retry(self, run_id: str) -> None:
         reply: Future[None] = Future()

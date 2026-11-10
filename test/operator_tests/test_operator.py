@@ -147,6 +147,76 @@ def test_machine_start_storage_failure_keeps_journal_and_can_retry(tmp_path):
         op.close()
 
 
+def test_machine_send_uses_payload_types_not_json_dictionary_keys(tmp_path):
+    from avalanche.local_waits import WaitRefusalError
+
+    fixture = tmp_path / "events.py"
+    fixture.write_text("""import avalanche as ava
+from pydantic import BaseModel, JsonValue
+class Input(ava.BaseInput):
+    ticket: int
+class JsonPayload(BaseModel):
+    payload: JsonValue
+class FilePayload(BaseModel):
+    files: list[ava.File]
+class WorkspacePayload(BaseModel):
+    workspace: ava.Workspace
+@ava.step
+def work():
+    return "done"
+@ava.machine(input=Input, key=("ticket",))
+def events():
+    pending = ava.state(work, initial=True)
+    done = ava.state(work, final=True)
+    pending.on("github", payload=JsonPayload) >> done
+    pending.on("file", payload=FilePayload) >> done
+    pending.on("workspace", payload=WorkspacePayload) >> done
+""")
+    op = Operator(
+        [str(fixture)],
+        watch=False,
+        schedule=False,
+        webhook_port=0,
+        state_db=tmp_path / "state.db",
+    )
+    try:
+        run_id = op.start_run("events", input={"ticket": 20})
+        deadline = time.monotonic() + 20
+        while (
+            time.monotonic() < deadline and op.get_run(run_id).status is not RunStatus.WAITING
+        ):
+            time.sleep(0.03)
+        for name, payload in [
+            ("file", {"files": []}),
+            ("workspace", {"workspace": {"reference": "ref"}}),
+        ]:
+            with pytest.raises(
+                (WaitRefusalError, ValueError),
+                match="machine_events_require_json_not_file_or_workspace",
+            ):
+                op._machine_host.send(run_id, name, payload, name)
+        receipt = op._machine_host.send(
+            run_id,
+            "github",
+            {
+                "payload": {
+                    "type": "file",
+                    "kind": "file",
+                    "version": 1,
+                    "entries": [],
+                    "uploads": [],
+                    "input_files": [],
+                    "path": "README.md",
+                }
+            },
+            "github",
+        )
+        assert receipt.status == "accepted"
+        assert wait_terminal(op, run_id).status is RunStatus.SUCCESS
+    finally:
+        op.close()
+
+
 def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path):
     """A real coordinator per visit, one durable run, stable event admission."""
     from runtime.operator.state.machines import MachinesTable
