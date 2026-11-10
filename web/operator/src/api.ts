@@ -191,6 +191,13 @@ import type {
 } from "./machine";
 
 export interface OperatorApi {
+  /**
+   * The host's live run statuses: a run in one of them is still changing, so its
+   * page shows no snapshot banner, offers Cancel and keeps its machine reads fresh.
+   * Every other status is settled. Defaults to the local operator's statuses
+   * (`requesting`, `pending`, `running`, `waiting`, `interrupted`, `needs_attention`).
+   */
+  readonly liveRunStatuses?: readonly string[];
   // Optional capabilities. Run IDs address reads; adapters resolve their host's key/scope.
   getMachineInstance?(runId: string, signal?: AbortSignal): Promise<MachineInstance>;
   getMachineHistory?(

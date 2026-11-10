@@ -7,6 +7,7 @@ import { applyInputFiles, type InputDraft } from "./useInputDraft";
 import { workflowInputDraft } from "./workflowInput";
 import type { OperatorProjection } from "./state";
 import { isUnknownRecord } from "./guards";
+import { runStatusLive } from "./runLiveness";
 
 interface RunControlsProps {
   workflow?: FlowInfoMsg;
@@ -29,6 +30,8 @@ interface RunControlsProps {
   inputDraft?: InputDraft;
   /** Opens the input panel, offered next to errors when the workflow takes input. */
   onEditInput?: () => void;
+  /** The host's live run statuses (`OperatorApi.liveRunStatuses`); Cancel shows for them. */
+  liveRunStatuses?: readonly string[];
 }
 
 /** Key-order independent JSON, to tell whether two inputs differ. */
@@ -65,6 +68,7 @@ export function RunControls({
   runActionsEnabled = true,
   inputDraft,
   onEditInput,
+  liveRunStatuses,
 }: RunControlsProps) {
   const [showSchedule, setShowSchedule] = useState(false);
   // One input for both Run and the cron schedule (see useInputDraft).
@@ -153,14 +157,7 @@ export function RunControls({
     }
   }
 
-  const active =
-    run?.summary?.status === "requesting" ||
-    run?.summary?.status === "pending" ||
-    run?.summary?.status === "running" ||
-    // A machine run parks between visits; cancelling it closes the instance.
-    run?.summary?.status === "waiting" ||
-    run?.summary?.status === "interrupted" ||
-    run?.summary?.status === "needs_attention";
+  const active = runStatusLive({ liveRunStatuses }, run?.summary?.status);
 
   const start = async () => {
     if (!workflow) return;

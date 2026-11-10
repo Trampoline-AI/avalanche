@@ -29,18 +29,40 @@ import { RunWaitPanel } from "./RunWaitPanel";
 const machineButton =
   "rounded border border-line bg-panel px-3 py-2 text-xs text-ink disabled:opacity-50";
 
-function useRead<T>(load: ((signal: AbortSignal) => Promise<T>) | undefined, poll = false) {
+/**
+ * When a machine read refreshes. `refreshKey` is the host's change signal for the
+ * run (its summary revision from the update stream): a new key re-reads at once.
+ * While `live`, a backoff poll (1 s doubling to 30 s, reset by each new key) covers
+ * hosts whose stream does not reach every machine change; a settled run never polls.
+ */
+export interface MachineReadRefresh {
+  live?: boolean;
+  refreshKey?: string;
+}
+
+const READ_POLL_FIRST_MS = 1000;
+const READ_POLL_MAX_MS = 30_000;
+/** Stream bursts (many revisions a second while a visit runs) coalesce to this spacing. */
+const READ_MIN_SPACING_MS = 250;
+
+function useRead<T>(
+  load: ((signal: AbortSignal) => Promise<T>) | undefined,
+  { live = false, refreshKey }: MachineReadRefresh = {},
+) {
   const [result, setResult] = useState<{ load: typeof load; value: T }>();
   const [failure, setFailure] = useState<{ load: typeof load; error: string }>();
   const value = result?.load === load ? result?.value : undefined;
   const error = failure?.load === load ? failure?.error : undefined;
   const [revision, refresh] = useState(0);
+  const lastRead = useRef<{ load: typeof load; at: number }>(undefined);
   useEffect(() => {
     if (!load) return;
     const readValue = load;
     const controller = new AbortController();
-    let timeout: ReturnType<typeof setTimeout>;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let delay = READ_POLL_FIRST_MS;
     async function read() {
+      lastRead.current = { load, at: Date.now() };
       try {
         const next = await readValue(controller.signal);
         if (!controller.signal.aborted) {
@@ -51,15 +73,21 @@ function useRead<T>(load: ((signal: AbortSignal) => Promise<T>) | undefined, pol
         if (!controller.signal.aborted)
           setFailure({ load, error: cause instanceof Error ? cause.message : "Read failed" });
       } finally {
-        if (poll && !controller.signal.aborted) timeout = setTimeout(() => void read(), 1000);
+        if (live && !controller.signal.aborted) {
+          timeout = setTimeout(() => void read(), delay);
+          delay = Math.min(delay * 2, READ_POLL_MAX_MS);
+        }
       }
     }
-    void read();
+    // A new load reads at once; a stream refresh right after a read waits its turn.
+    const since = lastRead.current?.load === load ? Date.now() - lastRead.current.at : Infinity;
+    if (since >= READ_MIN_SPACING_MS) void read();
+    else timeout = setTimeout(() => void read(), READ_MIN_SPACING_MS - since);
     return () => {
       controller.abort();
       clearTimeout(timeout);
     };
-  }, [load, poll, revision]);
+  }, [load, live, refreshKey, revision]);
   return { value, error, refresh: () => refresh((current) => current + 1) };
 }
 
@@ -81,11 +109,13 @@ function EventFacts({
   runId,
   visit,
   live,
+  refreshKey,
 }: {
   api: OperatorApi;
   runId: string;
   visit: number;
   live: boolean;
+  refreshKey?: string;
 }) {
   const [cursor, setCursor] = useState<string>();
   const load = useCallback(
@@ -93,10 +123,12 @@ function EventFacts({
       api.getMachineVisitEvents!(runId, visit, { cursor, limit: 25 }, signal),
     [api, runId, visit, cursor],
   );
-  const read = useRead(
-    api.getMachineVisitEvents ? load : undefined,
-    live && cursor === undefined,
-  );
+  // Only the first window follows the run; older windows are fixed.
+  const first = cursor === undefined;
+  const read = useRead(api.getMachineVisitEvents ? load : undefined, {
+    live: live && first,
+    refreshKey: first ? refreshKey : undefined,
+  });
   if (!api.getMachineVisitEvents)
     return (
       <p className="text-xs text-secondary">Event facts are unavailable from this host.</p>
@@ -111,7 +143,11 @@ function EventFacts({
         <>
           <ul className="m-0 grid list-none gap-1 p-0 font-mono text-[11px]">
             {read.value.items.map((fact) => (
-              <li key={fact.tseq} data-event-status={fact.status}>
+              <li
+                key={fact.tseq}
+                data-event-status={fact.status}
+                className="[overflow-wrap:anywhere]"
+              >
                 <span className="text-ink">{fact.event ?? "—"}</span> · {fact.status} ·{" "}
                 <span className="text-secondary">
                   {fact.source} · {fact.receipt_id ?? "no receipt"} · {clock(fact.at)}
@@ -161,17 +197,25 @@ function Timer({ due }: { due: number }) {
   );
 }
 
-/** The run's machine instance, polled while the page is open. */
-export function useMachineInstance(api: OperatorApi, runId: string | undefined) {
+/** The run's machine instance, re-read on each run change (see MachineReadRefresh). */
+export function useMachineInstance(
+  api: OperatorApi,
+  runId: string | undefined,
+  refresh: MachineReadRefresh = {},
+) {
   const load = useCallback(
     (signal: AbortSignal) => api.getMachineInstance!(runId!, signal),
     [api, runId],
   );
-  return useRead(api.getMachineInstance && runId ? load : undefined, true);
+  return useRead(api.getMachineInstance && runId ? load : undefined, refresh);
 }
 
-/** The newest window of the run's transitions; polled while it is the first window. */
-export function useMachineHistory(api: OperatorApi, runId: string | undefined) {
+/** The newest window of the run's transitions; follows the run while it is the first window. */
+export function useMachineHistory(
+  api: OperatorApi,
+  runId: string | undefined,
+  { live, refreshKey }: MachineReadRefresh = {},
+) {
   const [cursor, setCursor] = useState<{ runId?: string; value?: string }>();
   const current = cursor && cursor.runId === runId ? cursor.value : undefined;
   const load = useCallback(
@@ -179,10 +223,11 @@ export function useMachineHistory(api: OperatorApi, runId: string | undefined) {
       api.getMachineHistory!(runId!, { cursor: current, limit: 25 }, signal),
     [api, runId, current],
   );
-  const read = useRead(
-    api.getMachineHistory && runId ? load : undefined,
-    current === undefined,
-  );
+  const first = current === undefined;
+  const read = useRead(api.getMachineHistory && runId ? load : undefined, {
+    live: live && first,
+    refreshKey: first ? refreshKey : undefined,
+  });
   return {
     ...read,
     cursor: current,
@@ -191,7 +236,7 @@ export function useMachineHistory(api: OperatorApi, runId: string | undefined) {
 }
 export type MachineHistory = ReturnType<typeof useMachineHistory>;
 
-/** One visit, polled while it is the instance's current visit. */
+/** One visit; follows the run while it is the instance's current visit. */
 export function useMachineVisit(
   api: OperatorApi,
   runId: string | undefined,
@@ -201,10 +246,12 @@ export function useMachineVisit(
 ) {
   const load = useCallback(
     (signal: AbortSignal) => api.getMachineVisit!(runId!, visit!, signal),
-    // refreshKey re-reads the visit after the instance moves on.
-    [api, runId, visit, refreshKey],
+    [api, runId, visit],
   );
-  return useRead(api.getMachineVisit && runId && visit !== undefined ? load : undefined, live);
+  return useRead(api.getMachineVisit && runId && visit !== undefined ? load : undefined, {
+    live,
+    refreshKey,
+  });
 }
 
 /** The state each visit ran in, newest first, from the instance and its history. */
@@ -499,7 +546,7 @@ export function MachineSendPanel({
           ×
         </button>
       </header>
-      <div className="grid min-h-0 flex-1 content-start gap-4 overflow-auto px-5 py-4 text-xs">
+      <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-auto px-5 py-4 text-xs">
         {chosen ? (
           <>
             <label className="grid gap-1 text-secondary">
@@ -555,7 +602,7 @@ export function MachineSendPanel({
             {receipt && (
               <p
                 role="status"
-                className="m-0 font-mono text-[11px]"
+                className="m-0 min-w-0 font-mono text-[11px] [overflow-wrap:anywhere]"
                 data-receipt-status={receipt.status}
                 data-receipt-duplicate={receipt.duplicate}
               >
@@ -650,7 +697,7 @@ function SendEventForm({
 function WaitRow({ children, ...props }: React.ComponentProps<"li">) {
   return (
     <li
-      className="grid gap-0.5 border-b border-line py-2 font-mono text-[11px] last:border-0"
+      className="grid min-w-0 gap-0.5 border-b border-line py-2 font-mono text-[11px] [overflow-wrap:anywhere] last:border-0"
       {...props}
     >
       {children}
@@ -740,6 +787,7 @@ export function MachineVisitWaits({
   refresh,
   current,
   enabled,
+  refreshKey,
 }: {
   api: OperatorApi;
   runId: string;
@@ -748,6 +796,8 @@ export function MachineVisitWaits({
   refresh: () => void;
   current: boolean;
   enabled: boolean;
+  /** The run's change signal (see MachineReadRefresh); the current visit's facts follow it. */
+  refreshKey?: string;
 }) {
   if (!visit)
     return (
@@ -796,7 +846,13 @@ export function MachineVisitWaits({
               live={current}
             />
           )}
-          <EventFacts api={api} runId={runId} visit={visit.visit} live={current} />
+          <EventFacts
+            api={api}
+            runId={runId}
+            visit={visit.visit}
+            live={current}
+            refreshKey={current ? refreshKey : undefined}
+          />
         </>
       )}
     </section>

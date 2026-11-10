@@ -36,6 +36,7 @@ import { useOperatorProjection } from "./state";
 import { WorkspaceDivider } from "./WorkspaceDivider";
 import { useRunEvaluations } from "./useRunEvaluations";
 import { INPUT_NODE_ID } from "./workflowInput";
+import { runStatusLive } from "./runLiveness";
 
 import {
   INSPECTOR_MIN_WIDTH,
@@ -191,6 +192,13 @@ export function WorkflowWorkspaceSurface({
     useWorkspaceLayout(layoutStorageKey);
   const { timelineExpanded, inspectorWidth } = layout;
   const timelineElement = useRef<HTMLDivElement>(null);
+  // The timeline can mount after the first render (a host's loading fallback, the run
+  // list appearing); its node is state so its sizing attaches whenever it mounts.
+  const [timelineNode, setTimelineNode] = useState<HTMLDivElement | null>(null);
+  const timelineRef = useCallback((node: HTMLDivElement | null) => {
+    timelineElement.current = node;
+    setTimelineNode(node);
+  }, []);
   const timelineBounds = useRef<DOMRect | undefined>(undefined);
   const timelineAnimation = useRef<Animation | undefined>(undefined);
   const workspaceId = useId();
@@ -360,11 +368,11 @@ export function WorkflowWorkspaceSurface({
   // fitted clear of its width (expanded, it is a column beside the canvas).
   const [timelineReserve, setTimelineReserve] = useState<CanvasReserve>();
   // The floating timeline stops above the canvas controls (bottom left) and scrolls.
-  const graphShellElement = useRef<HTMLDivElement>(null);
+  const [graphShell, setGraphShell] = useState<HTMLDivElement | null>(null);
   const [timelineMaxHeight, setTimelineMaxHeight] = useState<number>();
   useEffect(() => {
-    const element = timelineElement.current;
-    const shell = graphShellElement.current;
+    const element = timelineNode;
+    const shell = graphShell;
     if (!element || typeof ResizeObserver === "undefined") {
       setTimelineReserve(undefined);
       setTimelineMaxHeight(undefined);
@@ -387,7 +395,7 @@ export function WorkflowWorkspaceSurface({
     observer.observe(element);
     if (shell) observer.observe(shell);
     return () => observer.disconnect();
-  }, [timelineExpanded, workflowId]);
+  }, [timelineExpanded, timelineNode, graphShell]);
 
   const historical = selectedRunId !== undefined;
   // One input draft for Run, the schedule and the graph's input popup.
@@ -418,12 +426,26 @@ export function WorkflowWorkspaceSurface({
   // its visits as a section of the run timeline and its detail in the side panel.
   const machineSpec = workflow?.machineSpec;
   const machineRunId = machineSpec ? selectedRunId : undefined;
-  const machineRead = useMachineInstance(api, machineRunId);
+  // Machine reads follow the run's revision from the update stream (each host bumps
+  // it on a machine change) and poll with backoff only while the run is live.
+  const runRevision =
+    (selectedRunId !== undefined ? state.runs[selectedRunId]?.revision : undefined) ??
+    run?.summary?.revision;
+  const runLive = runStatusLive(
+    api,
+    (selectedRunId !== undefined ? state.runs[selectedRunId]?.status : undefined) ??
+      run?.summary?.status,
+  );
+  const machineRefresh = useMemo(
+    () => ({ live: runLive, refreshKey: runRevision }),
+    [runLive, runRevision],
+  );
+  const machineRead = useMachineInstance(api, machineRunId, machineRefresh);
   const machineInstance =
     machineRunId !== undefined && machineRead.value?.run_id === machineRunId
       ? machineRead.value
       : undefined;
-  const machineHistory = useMachineHistory(api, machineRunId);
+  const machineHistory = useMachineHistory(api, machineRunId, machineRefresh);
   const [visitSelection, setVisitSelection] = useState<{ runId: string; visit: number }>();
   const selectedVisit =
     visitSelection && visitSelection.runId === machineRunId ? visitSelection.visit : undefined;
@@ -436,7 +458,7 @@ export function WorkflowWorkspaceSurface({
     machineRunId,
     selectedVisit,
     currentVisit,
-    `${machineInstance?.visit}:${machineInstance?.status}`,
+    `${machineInstance?.visit}:${machineInstance?.status}:${runRevision}`,
   );
   const visit =
     selectedVisit !== undefined && visitRead.value?.visit === selectedVisit
@@ -540,15 +562,9 @@ export function WorkflowWorkspaceSurface({
   // A machine run's send form opens in the side panel, like the run input form.
   const inspectorOpen = nodeInspectorOpen || (sendOpen && run !== undefined);
   const displayedRunId = run?.summary?.runId;
-  // A live run is still changing; only a settled run is a snapshot of the past.
+  // A live run (runLive, above) is still changing; only a settled run is a snapshot
+  // of the past. The host declares which statuses are live (OperatorApi.liveRunStatuses).
   const runStatus = run?.summary?.status;
-  const runLive =
-    runStatus === "requesting" ||
-    runStatus === "pending" ||
-    runStatus === "running" ||
-    runStatus === "waiting" ||
-    runStatus === "interrupted" ||
-    runStatus === "needs_attention";
   // The run's waits sit beside the graph, never over it: a flow run's pending waits
   // (decision cards), or a machine run's timer, deferred events and receipts.
   const waitsPanel =
@@ -584,6 +600,7 @@ export function WorkflowWorkspaceSurface({
             refresh={visitRead.refresh}
             current={currentVisit}
             enabled={runActionsEnabled && bottomRightPanel !== null}
+            refreshKey={runRevision}
           />
         ) : (
           <MachineRunWaits
@@ -657,6 +674,7 @@ export function WorkflowWorkspaceSurface({
       runActionsEnabled={runActionsEnabled}
       inputDraft={!historical ? inputDraft : undefined}
       onEditInput={() => openNode(INPUT_NODE_ID)}
+      liveRunStatuses={api.liveRunStatuses}
     />
   ) : undefined;
   // Machine-only actions sit beside the normal run controls (Cancel).
@@ -708,7 +726,7 @@ export function WorkflowWorkspaceSurface({
         <section className="canvas-shell relative col-start-1 flex min-h-0 min-w-0 flex-row overflow-hidden bg-canvas-shell">
           {runListPanel && (
             <div
-              ref={timelineElement}
+              ref={timelineRef}
               style={
                 timelineMaxHeight === undefined
                   ? undefined
@@ -725,7 +743,7 @@ export function WorkflowWorkspaceSurface({
             {workflow || run ? (
               <>
                 <div
-                  ref={graphShellElement}
+                  ref={setGraphShell}
                   className={`run-graph-shell relative min-w-0 flex-1 overflow-hidden ${machineRunId ? "min-h-[300px]" : "min-h-0"}`}
                 >
                   <GraphCanvas

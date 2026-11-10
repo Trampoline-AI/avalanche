@@ -40,6 +40,7 @@ export {
   useMachineInstance,
   useMachineVisit,
 } from "./MachineWorkspace";
-export type { MachineHistory } from "./MachineWorkspace";
+export type { MachineHistory, MachineReadRefresh } from "./MachineWorkspace";
+export { LOCAL_LIVE_RUN_STATUSES, runStatusLive } from "./runLiveness";
 export { runKeyLabel } from "./runKey";
 export type { MachineGraphView } from "./machineGraph";
