@@ -64,6 +64,7 @@ const RANK_GAP = { horizontal: 300, vertical: 260 };
 export function layoutMachine(
   view: MachineGraphView,
   orientation: GraphOrientation,
+  labelScale = 1,
 ): {
   ranks: Map<string, number>;
   positions: Record<string, { x: number; y: number }>;
@@ -107,6 +108,11 @@ export function layoutMachine(
     byRank.set(rank, [...(byRank.get(rank) ?? []), name]);
   }
   const { width, height } = DEFAULT_NODE_SIZE;
+  const rankGap = machineRankGap(
+    links.filter((link) => ranks.get(link.target)! > ranks.get(link.source)!),
+    orientation,
+    labelScale,
+  );
   const positions: Record<string, { x: number; y: number }> = {};
   for (const [rank, names] of byRank) {
     names.forEach((name, row) => {
@@ -115,12 +121,12 @@ export function layoutMachine(
       positions[name] =
         orientation === "horizontal"
           ? {
-              x: rank * (width + RANK_GAP.horizontal),
+              x: rank * (width + rankGap),
               y: offset * (height + COLUMN_GAP.horizontal),
             }
           : {
               x: offset * (width + COLUMN_GAP.vertical) - width / 2,
-              y: rank * (height + RANK_GAP.vertical),
+              y: rank * (height + rankGap),
             };
     });
   }
@@ -251,10 +257,37 @@ function labelSize(data: MachineArcData, scale = 1): { width: number; height: nu
   };
 }
 
+/**
+ * A forward arc runs level through its label only near the middle of the gap
+ * between ranks (GraphCanvas bends it over the outer parts), so the gap must be
+ * this many times the widest label's extent along it, or a neighbouring parallel
+ * arc's bend crosses that label.
+ */
+const RANK_GAP_PER_LABEL = 2.1;
+
+/** The gap between ranks: the default, widened for the forward arcs' labels at `scale`. */
+function machineRankGap(
+  forward: readonly Pick<MachineArcData, "label" | "timer">[],
+  orientation: GraphOrientation,
+  scale: number,
+): number {
+  const along = Math.max(
+    0,
+    ...forward.map((link) => {
+      const size = labelSize(link as MachineArcData, scale);
+      return orientation === "horizontal" ? size.width : size.height;
+    }),
+  );
+  return Math.max(RANK_GAP[orientation], Math.ceil(along * RANK_GAP_PER_LABEL));
+}
+
 /** Smallest arc label text, in screen pixels, at the graph's fitted zoom. */
 export const MIN_ARC_LABEL_PX = 11;
-/** Largest label multiplier: past it a label would outgrow the gap between ranks. */
-export const MAX_ARC_LABEL_SCALE = 1.8;
+/**
+ * Largest label multiplier. The gap between ranks widens with the labels, which
+ * shrinks the fit; past this the cards would get too small for the labels' gain.
+ */
+export const MAX_ARC_LABEL_SCALE = 3;
 
 /**
  * How much to enlarge arc labels (10 px text in flow units) so that, at `zoom`,

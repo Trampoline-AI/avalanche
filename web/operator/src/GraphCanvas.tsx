@@ -1113,10 +1113,6 @@ function GraphCanvasView({
     [hasInputNode, groupedTopology],
   );
   const [machineSelected, setMachineSelected] = useState<string>();
-  const machineLayout = useMemo(
-    () => (machine ? layoutMachine(machine, orientation) : undefined),
-    [machine, orientation],
-  );
   const graphNodeIds = useMemo(
     () =>
       machine
@@ -1422,54 +1418,73 @@ function GraphCanvasView({
   const reserveWidth = reserve?.width;
   const reserveHeight = reserve?.height;
   const minZoom = reserveWidth !== undefined ? RESERVED_MIN_ZOOM : MIN_ZOOM;
-  // The fit's extent: a machine's state cards and input dot (its arcs are routed
-  // after the fit), a flow's nodes.
-  const fitNodes = useMemo<readonly Node[]>(() => {
-    if (!machineLayout || !machine) return nodes;
-    const cards: Node[] = Object.entries(machineLayout.positions).map(([name, position]) => ({
-      id: name,
-      position,
-      measured: nodeMeasurements.get(name),
-      data: {},
-    }));
-    const initial = machineLayout.positions[machine.spec.initial];
-    if (hasInputNode && initial)
-      cards.push({
-        id: INPUT_NODE_ID,
-        position: machineInputPosition(initial, orientation),
-        measured: nodeMeasurements.get(INPUT_NODE_ID),
+  const reserveFor = useMemo<CanvasReserve | undefined>(
+    () =>
+      reserveWidth === undefined ? undefined : { width: reserveWidth, height: reserveHeight },
+    [reserveHeight, reserveWidth],
+  );
+  // A machine's layout, its arc label scale and the side of the runs panel it fits
+  // on, together: labels keep a readable size at the fitted zoom, and larger labels
+  // widen the gaps between ranks, which lowers that zoom. The fit covers the state
+  // cards and input dot only, so the zoom is known before the arcs are routed.
+  const machineFit = useMemo(() => {
+    if (!machine) return undefined;
+    const fitFor = (scale: number) => {
+      const layout = layoutMachine(machine, orientation, scale);
+      const cards: Node[] = Object.entries(layout.positions).map(([name, position]) => ({
+        id: name,
+        position,
+        measured: nodeMeasurements.get(name),
         data: {},
-      });
-    return cards;
-  }, [hasInputNode, machine, machineLayout, nodeMeasurements, nodes, orientation]);
+      }));
+      const initial = layout.positions[machine.spec.initial];
+      if (hasInputNode && initial)
+        cards.push({
+          id: INPUT_NODE_ID,
+          position: machineInputPosition(initial, orientation),
+          measured: nodeMeasurements.get(INPUT_NODE_ID),
+          data: {},
+        });
+      const side = reserveSide(baseFitViewOptions, reserveFor, cards, canvasSize, minZoom);
+      const zoom = firstFrameFor(
+        cards,
+        canvasSize,
+        reserveFit(baseFitViewOptions, reserveFor, side),
+        minZoom,
+      )?.viewport.zoom;
+      return { layout, side, zoom, scale };
+    };
+    let fit = fitFor(1);
+    for (let step = 0; step < 6; step++) {
+      const wanted = machineLabelScale(fit.zoom);
+      if (wanted <= fit.scale) break;
+      fit = fitFor(wanted);
+    }
+    return fit;
+  }, [
+    baseFitViewOptions,
+    canvasSize,
+    hasInputNode,
+    machine,
+    minZoom,
+    nodeMeasurements,
+    orientation,
+    reserveFor,
+  ]);
+  const machineLayout = machineFit?.layout;
+  const labelScale = machineFit?.scale ?? 1;
   // A primitive, so the options below keep their identity (a new one re-fits).
   const side = useMemo(
     () =>
-      reserveWidth === undefined
-        ? "beside"
-        : reserveSide(
-            baseFitViewOptions,
-            { width: reserveWidth, height: reserveHeight },
-            fitNodes,
-            canvasSize,
-            minZoom,
-          ),
-    [baseFitViewOptions, canvasSize, fitNodes, minZoom, reserveHeight, reserveWidth],
+      machineFit
+        ? machineFit.side
+        : reserveSide(baseFitViewOptions, reserveFor, nodes, canvasSize, minZoom),
+    [baseFitViewOptions, canvasSize, machineFit, minZoom, nodes, reserveFor],
   );
   const fitViewOptions = useMemo(
-    () =>
-      reserveWidth === undefined
-        ? baseFitViewOptions
-        : reserveFit(baseFitViewOptions, { width: reserveWidth, height: reserveHeight }, side),
-    [baseFitViewOptions, reserveHeight, reserveWidth, side],
+    () => reserveFit(baseFitViewOptions, reserveFor, side),
+    [baseFitViewOptions, reserveFor, side],
   );
-  // Arc labels keep a readable size at the fitted zoom: the fit covers the state
-  // cards only, so the zoom is known before the arcs (and their labels) are routed.
-  const labelScale = useMemo(() => {
-    if (!machineLayout) return 1;
-    const zoom = firstFrameFor(fitNodes, canvasSize, fitViewOptions, minZoom)?.viewport.zoom;
-    return machineLabelScale(zoom);
-  }, [canvasSize, fitNodes, fitViewOptions, machineLayout, minZoom]);
 
   // Machine mode reuses the same cards, input dot and edge highlighting; only the
   // layout (cycle-safe ranks) and the curved arcs differ from a flow.
