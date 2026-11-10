@@ -926,6 +926,42 @@ def test_missing_machine_definition_parks_without_stopping_operator(tmp_path, lo
             op.close()
 
 
+def test_stale_definition_retry_stalls_new_healthy_run(tmp_path):
+    """Reviewer M1: repairing a cancelled run must not strand the next keyed run."""
+    root = tmp_path / "source"
+    root.mkdir()
+    fixture = root / "machine.py"
+    source = (Path(__file__).parents[1] / "fixtures" / "local_machine.py").read_text()
+    fixture.write_text(source)
+    op = Operator(
+        [str(root)], watch=True, schedule=False, webhook_port=0, state_db=tmp_path / "state.db"
+    )
+    try:
+        values = {"ticket": 1, "journal": str(tmp_path / "j")}
+        first = op.start_run("approval", input=values)
+        _wait_until(lambda: _machine_record(op, first).phase == "waiting")
+        fixture.write_text("def invalid syntax:\n")
+        _wait_until(lambda: _machine_record(op, first).reason == "definition_unavailable")
+        op._machine_host.cancel(first)
+        fixture.write_text(source)
+        _wait_until(
+            lambda: not any(
+                d.kind in {"import_error", "build_error"} for d in op._registry.view.diagnostics
+            )
+        )
+        time.sleep(2)
+        print("retries after restore:", dict(op._machine_host._definition_retries))
+        second = op.start_run("approval", input={**values, "ticket": 2})
+        _wait_until(lambda: _machine_record(op, second).phase == "waiting")
+        time.sleep(5)
+        record = _machine_record(op, second)
+        print("new healthy run:", record.phase, record.state, record.reason)
+        assert record.reason is None
+        assert op.fatal_error is None
+    finally:
+        op.close()
+
+
 def _count_machine_reloads(op):
     calls = []
     refresh = op._refresh_workflows

@@ -272,7 +272,6 @@ class MachineHost:
             reload
             or summary is not None
             or record.reason in {"definition_unavailable", "state_missing"}
-            or record.machine in self._definition_retries
         ):
             if self._reload_definition(record.machine):
                 try:
@@ -280,8 +279,6 @@ class MachineHost:
                     summary = None
                 except (UnknownWorkflow, FileNotFoundError, ValueError) as exc:
                     summary = f"{type(exc).__name__}: {exc}"
-            else:
-                summary = summary or "Definition reload pending"
         if summary is not None:
             self._definition_unavailable(record, summary)
             if required:
@@ -362,6 +359,7 @@ class MachineHost:
             run.status = status
             record.run_status = status
             if status in {RunStatus.SUCCESS, RunStatus.CANCELLED, RunStatus.FAILED}:
+                self._definition_retries.pop(record.machine, None)
                 run.ended_at = time.monotonic()
             notifications = self.op._publish_run_locked(
                 run,
@@ -970,6 +968,9 @@ class MachineHost:
                     case VisitFinished():
                         self._finished(command)
                     case CatalogReloaded():
+                        catalog_ids = self.op._registry.view.by_id.keys()
+                        for machine in self._definition_retries.keys() - catalog_ids:
+                            del self._definition_retries[machine]
                         self._pass_reloaded = True
                         self._last_reload = time.monotonic()
                         with self.op._state_store.transaction() as connection:

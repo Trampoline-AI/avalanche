@@ -22,7 +22,9 @@
   minimum interval. With watching off, timer retries back off per machine from
   one to 60 seconds; watching instead wakes waiting runs on catalog reload.
   Original timer deadlines never move and overdue timers fire once on recovery.
-  Sends, explicit retry and restart bypass timer backoff.
+  Sends, explicit retry and restart bypass timer backoff. A successful definition
+  read is always usable, even during retry backoff; closed runs and removed
+  catalog entries no longer leave stale recovery bookkeeping behind.
   Only a loaded definition without the current state produces `state_missing` /
   `needs_attention`; restore that state and use `ava run retry RUN_ID --visit`.
   Visit preparation/start failures preserve the journal and require explicit
