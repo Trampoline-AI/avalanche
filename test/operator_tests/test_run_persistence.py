@@ -1148,15 +1148,91 @@ def test_machine_visit_import_failure_is_interrupted_and_retryable(tmp_path):
         assert _machine_record(op, run_id).phase == "interrupted"
         assert op.get_run(run_id).status is RunStatus.WAITING
         interrupted_visit = _machine_record(op, run_id).visit
-        op._machine_host.retry(run_id)  # Source is still broken: do not invent a visit.
-        assert _machine_record(op, run_id).phase == "interrupted"
-        assert _machine_record(op, run_id).visit == interrupted_visit
+
+        def retry_refused(reason):
+            import http.client
+
+            from runtime.operator.web import start_browser_server
+
+            # Behaviour fix: an unperformed retry must fail on every public path,
+            # not acknowledge success while leaving the interrupted visit alone.
+            with pytest.raises(ValueError, match=reason):
+                op._machine_host.retry(run_id)
+            port = _free_port()
+            address = f"127.0.0.1:{port}"
+            server = serve_operator(op, port=port, block=False)
+            browser = start_browser_server(address, port=0)
+            try:
+                with closing(grpc.insecure_channel(address)) as channel:
+                    stub = pb_grpc.OperatorServiceV2Stub(channel)
+                    with pytest.raises(grpc.RpcError) as error:
+                        stub.ControlMachine(
+                            pb.ControlMachineRequestV2(
+                                request_json=json.dumps({"op": "retry", "run_id": run_id})
+                            ),
+                            timeout=10,
+                        )
+                    assert error.value.code() == grpc.StatusCode.FAILED_PRECONDITION
+                    assert error.value.details() == reason
+                http = http.client.HTTPConnection(browser.host, browser.port, timeout=10)
+                try:
+                    http.request(
+                        "POST",
+                        f"/api/v1/runs/{run_id}/machine/visits:retry",
+                        body="{}",
+                        headers={"Content-Type": "application/json"},
+                    )
+                    response = http.getresponse()
+                    body = response.read().decode()
+                    assert response.status == 409 and reason in body
+                finally:
+                    http.close()
+                cli = subprocess.run(
+                    [
+                        sys.executable,
+                        "-m",
+                        "ava_cli",
+                        "run",
+                        "retry",
+                        run_id,
+                        "--visit",
+                        "--connect",
+                        address,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+                assert cli.returncode != 0 and reason in cli.stdout + cli.stderr
+            finally:
+                browser.close()
+                server.stop(grace=0).wait()
+            assert _machine_record(op, run_id).phase == "interrupted"
+            assert _machine_record(op, run_id).visit == interrupted_visit
+
+        retry_refused("definition_unavailable")
         with op._state_store.transaction() as c:
             from runtime.operator.state.machines import MachinesTable
 
             assert (
                 MachinesTable.visit(c, run_id, interrupted_visit).disposition == "indeterminate"
             )
+        state = _machine_record(op, run_id).state
+        fixture.write_text(source.replace(state, "retired_" + state))
+        op._refresh_workflows()
+        receipt = op._machine_host.send(run_id, "approved", {}, "missing-state")
+        with op._state_store.transaction() as c:
+            facts = [
+                json.loads(row[0])
+                for row in c.execute(
+                    "SELECT record_json FROM machine_facts WHERE run_id=?", (run_id,)
+                )
+            ]
+        assert any(
+            fact["receipt_id"] == receipt.receipt_id and fact["reason"] == "state_missing"
+            for fact in facts
+        )
+        retry_refused("state_missing")
         fixture.write_text(source)
         op._machine_host.retry(run_id)
         assert _wait_terminal(op, run_id).status is RunStatus.SUCCESS

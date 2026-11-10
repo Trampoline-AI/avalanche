@@ -312,7 +312,13 @@ follow the ordinary reducer/inbox rules. Admission still does not promise a
 transition. If source loading fails during validation, the event stays queued.
 A visit that already started but fails to prepare remains `interrupted` and
 requires explicit retry; restoring a definition never replays uncertain work.
-A retry while source is still unavailable creates no new visit.
+A retry while source is still unavailable creates no new visit and now fails
+with `definition_unavailable`; a loaded graph without the current state fails
+with `state_missing`. This corrects the former successful no-op: CLI exits
+unsuccessfully, REST returns 409 and gRPC returns FAILED_PRECONDITION, each with
+the reason. An interrupted run retains its unknown-outcome protection until a
+successful explicit retry. A send queued on such a run while its state is absent
+records `state_missing`, not `definition_unavailable`.
 
 Editing a timer delay does not move an already-entered state's deadline; the
 new delay applies on the next entry. Local visits are therefore different from

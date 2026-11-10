@@ -27,6 +27,11 @@
   `needs_attention`; restore that state and use `ava run retry RUN_ID --visit`.
   Visit preparation/start failures preserve the journal and require explicit
   visit retry; failed, unacknowledged keyed-flow starts release the key.
+- Explicit machine visit retry now fails with `definition_unavailable` or
+  `state_missing` when repair cannot start, instead of reporting a successful
+  no-op. CLI, REST and gRPC expose the reason without advancing the visit;
+  interrupted runs retain their unknown-outcome protection. Sends queued against
+  an interrupted run whose loaded state is absent record `state_missing`.
 - Local machine sends remain JSON-only until durable artifact-event ownership
   is implemented: admission refuses declared File/Workspace payload fields,
   including nested fields, not ordinary JSON keys such as `type: file`.

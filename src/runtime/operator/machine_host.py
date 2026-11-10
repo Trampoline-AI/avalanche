@@ -259,7 +259,7 @@ class MachineHost:
         return True
 
     def _current_spec(
-        self, record: InstanceRecord, *, reload: bool = False
+        self, record: InstanceRecord, *, reload: bool = False, required: bool = False
     ) -> MachineSpec | None:
         """Reload only this run's unavailable definition, never unrelated errors."""
         spec: MachineSpec | None = None
@@ -284,6 +284,8 @@ class MachineHost:
                 summary = summary or "Definition reload pending"
         if summary is not None:
             self._definition_unavailable(record, summary)
+            if required:
+                raise WaitRefusalError("definition_unavailable", 409)
             return None
         assert spec is not None
         self._definition_retries.pop(record.machine, None)
@@ -292,6 +294,8 @@ class MachineHost:
             if record.reason != "outcome_unknown":
                 record.reason = "state_missing"
             self._commit(record, lambda connection: None, record.run_status)
+            if required:
+                raise WaitRefusalError("state_missing", 409)
             return None
         if record.reason in {"definition_unavailable", "state_missing"}:
             record.reason = None
@@ -586,7 +590,8 @@ class MachineHost:
                 for row in connection.execute(
                     "SELECT json_extract(record_json, '$.receipt_id') FROM machine_facts "
                     "WHERE run_id=? AND json_extract(record_json, '$.status')='accepted' "
-                    "AND json_extract(record_json, '$.reason')='definition_unavailable'",
+                    "AND json_extract(record_json, '$.reason') "
+                    "IN ('definition_unavailable', 'state_missing')",
                     (record.run_id,),
                 )
             }
@@ -654,9 +659,14 @@ class MachineHost:
             )
         if record.phase in {"final", "closed"}:
             raise WaitRefusalError("run_closed", 409)
-        spec = self._current_spec(record)
-        if spec is None and record.reason == "state_missing":
-            raise WaitRefusalError("state_missing", 409)
+        unavailable_reason = None
+        try:
+            spec = self._current_spec(record, required=True)
+        except WaitRefusalError as exc:
+            if exc.code == "state_missing" and record.phase != "interrupted":
+                raise
+            spec = None
+            unavailable_reason = exc.code
         # While the definition is unavailable this is durable JSON ingress, not
         # schema acceptance. Validate against the restored native model before
         # the reducer may consume it, and journal any rejection visibly.
@@ -672,6 +682,7 @@ class MachineHost:
             except (MachineDefinitionUnavailableError, FileNotFoundError) as exc:
                 self._definition_unavailable(record, str(exc))
                 spec = None
+                unavailable_reason = "definition_unavailable"
                 accepted = True
         receipt = MachineEventReceipt(
             receipt_id=uuid4().hex,
@@ -716,7 +727,7 @@ class MachineHost:
                 status=receipt.status,
                 event=command.event,
                 receipt_id=receipt.receipt_id,
-                reason="definition_unavailable" if spec is None else None,
+                reason=unavailable_reason,
                 at=receipt.accepted_at,
             )
         # The receipt is durable before publication or driving work.
@@ -976,12 +987,13 @@ class MachineHost:
                             raise ValueError(
                                 "Only an interrupted or waiting machine can be retried"
                             )
-                        if self._current_spec(record, reload=True) is None:
+                        try:
+                            self._current_spec(record, reload=True, required=True)
+                        except WaitRefusalError:
                             if record.phase == "waiting":
                                 self._arm_timers(record, unavailable=True)
-                            if record.reason == "state_missing":
-                                raise ValueError("state_missing")
-                        elif phase == "interrupted":
+                            raise
+                        if phase == "interrupted":
                             with self.op._state_store.transaction() as connection:
                                 previous = MachinesTable.visit(connection, run_id, record.visit)
                             record.visit += 1
