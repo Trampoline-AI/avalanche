@@ -352,6 +352,28 @@ describe("run timeline in the bottom pane", () => {
     );
   });
 
+  it("reads no waits or event facts of a run whose history expired", async () => {
+    const expiredRun = RunSummaryMsg.create({ ...machineRun, expired: true });
+    const listRunWaits = vi.fn(async () => []);
+    const getMachineVisitEvents = vi.fn(async () => ({ items: [], next_cursor: null }));
+    const api = machineApi({
+      listRunWaits,
+      getMachineVisitEvents,
+      getLatestRunSnapshot: async () =>
+        RunSnapshotMsg.create({
+          operatorInstanceId: "operator-1",
+          asOfEventUlid: eventUlid(1),
+          summary: expiredRun,
+        }),
+    });
+    const baseline = await api.loadBaseline();
+    api.loadBaseline = async () => ({ ...baseline, runs: [summary, expiredRun] });
+    renderRun(api, machineFlow.workflowId, "run-m");
+    await waitFor(() => expect(events()).toContain("v3:enter"));
+    expect(listRunWaits).not.toHaveBeenCalled();
+    expect(getMachineVisitEvents).not.toHaveBeenCalled();
+  });
+
   it("omits entries a host does not report, with one neutral note", async () => {
     // No event facts, receipts or deferred events (the Delta console's host).
     renderRun(machineApi({}, true), machineFlow.workflowId, "run-m");

@@ -610,7 +610,12 @@ export function WorkflowWorkspaceSurface({
   // The run timeline: one chronological list of the run's events, the same for
   // flow and machine runs, in the bottom pane beside Logs.
   const settled = runStatusValue === undefined ? undefined : !runLive;
-  const runWaits = useRunWaits(api, run ? selectedRunId : undefined, machineRefresh);
+  // An expired run's history (waits, event facts) is gone: it is not read (R5).
+  const runWaits = useRunWaits(
+    api,
+    run && !runExpired ? selectedRunId : undefined,
+    machineRefresh,
+  );
   const waitCards = runWaits.value ?? EMPTY_WAITS;
   const windowVisits = useMemo(() => {
     if (!machineInstance) return [];
@@ -642,6 +647,7 @@ export function WorkflowWorkspaceSurface({
     shownVisits,
     liveVisit,
     `${machineInstance?.visit}:${machineInstance?.status}:${runRevision}`,
+    !runExpired,
   );
   const terminalStatuses = api.terminalRunStatuses ?? LOCAL_TERMINAL_RUN_STATUSES;
   const fromStart =

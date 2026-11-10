@@ -212,6 +212,8 @@ export function useMachineVisitDetails(
   visits: readonly number[],
   liveVisit: number | undefined,
   refreshKey: string | undefined,
+  /** Read the visits' event facts too (not once the run's history expired). */
+  facts = true,
 ) {
   const [store, setStore] = useState<{
     runId?: string;
@@ -263,12 +265,14 @@ export function useMachineVisitDetails(
       try {
         const [record, events] = await Promise.all([
           api.getMachineVisit?.(runId!, visit, controller.signal),
-          api.getMachineVisitEvents?.(
-            runId!,
-            visit,
-            { limit: VISIT_EVENTS_PAGE },
-            controller.signal,
-          ),
+          facts
+            ? api.getMachineVisitEvents?.(
+                runId!,
+                visit,
+                { limit: VISIT_EVENTS_PAGE },
+                controller.signal,
+              )
+            : undefined,
         ]);
         if (record) detail.record = record;
         if (events) {
@@ -309,7 +313,7 @@ export function useMachineVisitDetails(
       clearTimeout(timeout);
       loader.current = undefined;
     };
-  }, [api, runId, readable]);
+  }, [api, runId, readable, facts]);
   const loadMoreEvents = useCallback(
     async (visit: number) => {
       const cursor = details.get(visit)?.eventsCursor;
