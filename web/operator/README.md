@@ -314,21 +314,21 @@ and breadcrumb). Ordinary workflows are otherwise unchanged.
 Machine-only elements extend the nearest run component; there is no machine
 page, instance table or extra panel type:
 
-| Machine element                                         | Run component it extends                                                 |
-| ------------------------------------------------------- | ------------------------------------------------------------------------ |
-| State graph                                             | `GraphCanvas` (`machine` mode): same cards, grid, controls, input dot    |
-| Current state                                           | The graph's node card (ring + run status)                                |
-| One arc per trigger, loops, timer arcs                  | The graph's edges (cubic arcs, dotted timers with countdown)             |
-| Visits                                                  | Entries of the run's Timeline tab (bottom pane, beside Logs)             |
-| A visit's steps                                         | The run graph and side inspector (outputs, attempts, trace) and log pane |
-| Send, retry visit, dev timer                            | Run controls, beside Cancel                                              |
-| Send form                                               | The side panel, like the run input form                                  |
-| Pending timer, deferred events, open waits, decisions   | The Timeline tab's pinned Pending rows                                   |
+| Machine element                                          | Run component it extends                                                 |
+| -------------------------------------------------------- | ------------------------------------------------------------------------ |
+| State graph                                              | `GraphCanvas` (`machine` mode): same cards, grid, controls, input dot    |
+| Current state                                            | The graph's node card (ring + run status)                                |
+| One arc per trigger, loops, timer arcs                   | The graph's edges (cubic arcs, dotted timers with countdown)             |
+| Visits                                                   | Entries of the run's Timeline tab (bottom pane, beside Logs)             |
+| A visit's steps                                          | The run graph and side inspector (outputs, attempts, trace) and log pane |
+| Send, retry visit, dev timer                             | Run controls, beside Cancel                                              |
+| Send form                                                | The side panel, like the run input form                                  |
+| Pending timer, deferred events, open waits, decisions    | The Timeline tab's pinned Pending rows                                   |
 | Events, receipts, timers, waits, audits, cancel, outcome | Timeline entries, in time order, each naming its state and arc           |
-| Close a waiting run                                     | The normal Cancel run (`cancelRun`)                                      |
-| Start                                                   | The normal run input form and Run (`startRun`, files and workspaces)     |
-| Send payload fields, File and Workspace included        | The run input form's fields (`InputFieldList`) and upload path           |
-| Expired history                                         | The run row and run page read `expired`; the key label stays             |
+| Close a waiting run                                      | The normal Cancel run (`cancelRun`)                                      |
+| Start                                                    | The normal run input form and Run (`startRun`, files and workspaces)     |
+| Send payload fields, File and Workspace included         | The run input form's fields (`InputFieldList`) and upload path           |
+| Expired history                                          | The run row and run page read `expired`; the key label stays             |
 
 Clicking a state on the graph filters the Timeline to that state; a visit
 entry's **Steps** action opens that visit's steps on the graph, and "State
@@ -369,9 +369,9 @@ tab (kept in the layout storage as `runPaneTab`). The Timeline lists the run's
 events oldest first, newest at the bottom, with what the run waits for now
 pinned on top:
 
-| Run kind | Entries                                                         | Reads (existing `OperatorApi` only)                                        |
-| -------- | --------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| Flow     | run started, step started/finished (attempts), wait opened/resolved, outcome | `getLatestRunSnapshot` (live projection), `listRunWaits`        |
+| Run kind | Entries                                                                                                                                                           | Reads (existing `OperatorApi` only)                                                                   |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| Flow     | run started, step started/finished (attempts), wait opened/resolved, outcome                                                                                      | `getLatestRunSnapshot` (live projection), `listRunWaits`                                              |
 | Machine  | visit entered/left (with the arc), steps, event accepted/deferred/ignored/dropped/delivered with its receipt, timer armed/fired/cancelled, waits, cancel, outcome | `getMachineInstance`, `getMachineHistory`, `getMachineVisit`, `getMachineVisitEvents`, `listRunWaits` |
 
 Times read as offsets from the run start (`+1m 05s`); a wall-clock time is the
