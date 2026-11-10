@@ -839,17 +839,22 @@ export function MachineRunWaits({
   instance,
   readError,
   refresh,
-  settled = false,
+  settled,
 }: {
   instance: MachineInstance | undefined;
   readError?: string;
   refresh: () => void;
-  /** The run is settled on its host (not one of `OperatorApi.liveRunStatuses`). */
+  /**
+   * The run is settled on its host (not one of `OperatorApi.liveRunStatuses`), or
+   * live (`false`); `undefined` while its status is not loaded yet (unknown).
+   */
   settled?: boolean;
 }) {
   if (!instance) return <ReadError error={readError} retry={refresh} />;
   // A settled run waits for nothing: no accepted events, no deferred-events line.
-  const over = settled || instance.finished;
+  const over = settled === true || instance.finished;
+  // Until the run status is known, claim neither "nothing pending" nor a gap.
+  const known = settled !== undefined || instance.finished;
   // Hosts may omit deferred events (an optional capability); say so in user terms
   // on a live run, and leave the row out once the run is settled.
   const pending = instance.pending_events ?? [];
@@ -868,7 +873,8 @@ export function MachineRunWaits({
           </WaitRow>
         )}
         {instance.pending_events === undefined
-          ? !over && (
+          ? settled === false &&
+            !instance.finished && (
               <WaitRow className="text-secondary" data-wait-kind="deferred-unavailable">
                 Deferred events unavailable
               </WaitRow>
@@ -897,7 +903,8 @@ export function MachineRunWaits({
             <span className="text-secondary">{instance.accepts.join(", ")}</span>
           </WaitRow>
         )}
-        {due === null &&
+        {known &&
+          due === null &&
           pending.length === 0 &&
           (instance.pending_events !== undefined || over) &&
           (instance.receipts ?? []).length === 0 &&

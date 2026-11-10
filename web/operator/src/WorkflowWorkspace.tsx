@@ -431,11 +431,10 @@ export function WorkflowWorkspaceSurface({
   const runRevision =
     (selectedRunId !== undefined ? state.runs[selectedRunId]?.revision : undefined) ??
     run?.summary?.revision;
-  const runLive = runStatusLive(
-    api,
+  const runStatusValue =
     (selectedRunId !== undefined ? state.runs[selectedRunId]?.status : undefined) ??
-      run?.summary?.status,
-  );
+    run?.summary?.status;
+  const runLive = runStatusLive(api, runStatusValue);
   const machineRefresh = useMemo(
     () => ({ live: runLive, refreshKey: runRevision }),
     [runLive, runRevision],
@@ -607,7 +606,7 @@ export function WorkflowWorkspaceSurface({
             instance={machineInstance}
             readError={machineRead.error}
             refresh={machineRead.refresh}
-            settled={!runLive}
+            settled={runStatusValue === undefined ? undefined : !runLive}
           />
         )}
       </div>
