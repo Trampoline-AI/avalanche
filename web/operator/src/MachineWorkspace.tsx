@@ -45,6 +45,13 @@ const READ_POLL_MAX_MS = 30_000;
 /** Stream bursts (many revisions a second while a visit runs) coalesce to this spacing. */
 const READ_MIN_SPACING_MS = 250;
 
+/**
+ * One read at a time per `load`. Only a new `load` (or unmount) aborts a read in
+ * flight. A new key (refreshKey, `refresh()`, liveness) during a read marks it
+ * dirty, and one follow-up read starts READ_MIN_SPACING_MS after the read ends, so
+ * a burst of revisions faster than the host answers still completes reads and ends
+ * with a read of the latest state.
+ */
 function useRead<T>(
   load: ((signal: AbortSignal) => Promise<T>) | undefined,
   { live = false, refreshKey }: MachineReadRefresh = {},
@@ -54,15 +61,33 @@ function useRead<T>(
   const value = result?.load === load ? result?.value : undefined;
   const error = failure?.load === load ? failure?.error : undefined;
   const [revision, refresh] = useState(0);
-  const lastRead = useRef<{ load: typeof load; at: number }>(undefined);
+  const liveRef = useRef(live);
+  const reader = useRef<{ request: () => void }>(undefined);
+  useEffect(() => {
+    liveRef.current = live;
+  }, [live]);
+  // Declared before the reader so a key change that comes with a new load reaches
+  // no reader (the old one is cleaned up; the new one reads at once).
+  useEffect(() => {
+    reader.current?.request();
+  }, [live, refreshKey, revision]);
   useEffect(() => {
     if (!load) return;
     const readValue = load;
     const controller = new AbortController();
     let timeout: ReturnType<typeof setTimeout> | undefined;
+    let reading = false;
+    let dirty = false;
+    let endedAt = -Infinity;
     let delay = READ_POLL_FIRST_MS;
+    const schedule = (ms: number) => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => void read(), ms);
+    };
     async function read() {
-      lastRead.current = { load, at: Date.now() };
+      clearTimeout(timeout);
+      reading = true;
+      dirty = false;
       try {
         const next = await readValue(controller.signal);
         if (!controller.signal.aborted) {
@@ -73,21 +98,31 @@ function useRead<T>(
         if (!controller.signal.aborted)
           setFailure({ load, error: cause instanceof Error ? cause.message : "Read failed" });
       } finally {
-        if (live && !controller.signal.aborted) {
-          timeout = setTimeout(() => void read(), delay);
-          delay = Math.min(delay * 2, READ_POLL_MAX_MS);
+        reading = false;
+        endedAt = Date.now();
+        if (!controller.signal.aborted) {
+          if (dirty) schedule(READ_MIN_SPACING_MS);
+          else if (liveRef.current) {
+            schedule(delay);
+            delay = Math.min(delay * 2, READ_POLL_MAX_MS);
+          }
         }
       }
     }
-    // A new load reads at once; a stream refresh right after a read waits its turn.
-    const since = lastRead.current?.load === load ? Date.now() - lastRead.current.at : Infinity;
-    if (since >= READ_MIN_SPACING_MS) void read();
-    else timeout = setTimeout(() => void read(), READ_MIN_SPACING_MS - since);
+    reader.current = {
+      request() {
+        delay = READ_POLL_FIRST_MS;
+        if (reading) dirty = true;
+        else schedule(Math.max(0, READ_MIN_SPACING_MS - (Date.now() - endedAt)));
+      },
+    };
+    void read();
     return () => {
       controller.abort();
       clearTimeout(timeout);
+      reader.current = undefined;
     };
-  }, [load, live, refreshKey, revision]);
+  }, [load]);
   return { value, error, refresh: () => refresh((current) => current + 1) };
 }
 

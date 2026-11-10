@@ -155,7 +155,11 @@
   Machine reads (instance, history, current visit, its event facts) re-read on
   each run revision from the update stream instead of polling every second;
   while the run is live they also poll with backoff (1 s doubling to 30 s), and
-  a settled run never polls. `useMachineInstance` and `useMachineHistory` take
+  a settled run never polls. A machine read runs one at a time: a revision
+  that arrives during a read never aborts it, and starts one follow-up read
+  250 ms after it ends, so bursts of revisions faster than the host answers
+  still complete reads and end on the latest state (only a new run or visit
+  aborts a read). `useMachineInstance` and `useMachineHistory` take
   an optional `{ live, refreshKey }` (`MachineReadRefresh`); without it they
   read once.
 
