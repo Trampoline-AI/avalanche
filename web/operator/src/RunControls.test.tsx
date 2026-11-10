@@ -1,10 +1,10 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 
-import { FlowInfoMsg } from "./model";
+import { FlowInfoMsg, RunSummaryMsg } from "./model";
 import { RunControls } from "./RunControls";
 import { useInputDraft, type InputDraft } from "./useInputDraft";
-import { workflow } from "./test/fixtures";
+import { snapshotFor, summary, workflow } from "./test/fixtures";
 
 const nightly = FlowInfoMsg.create({
   ...workflow,
@@ -237,4 +237,20 @@ it("drops invalid typed text when the draft is replaced", () => {
   rerender({ ...nightly, workflowId: "other.py::other" });
 
   expect(draft.current!.pending).toEqual({});
+});
+
+it("offers Cancel for the statuses the host's api declares live", () => {
+  const run = snapshotFor(RunSummaryMsg.create({ ...summary, status: "admitted" }));
+  const controls = (api?: { liveRunStatuses?: readonly string[] }) => (
+    <RunControls
+      run={run}
+      api={api}
+      onStart={async () => "run-1"}
+      onCancel={async () => undefined}
+    />
+  );
+  const view = render(controls());
+  expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
+  view.rerender(controls({ liveRunStatuses: ["admitted"] }));
+  expect(screen.getByRole("button", { name: "Cancel run" })).toBeTruthy();
 });

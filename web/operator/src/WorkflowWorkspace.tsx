@@ -674,7 +674,7 @@ export function WorkflowWorkspaceSurface({
       runActionsEnabled={runActionsEnabled}
       inputDraft={!historical ? inputDraft : undefined}
       onEditInput={() => openNode(INPUT_NODE_ID)}
-      liveRunStatuses={api.liveRunStatuses}
+      api={api}
     />
   ) : undefined;
   // Machine-only actions sit beside the normal run controls (Cancel).
