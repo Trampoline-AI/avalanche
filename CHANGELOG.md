@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Operator: run and visit history recorded before a restart remains readable in
+  Timeline; returned cursors use the current instance without accepting stale
+  client cursors from the previous instance.
+
 - **Operator UI: run Timeline tab.** The bottom pane of every run page has two
   tabs, Logs and Timeline. Timeline is one time-ordered list of the run's
   events: visits entered and left, steps (with retries), events accepted,

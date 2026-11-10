@@ -219,13 +219,15 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         retained_floor_sequence: int | None = None,
     ) -> pb.LifecycleCursorV2:
         """Issue one complete, locally retained V2 lifecycle cursor."""
-        if retained_floor_sequence is None:
-            floor_sequence = min(
-                self._retained_floor_sequence_for(),
-                as_of_sequence,
-            )
-        else:
-            floor_sequence = retained_floor_sequence
+        # Persisted run/visit history is readable at this instance's baseline,
+        # but this instance can only name its own lifecycle sequence space.
+        as_of_sequence = max(as_of_sequence, self._first_event_sequence)
+        floor_sequence = (
+            self._retained_floor_sequence_for()
+            if retained_floor_sequence is None
+            else retained_floor_sequence
+        )
+        floor_sequence = min(as_of_sequence, max(floor_sequence, self._first_event_sequence))
         cursor = pb.LifecycleCursorV2(
             stream=_EVENTS_STREAM,
             topology_fingerprint=self._stream_topology_fingerprint(_EVENTS_STREAM),
@@ -1467,12 +1469,6 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         )
         return snapshot.summary.created_sequence if snapshot is not None else 0
 
-    def _result_cursor(self, run_sequence: int) -> pb.LifecycleCursorV2:
-        # A run stored before this operator started has its result as of this
-        # operator's first sequence: a stored result does not change, and this
-        # operator names no earlier sequence.
-        return self._cursor(max(run_sequence, self._first_event_sequence))
-
     @staticmethod
     def _set_file_metadata(descriptor, item) -> None:
         if item.name is not None:
@@ -1485,7 +1481,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         run_sequence = self._run_sequence(request.run_id)
         value_bytes = payload.value_json.encode("utf-8")
         return pb.RunResultV2(
-            cursor=self._result_cursor(run_sequence),
+            cursor=self._cursor(run_sequence),
             run_id=request.run_id,
             scope_ref=self._scope(),
             value=pb.ResultValueV2(
@@ -1533,7 +1529,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         size = _bounded_page_size(request.page_size)
         page = payload.files[offset : offset + size]
         next_offset = offset + len(page)
-        cursor = self._result_cursor(run_sequence)
+        cursor = self._cursor(run_sequence)
         message = pb.RunOutputArtifactPageV2(
             cursor=cursor,
             run_id=request.run_id,

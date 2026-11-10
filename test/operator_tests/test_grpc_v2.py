@@ -1,13 +1,17 @@
 """Wire-level pagination, replay recovery, and opaque reference safety."""
 
 import hashlib
+import json
 import socket
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
+from pathlib import Path
 
 import grpc
 import pytest
+from google.protobuf.json_format import ParseDict
 
 from avalanche import source, workflow
 from runtime.operator.client import GrpcStateProvider, StreamState
@@ -244,6 +248,168 @@ def test_artifact_refs_are_immutable_and_reject_forged_bindings(transport):
             )
         )
     assert excinfo.value.code() == grpc.StatusCode.INVALID_ARGUMENT
+
+
+def test_pre_restart_run_and_visit_history_remains_readable_over_grpc(tmp_path):
+    fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
+    state_db = tmp_path / "state.db"
+    values = {"ticket": 1, "journal": str(tmp_path / "visits")}
+
+    @contextmanager
+    def served():
+        operator = Operator(
+            [str(fixture)], watch=False, schedule=False, webhook_port=0, state_db=state_db
+        )
+        port = _unused_port()
+        server = serve(operator, port=port, block=False)
+        with grpc.insecure_channel(f"localhost:{port}") as channel:
+            try:
+                grpc.channel_ready_future(channel).result(timeout=5)
+                yield operator, pb_grpc.OperatorServiceV2Stub(channel)
+            finally:
+                server.stop(grace=0).wait()
+                operator.close()
+
+    def wait_for_status(operator, run_id, status):
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            if operator.get_run(run_id).status is status:
+                return
+            time.sleep(0.02)
+        pytest.fail(f"Run {run_id} did not reach {status}: {operator.get_run(run_id)}")
+
+    def control(service, op, **fields):
+        return json.loads(
+            service.ControlMachine(
+                pb.ControlMachineRequestV2(request_json=json.dumps({"op": op, **fields})),
+                timeout=5,
+            ).result_json
+        )
+
+    def activity_bodies(service, run_id):
+        bodies = []
+        continuation = None
+        while True:
+            page = service.ListRunActivity(
+                pb.ListRunActivityRequestV2(
+                    run_id=run_id, page_size=1, continuation=continuation
+                ),
+                timeout=5,
+            )
+            for item in page.activities:
+                bodies.append(
+                    b"".join(
+                        chunk.data
+                        for chunk in service.ReadActivityDetail(
+                            pb.ReadActivityDetailRequestV2(detail_ref=item.detail_ref),
+                            timeout=5,
+                        )
+                    )
+                )
+            if not page.next_page.continuation_id:
+                return bodies
+            continuation = page.next_page
+
+    with served() as (operator, service):
+        machine_id = operator.start_run("approval", input=values)
+        wait_for_status(operator, machine_id, RunStatus.WAITING)
+        control(
+            service,
+            "send",
+            run_id=machine_id,
+            event="approved",
+            payload={},
+            idempotency_key="before-restart",
+        )
+        wait_for_status(operator, machine_id, RunStatus.SUCCESS)
+        flow_id = operator.start_run("ordinary_child", input={**values, "ticket": 2})
+        wait_for_status(operator, flow_id, RunStatus.SUCCESS)
+        before = {
+            run_id: service.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=run_id))
+            for run_id in (machine_id, flow_id)
+        }
+        visits = [control(service, "visit", run_id=machine_id, visit=n) for n in (1, 2, 3)]
+        bodies = {run_id: activity_bodies(service, run_id) for run_id in before}
+        assert all(bodies.values())
+        old_page = service.ListRunSummaries(pb.ListRunSummariesRequestV2(page_size=1))
+        assert old_page.next_page.continuation_id
+        stored_sequence = operator.current_sequence
+
+    with served() as (operator, service):
+        assert operator.instance_first_sequence == stored_sequence
+        # Advance this instance without changing either retained run or its visits.
+        fresh_id = operator.start_run("ordinary_child", input={**values, "ticket": 3})
+        wait_for_status(operator, fresh_id, RunStatus.SUCCESS)
+        assert operator.current_sequence > operator.instance_first_sequence
+        for run_id, previous in before.items():
+            snapshot = service.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=run_id))
+            assert [(node.node_id, node.status, node.revision) for node in snapshot.nodes] == [
+                (node.node_id, node.status, node.revision) for node in previous.nodes
+            ]
+            assert snapshot.summary == previous.summary
+            assert snapshot.cursor.topology_fingerprint != previous.cursor.topology_fingerprint
+            assert activity_bodies(service, run_id) == bodies[run_id]
+
+        history = control(service, "history", run_id=machine_id, limit=1)
+        transitions = list(history["items"])
+        while history["next_cursor"]:
+            history = control(
+                service, "history", run_id=machine_id, limit=1, cursor=history["next_cursor"]
+            )
+            transitions.extend(history["items"])
+        assert len(transitions) == 2
+        for previous in visits:
+            visit = control(service, "visit", run_id=machine_id, visit=previous["visit"])
+            assert visit["state"] == previous["state"]
+            assert [
+                (node["node_id"], node["status"], node["revision"])
+                for node in visit["snapshot"]["nodes"]
+            ] == [
+                (node["node_id"], node["status"], node["revision"])
+                for node in previous["snapshot"]["nodes"]
+            ]
+        events = control(service, "events", run_id=machine_id, visit=1, limit=1)
+        facts = list(events["items"])
+        while events["next_cursor"]:
+            events = control(
+                service,
+                "events",
+                run_id=machine_id,
+                visit=1,
+                limit=1,
+                cursor=events["next_cursor"],
+            )
+            facts.extend(events["items"])
+        assert {fact["status"] for fact in facts} >= {"accepted", "consumed"}
+
+        # Old client bindings must still reset/rebaseline, never be silently clamped.
+        with pytest.raises(grpc.RpcError) as stale:
+            service.ListRunSummaries(
+                pb.ListRunSummariesRequestV2(continuation=old_page.next_page), timeout=5
+            )
+        assert stale.value.code() is grpc.StatusCode.FAILED_PRECONDITION
+        watch = service.WatchRunStatus(
+            pb.WatchRunStatusRequestV2(after_cursor=old_page.cursor), timeout=5
+        )
+        try:
+            assert next(watch).HasField("reset_required")
+        finally:
+            watch.cancel()
+
+        # A cursor newly issued for old history is usable for retained live replay.
+        baseline = ParseDict(
+            control(service, "visit", run_id=machine_id, visit=1)["snapshot"],
+            pb.RunSnapshotV2(),
+        )
+        watch = service.WatchRunStatus(
+            pb.WatchRunStatusRequestV2(after_cursor=baseline.cursor), timeout=5
+        )
+        try:
+            update = next(watch)
+            assert not update.HasField("reset_required")
+            assert update.run_created.summary.run_id == fresh_id
+        finally:
+            watch.cancel()
 
 
 def test_retained_replay_then_gap_reset_recovers_orphan_runs_and_live_updates(transport):
