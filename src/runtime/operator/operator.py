@@ -2210,8 +2210,9 @@ class Operator:
             }:
                 notifications = None
             else:
-                run.status = RunStatus.CANCELLED if cancelled else RunStatus.FAILED
-                run.ended_at = time.monotonic()
+                if not isinstance(handle, _MachineRunHandle):
+                    run.status = RunStatus.CANCELLED if cancelled else RunStatus.FAILED
+                    run.ended_at = time.monotonic()
                 log_entry = None
                 if not cancelled:
                     self._append_log_locked(run, entry)
@@ -2227,6 +2228,10 @@ class Operator:
         _close_event_queue(handle.event_queue)
         if notifications is not None:
             self._wait_for_notifications(notifications)
+        if isinstance(handle, _MachineRunHandle):
+            self._machine_host.queue.put(
+                VisitFinished(run_id, handle.machine_visit.visit, "failed", None, None)
+            )
 
     def wait_control(self, run_id: str, request: WaitControlRequest) -> WaitControlResponse:
         with self._lock:

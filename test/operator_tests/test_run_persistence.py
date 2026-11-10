@@ -838,6 +838,36 @@ def _machine_record(op, run_id):
         return MachinesTable.load(c, run_id)
 
 
+def test_machine_visit_import_failure_is_interrupted_and_retryable(tmp_path):
+    fixture = tmp_path / "machine.py"
+    source = (Path(__file__).parents[1] / "fixtures" / "local_machine.py").read_text()
+    fixture.write_text(source.replace("seconds=2", "seconds=4"))
+    op = _operator(fixture, tmp_path / "state.db")
+    try:
+        run_id = op.start_run(
+            "approval", input={"ticket": 18, "journal": str(tmp_path / "visits")}
+        )
+        _wait_until(lambda: op.get_run(run_id).status is RunStatus.WAITING)
+        op._machine_host.send(run_id, "approved", {}, "advance")
+        _wait_until(
+            lambda: (
+                _machine_record(op, run_id).visit == 2
+                and _machine_record(op, run_id).phase == "waiting"
+            )
+        )
+        fixture.write_text("def invalid syntax:\n")
+        _wait_until(lambda: _machine_record(op, run_id).phase in {"interrupted", "closed"})
+        assert _machine_record(op, run_id).phase == "interrupted"
+        assert op.get_run(run_id).status is RunStatus.WAITING
+        fixture.write_text(source)
+        op._machine_host.retry(run_id)
+        assert _wait_terminal(op, run_id).status is RunStatus.SUCCESS
+        assert _machine_record(op, run_id).visit == 4
+        assert op.fatal_error is None
+    finally:
+        op.close()
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
 def test_a_run_left_running_by_a_killed_operator_is_stopped_and_failed(flows, tmp_path):
     state_db = tmp_path / "state.db"
