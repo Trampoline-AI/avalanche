@@ -16,6 +16,137 @@ from runtime.operator.operator import RunAlreadyExistsError
 from runtime.operator.webhooks import WebhookRoute
 
 
+@pytest.mark.parametrize("target", ["approval", "ordinary_child"])
+def test_unacknowledged_start_failure_preserves_visits_or_releases_flow_key(
+    tmp_path, monkeypatch, target
+):
+    """Fault at thread launch after real coordinator spawn and durable publication."""
+    from runtime.operator.state.machines import MachinesTable
+
+    fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
+    op = Operator(
+        [str(fixture)],
+        watch=False,
+        schedule=False,
+        webhook_port=0,
+        state_db=tmp_path / "state.db",
+    )
+    original_start = threading.Thread.start
+    fault_fired = threading.Event()
+
+    def fail_preparation_once(thread):
+        if thread.name.startswith("avalanche-prepare-") and not fault_fired.is_set():
+            fault_fired.set()
+            raise RuntimeError("injected preparation thread launch failure")
+        return original_start(thread)
+
+    try:
+        with monkeypatch.context() as fault:
+            fault.setattr(threading.Thread, "start", fail_preparation_once)
+            if target == "approval":
+                run_id = op.start_run(
+                    target,
+                    run_id="failed-start",
+                    input={"ticket": 19, "journal": str(tmp_path / "visits")},
+                )
+            else:
+                with pytest.raises(RuntimeError, match="thread launch failure"):
+                    op.start_run(
+                        target,
+                        run_id="failed-start",
+                        input={"ticket": 19, "journal": str(tmp_path / "visits")},
+                    )
+        assert fault_fired.is_set()
+        if target == "approval":
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                with op._state_store.transaction() as c:
+                    record = MachinesTable.load(c, run_id)
+                if record.phase == "interrupted":
+                    break
+                time.sleep(0.03)
+            assert record.phase == "interrupted" and record.run_status is RunStatus.WAITING
+            with op._state_store.transaction() as c:
+                assert MachinesTable.visit(c, run_id, 1).disposition == "indeterminate"
+            assert op.start_run(target, input={"ticket": 19}) == run_id
+            op._machine_host.retry(run_id)
+            deadline = time.monotonic() + 20
+            while (
+                time.monotonic() < deadline
+                and op.get_run(run_id).status is not RunStatus.WAITING
+            ):
+                time.sleep(0.03)
+            assert op.get_run(run_id).status is RunStatus.WAITING
+            op._machine_host.send(run_id, "approved", {}, "repaired")
+            assert wait_terminal(op, run_id).status is RunStatus.SUCCESS
+        else:
+            with op._state_store.transaction() as c:
+                assert (
+                    c.execute("SELECT run_id FROM runs WHERE run_id='failed-start'").fetchone()
+                    is None
+                )
+            run_id = op.start_run(
+                target,
+                run_id="fresh-start",
+                input={"ticket": 19, "journal": str(tmp_path / "visits")},
+            )
+            assert run_id == "fresh-start"
+            assert wait_terminal(op, run_id).status is RunStatus.SUCCESS
+        assert op.fatal_error is None
+    finally:
+        op.close()
+
+
+def test_machine_start_storage_failure_keeps_journal_and_can_retry(tmp_path):
+    """Real filesystem refusal before a visit coordinator can be prepared."""
+    import os
+
+    from runtime.operator.state.machines import MachinesTable
+
+    fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
+    op = Operator(
+        [str(fixture)],
+        watch=False,
+        schedule=False,
+        webhook_port=0,
+        state_db=tmp_path / "state.db",
+    )
+    pending = op._result_store.root / "pending"
+    try:
+        pending.chmod(0o500)
+        # Verify this host actually enforces the fault, not just its mode bits.
+        with pytest.raises(PermissionError):
+            os.mkdir(pending / "fault-check")
+        run_id = op.start_run(
+            "approval",
+            run_id="storage-refused",
+            input={"ticket": 22, "journal": str(tmp_path / "visits")},
+        )
+        pending.chmod(0o700)
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            with op._state_store.transaction() as c:
+                record = MachinesTable.load(c, run_id)
+            if record.phase == "interrupted":
+                break
+            time.sleep(0.03)
+        assert record.phase == "interrupted" and record.run_status is RunStatus.WAITING
+        with op._state_store.transaction() as c:
+            assert MachinesTable.visit(c, run_id, 1).disposition == "indeterminate"
+        op._machine_host.retry(run_id)
+        deadline = time.monotonic() + 20
+        while (
+            time.monotonic() < deadline and op.get_run(run_id).status is not RunStatus.WAITING
+        ):
+            time.sleep(0.03)
+        op._machine_host.send(run_id, "approved", {}, "after-storage-repair")
+        assert wait_terminal(op, run_id).status is RunStatus.SUCCESS
+        assert op.fatal_error is None
+    finally:
+        pending.chmod(0o700)
+        op.close()
+
+
 def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path):
     """A real coordinator per visit, one durable run, stable event admission."""
     from runtime.operator.state.machines import MachinesTable

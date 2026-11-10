@@ -7,6 +7,7 @@ second top-level run. Admission and transitions commit before replies/publicatio
 from __future__ import annotations
 
 import heapq
+import logging
 import queue
 import sqlite3
 import threading
@@ -40,6 +41,8 @@ from .state.machines import (
     canonical_json,
 )
 from .state.runs import RunRequest
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .operator import Operator
@@ -353,7 +356,15 @@ class MachineHost:
             run.topology = WorkflowTopology()
             run.expansions = {}
         self._commit(record, write, RunStatus.PENDING, request=request)
-        self.op.start_run(record.machine, run_id=record.run_id, _machine_visit=record)
+        try:
+            self.op.start_run(record.machine, run_id=record.run_id, _machine_visit=record)
+        except Exception:
+            # Admission/entry already committed. A launch failure cannot erase
+            # that journal or turn an accepted timer/send into a fatal host error.
+            logger.exception(
+                "Machine visit could not start: %s visit %s", record.run_id, record.visit
+            )
+            self.queue.put(VisitFinished(record.run_id, record.visit, "failed", None, None))
 
     def resolve(self, selector: str, fields: dict[str, JsonValue]) -> str:
         descriptor = self.op._registry.resolve(selector)

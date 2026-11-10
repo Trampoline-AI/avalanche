@@ -273,6 +273,11 @@ class RunsTable:
         _upsert_nodes(connection, stored, node_ids)
 
     @staticmethod
+    def discard_start(connection: sqlite3.Connection, run_id: str) -> None:
+        """Roll back an unacknowledged start, including its never-admitted key."""
+        connection.execute(f"DELETE FROM {_RUNS} WHERE run_id=?", (run_id,))
+
+    @staticmethod
     def delete(connection: sqlite3.Connection, run_id: str) -> None:
         """Remove a run with its nodes and input files."""
         row = connection.execute("SELECT key FROM runs WHERE run_id=?", (run_id,)).fetchone()

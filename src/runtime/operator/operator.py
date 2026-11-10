@@ -2104,14 +2104,21 @@ class Operator:
             _teardown_process_group(process, windows_job)
             with self._lock:
                 run = self._runs.get(run_id)
-                if run is not None:
+                if run is not None and _machine_visit is None:
                     self._forget_run_details_locked(run)
                     try:
                         with self._state_store.transaction() as connection:
-                            RunsTable.delete(connection, run_id)
+                            RunsTable.discard_start(connection, run_id)
                     except (StateStoreError, sqlite3.Error) as exc:
                         failure.add_note(f"Removing the stored run also failed: {exc}")
-                self._runs.pop(run_id, None)
+                if _machine_visit is None:
+                    self._runs.pop(run_id, None)
+                    self._run_created_sequences.pop(run_id, None)
+                    self._run_revisions.pop(run_id, None)
+                    self._run_activity_sequences.pop(run_id, None)
+                    if run is not None:
+                        for node_id in run.nodes:
+                            self._node_revisions.pop((run_id, node_id), None)
                 self._active_runs.pop(run_id, None)
             self._result_store.discard(result_bundle)
             _close_run_controls(handle)
