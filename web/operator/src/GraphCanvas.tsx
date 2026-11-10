@@ -44,6 +44,7 @@ import {
   type NodeChange,
   type NodeProps,
   type Viewport,
+  type XYPosition,
 } from "@xyflow/react";
 
 import {
@@ -79,7 +80,11 @@ import {
   INPUT_EDGE_MARKER,
   INPUT_EDGE_MARKER_CONNECTED,
 } from "./graphSelection";
-import { type CanvasSize, useGraphOrientation } from "./useGraphOrientation";
+import {
+  type CanvasSize,
+  type GraphOrientation,
+  useGraphOrientation,
+} from "./useGraphOrientation";
 import { ClaudeLogo, isClaudeRuntime } from "./ClaudeLogo";
 import { RunStatus, statusTone, statusToneColor } from "./RunStatus";
 import {
@@ -843,10 +848,24 @@ function nodeBounds(nodes: readonly Node[]) {
   return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
-/** Width kept clear of a panel floating along the canvas's left edge (the run timeline). */
+/** Where a machine's input dot sits, before its initial state. */
+function machineInputPosition(initial: XYPosition, orientation: GraphOrientation): XYPosition {
+  return orientation === "horizontal"
+    ? { x: initial.x - 150, y: initial.y }
+    : { x: initial.x + DEFAULT_NODE_SIZE.width / 2 - 14, y: initial.y - 170 };
+}
+
+/**
+ * The panel floating over the canvas's top-left corner (the runs panel): its right
+ * edge (`width`) and, when known, its bottom edge (`height`), from the canvas origin.
+ */
 export interface CanvasReserve {
   width: number;
+  height?: number;
 }
+
+/** Which side of the floating panel the graph is fitted on: beside it or below it. */
+type ReserveSide = "beside" | "below";
 
 const RESERVE_GAP = 16;
 
@@ -859,6 +878,7 @@ const RESERVE_GAP = 16;
 function reserveFit(
   options: FitViewOptions,
   reserve: CanvasReserve | undefined,
+  side: ReserveSide = "beside",
 ): FitViewOptions {
   if (!reserve) return options;
   const padding = options.padding ?? 0.1;
@@ -869,11 +889,37 @@ function reserveFit(
   const base = (
     even ? { top: even, right: even, bottom: even, left: even } : padding
   ) as Record<"top" | "right" | "bottom" | "left", `${number}px`>;
+  if (side === "below" && reserve.height !== undefined) {
+    const top = Number.parseFloat(base.top ?? "0") || 0;
+    return {
+      ...options,
+      padding: { ...base, top: `${reserve.height + RESERVE_GAP + top}px` as const },
+    };
+  }
   const left = Number.parseFloat(base.left ?? "0") || 0;
   return {
     ...options,
     padding: { ...base, left: `${reserve.width + RESERVE_GAP + left}px` as const },
   };
+}
+
+/**
+ * The side of the floating panel that costs the graph less zoom. A wide, short graph
+ * (a horizontal machine) fits larger below the panel than beside it; a tall one beside.
+ * Beside is kept unless below is clearly larger, so small changes do not flip it.
+ */
+function reserveSide(
+  options: FitViewOptions,
+  reserve: CanvasReserve | undefined,
+  nodes: readonly Node[],
+  canvas: CanvasSize | undefined,
+  minZoom: number,
+): ReserveSide {
+  if (reserve?.height === undefined) return "beside";
+  const beside = firstFrameFor(nodes, canvas, reserveFit(options, reserve, "beside"), minZoom);
+  const below = firstFrameFor(nodes, canvas, reserveFit(options, reserve, "below"), minZoom);
+  if (!beside || !below) return "beside";
+  return below.viewport.zoom > beside.viewport.zoom * 1.05 ? "below" : "beside";
 }
 
 function MeasureGraphHandles({ nodes }: { nodes: readonly Node[] }) {
@@ -1374,27 +1420,56 @@ function GraphCanvasView({
   ]);
 
   const reserveWidth = reserve?.width;
+  const reserveHeight = reserve?.height;
   const minZoom = reserveWidth !== undefined ? RESERVED_MIN_ZOOM : MIN_ZOOM;
-  const fitViewOptions = useMemo(
-    () =>
-      reserveWidth === undefined
-        ? baseFitViewOptions
-        : reserveFit(baseFitViewOptions, { width: reserveWidth }),
-    [baseFitViewOptions, reserveWidth],
-  );
-  // Arc labels keep a readable size at the fitted zoom: the fit covers the state
-  // cards only, so the zoom is known before the arcs (and their labels) are routed.
-  const labelScale = useMemo(() => {
-    if (!machineLayout) return 1;
+  // The fit's extent: a machine's state cards and input dot (its arcs are routed
+  // after the fit), a flow's nodes.
+  const fitNodes = useMemo<readonly Node[]>(() => {
+    if (!machineLayout || !machine) return nodes;
     const cards: Node[] = Object.entries(machineLayout.positions).map(([name, position]) => ({
       id: name,
       position,
       measured: nodeMeasurements.get(name),
       data: {},
     }));
-    const zoom = firstFrameFor(cards, canvasSize, fitViewOptions, minZoom)?.viewport.zoom;
+    const initial = machineLayout.positions[machine.spec.initial];
+    if (hasInputNode && initial)
+      cards.push({
+        id: INPUT_NODE_ID,
+        position: machineInputPosition(initial, orientation),
+        measured: nodeMeasurements.get(INPUT_NODE_ID),
+        data: {},
+      });
+    return cards;
+  }, [hasInputNode, machine, machineLayout, nodeMeasurements, nodes, orientation]);
+  // A primitive, so the options below keep their identity (a new one re-fits).
+  const side = useMemo(
+    () =>
+      reserveWidth === undefined
+        ? "beside"
+        : reserveSide(
+            baseFitViewOptions,
+            { width: reserveWidth, height: reserveHeight },
+            fitNodes,
+            canvasSize,
+            minZoom,
+          ),
+    [baseFitViewOptions, canvasSize, fitNodes, minZoom, reserveHeight, reserveWidth],
+  );
+  const fitViewOptions = useMemo(
+    () =>
+      reserveWidth === undefined
+        ? baseFitViewOptions
+        : reserveFit(baseFitViewOptions, { width: reserveWidth, height: reserveHeight }, side),
+    [baseFitViewOptions, reserveHeight, reserveWidth, side],
+  );
+  // Arc labels keep a readable size at the fitted zoom: the fit covers the state
+  // cards only, so the zoom is known before the arcs (and their labels) are routed.
+  const labelScale = useMemo(() => {
+    if (!machineLayout) return 1;
+    const zoom = firstFrameFor(fitNodes, canvasSize, fitViewOptions, minZoom)?.viewport.zoom;
     return machineLabelScale(zoom);
-  }, [canvasSize, fitViewOptions, machineLayout, minZoom, nodeMeasurements]);
+  }, [canvasSize, fitNodes, fitViewOptions, machineLayout, minZoom]);
 
   // Machine mode reuses the same cards, input dot and edge highlighting; only the
   // layout (cycle-safe ranks) and the curved arcs differ from a flow.
@@ -1402,7 +1477,6 @@ function GraphCanvasView({
     if (!machine || !machineLayout) return undefined;
     const { spec } = machine;
     const { positions, links, ranks } = machineLayout;
-    const horizontal = orientation === "horizontal";
     // Arcs route around the cards as measured (nodes anchor at left edge, mid height).
     const boxes = Object.fromEntries(
       Object.keys(spec.states).map((name) => {
@@ -1469,9 +1543,7 @@ function GraphCanvasView({
         id: INPUT_NODE_ID,
         selected: selectedNodeId === INPUT_NODE_ID,
         type: "workflowInput",
-        position: horizontal
-          ? { x: initial.x - 150, y: initial.y }
-          : { x: initial.x + DEFAULT_NODE_SIZE.width / 2 - 14, y: initial.y - 170 },
+        position: machineInputPosition(initial, orientation),
         measured: nodeMeasurements.get(INPUT_NODE_ID),
         data: inputCard,
       } satisfies Node<InputDotData>);
@@ -1658,6 +1730,7 @@ export const GraphCanvas = memo(
     left.evaluations === right.evaluations &&
     left.bottomRightPanel === right.bottomRightPanel &&
     left.reserve?.width === right.reserve?.width &&
+    left.reserve?.height === right.reserve?.height &&
     left.selectedNodeId === right.selectedNodeId &&
     left.onClearNode === right.onClearNode &&
     left.onOpenNode === right.onOpenNode &&
