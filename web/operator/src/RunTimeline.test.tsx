@@ -52,7 +52,13 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
     nodeTypes,
     children,
   }: {
-    nodes: { id: string; type: string; data: unknown; className?: string }[];
+    nodes: {
+      id: string;
+      type: string;
+      data: unknown;
+      className?: string;
+      selected?: boolean;
+    }[];
     nodeTypes: Record<string, ComponentType<{ data: unknown }>>;
     children: ReactNode;
   }) => (
@@ -63,6 +69,7 @@ vi.mock("@xyflow/react", async (importOriginal) => ({
           <div
             key={node.id}
             data-id={node.id}
+            data-selected={node.selected || undefined}
             className={`react-flow__node ${node.className ?? ""}`}
           >
             <Card data={node.data} />
@@ -332,8 +339,55 @@ describe("run timeline in the bottom pane", () => {
     fireEvent.click(cardAction(container, "in_review"));
     expect(await screen.findByText("state in_review")).toBeInTheDocument();
     expect(events()).toEqual(["run-started", "v1:enter", "v1:leave", "v2:enter"]);
+    const selected = () =>
+      [...container.querySelectorAll('.react-flow__node[data-selected="true"]')].map((node) =>
+        node.getAttribute("data-id"),
+      );
+    expect(selected()).toEqual(["in_review"]);
+    // Show all clears the graph's selection too, not only the list's filter.
     fireEvent.click(screen.getByRole("button", { name: "Show all" }));
     expect(events()).toContain("v3:enter");
+    expect(selected()).toEqual([]);
+  });
+
+  it("clears the graph's state selection when the run changes", async () => {
+    const other = RunSummaryMsg.create({
+      ...machineRun,
+      runId: "run-n",
+      label: "acme/api #44",
+    });
+    const base = machineApi();
+    const api = machineApi({
+      getMachineInstance: async (runId) => ({
+        ...(await base.getMachineInstance!(runId)),
+        run_id: runId,
+      }),
+      getLatestRunSnapshot: async (runId) =>
+        RunSnapshotMsg.create({
+          operatorInstanceId: "operator-1",
+          asOfEventUlid: eventUlid(1),
+          summary: runId === "run-n" ? other : machineRun,
+          topology: WorkflowTopologyMsg.create({}),
+        }),
+    });
+    const baseline = await api.loadBaseline();
+    api.loadBaseline = async () => ({ ...baseline, runs: [summary, machineRun, other] });
+    const workspace = (runId: string) => (
+      <WorkflowWorkspace
+        api={api}
+        workflowId={machineFlow.workflowId}
+        layoutStorageKey="timeline-test-run-change"
+        navigation={{ selectedRunId: runId, onSelectRun: vi.fn() }}
+      />
+    );
+    const { container, rerender } = render(workspace("run-m"));
+    await waitFor(() => expect(events()).toContain("v2:enter"));
+    fireEvent.click(cardAction(container, "in_review"));
+    expect(await screen.findByText("state in_review")).toBeInTheDocument();
+    expect(container.querySelector('.react-flow__node[data-selected="true"]')).not.toBeNull();
+    rerender(workspace("run-n"));
+    await waitFor(() => expect(screen.queryByText("state in_review")).toBeNull());
+    expect(container.querySelector('.react-flow__node[data-selected="true"]')).toBeNull();
   });
 
   it("keeps the visit and the way back to the state machine on the Logs tab", async () => {

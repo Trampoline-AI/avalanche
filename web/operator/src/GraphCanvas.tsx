@@ -1113,7 +1113,9 @@ function GraphCanvasView({
         : groupedTopology?.graph,
     [hasInputNode, groupedTopology],
   );
-  const [machineSelected, setMachineSelected] = useState<string>();
+  const [ownMachineSelected, setMachineSelected] = useState<string>();
+  // A run page owns the selection (its timeline filter); a definition keeps its own.
+  const machineSelected = machine?.onOpenState ? machine.selected : ownMachineSelected;
   const graphNodeIds = useMemo(
     () =>
       machine

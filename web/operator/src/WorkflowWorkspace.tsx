@@ -565,9 +565,18 @@ export function WorkflowWorkspaceSurface({
             status: machineStatus,
             due: machineDue,
             onOpenState: machineRunId ? openMachineState : undefined,
+            selected: stateFilter,
           }
         : undefined,
-    [machineDue, machineRunId, machineState, machineStatus, openMachineState, shownMachineSpec],
+    [
+      machineDue,
+      machineRunId,
+      machineState,
+      machineStatus,
+      openMachineState,
+      shownMachineSpec,
+      stateFilter,
+    ],
   );
   const requestingRun =
     run?.summary?.status === "requesting" ||

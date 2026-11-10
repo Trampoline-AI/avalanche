@@ -13,6 +13,11 @@ export interface MachineGraphView {
   due?: number | null;
   /** Opens a state's latest visit; omitted for a definition. */
   onOpenState?: (state: string) => void;
+  /**
+   * The state selected on a run page (what narrows its timeline). With `onOpenState`
+   * the selection is the caller's, so clearing its filter or changing run clears it.
+   */
+  selected?: string;
 }
 
 export type MachineArcKind = "forward" | "back" | "self";
