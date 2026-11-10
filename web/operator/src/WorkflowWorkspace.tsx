@@ -565,6 +565,15 @@ export function WorkflowWorkspaceSurface({
       normalRunControls
     );
   const displayedRunId = run?.summary?.runId;
+  // A live run is still changing; only a settled run is a snapshot of the past.
+  const runStatus = run?.summary?.status;
+  const runLive =
+    runStatus === "requesting" ||
+    runStatus === "pending" ||
+    runStatus === "running" ||
+    runStatus === "waiting" ||
+    runStatus === "interrupted" ||
+    runStatus === "needs_attention";
   const liveEventDescriptorKey =
     displayedRunId && inspectedNode ? `${displayedRunId}:${inspectedNode}` : "";
   const workspaceStyle = {
@@ -708,7 +717,7 @@ export function WorkflowWorkspaceSurface({
                       artifacts expired under the run&apos;s retention policy. The run and its
                       label remain.
                     </div>
-                  ) : run ? (
+                  ) : run && !runLive ? (
                     <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
                       <span>Viewing a run snapshot</span>This view does not represent the
                       workflow&apos;s current state.

@@ -552,10 +552,8 @@ describe("operator workflows", () => {
       expect(screen.getByRole("tabpanel", { name: "Step interface" })).toHaveTextContent(
         /unavailable/i,
       );
-      expect(screen.getByText("Viewing a run snapshot")).toBeInTheDocument();
-      expect(
-        screen.getByText("This view does not represent the workflow's current state."),
-      ).toBeInTheDocument();
+      // A live (running) run is not a snapshot of the past: no snapshot banner.
+      expect(screen.queryByText("Viewing a run snapshot")).not.toBeInTheDocument();
       fireEvent.click(
         screen.getByRole("button", {
           name: host === "operator" ? "View current state for Orders" : "Current definition",
