@@ -303,7 +303,10 @@ def host_neutral(page, url: str, evidence: Path) -> list[dict]:
         assert fit["line_right"] <= fit["panel_right"] and fit["overflowing"] == 0, (tag, fit)
         # `parked` (the machine waiting between visits) is still live on this host.
         expect(page.get_by_role("region", name="Machine visits")).to_contain_text("ready")
+        status = page.locator(".run-list-row.active [data-status]")
+        expect(status).to_have_attribute("data-status", "parked")
         expect(banner).to_have_count(0)
+        expect(page.get_by_role("button", name="Cancel run", exact=True)).to_be_visible()
         page.screenshot(path=str(evidence / f"31-host-{tag}-long-receipt.png"))
         panel.get_by_role("button", name="Close", exact=True).click()
 
