@@ -230,6 +230,24 @@ it("refuses a send dispatched against a render the run has since moved past", as
   expect(sendMachineEvent.mock.calls[0]![1]).toBe("back");
 });
 
+it("shows a loading state, not 'accepts no events', while the run is loading", () => {
+  const api = { sendMachineEvent: vi.fn(receiptFor) } as unknown as OperatorApi;
+  render(
+    <MachineSendPanel
+      api={api}
+      runId="run-1"
+      workflow={workflow}
+      spec={spec}
+      instance={undefined}
+      onClose={() => undefined}
+      onSent={() => undefined}
+    />,
+  );
+  expect(screen.getByText("Loading the events this run accepts…")).toBeTruthy();
+  expect(screen.queryByText("This run accepts no events now.")).toBeNull();
+  expect(screen.queryByLabelText("Event")).toBeNull();
+});
+
 it("enables Send event on a run whose state only defers events", () => {
   const api = { sendMachineEvent: vi.fn(receiptFor) } as unknown as OperatorApi;
   const actions = (instance: MachineInstance) => (

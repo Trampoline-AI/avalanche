@@ -650,6 +650,11 @@ export function MachineSendPanel({
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[minmax(0,1fr)] content-start gap-4 overflow-auto px-5 py-4 text-xs">
         {!declaredEvents ? (
           <p className="m-0 text-secondary">This machine declares no events.</p>
+        ) : !instance ? (
+          // The run is still loading: what it accepts is not known yet.
+          <p role="status" className="m-0 text-secondary" data-send-loading>
+            Loading the events this run accepts…
+          </p>
         ) : chosen === undefined ? (
           <>
             <p className="m-0 text-secondary">This run accepts no events now.</p>
