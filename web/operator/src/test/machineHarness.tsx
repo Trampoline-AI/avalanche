@@ -282,6 +282,7 @@ function publish(change: OperatorUpdate["change"]) {
 }
 // `?host`: a host with its own run vocabulary (queue/admission statuses, 64-hex
 // receipt ids) whose first snapshot arrives late, behind the host's loading fallback.
+// It reports no terminal seals, deferred events or receipts.
 const foreignHost = new URLSearchParams(location.search).has("host");
 const FOREIGN_LIVE_STATUSES = ["submitted", "queued", "admitted", "parked"];
 let failSend = !foreignHost;
@@ -712,10 +713,15 @@ class FakeOperatorApi implements OperatorApi {
       due: null,
       finished: false,
       machine_spec: spec,
-      pending_events: [
-        { event: "later", receipt_id: "pending-1", payload: { note: "deferred" } },
-      ],
-      receipts: [],
+      // The foreign host omits the optional deferred-events and receipts capability.
+      ...(foreignHost
+        ? {}
+        : {
+            pending_events: [
+              { event: "later", receipt_id: "pending-1", payload: { note: "deferred" } },
+            ],
+            receipts: [],
+          }),
     };
     instances.set(run_id, item);
     visits.set(
@@ -805,7 +811,7 @@ class FakeOperatorApi implements OperatorApi {
       duplicate: false,
     };
     receipts.set(idempotencyKey, result);
-    item.receipts!.push(result);
+    item.receipts?.push(result);
     const atVisit = item.visit;
     facts.set(`${runId}:${atVisit}`, [
       {

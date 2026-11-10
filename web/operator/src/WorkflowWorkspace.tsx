@@ -607,6 +607,7 @@ export function WorkflowWorkspaceSurface({
             instance={machineInstance}
             readError={machineRead.error}
             refresh={machineRead.refresh}
+            settled={!runLive}
           />
         )}
       </div>

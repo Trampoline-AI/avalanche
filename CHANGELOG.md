@@ -176,6 +176,10 @@
   runs alike. Before, a host without seals (or a machine run) showed an empty
   controls box on the canvas; now no empty box is drawn when there is nothing
   to offer or report.
+- **operator-ui machine waits without deferred events:** when a host omits the
+  optional deferred events (`pending_events`) on a machine run, a live run's
+  Waits say "Deferred events unavailable" instead of developer text, and a
+  settled run shows no deferred-events, accepted-events or timer line.
 
 ## 0.20.4
 

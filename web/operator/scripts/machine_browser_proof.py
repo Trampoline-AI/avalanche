@@ -278,16 +278,32 @@ def host_neutral(page, url: str, evidence: Path) -> list[dict]:
         live_polls = history_reads(page, "machine-1") - before
         assert live_polls <= 3, (tag, live_polls)
 
+        # The host omits deferred events: user wording on the live run, no dev text.
+        waits = page.get_by_label("Machine run waits")
+        expect(waits.locator('[data-wait-kind="deferred-unavailable"]')).to_have_text(
+            "Deferred events unavailable"
+        )
+        expect(page.get_by_text("not reported by this host")).to_have_count(0)
+        expect(page.locator("[data-terminal-status]")).to_have_count(0)
+
         # A 64-hex receipt wraps inside the side panel instead of widening it.
         page.get_by_role("group", name="Machine actions").get_by_role(
             "button", name="Send event", exact=True
         ).click()
         panel = page.get_by_role("complementary", name="Send event")
-        panel.get_by_label("Event", exact=True).select_option("advance")
+        event_menu = panel.get_by_label("Event", exact=True)
+        # The menu offers only what the current state accepts.
+        menu_before = event_menu.locator("option").all_inner_texts()
+        assert menu_before == ["amend", "advance"], (tag, menu_before)
+        event_menu.select_option("advance")
         form = panel.get_by_role("form", name="Send event")
         form.get_by_role("button", name="Send event").click()
         receipt = panel.locator("[data-receipt-status]")
         expect(receipt).to_contain_text("c" * 40)
+        # After the transition the stale `advance` is gone: only `back` is offered.
+        expect(event_menu).to_have_value("back")
+        menu_after = event_menu.locator("option").all_inner_texts()
+        assert menu_after == ["back"], (tag, menu_after)
         fit = panel.evaluate(
             """(aside) => {
               const box = aside.getBoundingClientRect();
@@ -314,6 +330,12 @@ def host_neutral(page, url: str, evidence: Path) -> list[dict]:
         page.locator(".run-list-row", has_text="acme/api #9").click()
         expect(banner).to_have_count(1)
         expect(page.get_by_role("button", name="Cancel run", exact=True)).to_have_count(0)
+        # No seal from this host: the outcome comes from the settled run status, and
+        # a settled run shows no deferred-events line.
+        outcome = page.locator("[data-terminal-status]")
+        expect(outcome).to_have_text("Terminal: succeeded")
+        expect(waits.locator('[data-wait-kind="deferred-unavailable"]')).to_have_count(0)
+        expect(page.get_by_text("not reported by this host")).to_have_count(0)
         page.wait_for_timeout(500)
         before = history_reads(page, "machine-2")
         page.wait_for_timeout(3000)
@@ -339,6 +361,10 @@ def host_neutral(page, url: str, evidence: Path) -> list[dict]:
                 "settled_history_reads_3s": settled_polls,
                 "stream_change_reads": stream_reads,
                 "receipt": fit,
+                "send_menu_before": menu_before,
+                "send_menu_after_transition": menu_after,
+                "live_deferred_wording": "Deferred events unavailable",
+                "settled_outcome": outcome.inner_text(),
                 "geometry": geometry,
             }
         )

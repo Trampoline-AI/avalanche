@@ -788,12 +788,21 @@ export function MachineRunWaits({
   instance,
   readError,
   refresh,
+  settled = false,
 }: {
   instance: MachineInstance | undefined;
   readError?: string;
   refresh: () => void;
+  /** The run is settled on its host (not one of `OperatorApi.liveRunStatuses`). */
+  settled?: boolean;
 }) {
   if (!instance) return <ReadError error={readError} retry={refresh} />;
+  // A settled run waits for nothing: no accepted events, no deferred-events line.
+  const over = settled || instance.finished;
+  // Hosts may omit deferred events (an optional capability); say so in user terms
+  // on a live run, and leave the row out once the run is settled.
+  const pending = instance.pending_events ?? [];
+  const due = over ? null : instance.due;
   const timerTarget =
     instance.state &&
     instance.machine_spec?.states[instance.state]?.timers.map((timer) => timer.target)[0];
@@ -801,26 +810,26 @@ export function MachineRunWaits({
     <section aria-label="Machine waits" className="p-3 text-xs">
       <ReadError error={readError} retry={refresh} />
       <ul className="m-0 list-none p-0">
-        {instance.due !== null && (
+        {due !== null && (
           <WaitRow data-wait-kind="timer">
             <span className="text-ink">Timer{timerTarget ? ` → ${timerTarget}` : ""}</span>
-            <Timer due={instance.due} />
+            <Timer due={due} />
           </WaitRow>
         )}
-        {instance.pending_events === undefined ? (
-          <WaitRow className="text-secondary">
-            Pending events not reported by this host.
-          </WaitRow>
-        ) : (
-          instance.pending_events.map((pending) => (
-            <WaitRow key={pending.receipt_id} data-wait-kind="event">
-              <span className="text-ink">Deferred · {pending.event}</span>
-              <span className="text-secondary">
-                {pending.receipt_id} · {JSON.stringify(pending.payload)}
-              </span>
-            </WaitRow>
-          ))
-        )}
+        {instance.pending_events === undefined
+          ? !over && (
+              <WaitRow className="text-secondary" data-wait-kind="deferred-unavailable">
+                Deferred events unavailable
+              </WaitRow>
+            )
+          : pending.map((deferred) => (
+              <WaitRow key={deferred.receipt_id} data-wait-kind="event">
+                <span className="text-ink">Deferred · {deferred.event}</span>
+                <span className="text-secondary">
+                  {deferred.receipt_id} · {JSON.stringify(deferred.payload)}
+                </span>
+              </WaitRow>
+            ))}
         {(instance.receipts ?? []).map((item) => (
           <WaitRow key={item.receipt_id} data-receipt-status={item.status}>
             <span className="text-ink">
@@ -831,16 +840,17 @@ export function MachineRunWaits({
             </span>
           </WaitRow>
         ))}
-        {!instance.finished && instance.accepts.length > 0 && (
+        {!over && instance.accepts.length > 0 && (
           <WaitRow data-wait-kind="accepts">
             <span className="text-ink">Waiting for event</span>
             <span className="text-secondary">{instance.accepts.join(", ")}</span>
           </WaitRow>
         )}
-        {instance.due === null &&
-          instance.pending_events?.length === 0 &&
+        {due === null &&
+          pending.length === 0 &&
+          (instance.pending_events !== undefined || over) &&
           (instance.receipts ?? []).length === 0 &&
-          (instance.finished || instance.accepts.length === 0) && (
+          (over || instance.accepts.length === 0) && (
             <WaitRow className="text-secondary" data-wait-kind="none">
               No pending waits.
             </WaitRow>
