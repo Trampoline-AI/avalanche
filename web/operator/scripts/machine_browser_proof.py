@@ -688,7 +688,9 @@ def scenario(page, url: str, evidence: Path) -> dict:
     expect(page.locator(".react-flow__edge-machine")).to_have_count(0)
     expect(graph.locator(".node-card")).to_have_count(3)
     # The run pane keeps the tab last shown (Timeline): its steps are listed there too.
-    expect(run_timeline(page).locator('[data-timeline-kind="step-started"]').first).to_be_visible()
+    expect(
+        run_timeline(page).locator('[data-timeline-kind="step-started"]').first
+    ).to_be_visible()
     page.get_by_role("tab", name="Logs").click()
     expect(page.get_by_text("fetched document")).to_be_visible()
     graph.get_by_role("button", name="Inspect score", exact=True).click()
