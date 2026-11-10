@@ -258,14 +258,13 @@ function labelSize(data: MachineArcData, scale = 1): { width: number; height: nu
 }
 
 /**
- * A forward arc runs level through its label only near the middle of the gap
- * between ranks (GraphCanvas bends it over the outer parts), so the gap must be
- * this many times the widest label's extent along it, or a neighbouring parallel
- * arc's bend crosses that label.
+ * Parallel forward arcs run level across their pair's widest label, this far past
+ * its ends, and bend over at least FORWARD_BEND on each side of that level stretch.
  */
-const RANK_GAP_PER_LABEL = 2.1;
+const LABEL_CLEAR = 14;
+const FORWARD_BEND = 70;
 
-/** The gap between ranks: the default, widened for the forward arcs' labels at `scale`. */
+/** The gap between ranks: the default, widened to fit the forward arcs' labels at `scale`. */
 function machineRankGap(
   forward: readonly Pick<MachineArcData, "label" | "timer">[],
   orientation: GraphOrientation,
@@ -278,7 +277,7 @@ function machineRankGap(
       return orientation === "horizontal" ? size.width : size.height;
     }),
   );
-  return Math.max(RANK_GAP[orientation], Math.ceil(along * RANK_GAP_PER_LABEL));
+  return Math.max(RANK_GAP[orientation], Math.ceil(along + 2 * (LABEL_CLEAR + FORWARD_BEND)));
 }
 
 /** Smallest arc label text, in screen pixels, at the graph's fitted zoom. */
@@ -468,6 +467,8 @@ export function routeMachineArcs(
   // Where each forward arc's label sits across the gap, relative to the pair's midline:
   // labels of one pair stack in lane order, each a label's extent plus a gap apart.
   const fanOffsets = new Map<string, number>();
+  // Half the level stretch of each forward arc: its pair's widest label, plus clearance.
+  const levelHalves = new Map<string, number>();
   const pairs = new Map<string, MachineLink[]>();
   for (const link of links) {
     if (link.data.kind !== "forward") continue;
@@ -487,6 +488,13 @@ export function routeMachineArcs(
       );
     const centre = (offsets[0] + offsets.at(-1)!) / 2;
     group.forEach((link, index) => fanOffsets.set(link.id, offsets[index] - centre));
+    const along = Math.max(
+      ...group.map((link) => {
+        const size = labelSize(link.data, labelScale);
+        return horizontal ? size.width : size.height;
+      }),
+    );
+    group.forEach((link) => levelHalves.set(link.id, along / 2 + LABEL_CLEAR));
   }
 
   for (const link of links) {
@@ -531,9 +539,10 @@ export function routeMachineArcs(
       const labelAcross =
         (middleAcross(source) + middleAcross(target)) / 2 + (fanOffsets.get(link.id) ?? 0);
       const half = Math.max(40, (to.along - from.along) / 2);
-      // Level for most of each half, so the arc stays flat under its whole label.
-      const pull = half * 0.25;
-      const level = half * 0.8;
+      // Level across the pair's widest label (so no parallel arc bends through a
+      // neighbour's label), bending over what is left of each half.
+      const level = Math.min(levelHalves.get(link.id) ?? 0, half - 20);
+      const bend = (half - level) / 2;
       const at = (along: number, across: number) => {
         const { x, y } = point(along, across);
         return `${Math.round(x * 10) / 10},${Math.round(y * 10) / 10}`;
@@ -541,8 +550,9 @@ export function routeMachineArcs(
       routes[link.id] = {
         path:
           `M ${at(from.along, from.across)}` +
-          ` C ${at(from.along + pull, from.across)} ${at(middle - level, labelAcross)} ${at(middle, labelAcross)}` +
-          ` C ${at(middle + level, labelAcross)} ${at(to.along - pull, to.across)} ${at(to.along, to.across)}`,
+          ` C ${at(from.along + bend, from.across)} ${at(middle - level - bend, labelAcross)} ${at(middle - level, labelAcross)}` +
+          ` L ${at(middle + level, labelAcross)}` +
+          ` C ${at(middle + level + bend, labelAcross)} ${at(to.along - bend, to.across)} ${at(to.along, to.across)}`,
         label: point(middle, labelAcross),
       };
     }

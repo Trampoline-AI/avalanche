@@ -1456,16 +1456,21 @@ function GraphCanvasView({
       return { layout, side, zoom, scale };
     };
     const plain = fitFor(1);
+    if (plain.zoom === undefined) return plain;
+    const rendered = (fit: typeof plain) => 10 * fit.scale * (fit.zoom ?? 0);
+    // Out of reach (a small canvas), wider gaps only shrink the graph, down to the
+    // zoom floor where it no longer fits: keep the largest labels of a whole graph.
+    let best = plain;
     let fit = plain;
     for (let step = 0; step < 6; step++) {
       const wanted = machineLabelScale(fit.zoom);
       if (wanted <= fit.scale) break;
       fit = fitFor(wanted);
+      if (fit.zoom === undefined || fit.zoom <= minZoom * 1.01) break;
+      if (rendered(fit) > rendered(best)) best = fit;
+      if (rendered(fit) >= MIN_ARC_LABEL_PX - 0.05) return fit;
     }
-    if (fit === plain || fit.zoom === undefined) return plain;
-    // Out of reach (a small canvas): wider gaps would only shrink the graph further,
-    // down to the zoom floor where it no longer fits. Keep the plain layout whole.
-    return 10 * fit.scale * fit.zoom >= MIN_ARC_LABEL_PX - 0.05 ? fit : plain;
+    return best;
   }, [
     baseFitViewOptions,
     canvasSize,
@@ -1486,9 +1491,11 @@ function GraphCanvasView({
         : reserveSide(baseFitViewOptions, reserveFor, nodes, canvasSize, minZoom),
     [baseFitViewOptions, canvasSize, machineFit, minZoom, nodes, reserveFor],
   );
+  // A new label scale moves the cards (wider gaps between ranks): the new options
+  // object re-fits the graph to them.
   const fitViewOptions = useMemo(
-    () => reserveFit(baseFitViewOptions, reserveFor, side),
-    [baseFitViewOptions, reserveFor, side],
+    () => ({ ...reserveFit(baseFitViewOptions, reserveFor, side) }),
+    [baseFitViewOptions, labelScale, reserveFor, side],
   );
 
   // Machine mode reuses the same cards, input dot and edge highlighting; only the
