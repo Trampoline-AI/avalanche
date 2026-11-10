@@ -164,22 +164,32 @@
   aborts a read). `useMachineInstance` and `useMachineHistory` take
   an optional `{ live, refreshKey }` (`MachineReadRefresh`); without it they
   read once.
-- **operator-ui Send event offers only accepted events:** the machine run's
-  Send event menu lists only the events the run's current state accepts, and it
-  revalidates the choice on every read: after a transition, a choice the new
-  state no longer accepts resets to the first accepted event, so a second click
-  can no longer send a stale event. A run that accepts nothing offers no event
-  and Send is disabled.
+- **operator-ui Send event offers accepted and deferred events only:** the
+  machine run's Send event menu lists the events the run's current state accepts,
+  then the events it defers (its `defer=` list), labelled `(deferred)`; hosts
+  buffer a deferred event and acknowledge it as accepted. Events the state
+  neither accepts nor defers, which hosts ignore, are no longer offered. The
+  choice revalidates on every read: after a transition, a choice the new state
+  neither accepts nor defers resets to the first offered event, so a second click
+  can no longer send a stale event. A run that can take nothing offers no event
+  and Send is disabled; while the run is still loading, the panel says so.
 - **operator-ui settled runs show their outcome:** a settled run's controls
   show `Terminal: <outcome>` from the host's terminal seal or, when the host
-  reports none, from the run summary's settled status, for flow and machine
-  runs alike. Before, a host without seals (or a machine run) showed an empty
+  reports none, from the run summary's status when it is one of the host's
+  terminal outcomes, for flow and machine runs alike. New optional
+  `OperatorApi.terminalRunStatuses` declares a host's outcomes; it defaults to
+  the local operator's `success`, `failed` and `cancelled`
+  (`LOCAL_TERMINAL_RUN_STATUSES`, `runStatusTerminal`). A live run, a run whose
+  status is not loaded yet, or a sentinel status such as `unknown` shows no
+  outcome. Before, a host without seals (or a machine run) showed an empty
   controls box on the canvas; now no empty box is drawn when there is nothing
   to offer or report.
 - **operator-ui machine waits without deferred events:** when a host omits the
   optional deferred events (`pending_events`) on a machine run, a live run's
   Waits say "Deferred events unavailable" instead of developer text, and a
-  settled run shows no deferred-events, accepted-events or timer line.
+  settled run shows no deferred-events, accepted-events or timer line. While the
+  run status is not loaded yet, Waits claim neither "No pending waits." nor
+  "Deferred events unavailable".
 
 ## 0.20.4
 
