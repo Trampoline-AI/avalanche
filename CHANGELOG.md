@@ -132,6 +132,12 @@
   decision audits. Event payload files and the development timer trigger are
   not offered over this transport (the host has no attachment field or
   capability for them).
+  Run waits (flow decision cards and machine timers, deferred events and
+  receipts) sit in a dock beside the graph instead of over it. The "Viewing a
+  run snapshot" banner shows only on settled runs, not on live ones. Parallel
+  arcs between the same two states fan out, each level through its own label,
+  so labels never overlap each other, other arcs or cards. Visit rows wrap full
+  state names instead of truncating them.
 
 ## 0.20.4
 
