@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { expect, it, vi } from "vitest";
 
-import { FlowInfoMsg, RunSummaryMsg } from "./model";
+import { FlowInfoMsg, RunSummaryMsg, TerminalSealMsg, type RunSnapshotMsg } from "./model";
 import { RunControls } from "./RunControls";
 import { useInputDraft, type InputDraft } from "./useInputDraft";
 import { snapshotFor, summary, workflow } from "./test/fixtures";
@@ -253,4 +253,39 @@ it("offers Cancel for the statuses the host's api declares live", () => {
   expect(screen.queryByRole("button", { name: "Cancel run" })).toBeNull();
   view.rerender(controls({ liveRunStatuses: ["admitted"] }));
   expect(screen.getByRole("button", { name: "Cancel run" })).toBeTruthy();
+});
+
+it("shows a settled run's outcome from its seal, else its status, and no empty box", () => {
+  const controls = (status: string, seal?: RunSnapshotMsg["terminalSeal"]) => (
+    <RunControls
+      run={{ ...snapshotFor(RunSummaryMsg.create({ ...summary, status })), terminalSeal: seal }}
+      api={{ liveRunStatuses: ["admitted"] }}
+      onStart={async () => "run-1"}
+      onCancel={async () => undefined}
+    />
+  );
+  const outcome = () => document.querySelector("[data-terminal-status]")?.textContent;
+  // A host without terminal seals: the settled status from the run summary.
+  const view = render(controls("succeeded"));
+  expect(outcome()).toBe("Terminal: succeeded");
+  // A seal, when the host reports one, wins over the status.
+  view.rerender(
+    controls("succeeded", TerminalSealMsg.create({ terminalStatus: "failed", reason: "boom" })),
+  );
+  expect(outcome()).toBe("Terminal: failedReason: boom");
+  // A live run has no outcome yet; it offers Cancel instead.
+  view.rerender(controls("admitted"));
+  expect(outcome()).toBeUndefined();
+  expect(screen.getByRole("button", { name: "Cancel run" })).toBeTruthy();
+  // Read-only and live: nothing to offer or report, so no controls box at all.
+  view.rerender(
+    <RunControls
+      run={snapshotFor(RunSummaryMsg.create({ ...summary, status: "admitted" }))}
+      api={{ liveRunStatuses: ["admitted"] }}
+      runActionsEnabled={false}
+      onStart={async () => "run-1"}
+      onCancel={async () => undefined}
+    />,
+  );
+  expect(document.querySelector(".run-controls")).toBeNull();
 });

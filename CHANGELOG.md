@@ -170,6 +170,12 @@
   state no longer accepts resets to the first accepted event, so a second click
   can no longer send a stale event. A run that accepts nothing offers no event
   and Send is disabled.
+- **operator-ui settled runs show their outcome:** a settled run's controls
+  show `Terminal: <outcome>` from the host's terminal seal or, when the host
+  reports none, from the run summary's settled status, for flow and machine
+  runs alike. Before, a host without seals (or a machine run) showed an empty
+  controls box on the canvas; now no empty box is drawn when there is nothing
+  to offer or report.
 
 ## 0.20.4
 

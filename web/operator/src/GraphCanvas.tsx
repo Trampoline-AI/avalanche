@@ -1528,7 +1528,7 @@ function GraphCanvasView({
             {bottomRightPanel && (
               <Panel
                 position="bottom-right"
-                className="dag-panel dag-actions-panel nodrag nopan m-3.5 rounded border border-line bg-overlay-panel p-[7px] shadow-[0_6px_20px_var(--color-shadow-2)]"
+                className="dag-panel dag-actions-panel nodrag nopan m-3.5 rounded empty:hidden has-[>:only-child:empty]:hidden border border-line bg-overlay-panel p-[7px] shadow-[0_6px_20px_var(--color-shadow-2)]"
               >
                 {bottomRightPanel}
               </Panel>

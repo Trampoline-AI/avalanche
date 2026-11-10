@@ -46,6 +46,23 @@ function canonicalJson(value: unknown): string {
   );
 }
 
+/**
+ * A settled run's outcome: its terminal seal when the host reports one, else its
+ * settled status from the run summary, which every host supplies, so a host
+ * without seals (or a machine run) still shows how the run ended.
+ */
+function terminalOutcome(
+  run: RunSnapshotMsg | undefined,
+  live: boolean,
+): { status: string; reason?: string } | undefined {
+  if (run?.terminalSeal)
+    return run.terminalSeal.reason !== undefined
+      ? { status: run.terminalSeal.terminalStatus, reason: run.terminalSeal.reason }
+      : { status: run.terminalSeal.terminalStatus };
+  const status = run?.summary?.status;
+  return !live && status ? { status } : undefined;
+}
+
 /** Input JSON and the file attachments that fill its file fields. */
 interface StartInput {
   input?: Record<string, unknown>;
@@ -159,6 +176,9 @@ export function RunControls({
   }
 
   const active = runStatusLive(api, run?.summary?.status);
+  const outcome = terminalOutcome(run, active);
+  const startable = Boolean(workflow && runActionsEnabled);
+  const cancellable = Boolean(active && run?.summary && runActionsEnabled);
 
   const start = async () => {
     if (!workflow) return;
@@ -177,6 +197,10 @@ export function RunControls({
       setError(reason instanceof Error ? reason.message : "Operator rejected the run");
     }
   };
+
+  // Nothing to offer or report (a host without a terminal seal or status, or a
+  // read-only live run): draw no empty controls box.
+  if (!startable && !cancellable && !outcome && !error) return null;
 
   return (
     <div className="run-controls relative flex items-center gap-2 max-[700px]:flex-wrap [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50">
@@ -267,16 +291,14 @@ export function RunControls({
           {pending?.kind === "cancel" ? "Cancelling…" : "Cancel run"}
         </button>
       )}
-      {run?.terminalSeal && (
+      {outcome && (
         <div
           className="terminal-seal flex items-center gap-1.5 rounded border border-line-strong bg-canvas px-[11px] py-[7px] text-[10px] text-secondary"
-          data-terminal-status={run.terminalSeal.terminalStatus}
+          data-terminal-status={outcome.status}
         >
-          <span className="terminal-seal-status font-bold">
-            Terminal: {run.terminalSeal.terminalStatus}
-          </span>
-          {run.terminalSeal.reason !== undefined && (
-            <span className="terminal-seal-reason">Reason: {run.terminalSeal.reason}</span>
+          <span className="terminal-seal-status font-bold">Terminal: {outcome.status}</span>
+          {outcome.reason !== undefined && (
+            <span className="terminal-seal-reason">Reason: {outcome.reason}</span>
           )}
         </div>
       )}

@@ -680,7 +680,7 @@ export function WorkflowWorkspaceSurface({
   // Machine-only actions sit beside the normal run controls (Cancel).
   const runControlsPanel =
     machineRunId && normalRunControls ? (
-      <div className="flex items-center gap-2 max-[700px]:flex-wrap">
+      <div className="flex items-center gap-2 empty:hidden max-[700px]:flex-wrap">
         <MachineRunActions
           api={api}
           runId={machineRunId}
