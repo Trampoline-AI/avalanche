@@ -106,12 +106,32 @@ class Restart:
 
 
 @dataclass(frozen=True)
+class CatalogReloaded:
+    """The watcher has already done discovery; the owner only needs to drive runs."""
+
+
+@dataclass
+class DefinitionRetry:
+    next_at: float = 0.0
+    delay: float = 1.0
+
+
+@dataclass(frozen=True)
 class Stop:
     reply: Future[None]
 
 
 Command = (
-    Start | Send | MachineStep | VisitFinished | Retry | Close | FireNextTimer | Restart | Stop
+    Start
+    | Send
+    | MachineStep
+    | VisitFinished
+    | Retry
+    | Close
+    | FireNextTimer
+    | Restart
+    | CatalogReloaded
+    | Stop
 )
 
 
@@ -120,6 +140,11 @@ class MachineHost:
         self.op = operator
         self.queue: queue.Queue[Command] = queue.Queue()
         self.heap: list[tuple[float, str, int, int]] = []
+        # Shared by machine definition, not run: N keyed runs pay for one retry.
+        self._definition_retries: dict[str, DefinitionRetry] = {}
+        self._last_reload = float("-inf")
+        self._pass_reloaded = False
+        self._immediate_reload = False
         self.thread = threading.Thread(target=self._loop, name="avalanche-machine", daemon=True)
         self.thread.start()
         reply: Future[None] = Future()
@@ -186,50 +211,82 @@ class MachineHost:
             raise ValueError(f"{selector} is not a machine")
         return descriptor, MachineSpec.model_validate_json(descriptor.machine_spec_json)
 
+    def _read_spec(self, record: InstanceRecord) -> MachineSpec:
+        descriptor, root = self.op._registry.resolve_source(record.machine)
+        source = (root.path / descriptor.locator.relative_file).resolve()
+        errors = [
+            item.message
+            for item in self.op._registry.view.diagnostics
+            if item.kind in {"import_error", "build_error"}
+            and Path(item.path).resolve() == source
+        ]
+        if errors:
+            raise ValueError("; ".join(errors))
+        resolve_live_source(root, descriptor.locator)
+        return self._descriptor(record.machine)[1]
+
+    def _reload_definition(self, machine: str) -> bool:
+        """One catalog load per pass, spaced >=1s, shared across all runs.
+
+        Explicit commands bypass exponential backoff, not the shared minimum.
+        With watching enabled, timer retries use watcher publication instead of
+        launching another discovery process on the owner thread.
+        """
+        if self._pass_reloaded:
+            return True
+        retry = self._definition_retries.setdefault(machine, DefinitionRetry())
+        now = time.monotonic()
+        if not self._immediate_reload:
+            if self.op._watcher_thread is not None or now < retry.next_at:
+                return False
+            if now < self._last_reload + 1.0:
+                retry.next_at = max(retry.next_at, self._last_reload + 1.0)
+                return False
+        else:
+            # A repair command never waits for the 60s timer backoff. Bound
+            # repeated explicit commands too, including different machine IDs.
+            time.sleep(max(0.0, self._last_reload + 1.0 - now))
+        self._pass_reloaded = True
+        try:
+            self.op._refresh_workflows()
+        except WorkflowDiscoveryError:
+            # Only _read_spec's source-scoped diagnostic governs this run.
+            pass
+        finally:
+            self._last_reload = time.monotonic()
+            retry.next_at = self._last_reload + retry.delay
+            retry.delay = min(60.0, retry.delay * 2)
+        return True
+
     def _current_spec(
         self, record: InstanceRecord, *, reload: bool = False
     ) -> MachineSpec | None:
-        """Only a loaded graph can establish that the current state is missing.
-
-        Discovery keeps the last valid descriptors after an import failure. Retry
-        discovery on every subsequent trigger, even with watching disabled; never
-        execute those stale descriptors while their source is unavailable.
-        """
-        diagnostics = self.op._registry.view.diagnostics
-        if (
-            reload
-            or record.reason in {"definition_unavailable", "state_missing"}
-            or any(item.kind in {"import_error", "build_error"} for item in diagnostics)
-        ):
-            try:
-                self.op._refresh_workflows()
-            except WorkflowDiscoveryError:
-                # Inspect this machine's source diagnostic below. An unrelated
-                # broken file must not prevent a valid machine from progressing.
-                pass
+        """Reload only this run's unavailable definition, never unrelated errors."""
+        spec: MachineSpec | None = None
+        summary = None
         try:
-            descriptor, root = self.op._registry.resolve_source(record.machine)
-            source = (root.path / descriptor.locator.relative_file).resolve()
-            errors = [
-                item.message
-                for item in self.op._registry.view.diagnostics
-                if item.kind in {"import_error", "build_error"}
-                and Path(item.path).resolve() == source
-            ]
-            if errors:
-                raise ValueError("; ".join(errors))
-            resolve_live_source(root, descriptor.locator)
-            _, spec = self._descriptor(record.machine)
+            spec = self._read_spec(record)
         except (UnknownWorkflow, FileNotFoundError, ValueError) as exc:
             summary = f"{type(exc).__name__}: {exc}"
-            if isinstance(exc, UnknownWorkflow):
-                summary += "; " + "; ".join(
-                    item.message
-                    for item in self.op._registry.view.diagnostics
-                    if item.kind in {"import_error", "build_error"}
-                )
+        if (
+            reload
+            or summary is not None
+            or record.reason in {"definition_unavailable", "state_missing"}
+            or record.machine in self._definition_retries
+        ):
+            if self._reload_definition(record.machine):
+                try:
+                    spec = self._read_spec(record)
+                    summary = None
+                except (UnknownWorkflow, FileNotFoundError, ValueError) as exc:
+                    summary = f"{type(exc).__name__}: {exc}"
+            else:
+                summary = summary or "Definition reload pending"
+        if summary is not None:
             self._definition_unavailable(record, summary)
             return None
+        assert spec is not None
+        self._definition_retries.pop(record.machine, None)
         record.spec = spec
         if record.state not in spec.states:
             if record.reason != "outcome_unknown":
@@ -263,10 +320,23 @@ class MachineHost:
             timers = MachinesTable.timers(connection, record.run_id, record.visit)
         self.heap = [entry for entry in self.heap if entry[1] != record.run_id]
         heapq.heapify(self.heap)
+        retry = (
+            self._definition_retries.setdefault(
+                record.machine, DefinitionRetry(next_at=time.monotonic() + 1.0)
+            )
+            if unavailable
+            else None
+        )
         for timer in timers:
-            # Preserve the persisted absolute deadline. Back off a failed load,
-            # rather than spinning on an overdue timer or forgetting it entirely.
-            wake = max(timer.due, time.time() + 1) if unavailable else timer.due
+            # Watching owns recovery when enabled; no periodic discovery polling.
+            if unavailable and self.op._watcher_thread is not None:
+                continue
+            # Only the heap wake changes; never move the persisted UTC deadline.
+            wake = (
+                timer.due
+                if retry is None
+                else max(timer.due, time.time() + max(0.0, retry.next_at - time.monotonic()))
+            )
             heapq.heappush(self.heap, (wake, record.run_id, record.visit, timer.timer_index))
 
     def _commit(
@@ -851,21 +921,30 @@ class MachineHost:
 
     def _loop(self) -> None:
         while True:
+            self._pass_reloaded = False
+            self._immediate_reload = False
             timeout = None if not self.heap else max(0, self.heap[0][0] - time.time())
             try:
                 command = self.queue.get(timeout=timeout)
             except queue.Empty:
-                _, run_id, visit, index = heapq.heappop(self.heap)
-                try:
-                    record = self._load(run_id)
-                    if record.phase == "waiting" and record.visit == visit:
-                        with self.op._state_store.transaction() as connection:
-                            timers = MachinesTable.timers(connection, run_id, visit)
-                        if any(timer.timer_index == index for timer in timers):
-                            self._drive(record)
-                except Exception as exc:
-                    self.op._record_fatal_error(exc)
+                # Snapshot due entries before driving: re-armed retries belong to
+                # the next pass, and all runs here share this pass's one reload.
+                due = []
+                now = time.time()
+                while self.heap and self.heap[0][0] <= now:
+                    due.append(heapq.heappop(self.heap))
+                for _, run_id, visit, index in due:
+                    try:
+                        record = self._load(run_id)
+                        if record.phase == "waiting" and record.visit == visit:
+                            with self.op._state_store.transaction() as connection:
+                                timers = MachinesTable.timers(connection, run_id, visit)
+                            if any(timer.timer_index == index for timer in timers):
+                                self._drive(record)
+                    except Exception as exc:
+                        self.op._record_fatal_error(exc)
                 continue
+            self._immediate_reload = isinstance(command, (Send, Retry, Restart, MachineStep))
             try:
                 match command:
                     case Stop(reply=reply):
@@ -879,6 +958,14 @@ class MachineHost:
                         reply.set_result(self._step(request))
                     case VisitFinished():
                         self._finished(command)
+                    case CatalogReloaded():
+                        self._pass_reloaded = True
+                        self._last_reload = time.monotonic()
+                        with self.op._state_store.transaction() as connection:
+                            records = MachinesTable.all(connection)
+                        for record in records:
+                            if record.phase == "waiting":
+                                self._drive(record, catchup=True)
                     case Restart(reply=reply):
                         self._restart()
                         reply.set_result(None)
@@ -915,7 +1002,7 @@ class MachineHost:
                         self._drive(self._load(run_id), manual=True)
                         reply.set_result(None)
             except Exception as exc:
-                if isinstance(command, VisitFinished):
+                if isinstance(command, (VisitFinished, CatalogReloaded)):
                     self.op._record_fatal_error(exc)
                 else:
                     command.reply.set_exception(exc)

@@ -291,9 +291,17 @@ waiting runs stay `waiting`, with reason `definition_unavailable` and an error
 summary in the event facts. No transition executes against a last-valid catalog
 while the definition is unavailable. Original timers remain armed; source loading
 is retried on sends (including receipt replays), timer delivery, explicit retry,
-and operator restart, even when source watching is off. Restoring the source
-clears the reason and resumes the same run/key; overdue timers retain reducer
-priority and fire once in deadline order.
+and operator restart, even when source watching is off. Only the affected
+machine's unavailable definition triggers loading; unrelated broken files do not
+cause reloads on a healthy machine's path. The owner coalesces loading to one
+catalog refresh per loop pass and a shared minimum interval of one second.
+Without watching, timer retries share exponential backoff per machine definition
+(not per keyed run): one second, doubling to a 60-second cap. Send, explicit retry
+and restart bypass that timer backoff, subject only to the shared minimum interval.
+With watching, catalog reload wakes waiting runs directly, including those without
+timers; unavailable timers do not poll discovery. Restoring the source clears the
+reason and resumes the same run/key; overdue timers keep their original deadlines,
+retain reducer priority and fire once in deadline order.
 
 Sends during definition loss durably queue their JSON and return an `accepted`
 ingress receipt before any processing. The restored definition validates queued

@@ -926,6 +926,147 @@ def test_missing_machine_definition_parks_without_stopping_operator(tmp_path, lo
             op.close()
 
 
+def _count_machine_reloads(op):
+    calls = []
+    refresh = op._refresh_workflows
+
+    def measured(*args, **kwargs):
+        started = time.monotonic()
+        try:
+            return refresh(*args, **kwargs)
+        finally:
+            calls.append((started, time.monotonic() - started))
+
+    op._refresh_workflows = measured
+    return calls
+
+
+@pytest.mark.parametrize("run_count", [1, 5])
+def test_unavailable_machine_reload_cost_is_bounded(tmp_path, run_count):
+    """Reviewer probe: real discovery cost must not scale with waiting run count."""
+    from runtime.operator.state.machines import MachinesTable
+
+    root = tmp_path / "source"
+    root.mkdir()
+    fixture = root / "machine.py"
+    source = (Path(__file__).parents[1] / "fixtures" / "local_machine.py").read_text()
+    fixture.write_text(source.replace("seconds=2", "seconds=15"))
+    op = _operator(root, tmp_path / "state.db")
+    try:
+        runs = [
+            op.start_run("approval", input={"ticket": n, "journal": str(tmp_path / "j")})
+            for n in range(run_count)
+        ]
+        for run_id in runs:
+            _wait_until(lambda: _machine_record(op, run_id).phase == "waiting")
+            op._machine_host.send(run_id, "approved", {}, "advance")
+        _wait_until(
+            lambda: all(
+                _machine_record(op, r).visit == 2 and _machine_record(op, r).phase == "waiting"
+                for r in runs
+            )
+        )
+        with op._state_store.transaction() as c:
+            deadlines = {r: MachinesTable.timers(c, r, 2)[0].due for r in runs}
+        fixture.unlink()
+        op._registry.scan([str(root)])
+        calls = _count_machine_reloads(op)
+        _wait_until(
+            lambda: all(
+                _machine_record(op, r).reason == "definition_unavailable" for r in runs
+            ),
+            seconds=25,
+        )
+        start = time.monotonic()
+        time.sleep(30)
+        window = [(at, elapsed) for at, elapsed in calls if at >= start]
+        print(
+            "unavailable reload cost:",
+            {
+                "runs": run_count,
+                "window_s": 30,
+                "refreshes": len(window),
+                "busy_s": sum(elapsed for _, elapsed in window),
+                "offsets_s": [round(at - start, 2) for at, _ in window],
+            },
+        )
+        fixture.write_text(source)
+        restored = time.monotonic()
+        _wait_until(
+            lambda: all(op.get_run(r).status is RunStatus.SUCCESS for r in runs), seconds=65
+        )
+        print("timer recovery seconds:", round(time.monotonic() - restored, 2))
+        with op._state_store.transaction() as c:
+            for run_id in runs:
+                fired = [t for t in MachinesTable.all_timers(c, run_id) if t.fired_at]
+                assert len(fired) == 1 and fired[0].due == deadlines[run_id]
+        assert op.fatal_error is None
+        # 1, 2, 4, 8, 16, 32, ... delays: at most five attempts in this window,
+        # regardless of how many runs share the unavailable machine definition.
+        assert len(window) <= 5
+    finally:
+        op.close()
+
+
+def test_unrelated_broken_source_does_not_reload_healthy_machine(tmp_path):
+    root = tmp_path / "source"
+    root.mkdir()
+    (root / "machine.py").write_text(
+        (Path(__file__).parents[1] / "fixtures" / "local_machine.py").read_text()
+    )
+    op = _operator(root, tmp_path / "state.db")
+    try:
+        (root / "other.py").write_text("import avalanche as ava\ndef broken(:\n")
+        from runtime.operator.discovery import WorkflowDiscoveryError
+
+        with pytest.raises(WorkflowDiscoveryError):
+            op._refresh_workflows()
+        assert any(d.kind == "import_error" for d in op._registry.view.diagnostics)
+        calls = _count_machine_reloads(op)
+        run_id = op.start_run("approval", input={"ticket": 9, "journal": str(tmp_path / "j")})
+        _wait_until(lambda: op.get_run(run_id).status is RunStatus.WAITING)
+        op._machine_host.send(run_id, "approved", {}, "advance")
+        assert _wait_terminal(op, run_id).status is RunStatus.SUCCESS
+        print("healthy machine with unrelated broken source refreshes:", len(calls))
+        assert op.fatal_error is None
+        assert not calls
+    finally:
+        op.close()
+
+
+def test_watcher_reloads_wake_unavailable_machines_without_polling(tmp_path):
+    """No timer or send is needed to recover queued work when watching source."""
+    root = tmp_path / "source"
+    root.mkdir()
+    fixture = root / "machine.py"
+    source = (Path(__file__).parents[1] / "fixtures" / "local_machine.py").read_text()
+    fixture.write_text(source)
+    op = Operator(
+        [str(root)], watch=True, schedule=False, webhook_port=0, state_db=tmp_path / "state.db"
+    )
+    try:
+        runs = [
+            op.start_run("approval", input={"ticket": n, "journal": str(tmp_path / "j")})
+            for n in range(3)
+        ]
+        _wait_until(lambda: all(_machine_record(op, r).phase == "waiting" for r in runs))
+        calls = _count_machine_reloads(op)
+        fixture.write_text("def invalid syntax:\n")
+        _wait_until(
+            lambda: all(_machine_record(op, r).reason == "definition_unavailable" for r in runs)
+        )
+        for run_id in runs:
+            op._machine_host.send(run_id, "approved", {}, "queued")
+        before = len(calls)
+        time.sleep(3)
+        assert len(calls) == before  # No owner polling while the watcher owns discovery.
+        fixture.write_text(source)
+        _wait_until(lambda: all(op.get_run(r).status is RunStatus.SUCCESS for r in runs))
+        assert op.fatal_error is None
+    finally:
+        op.close()
+
+
 @pytest.mark.parametrize("recovery", ["restart", "send", "retry"])
 def test_transient_syntax_error_at_restart(tmp_path, recovery):
     """Reviewer reproduction: fix a typo, then recover the same keyed live run."""

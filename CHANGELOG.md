@@ -18,6 +18,11 @@
   `definition_unavailable` and its error are visible in the run's event facts;
   sends remain durable and timers retain their deadlines. Restoring the source
   resumes the same run/key on send, timer delivery, explicit retry or restart.
+  Definition reloads are source-scoped and coalesced, with a shared one-second
+  minimum interval. With watching off, timer retries back off per machine from
+  one to 60 seconds; watching instead wakes waiting runs on catalog reload.
+  Original timer deadlines never move and overdue timers fire once on recovery.
+  Sends, explicit retry and restart bypass timer backoff.
   Only a loaded definition without the current state produces `state_missing` /
   `needs_attention`; restore that state and use `ava run retry RUN_ID --visit`.
   Visit preparation/start failures preserve the journal and require explicit

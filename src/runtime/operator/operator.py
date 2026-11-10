@@ -47,6 +47,7 @@ from avalanche.step_interface import StepInterface
 from ._signals import shutdown_cleanup
 from .discovery import (
     DEFAULT_DISCOVERY_TIMEOUT,
+    WorkflowDiscoveryError,
     raise_for_discovery_diagnostics,
 )
 from .evaluation_models import EvaluationRecord
@@ -57,7 +58,7 @@ from .input_files import (
     StagedInputFile,
     StagedInputFileError,
 )
-from .machine_host import MachineHost, VisitFinished
+from .machine_host import CatalogReloaded, MachineHost, VisitFinished
 from .models import (
     AgentEvent,
     AgentEventAppended,
@@ -642,11 +643,11 @@ class Operator:
             self._scheduler.reconcile(self._registry.descriptors())
             if initial_view is not None:
                 self._reconcile_webhooks(initial_view.by_id.values())
-            if watch and self._workflow_paths:
-                self._start_watcher()
             self._start_notification_dispatcher()
             self._fail_interrupted_runs(interrupted_runs)
             self._machine_host = MachineHost(self)
+            if watch and self._workflow_paths:
+                self._start_watcher()
             if schedule and self._workflow_paths:
                 self._scheduler.start()
         except BaseException as failure:
@@ -2600,7 +2601,15 @@ class Operator:
                 if not changes:
                     continue
                 changed_files = tuple(sorted(path for _, path in changes))
-                self._refresh_workflows(changed_files)
+                try:
+                    self._refresh_workflows(changed_files)
+                except WorkflowDiscoveryError as exc:
+                    # An edit can temporarily fail discovery. The registry keeps
+                    # diagnostics/last-valid definitions; a later edit repairs it.
+                    logger.warning(
+                        "Workflow reload unavailable: %s", _bound_reload_log_text(str(exc))
+                    )
+                self._machine_host.queue.put(CatalogReloaded())
         except Exception as exc:
             self._record_fatal_error(exc)
             logger.error("Workflow watcher failed: %s", exc)
