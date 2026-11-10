@@ -1,7 +1,7 @@
 import {
-  Fragment,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -14,17 +14,15 @@ import type {
   MachinePage,
   MachineSpec,
   MachineTransition,
-  MachineVisit,
-  MachineVisitEvent,
 } from "./machine";
 import type { FlowInfoMsg, InputFileAttachment } from "./model";
 import { parseRunInput } from "./RunControls";
 import { runKeyLabel } from "./runKey";
+import type { MachineVisitDetail } from "./timelineEntries";
 import { parseJsonValue, type JsonSchema, type JsonValue } from "./stepInterface";
 import { applyInputFiles, useInputDraft } from "./useInputDraft";
 import { InputFieldList } from "./WorkflowInputInspector";
 import { workflowInputFields } from "./workflowInput";
-import { RunWaitPanel } from "./RunWaitPanel";
 
 const machineButton =
   "rounded border border-line bg-panel px-3 py-2 text-xs text-ink disabled:opacity-50";
@@ -126,112 +124,6 @@ function useRead<T>(
   return { value, error, refresh: () => refresh((current) => current + 1) };
 }
 
-function ReadError({ error, retry }: { error?: string; retry: () => void }) {
-  return error ? (
-    <p role="alert" className="text-xs text-danger">
-      {error}{" "}
-      <button className="underline" onClick={retry}>
-        Retry read
-      </button>
-    </p>
-  ) : null;
-}
-function clock(value: number | null) {
-  return value === null ? "Not recorded" : new Date(value * 1000).toLocaleString();
-}
-function EventFacts({
-  api,
-  runId,
-  visit,
-  live,
-  refreshKey,
-}: {
-  api: OperatorApi;
-  runId: string;
-  visit: number;
-  live: boolean;
-  refreshKey?: string;
-}) {
-  const [cursor, setCursor] = useState<string>();
-  const load = useCallback(
-    (signal: AbortSignal): Promise<MachinePage<MachineVisitEvent>> =>
-      api.getMachineVisitEvents!(runId, visit, { cursor, limit: 25 }, signal),
-    [api, runId, visit, cursor],
-  );
-  // Only the first window follows the run; older windows are fixed.
-  const first = cursor === undefined;
-  const read = useRead(api.getMachineVisitEvents ? load : undefined, {
-    live: live && first,
-    refreshKey: first ? refreshKey : undefined,
-  });
-  if (!api.getMachineVisitEvents)
-    return (
-      <p className="text-xs text-secondary">Event facts are unavailable from this host.</p>
-    );
-  return (
-    <section aria-label="Event facts" className="grid gap-2">
-      <h3 className="m-0 border-b border-line pb-2 font-mono text-[9px] tracking-[.16em] text-secondary uppercase">
-        Event facts
-      </h3>
-      <ReadError error={read.error} retry={read.refresh} />
-      {read.value ? (
-        <>
-          <ul className="m-0 grid list-none gap-1 p-0 font-mono text-[11px]">
-            {read.value.items.map((fact) => (
-              <li
-                key={fact.tseq}
-                data-event-status={fact.status}
-                className="[overflow-wrap:anywhere]"
-              >
-                <span className="text-ink">{fact.event ?? "—"}</span> · {fact.status} ·{" "}
-                <span className="text-secondary">
-                  {fact.source} · {fact.receipt_id ?? "no receipt"} · {clock(fact.at)}
-                </span>
-              </li>
-            ))}
-          </ul>
-          {read.value.items.length === 0 && (
-            <p className="text-xs text-secondary">No event facts in this window.</p>
-          )}
-          <div className="flex gap-2">
-            {cursor && (
-              <button className={machineButton} onClick={() => setCursor(undefined)}>
-                First facts
-              </button>
-            )}
-            {read.value.next_cursor !== null && (
-              <button
-                className={machineButton}
-                onClick={() => setCursor(read.value!.next_cursor!)}
-              >
-                Next facts
-              </button>
-            )}
-          </div>
-        </>
-      ) : (
-        <p role="status">Loading event facts…</p>
-      )}
-    </section>
-  );
-}
-
-function Timer({ due }: { due: number }) {
-  const [now, setNow] = useState(() => Date.now() / 1000);
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now() / 1000), 250);
-    return () => clearInterval(timer);
-  }, []);
-  return (
-    <span>
-      <time dateTime={new Date(due * 1000).toISOString()}>{clock(due)}</time> ·{" "}
-      <span className="text-amber" data-timer-remaining={Math.max(0, Math.ceil(due - now))}>
-        {due > now ? `${Math.ceil(due - now)}s remaining` : "Due — awaiting host"}
-      </span>
-    </span>
-  );
-}
-
 /** The run's machine instance, re-read on each run change (see MachineReadRefresh). */
 export function useMachineInstance(
   api: OperatorApi,
@@ -289,6 +181,176 @@ export function useMachineVisit(
   });
 }
 
+/**
+ * The run's waits (decision, event and sleep cards), read on each run change like
+ * the machine reads (no fixed poll); absent when the host does not list waits.
+ */
+export function useRunWaits(
+  api: OperatorApi,
+  runId: string | undefined,
+  refresh: MachineReadRefresh = {},
+) {
+  const load = useCallback(() => api.listRunWaits!(runId!), [api, runId]);
+  return useRead(api.listRunWaits && runId ? load : undefined, refresh);
+}
+
+const EMPTY_VISIT_DETAILS: ReadonlyMap<number, MachineVisitDetail> = new Map();
+/** Event facts read per visit for the timeline; later pages load on request. */
+export const VISIT_EVENTS_PAGE = 50;
+
+/**
+ * The visit records and first event-fact pages of the visits the timeline shows.
+ * A visit the run has left never changes, so it is read once; only the live visit
+ * re-reads, when `refreshKey` (the run's change signal) moves. One visit is read at
+ * a time, and a key change never aborts a read in flight (it marks the live visit
+ * stale, read again READ_MIN_SPACING_MS after the read ends), so a burst of
+ * revisions still completes reads. No timer polls.
+ */
+export function useMachineVisitDetails(
+  api: OperatorApi,
+  runId: string | undefined,
+  visits: readonly number[],
+  liveVisit: number | undefined,
+  refreshKey: string | undefined,
+) {
+  const [store, setStore] = useState<{
+    runId?: string;
+    details: ReadonlyMap<number, MachineVisitDetail>;
+  }>({ details: EMPTY_VISIT_DETAILS });
+  const details = store.runId === runId ? store.details : EMPTY_VISIT_DETAILS;
+  const visitsKey = visits.join(",");
+  const wanted = useRef({ visits: [] as number[], liveVisit, refreshKey });
+  const loader = useRef<{ request: () => void; retry: () => void }>(undefined);
+  const readable = Boolean(api.getMachineVisit || api.getMachineVisitEvents);
+  useLayoutEffect(() => {
+    wanted.current = {
+      visits: visitsKey ? visitsKey.split(",").map(Number) : [],
+      liveVisit,
+      refreshKey,
+    };
+    loader.current?.request();
+  }, [visitsKey, liveVisit, refreshKey]);
+  useEffect(() => {
+    if (!runId || !readable) return;
+    const controller = new AbortController();
+    // visit -> the key it was read at ("" for a visit the run has left).
+    const read = new Map<number, string>();
+    let reading = false;
+    let endedAt = -Infinity;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const spaced = () => Math.max(0, READ_MIN_SPACING_MS - (Date.now() - endedAt));
+    const keyFor = (visit: number) =>
+      visit === wanted.current.liveVisit ? (wanted.current.refreshKey ?? "") : "";
+    const next = () => {
+      const { visits: shown, liveVisit: live } = wanted.current;
+      // The live visit first, then newest to oldest.
+      const order = [...shown].sort((left, right) =>
+        left === live ? -1 : right === live ? 1 : right - left,
+      );
+      return order.find((visit) => read.get(visit) !== keyFor(visit));
+    };
+    const schedule = (ms: number) => {
+      clearTimeout(timeout);
+      timeout = setTimeout(() => void step(), ms);
+    };
+    async function step() {
+      const visit = next();
+      if (visit === undefined || controller.signal.aborted) return;
+      reading = true;
+      const key = keyFor(visit);
+      read.set(visit, key);
+      const detail: MachineVisitDetail = {};
+      try {
+        const [record, events] = await Promise.all([
+          api.getMachineVisit?.(runId!, visit, controller.signal),
+          api.getMachineVisitEvents?.(
+            runId!,
+            visit,
+            { limit: VISIT_EVENTS_PAGE },
+            controller.signal,
+          ),
+        ]);
+        if (record) detail.record = record;
+        if (events) {
+          detail.events = events.items;
+          detail.eventsCursor = events.next_cursor;
+        }
+      } catch (cause) {
+        detail.error = cause instanceof Error ? cause.message : "Read failed";
+      } finally {
+        reading = false;
+        endedAt = Date.now();
+      }
+      if (controller.signal.aborted) return;
+      setStore((current) => {
+        const map = new Map(current.runId === runId ? current.details : []);
+        map.set(visit, detail);
+        return { runId, details: map };
+      });
+      // A live visit whose key moved during the read is read again, spaced.
+      // Unchanged visits still to read go at once; a re-read waits for the spacing.
+      const following = next();
+      if (following !== undefined) schedule(read.has(following) ? spaced() : 0);
+    }
+    loader.current = {
+      request() {
+        if (reading) return;
+        const following = next();
+        if (following !== undefined) schedule(read.has(following) ? spaced() : 0);
+      },
+      retry() {
+        for (const [visit] of read) read.delete(visit);
+        if (!reading) schedule(0);
+      },
+    };
+    schedule(0);
+    return () => {
+      controller.abort();
+      clearTimeout(timeout);
+      loader.current = undefined;
+    };
+  }, [api, runId, readable]);
+  const loadMoreEvents = useCallback(
+    async (visit: number) => {
+      const cursor = details.get(visit)?.eventsCursor;
+      if (!runId || !cursor || !api.getMachineVisitEvents) return;
+      try {
+        const page = await api.getMachineVisitEvents(runId, visit, {
+          cursor,
+          limit: VISIT_EVENTS_PAGE,
+        });
+        setStore((current) => {
+          if (current.runId !== runId) return current;
+          const previous = current.details.get(visit) ?? {};
+          const map = new Map(current.details);
+          map.set(visit, {
+            ...previous,
+            events: [...(previous.events ?? []), ...page.items],
+            eventsCursor: page.next_cursor,
+          });
+          return { runId, details: map };
+        });
+      } catch (cause) {
+        setStore((current) => {
+          if (current.runId !== runId) return current;
+          const map = new Map(current.details);
+          map.set(visit, {
+            ...current.details.get(visit),
+            error: cause instanceof Error ? cause.message : "Read failed",
+          });
+          return { runId, details: map };
+        });
+      }
+    },
+    [api, details, runId],
+  );
+  return {
+    details,
+    loadMoreEvents,
+    retry: useCallback(() => loader.current?.retry(), []),
+  };
+}
+
 /** The state each visit ran in, newest first, from the instance and its history. */
 export function machineVisits(
   instance: MachineInstance,
@@ -304,128 +366,6 @@ export function machineVisits(
   if (instance.visit > 0 && instance.state && !visits.has(instance.visit))
     visits.set(instance.visit, { visit: instance.visit, state: instance.state });
   return [...visits.values()].sort((a, b) => b.visit - a.visit);
-}
-
-/**
- * The visits of the selected machine run, as a section of the run timeline. The
- * first row returns to the state graph; each visit row opens that visit's steps.
- */
-/** A state name that may wrap after its underscores (and anywhere, as a last resort). */
-function wrappable(name: string) {
-  const parts = name.split("_");
-  return parts.map((part, index) => (
-    <Fragment key={index}>
-      {part}
-      {index < parts.length - 1 && (
-        <>
-          _<wbr />
-        </>
-      )}
-    </Fragment>
-  ));
-}
-
-export function MachineVisitTimeline({
-  instance,
-  history,
-  selectedVisit,
-  onSelectVisit,
-  expanded = false,
-}: {
-  instance: MachineInstance | undefined;
-  history: MachineHistory;
-  selectedVisit?: number;
-  onSelectVisit: (visit: number | undefined) => void;
-  expanded?: boolean;
-}) {
-  if (!instance) return null;
-  const visits = machineVisits(instance, history.value);
-  // Rows grow to fit: state names and transitions wrap rather than truncate.
-  const row = `machine-visit-row flex w-full cursor-pointer items-start justify-between gap-3 border-0 border-b border-run-list-line text-left font-mono leading-[1.35] ${expanded ? "min-h-[34px] py-[9px] pl-[28px] pr-[30px] text-[11px]" : "min-h-[27.5px] py-[7px] pl-[28px] pr-[30px] text-[10px]"}`;
-  const active =
-    "active bg-selected shadow-[inset_2px_0_var(--color-acid)] hover:bg-selected-hover";
-  return (
-    <section aria-label="Machine visits" className="shrink-0 border-t border-run-list-line">
-      <div className="flex h-7 items-center justify-between pl-[16px] pr-[30px] font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase">
-        <span>Visits</span>
-        <span>{runKeyLabel(instance.key)}</span>
-      </div>
-      <div className={`overflow-auto overscroll-contain ${expanded ? "max-h-80" : "max-h-40"}`}>
-        <button
-          type="button"
-          aria-pressed={selectedVisit === undefined}
-          className={`${row} ${selectedVisit === undefined ? active : "bg-transparent hover:bg-hover"}`}
-          onClick={() => onSelectVisit(undefined)}
-        >
-          <span className="shrink-0 text-ink">State machine</span>
-          <span
-            className="machine-visit-state min-w-0 text-right text-secondary [overflow-wrap:anywhere]"
-            data-machine-state={instance.state}
-          >
-            {instance.state ? wrappable(instance.state) : "—"}
-          </span>
-        </button>
-        {visits.map((visit) => {
-          const current = visit.visit === instance.visit && !instance.finished;
-          return (
-            <button
-              key={visit.visit}
-              type="button"
-              data-visit={visit.visit}
-              aria-pressed={selectedVisit === visit.visit}
-              aria-label={`Visit ${visit.visit}, ${visit.state}${current ? ", current" : ""}`}
-              className={`${row} ${selectedVisit === visit.visit ? active : "bg-transparent hover:bg-hover"}`}
-              onClick={() => onSelectVisit(visit.visit)}
-            >
-              <span className="machine-visit-state min-w-0 max-w-[50%] shrink-0 [overflow-wrap:anywhere]">
-                <span className="text-secondary">#{visit.visit}</span>{" "}
-                <span className="text-ink">{wrappable(visit.state)}</span>
-              </span>
-              <span className="machine-visit-transition min-w-0 text-right text-secondary [overflow-wrap:anywhere]">
-                {current
-                  ? "current"
-                  : visit.left
-                    ? wrappable(
-                        `→ ${visit.left.to ?? "closed"} · ${visit.left.event ?? visit.left.source}`,
-                      )
-                    : ""}
-              </span>
-            </button>
-          );
-        })}
-        {history.error && (
-          <p role="alert" className="px-[16px] py-1 text-[10px] text-danger">
-            {history.error}{" "}
-            <button type="button" className="underline" onClick={history.refresh}>
-              Retry read
-            </button>
-          </p>
-        )}
-        {(history.cursor !== undefined || history.value?.next_cursor != null) && (
-          <div className="flex gap-3 px-[16px] py-1.5 text-[10px]">
-            {history.cursor !== undefined && (
-              <button
-                type="button"
-                className="underline"
-                onClick={() => history.setCursor(undefined)}
-              >
-                Latest visits
-              </button>
-            )}
-            {history.value?.next_cursor != null && (
-              <button
-                type="button"
-                className="underline"
-                onClick={() => history.setCursor(history.value!.next_cursor!)}
-              >
-                Older visits
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-    </section>
-  );
 }
 
 type MachineTransitionSpec = MachineSpec["states"][string]["transitions"][number];
@@ -817,187 +757,5 @@ function SendEventForm({
         </p>
       )}
     </form>
-  );
-}
-
-function WaitRow({ children, ...props }: React.ComponentProps<"li">) {
-  return (
-    <li
-      className="grid min-w-0 gap-0.5 border-b border-line py-2 font-mono text-[11px] [overflow-wrap:anywhere] last:border-0"
-      {...props}
-    >
-      {children}
-    </li>
-  );
-}
-
-/**
- * Machine rows for the run's waits panel (where a flow run shows its pending
- * waits): the pending timer, deferred events and accepted receipts.
- */
-export function MachineRunWaits({
-  instance,
-  readError,
-  refresh,
-  settled,
-}: {
-  instance: MachineInstance | undefined;
-  readError?: string;
-  refresh: () => void;
-  /**
-   * The run is settled on its host (not one of `OperatorApi.liveRunStatuses`), or
-   * live (`false`); `undefined` while its status is not loaded yet (unknown).
-   */
-  settled?: boolean;
-}) {
-  if (!instance) return <ReadError error={readError} retry={refresh} />;
-  // A settled run waits for nothing: no accepted events, no deferred-events line.
-  const over = settled === true || instance.finished;
-  // Until the run status is known, claim neither "nothing pending" nor a gap.
-  const known = settled !== undefined || instance.finished;
-  // Hosts may omit deferred events (an optional capability); say so in user terms
-  // on a live run, and leave the row out once the run is settled.
-  const pending = instance.pending_events ?? [];
-  const due = over ? null : instance.due;
-  const timerTarget =
-    instance.state &&
-    instance.machine_spec?.states[instance.state]?.timers.map((timer) => timer.target)[0];
-  return (
-    <section aria-label="Machine waits" className="p-3 text-xs">
-      <ReadError error={readError} retry={refresh} />
-      <ul className="m-0 list-none p-0">
-        {due !== null && (
-          <WaitRow data-wait-kind="timer">
-            <span className="text-ink">Timer{timerTarget ? ` → ${timerTarget}` : ""}</span>
-            <Timer due={due} />
-          </WaitRow>
-        )}
-        {instance.pending_events === undefined
-          ? settled === false &&
-            !instance.finished && (
-              <WaitRow className="text-secondary" data-wait-kind="deferred-unavailable">
-                Deferred events unavailable
-              </WaitRow>
-            )
-          : pending.map((deferred) => (
-              <WaitRow key={deferred.receipt_id} data-wait-kind="event">
-                <span className="text-ink">Deferred · {deferred.event}</span>
-                <span className="text-secondary">
-                  {deferred.receipt_id} · {JSON.stringify(deferred.payload)}
-                </span>
-              </WaitRow>
-            ))}
-        {(instance.receipts ?? []).map((item) => (
-          <WaitRow key={item.receipt_id} data-receipt-status={item.status}>
-            <span className="text-ink">
-              {item.key} · {item.status}
-            </span>
-            <span className="text-secondary">
-              {item.receipt_id} · {clock(item.accepted_at)}
-            </span>
-          </WaitRow>
-        ))}
-        {!over && instance.accepts.length > 0 && (
-          <WaitRow data-wait-kind="accepts">
-            <span className="text-ink">Waiting for event</span>
-            <span className="text-secondary">{instance.accepts.join(", ")}</span>
-          </WaitRow>
-        )}
-        {known &&
-          due === null &&
-          pending.length === 0 &&
-          (instance.pending_events !== undefined || over) &&
-          (instance.receipts ?? []).length === 0 &&
-          (over || instance.accepts.length === 0) && (
-            <WaitRow className="text-secondary" data-wait-kind="none">
-              No pending waits.
-            </WaitRow>
-          )}
-      </ul>
-    </section>
-  );
-}
-
-/**
- * A selected visit in the run's waits panel: its clocks, catalog revision and
- * transition, its waits, decision cards and terminal audits, and its event facts.
- */
-export function MachineVisitWaits({
-  api,
-  runId,
-  visit,
-  readError,
-  refresh,
-  current,
-  enabled,
-  refreshKey,
-}: {
-  api: OperatorApi;
-  runId: string;
-  visit: MachineVisit | undefined;
-  readError?: string;
-  refresh: () => void;
-  current: boolean;
-  enabled: boolean;
-  /** The run's change signal (see MachineReadRefresh); the current visit's facts follow it. */
-  refreshKey?: string;
-}) {
-  if (!visit)
-    return (
-      <div className="p-3 text-xs">
-        <ReadError error={readError} retry={refresh} />
-      </div>
-    );
-  return (
-    <section aria-label={`Visit ${visit.visit}`} className="grid gap-3 p-3 text-xs">
-      <ReadError error={readError} retry={refresh} />
-      <dl className="m-0 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-0.5 font-mono text-[10px]">
-        <dt className="text-secondary">Visit</dt>
-        <dd className="m-0">
-          #{visit.visit} · {visit.state} · {visit.disposition}
-        </dd>
-        <dt className="text-secondary">Entered</dt>
-        <dd className="m-0">{clock(visit.entered_at)}</dd>
-        <dt className="text-secondary">Left</dt>
-        <dd className="m-0">{clock(visit.left_at)}</dd>
-        <dt className="text-secondary">Revision</dt>
-        <dd className="m-0">{visit.catalog_revision ?? "Not reported"}</dd>
-        {visit.transition && (
-          <>
-            <dt className="text-secondary">Transition</dt>
-            <dd className="m-0">
-              {visit.transition.from} → {visit.transition.to ?? "closed"} ·{" "}
-              {visit.transition.event ?? visit.transition.source}
-            </dd>
-          </>
-        )}
-      </dl>
-      {visit.disposition === "expired" ? (
-        <p className="m-0 text-secondary" data-run-history="expired">
-          This visit&apos;s waits, event facts and steps expired under the run&apos;s retention
-          policy.
-        </p>
-      ) : (
-        <>
-          {api.listRunWaits && (
-            <RunWaitPanel
-              key={`${runId}:${visit.visit}`}
-              api={api}
-              runId={runId}
-              visit={visit.visit}
-              readOnly={!enabled || !current}
-              live={current}
-            />
-          )}
-          <EventFacts
-            api={api}
-            runId={runId}
-            visit={visit.visit}
-            live={current}
-            refreshKey={current ? refreshKey : undefined}
-          />
-        </>
-      )}
-    </section>
   );
 }

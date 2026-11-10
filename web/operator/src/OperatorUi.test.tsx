@@ -957,7 +957,7 @@ describe("operator workflows", () => {
     );
     fireEvent.click(await screen.findByRole("button", { name: /^dpl-host-full-id,/ }));
     expect(onSelect).toHaveBeenCalledExactlyOnceWith("dpl-host-full-id");
-    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand runs" }));
     expect(screen.getByRole("tab", { name: "Deployments" })).toHaveAttribute(
       "aria-selected",
       "true",
@@ -1613,8 +1613,8 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     const logHeight = logPane.style.flexBasis;
     expect(logHeight).toBe("276px");
     const inspectorDivider = screen.getByRole("separator", { name: "Resize Inspector" });
-    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
-    const allRuns = screen.getByRole("region", { name: "Timeline" });
+    fireEvent.click(screen.getByRole("button", { name: "Expand runs" }));
+    const allRuns = screen.getByRole("region", { name: "Runs" });
     const timeline = allRuns.closest(".workspace-timeline")!;
     const canvas = logPane.closest(".canvas")!;
     expect(timeline.parentElement).toHaveClass("canvas-shell", "flex-row");
@@ -1627,7 +1627,7 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(screen.getByRole("separator", { name: "Resize Inspector" })).toBe(inspectorDivider);
     expect(logPane.style.flexBasis).toBe(logHeight);
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
-    expect(within(allRuns).getByRole("button", { name: "Collapse timeline" })).toHaveFocus();
+    expect(within(allRuns).getByRole("button", { name: "Collapse runs" })).toHaveFocus();
     fireEvent.click(within(allRuns).getByText("Advanced filters"));
     fireEvent.change(within(allRuns).getByRole("searchbox", { name: "Run ID" }), {
       target: { value: "run-1" },
@@ -1647,17 +1647,17 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
     expect(timeline).not.toHaveClass("relative", "shrink-0");
     expect(screen.getByRole("region", { name: "Run logs" })).toBe(logPane);
     expect(logPane.style.flexBasis).toBe(logHeight);
-    expect(screen.getByRole("button", { name: "Expand timeline" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Expand runs" })).toHaveFocus();
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand runs" }));
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
     expect(within(allRuns).getByLabelText("From")).toHaveValue("2026-09-10");
     expect(within(allRuns).getByLabelText("To")).toHaveValue("2026-09-10");
     expect(within(allRuns).queryByRole("button", { name: /run-1,/ })).not.toBeInTheDocument();
     expect(screen.getByRole("complementary", { name: "Run inspector" })).toBeInTheDocument();
-    fireEvent.click(within(allRuns).getByRole("button", { name: "Collapse timeline" }));
-    expect(screen.getByRole("region", { name: "Timeline" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Expand timeline" })).toHaveFocus();
+    fireEvent.click(within(allRuns).getByRole("button", { name: "Collapse runs" }));
+    expect(screen.getByRole("region", { name: "Runs" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand runs" })).toHaveFocus();
   });
 });
 
@@ -1701,8 +1701,8 @@ describe("persisted workspace layout", () => {
       expect(inspector).toHaveAttribute("aria-valuenow", "426");
       const logs = await screen.findByRole("separator", { name: "Resize logs" });
       fireEvent.keyDown(logs, { key: "ArrowUp" });
-      fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
-      fireEvent.click(screen.getByRole("button", { name: /^Logs/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Expand runs" }));
+      fireEvent.click(screen.getByRole("button", { name: "Collapse run pane" }));
       first.unmount(); // A route change before the debounce expires must flush the latest values.
       expect(JSON.parse(window.localStorage.getItem(key)!)).toMatchObject({
         inspectorWidth: 426,
@@ -1713,14 +1713,14 @@ describe("persisted workspace layout", () => {
       if (layoutStorageKey)
         expect(window.localStorage.getItem("avalanche-operator-ui.layout")).toBeNull();
       const second = mountWorkspace(true);
-      await screen.findByRole("button", { name: "Collapse timeline" });
+      await screen.findByRole("button", { name: "Collapse runs" });
       // The timeline restores synchronously from storage; the log pane mounts only after the
       // run snapshot resolves, so wait for it rather than racing the loader.
-      expect(await screen.findByRole("button", { name: /^Logs/ })).toHaveAttribute(
+      expect(await screen.findByRole("button", { name: "Expand run pane" })).toHaveAttribute(
         "aria-expanded",
         "false",
       );
-      fireEvent.click(screen.getByRole("button", { name: /^Logs/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Expand run pane" }));
       expect(screen.getByRole("region", { name: "Run logs" })).toHaveStyle({
         flexBasis: "276px",
       });
@@ -1746,7 +1746,7 @@ describe("persisted workspace layout", () => {
       "aria-valuenow",
       "410",
     );
-    expect(screen.getByRole("button", { name: "Expand timeline" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand runs" })).toBeInTheDocument();
   });
 
   it("keeps debounced changes during an immediate keyed route replacement", async () => {
@@ -1758,11 +1758,11 @@ describe("persisted workspace layout", () => {
     fireEvent.keyDown(screen.getByRole("separator", { name: "Resize Inspector" }), {
       key: "ArrowLeft",
     });
-    fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
+    fireEvent.click(screen.getByRole("button", { name: "Expand runs" }));
     view.rerender(
       <WorkflowWorkspace key="deployment-b" api={api} workflowId={workflow.workflowId} />,
     );
-    await screen.findByRole("button", { name: "Collapse timeline" });
+    await screen.findByRole("button", { name: "Collapse runs" });
     fireEvent.click(screen.getByRole("button", { name: "Inspect Fetch" }));
     expect(screen.getByRole("separator", { name: "Resize Inspector" })).toHaveAttribute(
       "aria-valuenow",
@@ -1781,8 +1781,8 @@ describe("persisted workspace layout", () => {
       const view = render(
         <WorkflowWorkspace api={createApi()} workflowId={workflow.workflowId} />,
       );
-      fireEvent.click(await screen.findByRole("button", { name: "Expand timeline" }));
-      expect(screen.getByRole("button", { name: "Collapse timeline" })).toBeInTheDocument();
+      fireEvent.click(await screen.findByRole("button", { name: "Expand runs" }));
+      expect(screen.getByRole("button", { name: "Collapse runs" })).toBeInTheDocument();
       view.unmount();
     } finally {
       read.mockRestore();
@@ -1818,7 +1818,7 @@ describe("persisted workspace layout", () => {
     expect(Number(logs.getAttribute("aria-valuenow"))).toBe(
       Math.max(140, Math.floor(window.innerHeight * 0.75)),
     );
-    await screen.findByRole("button", { name: "Collapse timeline" });
+    await screen.findByRole("button", { name: "Collapse runs" });
     vi.useFakeTimers();
     try {
       const write = vi.spyOn(Storage.prototype, "setItem");

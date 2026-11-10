@@ -19,6 +19,11 @@ export interface WorkspaceLayout {
   timelineExpanded: boolean;
   logHeight: number;
   logExpanded: boolean;
+  /**
+   * The bottom pane's tab, once the reader picks one. Unset: a machine run opens
+   * on Timeline, a flow run on Logs.
+   */
+  runPaneTab?: "logs" | "timeline";
 }
 
 export function maximumInspectorWidth() {
@@ -58,6 +63,9 @@ function boundedLayout(value: Partial<WorkspaceLayout> | null): WorkspaceLayout 
       maximumPaneHeight(),
     ),
     logExpanded: typeof value?.logExpanded === "boolean" ? value.logExpanded : true,
+    ...(value?.runPaneTab === "logs" || value?.runPaneTab === "timeline"
+      ? { runPaneTab: value.runPaneTab }
+      : {}),
   };
 }
 
@@ -135,5 +143,16 @@ export function useWorkspaceLayout(storageKey = DEFAULT_LAYOUT_STORAGE_KEY) {
     (value: SetStateAction<boolean>) => setField("logExpanded", value),
     [setField],
   );
-  return { layout, setInspectorWidth, setTimelineExpanded, setLogHeight, setLogExpanded };
+  const setRunPaneTab = useCallback(
+    (value: "logs" | "timeline") => setField("runPaneTab", value),
+    [setField],
+  );
+  return {
+    layout,
+    setInspectorWidth,
+    setTimelineExpanded,
+    setLogHeight,
+    setLogExpanded,
+    setRunPaneTab,
+  };
 }

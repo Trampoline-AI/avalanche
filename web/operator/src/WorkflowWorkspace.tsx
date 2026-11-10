@@ -13,22 +13,33 @@ import {
 import type { OperatorApi } from "./api";
 import {
   MachineRunActions,
-  MachineRunWaits,
   MachineSendPanel,
-  MachineVisitTimeline,
-  MachineVisitWaits,
   machineVisits,
   useMachineHistory,
   useMachineInstance,
   useMachineVisit,
+  useMachineVisitDetails,
+  useRunWaits,
 } from "./MachineWorkspace";
 import type { MachineGraphView } from "./machineGraph";
 import { GraphCanvas, type CanvasReserve } from "./GraphCanvas";
 import { Inspector } from "./Inspector";
 import type { FlowInfoMsg, InputFileAttachment, RunSnapshotMsg } from "./model";
-import { RunLogPane } from "./RunLogPane";
+import { RunLogPane, visitStep } from "./RunLogPane";
 import { RunControls } from "./RunControls";
-import { RunWaitPanel } from "./RunWaitPanel";
+import { DecisionForm, type WaitCard } from "./RunWaitPanel";
+import { RunTimeline, type TimelineFocus } from "./RunTimeline";
+import {
+  entryHighlight,
+  filterTimeline,
+  flowPending,
+  flowTimeline,
+  machinePending,
+  machineTimeline,
+  type GraphHighlight,
+  type PendingItem,
+  type TimelineEntry,
+} from "./timelineEntries";
 import { useInputDraft } from "./useInputDraft";
 import { compareNewestRun, RunListPanel } from "./RunListPanel";
 import type { OperatorProjection } from "./state";
@@ -36,7 +47,7 @@ import { useOperatorProjection } from "./state";
 import { WorkspaceDivider } from "./WorkspaceDivider";
 import { useRunEvaluations } from "./useRunEvaluations";
 import { INPUT_NODE_ID } from "./workflowInput";
-import { runStatusLive } from "./runLiveness";
+import { LOCAL_TERMINAL_RUN_STATUSES, runStatusLive } from "./runLiveness";
 
 import {
   INSPECTOR_MIN_WIDTH,
@@ -160,6 +171,21 @@ interface WorkflowWorkspaceSurfaceProps extends Pick<
 /** Room left under the floating timeline for the canvas controls (zoom, fit, orientation). */
 const TIMELINE_CONTROLS_CLEARANCE = 210;
 const TIMELINE_MIN_HEIGHT = 160;
+/** Machine visits the run timeline lists at first; earlier ones load on request. */
+const TIMELINE_VISITS = 10;
+const EMPTY_WAITS: WaitCard[] = [];
+
+const paneAction =
+  "cursor-pointer rounded border border-line bg-panel px-1.5 py-0.5 font-mono text-[9px] text-acid";
+
+/** "a", "a and b", "a, b and c", capitalised. */
+function sentenceList(items: readonly string[]) {
+  const text =
+    items.length <= 1
+      ? (items[0] ?? "")
+      : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
 
 export function WorkflowWorkspaceSurface({
   api,
@@ -188,8 +214,14 @@ export function WorkflowWorkspaceSurface({
   layoutStorageKey,
 }: WorkflowWorkspaceSurfaceProps) {
   const [inspectedNode, setInspectedNode] = useState<string>();
-  const { layout, setInspectorWidth, setTimelineExpanded, setLogHeight, setLogExpanded } =
-    useWorkspaceLayout(layoutStorageKey);
+  const {
+    layout,
+    setInspectorWidth,
+    setTimelineExpanded,
+    setLogHeight,
+    setLogExpanded,
+    setRunPaneTab,
+  } = useWorkspaceLayout(layoutStorageKey);
   const { timelineExpanded, inspectorWidth } = layout;
   const timelineElement = useRef<HTMLDivElement>(null);
   // The timeline can mount after the first render (a host's loading fallback, the run
@@ -497,16 +529,24 @@ export function WorkflowWorkspaceSurface({
     [instanceSpecJson, machineSpec],
   );
   const historyPage = machineHistory.value;
+  // Selecting a state on the graph narrows the run timeline to that state.
+  const [stateSelection, setStateSelection] = useState<{ runId: string; state: string }>();
+  const stateFilter =
+    stateSelection && stateSelection.runId === machineRunId ? stateSelection.state : undefined;
+  const runPaneTab = layout.runPaneTab ?? (machineRunId ? "timeline" : "logs");
   const openMachineState = useCallback(
     (state: string) => {
-      if (!machineInstance) return;
-      const latest = machineVisits(machineInstance, historyPage).find(
-        (item) => item.state === state,
-      );
-      if (latest) selectVisit(latest.visit);
+      if (!machineRunId) return;
+      setStateSelection({ runId: machineRunId, state });
+      setRunPaneTab("timeline");
+      setLogExpanded(true);
     },
-    [historyPage, machineInstance, selectVisit],
+    [machineRunId, setLogExpanded, setRunPaneTab],
   );
+  const clearGraphSelection = useCallback(() => {
+    setInspectedNode(undefined);
+    setStateSelection(undefined);
+  }, []);
   const machineState = machineInstance?.state;
   const machineStatus = machineInstance?.status;
   const machineDue = machineInstance?.due;
@@ -561,18 +601,239 @@ export function WorkflowWorkspaceSurface({
   // A machine run's send form opens in the side panel, like the run input form.
   const inspectorOpen = nodeInspectorOpen || (sendOpen && run !== undefined);
   const displayedRunId = run?.summary?.runId;
-  // A live run (runLive, above) is still changing; only a settled run is a snapshot
-  // of the past. The host declares which statuses are live (OperatorApi.liveRunStatuses).
-  const runStatus = run?.summary?.status;
-  // The run's waits sit beside the graph, never over it: a flow run's pending waits
-  // (decision cards), or a machine run's timer, deferred events and receipts.
-  const waitsPanel =
-    machineRunId && run ? (
-      <div aria-label="Machine run waits">
+  // The run timeline: one chronological list of the run's events, the same for
+  // flow and machine runs, in the bottom pane beside Logs.
+  const settled = runStatusValue === undefined ? undefined : !runLive;
+  const runWaits = useRunWaits(api, run ? selectedRunId : undefined, machineRefresh);
+  const waitCards = runWaits.value ?? EMPTY_WAITS;
+  const windowVisits = useMemo(() => {
+    if (!machineInstance) return [];
+    // A window before the latest page of history does not hold the current visit.
+    const latestWindow = historyPage?.next_cursor == null;
+    return machineVisits(machineInstance, historyPage)
+      .map((item) => item.visit)
+      .filter(
+        (visitNumber) =>
+          latestWindow || historyPage?.items.some((item) => item.visit === visitNumber),
+      )
+      .sort((left, right) => left - right);
+  }, [historyPage, machineInstance]);
+  const [visitCount, setVisitCount] = useState<{ runId?: string; count: number }>({
+    count: TIMELINE_VISITS,
+  });
+  const shownVisitCount =
+    visitCount.runId === machineRunId ? visitCount.count : TIMELINE_VISITS;
+  const shownVisits = useMemo(
+    () => windowVisits.slice(-shownVisitCount),
+    [shownVisitCount, windowVisits],
+  );
+  const hiddenVisits = windowVisits.length - shownVisits.length;
+  const liveVisit =
+    machineInstance && !machineInstance.finished && runLive ? machineInstance.visit : undefined;
+  const visitDetails = useMachineVisitDetails(
+    api,
+    machineRunId,
+    shownVisits,
+    liveVisit,
+    `${machineInstance?.visit}:${machineInstance?.status}:${runRevision}`,
+  );
+  const terminalStatuses = api.terminalRunStatuses ?? LOCAL_TERMINAL_RUN_STATUSES;
+  const fromStart =
+    machineHistory.cursor === undefined && hiddenVisits === 0 && (shownVisits[0] ?? 1) <= 1;
+  const timelineEntries = useMemo<TimelineEntry[]>(() => {
+    if (!run) return [];
+    if (machineRunId) {
+      if (!machineInstance) return [];
+      return machineTimeline({
+        spec: shownMachineSpec,
+        instance: machineInstance,
+        history: historyPage?.items ?? [],
+        visits: shownVisits,
+        details: visitDetails.details,
+        waits: waitCards,
+        startedAt: run.summary?.triggeredAt,
+        status: runStatusValue,
+        settled: settled === true,
+        fromStart,
+        clocksPending:
+          api.getMachineVisit !== undefined &&
+          shownVisits.some((item) => {
+            const read = visitDetails.details.get(item);
+            return !read?.record && !read?.error;
+          }),
+      });
+    }
+    return flowTimeline({ run, waits: waitCards, settled: settled === true, terminalStatuses });
+  }, [
+    api.getMachineVisit,
+    fromStart,
+    historyPage,
+    machineInstance,
+    machineRunId,
+    run,
+    runStatusValue,
+    settled,
+    shownMachineSpec,
+    shownVisits,
+    terminalStatuses,
+    visitDetails.details,
+    waitCards,
+  ]);
+  const pendingItems = useMemo<PendingItem[]>(
+    () =>
+      machineRunId
+        ? machinePending(machineInstance, shownMachineSpec, waitCards, settled)
+        : flowPending(waitCards, settled !== false),
+    [machineInstance, machineRunId, settled, shownMachineSpec, waitCards],
+  );
+  // A graph selection narrows the timeline: a state, or an inspected step.
+  const filterNode =
+    inspectedNode && inspectedNode !== INPUT_NODE_ID && (visitRun || !machineRunId)
+      ? inspectedNode
+      : undefined;
+  const timelineFilter = useMemo(
+    () =>
+      stateFilter !== undefined
+        ? { state: stateFilter }
+        : filterNode !== undefined
+          ? { nodeId: filterNode }
+          : undefined,
+    [filterNode, stateFilter],
+  );
+  const filteredEntries = useMemo(
+    () => filterTimeline(timelineEntries, timelineFilter),
+    [timelineEntries, timelineFilter],
+  );
+  const shownTopologyNames = (visitRun ?? run)?.topology?.displayNames;
+  const filterLabel =
+    stateFilter !== undefined
+      ? `state ${stateFilter}`
+      : filterNode !== undefined
+        ? `step ${shownTopologyNames?.[filterNode] || filterNode}`
+        : undefined;
+  // Hovered and selected entries point the graph at their state, arc or step.
+  const [hover, setHover] = useState<{ runId?: string; focus?: TimelineFocus }>({});
+  const [selectedEntry, setSelectedEntry] = useState<{
+    runId?: string;
+    entry?: TimelineEntry;
+  }>({});
+  const hoverFocus = hover.runId === selectedRunId ? hover.focus : undefined;
+  const chosenEntry = selectedEntry.runId === selectedRunId ? selectedEntry.entry : undefined;
+  const focus: TimelineFocus | undefined = hoverFocus ?? chosenEntry;
+  const machineGraphShown = machineView !== undefined && !visitRun && !visitExpired;
+  const focusKey = focus
+    ? JSON.stringify([focus.id, focus.state, focus.arc, focus.nodeId, machineGraphShown])
+    : "";
+  const graphHighlight = useMemo<GraphHighlight | undefined>(() => {
+    if (!focusKey) return undefined;
+    const [, state, arc, nodeId, machineShown] = JSON.parse(focusKey) as [
+      string,
+      string | undefined,
+      TimelineEntry["arc"] | undefined,
+      string | undefined,
+      boolean,
+    ];
+    if (machineShown) return state || arc ? entryHighlight({ state, arc }) : undefined;
+    return nodeId ? { nodeId } : undefined;
+  }, [focusKey]);
+  const onTimelineHover = useCallback(
+    (next: TimelineFocus | undefined) => setHover({ runId: selectedRunId, focus: next }),
+    [selectedRunId],
+  );
+  const onTimelineSelect = useCallback(
+    (entry: TimelineEntry | undefined) => setSelectedEntry({ runId: selectedRunId, entry }),
+    [selectedRunId],
+  );
+  // A visit's step opens once that visit's steps are on the graph.
+  const [pendingVisitNode, setPendingVisitNode] = useState<{ visit: number; nodeId: string }>();
+  useEffect(() => {
+    if (
+      !pendingVisitNode ||
+      visit?.visit !== pendingVisitNode.visit ||
+      !topologyNodeIds?.includes(pendingVisitNode.nodeId)
+    )
+      return;
+    setInspectedNode(pendingVisitNode.nodeId);
+    setPendingVisitNode(undefined);
+  }, [pendingVisitNode, topologyNodeIds, visit]);
+  const openVisitStep = useCallback(
+    (visitNumber: number, nodeId?: string) => {
+      selectVisit(visitNumber);
+      setPendingVisitNode(nodeId ? { visit: visitNumber, nodeId } : undefined);
+    },
+    [selectVisit],
+  );
+  const openEntryLogs = useCallback(
+    (entry: TimelineEntry) => {
+      setRunPaneTab("logs");
+      if (machineRunId) {
+        if (entry.visit !== undefined) openVisitStep(entry.visit, entry.nodeId);
+      } else if (entry.nodeId) {
+        setInspectedNode(entry.nodeId);
+      }
+    },
+    [machineRunId, openVisitStep, setRunPaneTab],
+  );
+  // A log row of another visit's step opens that visit and step.
+  const openLogNode = useCallback(
+    (nodeId: string) => {
+      const step = machineRunId && !visitRun ? visitStep(nodeId) : undefined;
+      if (step) openVisitStep(step.visit, nodeId);
+      else setInspectedNode(nodeId);
+    },
+    [machineRunId, openVisitStep, visitRun],
+  );
+  const decisionsEnabled =
+    runActionsEnabled && bottomRightPanel !== null && api.submitDecision !== undefined;
+  const refreshWaits = runWaits.refresh;
+  const renderPending = useCallback(
+    (item: PendingItem) =>
+      item.card && item.card.kind === "decision" && displayedRunId ? (
+        <DecisionForm
+          card={item.card}
+          submit={async (outcome, reason, key) => {
+            await api.submitDecision!(displayedRunId, item.card!.nodeId, outcome, reason, key);
+            refreshWaits();
+          }}
+        />
+      ) : null,
+    [api, displayedRunId, refreshWaits],
+  );
+  const missingFacts: string[] = [];
+  if (machineRunId && machineInstance) {
+    if (!api.getMachineVisitEvents) missingFacts.push("received events");
+    if (machineInstance.pending_events === undefined && settled === false)
+      missingFacts.push("deferred events");
+    if (machineInstance.receipts === undefined) missingFacts.push("send receipts");
+  }
+  const timelineNote = missingFacts.length
+    ? `${sentenceList(missingFacts)} aren't listed for this run.`
+    : undefined;
+  const visitErrors = [...visitDetails.details.values()].filter((item) => item.error);
+  const timelineError =
+    machineRead.error || machineHistory.error || visitErrors.length > 0 ? (
+      <p role="alert" className="m-2 text-[10px] text-danger">
+        {machineRead.error ?? machineHistory.error ?? visitErrors[0].error}{" "}
+        <button
+          type="button"
+          className="underline"
+          onClick={() => {
+            machineRead.refresh();
+            machineHistory.refresh();
+            visitDetails.retry();
+          }}
+        >
+          Retry read
+        </button>
+      </p>
+    ) : undefined;
+  const timelineHeader =
+    machineRunId && (selectedVisit !== undefined || hiddenVisits > 0) ? (
+      <>
         {selectedVisit !== undefined && (
           <nav
             aria-label="Machine visit"
-            className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2 font-mono text-[10px] text-secondary"
+            className="flex flex-wrap items-center gap-2 border-b border-line px-[9px] py-1.5 font-mono text-[10px] text-secondary"
           >
             <button
               type="button"
@@ -584,35 +845,89 @@ export function WorkflowWorkspaceSurface({
             <span aria-hidden="true">/</span>
             <span className="text-ink">
               Visit {selectedVisit}
-              {visit ? ` · ${visit.state}` : ""}
+              {visit && !visitExpired ? ` · ${visit.state}` : ""}
               {visitExpired ? " · expired" : ""}
+              {visit?.catalog_revision ? ` · revision ${visit.catalog_revision}` : ""}
             </span>
+            <span>steps on the graph</span>
             {!visit && <span role="status">Loading visit…</span>}
           </nav>
         )}
-        {selectedVisit !== undefined ? (
-          <MachineVisitWaits
-            api={api}
-            runId={machineRunId}
-            visit={visit}
-            readError={visitRead.error}
-            refresh={visitRead.refresh}
-            current={currentVisit}
-            enabled={runActionsEnabled && bottomRightPanel !== null}
-            refreshKey={runRevision}
-          />
-        ) : (
-          <MachineRunWaits
-            instance={machineInstance}
-            readError={machineRead.error}
-            refresh={machineRead.refresh}
-            settled={runStatusValue === undefined ? undefined : !runLive}
-          />
+        {hiddenVisits > 0 && (
+          <div className="px-[9px] py-1.5">
+            <button
+              type="button"
+              className={paneAction}
+              onClick={() =>
+                setVisitCount({
+                  runId: machineRunId,
+                  count: shownVisitCount + TIMELINE_VISITS,
+                })
+              }
+            >
+              Show {Math.min(hiddenVisits, TIMELINE_VISITS)} earlier visits
+            </button>
+          </div>
+        )}
+      </>
+    ) : undefined;
+  const timelineFooter =
+    machineRunId &&
+    (machineHistory.cursor !== undefined || historyPage?.next_cursor != null) ? (
+      <div className="flex gap-3 px-[9px] py-1.5">
+        {machineHistory.cursor !== undefined && (
+          <button
+            type="button"
+            className={paneAction}
+            onClick={() => machineHistory.setCursor(undefined)}
+          >
+            First visits
+          </button>
+        )}
+        {historyPage?.next_cursor != null && (
+          <button
+            type="button"
+            className={paneAction}
+            onClick={() => machineHistory.setCursor(historyPage.next_cursor!)}
+          >
+            More visits
+          </button>
         )}
       </div>
-    ) : run && displayedRunId && runActionsEnabled && runStatus === "running" ? (
-      <RunWaitPanel key={displayedRunId} api={api} runId={displayedRunId} />
     ) : undefined;
+  const runTimeline = run ? (
+    <RunTimeline
+      key={displayedRunId}
+      entries={filteredEntries}
+      pending={pendingItems}
+      filter={
+        filterLabel
+          ? {
+              label: filterLabel,
+              onClear: () => {
+                setStateSelection(undefined);
+                if (filterNode !== undefined) setInspectedNode(undefined);
+              },
+            }
+          : undefined
+      }
+      selectedId={chosenEntry?.id}
+      onHover={onTimelineHover}
+      onSelect={onTimelineSelect}
+      onOpenVisit={
+        machineRunId && api.getMachineVisit
+          ? (visitNumber: number) => openVisitStep(visitNumber)
+          : undefined
+      }
+      onOpenLogs={openEntryLogs}
+      renderPending={decisionsEnabled ? renderPending : undefined}
+      header={timelineHeader}
+      footer={timelineFooter}
+      note={timelineNote}
+      loading={Boolean(machineRunId) && !machineInstance && !machineRead.error}
+      error={timelineError}
+    />
+  ) : undefined;
   const runListPanel = workflowId ? (
     <RunListPanel
       key={workflowId}
@@ -629,38 +944,6 @@ export function WorkflowWorkspaceSurface({
       deployments={deployments}
       timelineView={timelineView}
       onTimelineViewChange={onTimelineViewChange}
-      selectedRunSection={
-        machineRunId || waitsPanel ? (
-          <>
-            {machineRunId && (
-              <MachineVisitTimeline
-                instance={machineInstance}
-                history={machineHistory}
-                selectedVisit={selectedVisit}
-                onSelectVisit={selectVisit}
-                expanded={timelineExpanded}
-              />
-            )}
-            {waitsPanel && (
-              // The run's waits are a section of its timeline, like visits: a flow
-              // run's decision cards, a machine run's timer, events and receipts.
-              <section
-                aria-label="Run waits section"
-                className="run-waits-section shrink-0 border-t border-run-list-line has-[>div:empty]:hidden"
-              >
-                <div className="flex h-7 items-center justify-between pl-[16px] pr-[30px] font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase">
-                  <span>Waits</span>
-                </div>
-                <div
-                  className={`overflow-auto overscroll-contain ${timelineExpanded ? "max-h-96" : "max-h-48"}`}
-                >
-                  {waitsPanel}
-                </div>
-              </section>
-            )}
-          </>
-        ) : undefined
-      }
     />
   ) : undefined;
   const normalRunControls = (historical ? loadedRun : workflow) ? (
@@ -769,8 +1052,9 @@ export function WorkflowWorkspaceSurface({
                     inspectionDisabled={requestingRun}
                     evaluations={evaluationState.records}
                     selectedNodeId={inspectedNode}
-                    onClearNode={closePanel}
+                    onClearNode={clearGraphSelection}
                     onOpenNode={openNode}
+                    highlight={graphHighlight}
                     bottomRightPanel={
                       bottomRightPanel === undefined ? runControlsPanel : bottomRightPanel
                     }
@@ -846,7 +1130,10 @@ export function WorkflowWorkspaceSurface({
                     liveLogs={
                       displayedRunId && !visitRun ? state.liveLogs[displayedRunId] : undefined
                     }
-                    onSelectNode={openNode}
+                    onSelectNode={openLogNode}
+                    timeline={runTimeline}
+                    tab={runPaneTab}
+                    onTabChange={setRunPaneTab}
                   />
                 ) : (
                   emptyRunPanel

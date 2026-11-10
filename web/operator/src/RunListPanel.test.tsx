@@ -42,11 +42,11 @@ it("defaults to Current definition without a caret, action or tabs", () => {
   expect(current.querySelector(".lucide-chevron-right")).toBeNull();
   expect(screen.queryByRole("tablist")).not.toBeInTheDocument();
   expect(screen.queryByRole("tab")).not.toBeInTheDocument();
-  const panel = screen.getByRole("region", { name: "Timeline" });
+  const panel = screen.getByRole("region", { name: "Runs" });
   expect(within(panel).queryByRole("heading")).not.toBeInTheDocument();
-  // Stock hosts keep the "Timeline" title (header style, no underline indicator); no Overview label.
+  // Stock hosts title the runs list "Runs" (header style, no underline indicator); no Overview label.
   expect(within(panel).queryByText("Overview")).not.toBeInTheDocument();
-  const title = within(panel).getByText("Timeline");
+  const title = within(panel).getByText("Runs");
   expect(title.tagName).toBe("SPAN");
   expect(title).toHaveClass("font-semibold", "text-ink", "uppercase", "text-[10px]");
   expect(title).not.toHaveClass("after:bg-acid");
@@ -93,10 +93,10 @@ it.each([false, true])(
     fireEvent.click(action);
     expect(onClick).toHaveBeenCalledOnce();
     expect(onSelectRun).not.toHaveBeenCalled();
-    const tabs = screen.getByRole("tablist", { name: "Timeline view" });
+    const tabs = screen.getByRole("tablist", { name: "Runs view" });
     const runsTab = within(tabs).getByRole("tab", { name: "Overview" });
     const deploymentsTab = within(tabs).getByRole("tab", { name: "Deployments" });
-    expect(screen.queryByRole("heading", { name: "Timeline" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Runs" })).not.toBeInTheDocument();
     expect(runsTab).toHaveAttribute("aria-selected", "true");
     expect(runsTab).toHaveAttribute("tabindex", "0");
     expect(runsTab).toHaveClass("font-semibold", "text-ink", "after:bg-acid");
@@ -648,12 +648,10 @@ it("loads successive compact pages near the bottom and pins Current above the sc
   expect(current).toHaveStyle({ height: "30px", paddingTop: "7px", paddingBottom: "7px" });
   expect(virtual).toHaveStyle({ height: `${25 * 27.5}px` });
   expect(view.container.querySelector("footer")).not.toBeInTheDocument();
-  const viewAll = screen.getByRole("button", { name: "Expand timeline" });
+  const viewAll = screen.getByRole("button", { name: "Expand runs" });
   expect(viewAll.closest("header")).not.toBeNull();
-  expect(
-    within(scroll).queryByRole("button", { name: "Expand timeline" }),
-  ).not.toBeInTheDocument();
-  expect(viewAll).toHaveAttribute("aria-label", "Expand timeline");
+  expect(within(scroll).queryByRole("button", { name: "Expand runs" })).not.toBeInTheDocument();
+  expect(viewAll).toHaveAttribute("aria-label", "Expand runs");
   expect(viewAll).toHaveTextContent("");
   expect(screen.queryByText("View all")).not.toBeInTheDocument();
   fireEvent.click(viewAll);
@@ -693,7 +691,7 @@ it("loads successive compact pages near the bottom and pins Current above the sc
     paddingBottom: "9.75px",
   });
   expect(scroll).not.toContainElement(current);
-  expect(screen.queryByRole("button", { name: "Expand timeline" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Expand runs" })).not.toBeInTheDocument();
 });
 
 it("preserves compact timeline scrolling across status and unrelated workflow updates", async () => {
@@ -718,10 +716,8 @@ it("preserves compact timeline scrolling across status and unrelated workflow up
   const scroll = view.container.querySelector<HTMLElement>(".run-list-scroll")!;
   const bottom = 20 * 27.5 - 192;
   await scrollTimelineTo(scroll, bottom);
-  expect(await screen.findByRole("button", { name: "Expand timeline" })).toBeVisible();
-  expect(
-    within(scroll).queryByRole("button", { name: "Expand timeline" }),
-  ).not.toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "Expand runs" })).toBeVisible();
+  expect(within(scroll).queryByRole("button", { name: "Expand runs" })).not.toBeInTheDocument();
 
   const updatedRuns = {
     ...runs,
@@ -740,7 +736,7 @@ it("preserves compact timeline scrolling across status and unrelated workflow up
     <RunListPanel {...props} runs={{ ...updatedRuns, [otherRun.runId]: otherRun }} />,
   );
   expect(scroll.scrollTop).toBe(bottom);
-  fireEvent.click(screen.getByRole("button", { name: "Expand timeline" }));
+  fireEvent.click(screen.getByRole("button", { name: "Expand runs" }));
   expect(props.onViewAll).toHaveBeenCalledOnce();
 
   const newestRun = RunSummaryMsg.create({
@@ -789,11 +785,36 @@ it.each([
     `${timestamp} · ${label}`,
   );
   expect(row).toHaveStyle({ height: "27.5px", paddingTop: "8.25px", paddingBottom: "8.25px" });
-  expect(row).toHaveAttribute("title", run.runId);
+  expect(row).toHaveAttribute("title", `${run.runId} · ${timestamp}`);
   expect(row.querySelector(".run-status-text")).toHaveTextContent(run.status);
   expect(row.querySelector(".run-status-text")).toHaveAttribute("data-status", run.status);
   expect(row.querySelector(".run-status-glyph")).toHaveAttribute("data-glyph", "running");
   expect(row.querySelector(".run-status-text")).not.toHaveClass("border", "rounded");
   expect(row.lastElementChild).toHaveClass("justify-self-end", "text-right");
   expect(row).toHaveClass("text-left");
+});
+
+it("keeps a run's key label whole: the date after it truncates, and the tooltip has both", () => {
+  const run = RunSummaryMsg.create({
+    ...summary,
+    label: "acme/api #46",
+    startedAt: 100,
+    endedAt: 104,
+    triggeredAt: new Date(2026, 10, 10, 9, 30).getTime() / 1000,
+  });
+  render(
+    <RunListPanel
+      workflowId={workflow.workflowId}
+      runs={{ [run.runId]: run }}
+      onSelectRun={vi.fn()}
+    />,
+  );
+  const row = screen.getByRole("button", { name: /^acme\/api #46, / });
+  const label = row.querySelector(".run-label")!;
+  expect(label).toHaveTextContent("acme/api #46");
+  // The label never shrinks; only the date, duration and trigger beside it truncate.
+  expect(label).toHaveClass("shrink-0");
+  expect(label.contains(row.querySelector(".run-triggered-at"))).toBe(false);
+  expect(row.querySelector(".run-triggered-at")!.closest(".truncate")).not.toBe(label);
+  expect(row.getAttribute("title")).toMatch(/^acme\/api #46 · run-1 · /);
 });

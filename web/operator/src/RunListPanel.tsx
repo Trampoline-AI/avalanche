@@ -214,7 +214,7 @@ export function RunListPanel({
           ? "all-runs-panel flex h-full min-h-0 min-w-0 flex-col overflow-hidden border-r border-line bg-panel"
           : "run-list-panel flex h-full w-full flex-col overflow-hidden rounded border border-line bg-overlay-panel shadow-[0_6px_20px_var(--color-shadow-2)]"
       }
-      aria-label="Timeline"
+      aria-label="Runs"
       onKeyDown={(event) => {
         if (expanded && event.key === "Escape") {
           event.stopPropagation();
@@ -229,7 +229,7 @@ export function RunListPanel({
           {deployments ? (
             <div
               role="tablist"
-              aria-label="Timeline view"
+              aria-label="Runs view"
               className="flex h-full items-center gap-4"
             >
               {(["runs", "deployments"] as const).map((tab) => (
@@ -264,7 +264,7 @@ export function RunListPanel({
             </div>
           ) : (
             <span className="timeline-title inline-flex h-full items-center font-mono text-[10px] font-semibold tracking-[0.16em] text-ink uppercase">
-              Timeline
+              Runs
             </span>
           )}
         </div>
@@ -273,8 +273,8 @@ export function RunListPanel({
             <button
               ref={toggleButton}
               type="button"
-              aria-label="Expand timeline"
-              title="Expand timeline"
+              aria-label="Expand runs"
+              title="Expand runs"
               onClick={onViewAll}
               className="grid size-5 cursor-pointer place-items-center rounded border-0 bg-transparent text-secondary hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-acid"
             >
@@ -285,8 +285,8 @@ export function RunListPanel({
             <button
               ref={toggleButton}
               type="button"
-              aria-label="Collapse timeline"
-              title="Collapse timeline"
+              aria-label="Collapse runs"
+              title="Collapse runs"
               onClick={onClose}
               className="grid size-8 cursor-pointer place-items-center rounded border-0 bg-transparent text-lg text-secondary hover:bg-canvas hover:text-ink focus-visible:outline-2 focus-visible:outline-acid"
             >
@@ -464,7 +464,13 @@ export function RunListPanel({
                         onClick={() => onSelectRun(summary.runId)}
                         aria-pressed={selectedRunId === summary.runId}
                         style={rowStyle}
-                        title={summary.runId}
+                        title={[
+                          summary.label,
+                          summary.runId,
+                          triggeredAt ? RUN_TIMESTAMP_FORMAT.format(triggeredAt) : undefined,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
                         data-run-history={summary.expired ? "expired" : undefined}
                         aria-label={`${summary.label ? `${summary.label}, ` : ""}${summary.runId}, ${summary.status}${summary.expired ? ", expired" : ""}, ${runDuration(elapsedSeconds)}, ${
                           TRIGGER_LABELS[summary.triggeredBy]
@@ -474,36 +480,42 @@ export function RunListPanel({
                             : "start time not recorded"
                         }`}
                       >
-                        <span className="min-w-0 truncate font-mono text-secondary">
+                        <span className="flex min-w-0 font-mono text-secondary">
+                          {/* The key label comes first and keeps its full width; the date,
+                              duration and trigger after it truncate instead. */}
                           {summary.label && (
-                            <span className="text-ink">{summary.label} · </span>
+                            <span className="run-label max-w-full shrink-0 truncate text-ink">
+                              {`${summary.label}\u00a0·\u00a0`}
+                            </span>
                           )}
-                          {/* Beside the label, so truncation never hides it. */}
-                          {summary.expired && (
-                            <span className="run-expired text-amber">expired · </span>
-                          )}
-                          <time
-                            className="run-triggered-at"
-                            dateTime={triggeredAt?.toISOString()}
-                          >
-                            {triggeredAt
-                              ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
-                              : "Start time not recorded"}
-                          </time>
-                          {" · "}
-                          <span
-                            className="run-duration"
-                            title={
-                              elapsedSeconds === undefined
-                                ? undefined
-                                : `${elapsedSeconds.toFixed(1)} seconds`
-                            }
-                          >
-                            {runDuration(elapsedSeconds)}
-                          </span>
-                          {" · "}
-                          <span className="run-trigger" data-trigger={summary.triggeredBy}>
-                            {TRIGGER_LABELS[summary.triggeredBy]}
+                          <span className="min-w-0 truncate">
+                            {/* Beside the label, so truncation never hides it. */}
+                            {summary.expired && (
+                              <span className="run-expired text-amber">expired · </span>
+                            )}
+                            <time
+                              className="run-triggered-at"
+                              dateTime={triggeredAt?.toISOString()}
+                            >
+                              {triggeredAt
+                                ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
+                                : "Start time not recorded"}
+                            </time>
+                            {" · "}
+                            <span
+                              className="run-duration"
+                              title={
+                                elapsedSeconds === undefined
+                                  ? undefined
+                                  : `${elapsedSeconds.toFixed(1)} seconds`
+                              }
+                            >
+                              {runDuration(elapsedSeconds)}
+                            </span>
+                            {" · "}
+                            <span className="run-trigger" data-trigger={summary.triggeredBy}>
+                              {TRIGGER_LABELS[summary.triggeredBy]}
+                            </span>
                           </span>
                         </span>
                         <span className="justify-self-end text-right">

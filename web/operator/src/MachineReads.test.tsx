@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OperatorApi } from "./api";
 import type { MachineInstance } from "./machine";
-import { useMachineInstance } from "./MachineWorkspace";
+import { useMachineInstance, useMachineVisitDetails } from "./MachineWorkspace";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -96,5 +96,68 @@ describe("machine reads under a revision burst", () => {
     renderHook(() => useMachineInstance(host.api, "run-1", { live: false, refreshKey: "1" }));
     await act(() => vi.advanceTimersByTimeAsync(60_000));
     expect(host.stats.started).toBe(1);
+  });
+});
+
+describe("timeline visit reads", () => {
+  function visitHost(latency: number) {
+    const reads: number[] = [];
+    let aborted = 0;
+    const later = <T,>(value: T, signal?: AbortSignal) =>
+      new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => resolve(value), latency);
+        signal?.addEventListener("abort", () => {
+          clearTimeout(timer);
+          aborted += 1;
+          reject(new DOMException("aborted", "AbortError"));
+        });
+      });
+    const api = {
+      getMachineVisit: (_runId: string, visit: number, signal?: AbortSignal) => {
+        reads.push(visit);
+        return later({ visit, state: "s", entered_at: visit, left_at: null }, signal);
+      },
+      getMachineVisitEvents: (
+        _runId: string,
+        _visit: number,
+        _page: unknown,
+        signal?: AbortSignal,
+      ) => later({ items: [], next_cursor: null }, signal),
+    } as unknown as OperatorApi;
+    return { api, reads, aborted: () => aborted };
+  }
+
+  it("reads left visits once and the live visit again on each change, without polling", async () => {
+    const host = visitHost(50);
+    const { result, rerender } = renderHook(
+      ({ key }) => useMachineVisitDetails(host.api, "run-1", [1, 2, 3], 3, key),
+      { initialProps: { key: "a" } },
+    );
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect([...host.reads].sort()).toEqual([1, 2, 3]);
+    expect(result.current.details.size).toBe(3);
+    // Quiet: no further reads.
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(host.reads).toHaveLength(3);
+    // A run change re-reads only the live visit.
+    rerender({ key: "b" });
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(host.reads).toEqual([3, 2, 1, 3]);
+  });
+
+  it("completes reads during a burst of changes and never aborts them", async () => {
+    const host = visitHost(300);
+    const { rerender } = renderHook(
+      ({ key }) => useMachineVisitDetails(host.api, "run-1", [1, 2], 2, key),
+      { initialProps: { key: "0" } },
+    );
+    for (let tick = 1; tick <= 30; tick += 1) {
+      await act(() => vi.advanceTimersByTimeAsync(100));
+      rerender({ key: String(tick) });
+    }
+    await act(() => vi.advanceTimersByTimeAsync(2000));
+    expect(host.aborted()).toBe(0);
+    // Coalesced: far fewer reads than the 30 changes.
+    expect(host.reads.length).toBeLessThanOrEqual(Math.ceil(3000 / (300 + 250)) + 3);
   });
 });

@@ -43,7 +43,7 @@ describe("large-run resource bounds", () => {
     const view = render(
       <RunListPanel workflowId={workflow.workflowId} runs={runs} onSelectRun={selected} />,
     );
-    const region = screen.getByRole("region", { name: "Timeline" });
+    const region = screen.getByRole("region", { name: "Runs" });
     const newest = await within(region).findByRole("button", { name: /run-09999,/ });
     expect(within(region).getAllByRole("button").length).toBeLessThan(100);
     expect(screen.queryByRole("button", { name: /run-00000,/ })).not.toBeInTheDocument();

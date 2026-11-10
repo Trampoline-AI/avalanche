@@ -30,6 +30,10 @@ export interface MachineArcData extends Record<string, unknown> {
   timer?: { delaySeconds: number; due?: number };
   /** The arc leaves the current state, so the run can take it now. */
   live: boolean;
+  /** Label size multiplier (routing and rendering), so labels stay readable when fitted small. */
+  labelScale?: number;
+  /** The run timeline points at this transition. */
+  highlighted?: boolean;
 }
 
 /** An arc's SVG path and where its label sits, clear of every state card. */
@@ -236,12 +240,32 @@ const LABEL_HEIGHT = 20;
 const LABEL_GAP = { horizontal: 20, vertical: 16 };
 
 /** The rendered label box, estimated from its text (clock icon and countdown included). */
-function labelSize(data: MachineArcData): { width: number; height: number } {
+function labelSize(data: MachineArcData, scale = 1): { width: number; height: number } {
   let chars = data.label.length;
   // The clock icon, and a running countdown (`· 59m left`).
   if (data.timer) chars += 2;
   if (data.timer?.due !== undefined) chars += 12;
-  return { width: chars * LABEL_CHAR + LABEL_PADDING, height: LABEL_HEIGHT };
+  return {
+    width: (chars * LABEL_CHAR + LABEL_PADDING) * scale,
+    height: LABEL_HEIGHT * scale,
+  };
+}
+
+/** Smallest arc label text, in screen pixels, at the graph's fitted zoom. */
+export const MIN_ARC_LABEL_PX = 11;
+/** Largest label multiplier: past it a label would outgrow the gap between ranks. */
+export const MAX_ARC_LABEL_SCALE = 1.8;
+
+/**
+ * How much to enlarge arc labels (10 px text in flow units) so that, at `zoom`,
+ * they render at least MIN_ARC_LABEL_PX. Stepped by 0.1 so small canvas
+ * changes do not re-route the arcs.
+ */
+export function machineLabelScale(zoom: number | undefined): number {
+  if (!zoom || !Number.isFinite(zoom)) return 1;
+  const wanted = MIN_ARC_LABEL_PX / (10 * zoom);
+  const scale = Math.min(MAX_ARC_LABEL_SCALE, Math.max(1, wanted));
+  return Math.ceil(scale * 10 - 1e-9) / 10;
 }
 
 /**
@@ -299,6 +323,7 @@ export function routeMachineArcs(
   boxes: Readonly<Record<string, Box>>,
   ranks: ReadonlyMap<string, number>,
   orientation: GraphOrientation,
+  labelScale = 1,
 ): Record<string, MachineArcRoute> {
   const horizontal = orientation === "horizontal";
   // Work in (along, across): along runs with the ranks, across between a rank's states.
@@ -419,7 +444,7 @@ export function routeMachineArcs(
   for (const group of pairs.values()) {
     group.sort((left, right) => left.data.lane - right.data.lane);
     const extents = group.map((link) => {
-      const size = labelSize(link.data);
+      const size = labelSize(link.data, labelScale);
       return horizontal ? size.height : size.width;
     });
     const offsets = [0];

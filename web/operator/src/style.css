@@ -641,6 +641,12 @@
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-acid) 28%, transparent);
   }
 
+  /* The state or step a hovered or selected run timeline entry points at. */
+  .react-flow__node.timeline-highlight .node-card {
+    border-color: var(--color-amber);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--color-amber) 38%, transparent);
+  }
+
   /* The run input is data coming in, not a step: a dot with no run state. Its
      edges are dashed with a diamond head (graphSelection.ts). */
   .node-input-dot {

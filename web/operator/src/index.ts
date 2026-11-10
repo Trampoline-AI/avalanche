@@ -31,15 +31,33 @@ export type * from "./machine";
 // Machine run pieces, for hosts composing the run page (the console port).
 export {
   MachineRunActions,
-  MachineRunWaits,
   MachineSendPanel,
-  MachineVisitTimeline,
-  MachineVisitWaits,
   machineVisits,
   useMachineHistory,
   useMachineInstance,
   useMachineVisit,
+  useMachineVisitDetails,
+  useRunWaits,
 } from "./MachineWorkspace";
+// The run timeline (bottom pane tab beside Logs), for flow and machine runs.
+export { RunTimeline } from "./RunTimeline";
+export type { RunTimelineProps, TimelineFocus } from "./RunTimeline";
+export {
+  filterTimeline,
+  flowPending,
+  flowTimeline,
+  machinePending,
+  machineTimeline,
+} from "./timelineEntries";
+export type {
+  GraphHighlight,
+  MachineVisitDetail,
+  PendingItem,
+  TimelineArc,
+  TimelineEntry,
+  TimelineFilter,
+  TimelineKind,
+} from "./timelineEntries";
 export type { MachineHistory, MachineReadRefresh } from "./MachineWorkspace";
 export {
   LOCAL_LIVE_RUN_STATUSES,

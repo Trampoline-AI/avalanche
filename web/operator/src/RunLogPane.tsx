@@ -2,6 +2,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import {
   type CSSProperties,
   type Dispatch,
+  type ReactNode,
   type SetStateAction,
   type KeyboardEvent,
   type PointerEvent,
@@ -39,6 +40,8 @@ const LOG_DECODE_BATCH_SIZE = 20;
 const LOG_ROW_ESTIMATE_PX = 48;
 const LOG_ROW_OVERSCAN = 12;
 const LOG_PANE_KEYBOARD_STEP_PX = 16;
+const TAB_CLASS =
+  "flex min-w-0 cursor-pointer items-center gap-[7px] self-stretch border-0 border-b-2 bg-transparent px-1 text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-acid [&>strong]:text-[10px] [&>strong]:tracking-[.08em] [&>strong]:uppercase";
 const EMPTY_LOGS: LogRecordDescriptorMsg[] = [];
 const EMPTY_LOG_PAGE: DescriptorPageState<LogRecordDescriptorMsg> = {
   records: EMPTY_LOGS,
@@ -56,6 +59,22 @@ interface RunLogPaneProps {
   nodeId?: string;
   liveLogs?: LogRecordDescriptorMsg[];
   onSelectNode: (nodeId: string) => void;
+  /**
+   * The run's timeline, as a second tab beside Logs. Omitted: the pane holds
+   * only logs, with its original header.
+   */
+  timeline?: ReactNode;
+  /** The shown tab when `timeline` is set (default "logs"). */
+  tab?: RunPaneTab;
+  onTabChange?: (tab: RunPaneTab) => void;
+}
+
+export type RunPaneTab = "logs" | "timeline";
+
+/** A visit-qualified step ID (`v<visit>.<step>`) of a machine run's visit. */
+export function visitStep(nodeId: string): { visit: number; step: string } | undefined {
+  const match = /^v(\d+)\.(.+)$/.exec(nodeId);
+  return match ? { visit: Number(match[1]), step: match[2] } : undefined;
 }
 
 interface ScrollAnchor {
@@ -83,7 +102,11 @@ export function RunLogPane({
   nodeId,
   liveLogs = EMPTY_LOGS,
   onSelectNode,
+  timeline,
+  tab = "logs",
+  onTabChange,
 }: RunLogPaneProps) {
+  const timelineShown = timeline !== undefined && tab === "timeline";
   const [localExpanded, setLocalExpanded] = useState(true);
   const [following, setFollowing] = useState(true);
   const [localHeight, setLocalHeight] = useState(() =>
@@ -504,23 +527,63 @@ export function RunLogPane({
         />
       )}
       <header className="flex min-w-0 items-center gap-2.5 border-b border-line px-2.5">
-        <button
-          type="button"
-          className="run-log-collapse flex min-w-0 cursor-pointer items-center gap-[7px] border-0 bg-transparent py-1 text-left text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>span:first-child]:w-2.5 [&>span:first-child]:text-acid [&>strong]:text-[10px] [&>strong]:tracking-[.08em] [&>strong]:uppercase"
-          aria-expanded={expanded}
-          aria-controls="run-log-content"
-          onClick={() => setExpanded((value) => !value)}
-        >
-          <span aria-hidden="true">{expanded ? "▾" : "▸"}</span>
-          <strong>Logs</strong>
-          <span className="run-log-scope truncate font-mono text-[9px] text-secondary">
-            {scopeLabel}
+        {timeline !== undefined ? (
+          <>
+            <button
+              type="button"
+              className="run-log-collapse grid w-4 flex-none cursor-pointer place-items-center border-0 bg-transparent p-0 text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+              aria-label={expanded ? "Collapse run pane" : "Expand run pane"}
+              aria-expanded={expanded}
+              aria-controls="run-log-content"
+              onClick={() => setExpanded((value) => !value)}
+            >
+              <span aria-hidden="true">{expanded ? "▾" : "▸"}</span>
+            </button>
+            <div role="tablist" aria-label="Run pane" className="flex min-w-0 self-stretch">
+              {(["logs", "timeline"] as const).map((item) => (
+                <button
+                  key={item}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === item}
+                  aria-controls="run-log-content"
+                  className={`run-pane-tab ${TAB_CLASS} ${tab === item ? "border-acid text-ink" : "border-transparent text-secondary hover:text-ink"}`}
+                  onClick={() => {
+                    if (!expanded) setExpanded(true);
+                    onTabChange?.(item);
+                  }}
+                >
+                  <strong>{item === "logs" ? "Logs" : "Timeline"}</strong>
+                  {item === "logs" && tab === "logs" && (
+                    <span className="run-log-scope truncate font-mono text-[9px] font-normal text-secondary normal-case">
+                      {scopeLabel}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <button
+            type="button"
+            className="run-log-collapse flex min-w-0 cursor-pointer items-center gap-[7px] border-0 bg-transparent py-1 text-left text-ink focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>span:first-child]:w-2.5 [&>span:first-child]:text-acid [&>strong]:text-[10px] [&>strong]:tracking-[.08em] [&>strong]:uppercase"
+            aria-expanded={expanded}
+            aria-controls="run-log-content"
+            onClick={() => setExpanded((value) => !value)}
+          >
+            <span aria-hidden="true">{expanded ? "▾" : "▸"}</span>
+            <strong>Logs</strong>
+            <span className="run-log-scope truncate font-mono text-[9px] text-secondary">
+              {scopeLabel}
+            </span>
+          </button>
+        )}
+        {!timelineShown && (
+          <span className="run-log-count ml-auto whitespace-nowrap font-mono text-[8px] text-muted">
+            {combinedLogs.length} {combinedLogs.length === 1 ? "record" : "records"}
           </span>
-        </button>
-        <span className="run-log-count ml-auto whitespace-nowrap font-mono text-[8px] text-muted">
-          {combinedLogs.length} {combinedLogs.length === 1 ? "record" : "records"}
-        </span>
-        {expanded && (
+        )}
+        {expanded && !timelineShown && (
           <button
             type="button"
             className={`toggle run-log-autoscroll inline-flex flex-none cursor-pointer items-center gap-[5px] rounded border bg-panel px-2 py-[5px] font-mono text-[8px] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>span]:text-xs [&>span]:leading-none [&>span]:text-acid ${following ? "active border-acid text-acid" : "border-line text-secondary"}`}
@@ -542,8 +605,18 @@ export function RunLogPane({
           </button>
         )}
       </header>
-      {expanded && (
+      {expanded && timelineShown && (
         <div
+          className="run-log-content run-timeline-panel grid min-h-0 min-w-0"
+          id="run-log-content"
+          role="tabpanel"
+        >
+          {timeline}
+        </div>
+      )}
+      {expanded && !timelineShown && (
+        <div
+          role={timeline !== undefined ? "tabpanel" : undefined}
           className="run-log-content grid min-h-0 min-w-0 grid-rows-[auto_auto_auto_minmax(0,1fr)_auto]"
           id="run-log-content"
         >
@@ -630,7 +703,18 @@ export function RunLogPane({
                       >
                         {logTimestamp(entry.timestamp)}
                       </time>
-                      {graphNodeId ? (
+                      {!graphNodeId && visitStep(entry.nodeId) ? (
+                        // A machine run's step of another visit: opens that visit's step.
+                        <button
+                          type="button"
+                          className="run-log-node sticky top-1.5 min-w-0 cursor-pointer border-0 bg-inherit p-0 text-left [font:inherit] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>strong]:block [&>strong]:truncate [&>code]:mt-0.5 [&>code]:block [&>code]:truncate [&>code]:text-[8px] [&>code]:text-muted"
+                          data-log-visit={visitStep(entry.nodeId)!.visit}
+                          onClick={() => onSelectNode(entry.nodeId)}
+                        >
+                          <strong>{visitStep(entry.nodeId)!.step}</strong>
+                          <code>visit {visitStep(entry.nodeId)!.visit}</code>
+                        </button>
+                      ) : graphNodeId ? (
                         <button
                           type="button"
                           className="run-log-node sticky top-1.5 min-w-0 cursor-pointer border-0 bg-inherit p-0 text-left [font:inherit] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>strong]:block [&>strong]:truncate [&>code]:mt-0.5 [&>code]:block [&>code]:truncate [&>code]:text-[8px] [&>code]:text-muted"

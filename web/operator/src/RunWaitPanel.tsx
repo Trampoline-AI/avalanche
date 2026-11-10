@@ -1,5 +1,4 @@
-import { useEffect, useState } from "react";
-import type { OperatorApi } from "./api";
+import { useState } from "react";
 import type { JsonSchema, JsonValue, Schema } from "./stepInterface";
 
 export interface WaitCard {
@@ -13,7 +12,11 @@ export interface WaitCard {
   audit?: { outcome: JsonValue; reason: string; at: number };
 }
 
-function DecisionForm({
+/**
+ * Answers a pending decision wait. Uses the pinned server schema and server-side
+ * validation, never a payload reviewer ID; the idempotency key is kept for retries.
+ */
+export function DecisionForm({
   card,
   submit,
 }: {
@@ -92,85 +95,5 @@ function DecisionForm({
       </button>
       {error && <p role="alert">{error}</p>}
     </form>
-  );
-}
-
-/** Uses pinned server schemas and server-side validation, never a payload reviewer ID. */
-export function RunWaitPanel({
-  api,
-  runId,
-  visit,
-  readOnly = false,
-  live = true,
-}: {
-  api: OperatorApi;
-  runId: string;
-  visit?: number;
-  readOnly?: boolean;
-  live?: boolean;
-}) {
-  const [cards, setCards] = useState<WaitCard[]>([]);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    if (!api.listRunWaits) return;
-    let stopped = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function load() {
-      try {
-        const next = await api.listRunWaits!(runId, visit);
-        if (!stopped) {
-          setCards(next);
-          setError("");
-        }
-      } catch (cause) {
-        if (!stopped) setError(cause instanceof Error ? cause.message : "Waits unavailable");
-      }
-      if (!stopped && live) timer = setTimeout(() => void load(), 1500);
-    }
-    void load();
-    return () => {
-      stopped = true;
-      clearTimeout(timer);
-    };
-  }, [api, runId, visit, live]);
-  // Nothing pending: render nothing, so the waits dock beside the graph collapses.
-  if (!api.listRunWaits || (cards.length === 0 && !error)) return null;
-  return (
-    <section aria-label="Run waits" className="bg-panel p-3 text-xs">
-      {cards.map((card) => (
-        <article key={card.nodeId} className="mb-3 grid gap-2">
-          <h3>
-            {card.prompt ?? card.kind} · {card.nodeId} · {card.state}
-          </h3>
-          {card.show !== null && (
-            <pre className="max-h-32 overflow-auto">{JSON.stringify(card.show, null, 2)}</pre>
-          )}
-          {card.audit && (
-            <section
-              aria-label="Decision audit"
-              className="grid gap-1 border-t border-line pt-2"
-            >
-              <p>
-                {card.audit.reason} · {new Date(card.audit.at * 1000).toLocaleString()}
-              </p>
-              <pre>{JSON.stringify(card.audit.outcome, null, 2)}</pre>
-            </section>
-          )}
-          {!readOnly &&
-            api.submitDecision &&
-            card.kind === "decision" &&
-            card.state === "waiting" && (
-              <DecisionForm
-                card={card}
-                submit={async (outcome, reason, key) => {
-                  await api.submitDecision!(runId, card.nodeId, outcome, reason, key);
-                  setCards(await api.listRunWaits!(runId, visit));
-                }}
-              />
-            )}
-        </article>
-      ))}
-      {error && <p role="status">{error}</p>}
-    </section>
   );
 }

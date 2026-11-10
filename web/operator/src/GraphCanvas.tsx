@@ -51,10 +51,12 @@ import {
   layoutMachine,
   machineArcHandles,
   machineArcPath,
+  machineLabelScale,
   routeMachineArcs,
   type MachineArcData,
   type MachineGraphView,
 } from "./machineGraph";
+import { arcMatches, type GraphHighlight } from "./timelineEntries";
 import type { FlowInfoMsg, NodeSnapshotMsg, TriggerKind, WorkflowTopologyMsg } from "./model";
 import {
   AgentDeclaration as AgentDeclarationSchema,
@@ -742,9 +744,12 @@ const MachineArc = memo(
         {data.label && (
           <EdgeLabelRenderer>
             <div
-              className={`machine-arc-label nodrag nopan pointer-events-none absolute inline-flex items-center gap-1 rounded border bg-panel px-1.5 py-0.5 font-mono text-[10px] whitespace-nowrap ${data.live ? "border-line-strong text-ink" : "border-line text-secondary"}`}
+              className={`machine-arc-label nodrag nopan pointer-events-none absolute inline-flex items-center gap-1 rounded border bg-panel font-mono whitespace-nowrap ${data.highlighted ? "machine-arc-label--highlight border-amber text-ink" : data.live ? "border-line-strong text-ink" : "border-line text-secondary"}`}
               style={{
                 transform: `translate(${anchor === "start" ? "0" : anchor === "end" ? "-100%" : "-50%"}, -50%) translate(${label.x}px, ${label.y}px)`,
+                // Scaled with the fit so the label stays readable (routing used the same size).
+                fontSize: `${10 * (data.labelScale ?? 1)}px`,
+                padding: `${2 * (data.labelScale ?? 1)}px ${6 * (data.labelScale ?? 1)}px`,
               }}
               data-arc-id={id}
               data-arc-kind={data.kind}
@@ -924,6 +929,12 @@ function FitGraphOnWidthChange({
   return null;
 }
 
+/** A step node the timeline points at (a `.map` item highlights its parent card). */
+function highlightedNode(highlight: GraphHighlight | undefined, nodeId: string) {
+  const target = highlight?.nodeId;
+  return target !== undefined && (target === nodeId || target.startsWith(`${nodeId}[`));
+}
+
 function invocationIdentity(nodeId: string, label: string): string {
   const suffix = nodeId.startsWith(`${label}_`) ? nodeId.slice(label.length + 1) : "";
   return suffix && /^\d+$/.test(suffix) ? `#${suffix}` : nodeId;
@@ -961,6 +972,11 @@ interface GraphCanvasProps {
   onClearNode?: () => void;
   onOpenNode: (nodeId: string) => void;
   inspectionDisabled?: boolean;
+  /**
+   * What the run timeline points at (a hovered or selected entry): a machine
+   * state and its transition arc, or a step node. Drawn without re-fitting.
+   */
+  highlight?: GraphHighlight;
 }
 
 function GraphCanvasView({
@@ -977,6 +993,7 @@ function GraphCanvasView({
   onClearNode,
   onOpenNode,
   inspectionDisabled = false,
+  highlight,
 }: GraphCanvasProps) {
   const { containerRef, orientation, toggleOrientation, canvasSize } = useGraphOrientation();
   const baseFitViewOptions = machine
@@ -1266,6 +1283,7 @@ function GraphCanvasView({
       return {
         id: nodeId,
         selected: nodeId === selectedNodeId,
+        className: highlightedNode(highlight, nodeId) ? "timeline-highlight" : undefined,
         type: "workflow",
         position: positions[nodeId],
         measured: nodeMeasurements.get(nodeId),
@@ -1347,12 +1365,36 @@ function GraphCanvasView({
     runNodes,
     expansions,
     groupedTopology,
+    highlight,
     onOpenNode,
     runTopology,
     selectedNodeId,
     topology,
     workflow,
   ]);
+
+  const reserveWidth = reserve?.width;
+  const minZoom = reserveWidth !== undefined ? RESERVED_MIN_ZOOM : MIN_ZOOM;
+  const fitViewOptions = useMemo(
+    () =>
+      reserveWidth === undefined
+        ? baseFitViewOptions
+        : reserveFit(baseFitViewOptions, { width: reserveWidth }),
+    [baseFitViewOptions, reserveWidth],
+  );
+  // Arc labels keep a readable size at the fitted zoom: the fit covers the state
+  // cards only, so the zoom is known before the arcs (and their labels) are routed.
+  const labelScale = useMemo(() => {
+    if (!machineLayout) return 1;
+    const cards: Node[] = Object.entries(machineLayout.positions).map(([name, position]) => ({
+      id: name,
+      position,
+      measured: nodeMeasurements.get(name),
+      data: {},
+    }));
+    const zoom = firstFrameFor(cards, canvasSize, fitViewOptions, minZoom)?.viewport.zoom;
+    return machineLabelScale(zoom);
+  }, [canvasSize, fitViewOptions, machineLayout, minZoom, nodeMeasurements]);
 
   // Machine mode reuses the same cards, input dot and edge highlighting; only the
   // layout (cycle-safe ranks) and the curved arcs differ from a flow.
@@ -1372,13 +1414,14 @@ function GraphCanvasView({
         ];
       }),
     );
-    const routes = routeMachineArcs(links, boxes, ranks, orientation);
+    const routes = routeMachineArcs(links, boxes, ranks, orientation, labelScale);
     const states: Node<CardData>[] = Object.entries(spec.states).map(([name, declaration]) => {
       const current = name === machine.state;
       return {
         id: name,
         type: "workflow",
         selected: name === machineSelected,
+        className: highlight?.state === name ? "timeline-highlight" : undefined,
         position: positions[name],
         measured: nodeMeasurements.get(name),
         data: {
@@ -1410,7 +1453,12 @@ function GraphCanvasView({
     });
     const arcs: Edge<MachineArcData, "machine">[] = links.map((link) => ({
       ...link,
-      data: { ...link.data, route: routes[link.id] },
+      data: {
+        ...link.data,
+        route: routes[link.id],
+        labelScale,
+        highlighted: arcMatches(link, highlight?.arc) || undefined,
+      },
       type: "machine",
       ...machineArcHandles(link.data.kind, orientation),
     }));
@@ -1440,35 +1488,39 @@ function GraphCanvasView({
     const edges = highlightConnectedEdges(arcs, selected).map((edge) => {
       const data = edge.data as MachineArcData;
       if (edge.source === INPUT_NODE_ID) return edge;
-      const muted = edge.className?.includes("dag-edge--muted");
+      const muted = edge.className?.includes("dag-edge--muted") && !data.highlighted;
       const connected = edge.className?.includes("dag-edge--connected");
-      const stroke = connected
-        ? "var(--color-acid)"
-        : data.live
-          ? "var(--color-ink)"
-          : "var(--color-edge)";
+      const stroke = data.highlighted
+        ? "var(--color-amber)"
+        : connected
+          ? "var(--color-acid)"
+          : data.live
+            ? "var(--color-ink)"
+            : "var(--color-edge)";
       return {
         ...edge,
-        className: `${edge.className ?? ""} machine-arc machine-arc--${data.kind}${data.timer ? " machine-arc--timer" : ""}${data.live ? " machine-arc--live" : ""}`,
+        className: `${edge.className ?? ""} machine-arc machine-arc--${data.kind}${data.timer ? " machine-arc--timer" : ""}${data.live ? " machine-arc--live" : ""}${data.highlighted ? " machine-arc--highlight" : ""}`,
         ariaLabel: `${edge.source} to ${edge.target}: ${data.label}${connected ? " (connected to selected node)" : ""}`,
         style: {
           ...edge.style,
           stroke,
-          strokeWidth: connected ? 2.8 : data.live ? 1.8 : 1.4,
+          strokeWidth: data.highlighted ? 3.2 : connected ? 2.8 : data.live ? 1.8 : 1.4,
           // Timer arcs are dotted; muting still dashes the rest.
           strokeDasharray: muted ? "6 4" : data.timer ? "1 5" : undefined,
           strokeLinecap: data.timer ? ("round" as const) : undefined,
         },
         markerEnd: { type: MarkerType.ArrowClosed, color: stroke },
         // Stay under the arc labels, which share one layer.
-        zIndex: 0,
+        zIndex: data.highlighted ? 1 : 0,
       };
     });
     return { nodes, edges };
   }, [
     descriptionsExpanded,
+    highlight,
     inputCard,
     inspectionDisabled,
+    labelScale,
     machine,
     machineLayout,
     machineSelected,
@@ -1477,15 +1529,6 @@ function GraphCanvasView({
     selectedNodeId,
   ]);
   const shownNodes = machineGraph ? machineGraph.nodes : nodes;
-  const reserveWidth = reserve?.width;
-  const minZoom = reserveWidth !== undefined ? RESERVED_MIN_ZOOM : MIN_ZOOM;
-  const fitViewOptions = useMemo(
-    () =>
-      reserveWidth === undefined
-        ? baseFitViewOptions
-        : reserveFit(baseFitViewOptions, { width: reserveWidth }),
-    [baseFitViewOptions, reserveWidth],
-  );
   const shownEdges = machineGraph ? machineGraph.edges : edges;
 
   const firstFrame = useMemo(
@@ -1619,5 +1662,6 @@ export const GraphCanvas = memo(
     left.onClearNode === right.onClearNode &&
     left.onOpenNode === right.onOpenNode &&
     left.inspectionDisabled === right.inspectionDisabled &&
+    left.highlight === right.highlight &&
     sameRunNodeState(left.runNodes, right.runNodes),
 );
