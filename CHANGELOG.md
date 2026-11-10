@@ -20,6 +20,14 @@
   row tooltip names both. Machine arc labels scale up to stay readable at the
   fitted zoom. Machine run logs from other visits read "step · visit N" and
   open that visit's step.
+- Operator UI: the open Decide panel shows the decision's reviewed artifact
+  above the form, and a resolved wait's Timeline entry shows its audit outcome
+  beside the reason. Show all (and a run or flow change) also clears the state
+  selected on the graph. Countdowns read in minutes and hours ("9m 26s left")
+  on both the timer arc and the pinned row. Steps inside a visit are named
+  without the `v<N>.` prefix. On narrow canvases the Timeline tab no longer
+  overlaps the record count, the snapshot banner is hidden rather than drawn
+  under the runs panel, and the graph keeps clear of the canvas controls.
 - **Local operator storage upgrade:** opening an existing `state.db` upgrades it
   one-way to schema v8; older operator versions cannot reopen that database.
   Back up the database before upgrading. Durable writes use SQLite WAL with
