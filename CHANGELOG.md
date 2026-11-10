@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- **Local operator storage upgrade:** opening an existing `state.db` upgrades it
+  one-way to schema v8; older operator versions cannot reopen that database.
+  Back up the database before upgrading. Durable writes use SQLite WAL with
+  `synchronous=FULL` (including admission and transitions before replies).
+- `ava state delete` and `ava state clear` remove retained keyed-run history but
+  keep permanent key tombstones. Starting with the same key returns the original
+  run with `read_state=expired`, not a new execution. Use a new key to start anew.
+- Active-run wait controls return HTTP 503 when their coordinator is temporarily
+  unavailable, rather than reporting a misleading missing run or decision.
+- **CLI name collision:** `ava run list|show|retry|cancel|rerun` are now reserved
+  command words and shadow workflows with those names. Rename the workflow or
+  invoke it using its fully qualified workflow selector (`file.py::symbol`).
+- Missing local machine definitions park their runs as `waiting` /
+  `needs_attention` with reason `state_missing`, including restart and timer
+  delivery. Visit preparation/start failures preserve the journal and require
+  explicit visit retry; failed, unacknowledged keyed-flow starts release the key.
+- Local machine sends remain JSON-only until durable artifact-event ownership
+  is implemented: admission refuses declared File/Workspace payload fields,
+  including nested fields, not ordinary JSON keys such as `type: file`.
+  Listing runs during admission ignores IDs whose first write is not committed.
+
 - Persist keyed flow runs in the local operator: concurrent starts with the same
   declared key return one run, including after restart or history expiry. Resolve
   flows or machines through the same REST/gRPC key lookup and
