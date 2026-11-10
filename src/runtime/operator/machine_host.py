@@ -13,6 +13,7 @@ import threading
 import time
 from concurrent.futures import Future
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 from uuid import uuid4
 
@@ -28,6 +29,8 @@ from avalanche.run_steps import RunOpSpec, RunStart
 from .machine_steps import HostStepOutput, MachineStepRequest
 from .machine_validation import validate_native
 from .models import RunState, RunStatus, TriggerKind, WorkflowDescriptor, WorkflowTopology
+from .registry import UnknownWorkflow
+from .source import resolve_live_source
 from .state.machines import (
     InstanceRecord,
     MachinesTable,
@@ -198,6 +201,31 @@ class MachineHost:
             raise ValueError(f"{selector} is not a machine")
         return descriptor, MachineSpec.model_validate_json(descriptor.machine_spec_json)
 
+    def _current_spec(
+        self, record: InstanceRecord, *, request: RunRequest | None = None
+    ) -> MachineSpec | None:
+        """Definition loss is a repairable persisted state, not a host failure."""
+        try:
+            descriptor, root = self.op._registry.resolve_source(record.machine)
+            source = (root.path / descriptor.locator.relative_file).resolve()
+            unavailable = any(
+                item.kind in {"import_error", "build_error"}
+                and Path(item.path).resolve() == source
+                for item in self.op._registry.view.diagnostics
+            )
+            resolve_live_source(root, descriptor.locator)
+            _, spec = self._descriptor(record.machine)
+            if unavailable:
+                spec = None
+        except (UnknownWorkflow, FileNotFoundError):
+            spec = None
+        if spec is None or record.state not in spec.states:
+            record.reason = "state_missing"
+            self._commit(record, lambda connection: None, RunStatus.WAITING, request=request)
+            return None
+        record.spec = spec
+        return spec
+
     def _commit(
         self,
         record: InstanceRecord,
@@ -235,11 +263,8 @@ class MachineHost:
         consumed_receipt: str | None = None,
         fired: TimerRecord | None = None,
     ) -> None:
-        descriptor, spec = self._descriptor(record.machine)
-        record.spec = spec
-        if record.state not in spec.states:
-            record.reason = "state_missing"
-            self._commit(record, lambda connection: None, RunStatus.WAITING, request=request)
+        spec = self._current_spec(record, request=request)
+        if spec is None:
             return
         record.reason = None
         record.outcome = None
@@ -436,11 +461,8 @@ class MachineHost:
             )
         if record.phase in {"final", "closed"}:
             raise WaitRefusalError("run_closed", 409)
-        _, spec = self._descriptor(record.machine)
-        record.spec = spec
-        if record.state not in spec.states:
-            record.reason = "state_missing"
-            self._commit(record, lambda connection: None, RunStatus.WAITING)
+        spec = self._current_spec(record)
+        if spec is None:
             raise WaitRefusalError("state_missing", 409)
         state = spec.states[record.state]
         edge = next((edge for edge in state.transitions if edge.event == command.event), None)
@@ -516,11 +538,8 @@ class MachineHost:
     ) -> None:
         if record.phase != "waiting":
             return
-        _, spec = self._descriptor(record.machine)
-        record.spec = spec
-        if record.state not in spec.states:
-            record.reason = "state_missing"
-            self._commit(record, lambda connection: None, RunStatus.WAITING)
+        spec = self._current_spec(record)
+        if spec is None:
             return
         with self.op._state_store.transaction() as connection:
             timers = MachinesTable.timers(connection, record.run_id, record.visit)

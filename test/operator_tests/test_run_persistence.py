@@ -780,6 +780,64 @@ def test_machine_timer_and_interrupted_visit_survive_sigkill(tmp_path):
                 os.killpg(report["coordinator"], signal.SIGKILL)
 
 
+@pytest.mark.parametrize("loss", ["deleted", "renamed", "syntax"])
+@pytest.mark.parametrize("boundary", ["restart", "timer"])
+def test_missing_machine_definition_parks_without_stopping_operator(tmp_path, loss, boundary):
+    from runtime.operator.state.machines import MachinesTable
+
+    root = tmp_path / "source"
+    root.mkdir()
+    fixture = root / "machine.py"
+    source = (Path(__file__).parents[1] / "fixtures" / "local_machine.py").read_text()
+    fixture.write_text(source.replace("seconds=2", "seconds=4"))
+    db = tmp_path / "state.db"
+    op = _operator(root, db)
+    try:
+        run_id = op.start_run(
+            "approval", input={"ticket": 17, "journal": str(tmp_path / "visits")}
+        )
+        _wait_until(lambda: op.get_run(run_id).status is RunStatus.WAITING)
+        if boundary == "timer":
+            op._machine_host.send(run_id, "approved", {}, "advance")
+            _wait_until(
+                lambda: (
+                    _machine_record(op, run_id).visit == 2
+                    and _machine_record(op, run_id).phase == "waiting"
+                )
+            )
+            with op._state_store.transaction() as c:
+                due = MachinesTable.timers(c, run_id, 2)[0].due
+        else:
+            op.close()
+            op = None
+        if loss == "deleted":
+            fixture.unlink()
+        elif loss == "renamed":
+            fixture.rename(root / "renamed.py")
+        else:
+            fixture.write_text("def invalid syntax:\n")
+        if boundary == "restart":
+            op = _operator(root, db)
+        else:
+            op._registry.scan([str(root)])
+            time.sleep(max(0, due - time.time()) + 0.3)
+        _wait_until(lambda: _machine_record(op, run_id).reason == "state_missing", seconds=5)
+        record = _machine_record(op, run_id)
+        assert record.phase == "needs_attention" and record.run_status is RunStatus.WAITING
+        assert op.fatal_error is None
+        assert op.list_run_summaries().runs[0].run_id == run_id
+    finally:
+        if op is not None:
+            op.close()
+
+
+def _machine_record(op, run_id):
+    from runtime.operator.state.machines import MachinesTable
+
+    with op._state_store.transaction() as c:
+        return MachinesTable.load(c, run_id)
+
+
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
 def test_a_run_left_running_by_a_killed_operator_is_stopped_and_failed(flows, tmp_path):
     state_db = tmp_path / "state.db"

@@ -518,7 +518,37 @@ class Operator:
             initial_view = None
             if self._workflow_paths:
                 initial_view = self._registry.scan(self._workflow_paths, validate=routes_for)
-                raise_for_discovery_diagnostics(initial_view.diagnostics)
+                # Existing machines must remain inspectable when their source no
+                # longer imports. Keep diagnostics visible; unrelated discovery
+                # failures retain the normal strict startup contract.
+                with self._state_store.transaction() as connection:
+                    machines = MachinesTable.all(connection)
+                roots = self._registry.configured_roots
+                repairable_paths = set()
+                for record in machines:
+                    if record.run_status in {
+                        RunStatus.SUCCESS,
+                        RunStatus.FAILED,
+                        RunStatus.CANCELLED,
+                    }:
+                        continue
+                    relative_file = record.machine.rsplit("::", 1)[0]
+                    for root in roots:
+                        prefix = root.alias + "/" if len(roots) > 1 else ""
+                        if relative_file.startswith(prefix):
+                            repairable_paths.add(
+                                (root.path / relative_file.removeprefix(prefix)).resolve()
+                            )
+                raise_for_discovery_diagnostics(
+                    tuple(
+                        item
+                        for item in initial_view.diagnostics
+                        if not (
+                            item.kind in {"import_error", "build_error"}
+                            and Path(item.path).resolve() in repairable_paths
+                        )
+                    )
+                )
             self._subscriber_queue_capacity = subscriber_queue_capacity
             self._mp = multiprocessing.get_context("spawn")
             self._runs: dict[str, RunState] = {}
