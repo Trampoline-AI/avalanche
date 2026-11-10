@@ -141,6 +141,23 @@
   arcs between the same two states fan out, each level through its own label,
   so labels never overlap each other, other arcs or cards. Visit rows wrap full
   state names instead of truncating them.
+- **operator-ui run page, host-neutral:** `OperatorApi.liveRunStatuses`
+  (optional) declares which of a host's run statuses are live. A live run shows
+  no snapshot banner and offers Cancel; every other status is settled. It
+  defaults to the local operator's statuses (`requesting`, `pending`,
+  `running`, `waiting`, `interrupted`, `needs_attention`), so hosts with their
+  own vocabulary (queued or admitted runs) no longer read as settled.
+  `runStatusLive` and `LOCAL_LIVE_RUN_STATUSES` are exported. The floating
+  timeline's height limit and the graph's fit reserve now attach whenever the
+  timeline mounts, including after a host's `loadingFallback`, so the timeline
+  no longer covers state cards or the canvas controls there. Long receipt IDs
+  wrap in the send panel and the run waits instead of widening the side panel.
+  Machine reads (instance, history, current visit, its event facts) re-read on
+  each run revision from the update stream instead of polling every second;
+  while the run is live they also poll with backoff (1 s doubling to 30 s), and
+  a settled run never polls. `useMachineInstance` and `useMachineHistory` take
+  an optional `{ live, refreshKey }` (`MachineReadRefresh`); without it they
+  read once.
 
 ## 0.20.4
 
