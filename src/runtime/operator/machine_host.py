@@ -12,8 +12,9 @@ import queue
 import sqlite3
 import threading
 import time
+from collections import deque
 from concurrent.futures import Future
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable
 from uuid import uuid4
@@ -65,12 +66,14 @@ class Send:
     payload: JsonValue
     idempotency_key: str
     reply: Future[MachineEventReceipt]
+    queued_at: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
 class MachineStep:
     request: MachineStepRequest
     reply: Future[HostStepOutput]
+    queued_at: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,7 @@ class VisitFinished:
 class Retry:
     run_id: str
     reply: Future[None]
+    queued_at: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
@@ -103,6 +107,7 @@ class FireNextTimer:
 @dataclass(frozen=True)
 class Restart:
     reply: Future[None]
+    queued_at: float = field(default_factory=time.monotonic)
 
 
 @dataclass(frozen=True)
@@ -135,6 +140,10 @@ Command = (
 )
 
 
+class DefinitionReloadDeferredError(Exception):
+    """Resume this command once the shared reload interval has elapsed."""
+
+
 class MachineHost:
     def __init__(self, operator: Operator) -> None:
         self.op = operator
@@ -145,6 +154,8 @@ class MachineHost:
         self._last_reload = float("-inf")
         self._pass_reloaded = False
         self._immediate_reload = False
+        self._command_queued_at = 0.0
+        self._deferred: deque[tuple[float, Command]] = deque()
         self.thread = threading.Thread(target=self._loop, name="avalanche-machine", daemon=True)
         self.thread.start()
         reply: Future[None] = Future()
@@ -242,10 +253,12 @@ class MachineHost:
             if now < self._last_reload + 1.0:
                 retry.next_at = max(retry.next_at, self._last_reload + 1.0)
                 return False
-        else:
-            # A repair command never waits for the 60s timer backoff. Bound
-            # repeated explicit commands too, including different machine IDs.
-            time.sleep(max(0.0, self._last_reload + 1.0 - now))
+        elif now < self._last_reload + 1.0:
+            if self._command_queued_at <= self._last_reload:
+                return True  # This command shares the refresh completed after it arrived.
+            # A newer command may carry a repair not present in the last view.
+            # Defer its reply, not the owner thread, and coalesce the queued burst.
+            raise DefinitionReloadDeferredError
         self._pass_reloaded = True
         try:
             self.op._refresh_workflows()
@@ -928,13 +941,26 @@ class MachineHost:
             Send(run_id, request.event, request.payload, request.idempotency_key, Future())
         )
 
+    def _next_command(self, timeout: float | None) -> Command:
+        if self._deferred:
+            remaining = self._deferred[0][0] - time.monotonic()
+            if remaining <= 0:
+                return self._deferred.popleft()[1]
+            timeout = remaining if timeout is None else min(timeout, remaining)
+        try:
+            return self.queue.get(timeout=timeout)
+        except queue.Empty:
+            if self._deferred and self._deferred[0][0] <= time.monotonic():
+                return self._deferred.popleft()[1]
+            raise
+
     def _loop(self) -> None:
         while True:
             self._pass_reloaded = False
             self._immediate_reload = False
             timeout = None if not self.heap else max(0, self.heap[0][0] - time.time())
             try:
-                command = self.queue.get(timeout=timeout)
+                command = self._next_command(timeout)
             except queue.Empty:
                 # Snapshot due entries before driving: re-armed retries belong to
                 # the next pass, and all runs here share this pass's one reload.
@@ -954,9 +980,17 @@ class MachineHost:
                         self.op._record_fatal_error(exc)
                 continue
             self._immediate_reload = isinstance(command, (Send, Retry, Restart, MachineStep))
+            if isinstance(command, (Send, Retry, Restart, MachineStep)):
+                self._command_queued_at = command.queued_at
             try:
                 match command:
                     case Stop(reply=reply):
+                        for _, deferred in self._deferred:
+                            if isinstance(deferred, (Send, Retry, Restart, MachineStep)):
+                                deferred.reply.set_exception(
+                                    RuntimeError("Machine host stopped")
+                                )
+                        self._deferred.clear()
                         reply.set_result(None)
                         return
                     case Start():
@@ -1014,6 +1048,8 @@ class MachineHost:
                     case FireNextTimer(run_id=run_id, reply=reply):
                         self._drive(self._load(run_id), manual=True)
                         reply.set_result(None)
+            except DefinitionReloadDeferredError:
+                self._deferred.append((self._last_reload + 1.0, command))
             except Exception as exc:
                 if isinstance(command, (VisitFinished, CatalogReloaded)):
                     self.op._record_fatal_error(exc)

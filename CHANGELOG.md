@@ -19,8 +19,10 @@
   sends remain durable and timers retain their deadlines. Restoring the source
   resumes the same run/key on send, timer delivery, explicit retry or restart.
   Definition reloads are source-scoped and coalesced, with a shared one-second
-  minimum interval. With watching off, timer retries back off per machine from
-  one to 60 seconds; watching instead wakes waiting runs on catalog reload.
+  minimum interval. Concurrent commands share the next allowed refresh; newer
+  repair commands wait in the queue without blocking the owner. With watching
+  off, timer retries back off per machine from one to 60 seconds; watching
+  instead wakes waiting runs on catalog reload.
   Original timer deadlines never move and overdue timers fire once on recovery.
   Sends, explicit retry and restart bypass timer backoff. A successful definition
   read is always usable, even during retry backoff; closed runs and removed

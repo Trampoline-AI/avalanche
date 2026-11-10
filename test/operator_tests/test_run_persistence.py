@@ -945,8 +945,11 @@ def test_stale_definition_retry_stalls_new_healthy_run(tmp_path):
         op._machine_host.cancel(first)
         fixture.write_text(source)
         _wait_until(
-            lambda: not any(
-                d.kind in {"import_error", "build_error"} for d in op._registry.view.diagnostics
+            lambda: (
+                not any(
+                    d.kind in {"import_error", "build_error"}
+                    for d in op._registry.view.diagnostics
+                )
             )
         )
         time.sleep(2)
@@ -958,6 +961,62 @@ def test_stale_definition_retry_stalls_new_healthy_run(tmp_path):
         print("new healthy run:", record.phase, record.state, record.reason)
         assert record.reason is None
         assert op.fatal_error is None
+    finally:
+        op.close()
+
+
+def test_send_storm_owner_latency(tmp_path):
+    """Reviewer M2: eight concurrent sends must not sleep on the shared owner."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from runtime.operator.discovery import WorkflowDiscoveryError
+
+    root = tmp_path / "source"
+    root.mkdir()
+    fixture = root / "machine.py"
+    fixture.write_text(
+        (Path(__file__).parents[1] / "fixtures" / "local_machine.py").read_text()
+    )
+    op = _operator(root, tmp_path / "state.db")
+    try:
+        values = {"ticket": 1, "journal": str(tmp_path / "j")}
+        broken = op.start_run("approval", input=values)
+        other = op.start_run("approval", input={**values, "ticket": 2})
+        _wait_until(lambda: _machine_record(op, broken).phase == "waiting")
+        _wait_until(lambda: _machine_record(op, other).phase == "waiting")
+        fixture.write_text("def invalid syntax:\n")
+        with pytest.raises(WorkflowDiscoveryError):
+            op._refresh_workflows()
+        op._machine_host.send(broken, "approved", {}, "prime")
+        assert _machine_record(op, broken).reason == "definition_unavailable"
+        calls = _count_machine_reloads(op)
+        started = time.monotonic()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            sends = [
+                pool.submit(op._machine_host.send, broken, "approved", {}, f"storm-{i}")
+                for i in range(8)
+            ]
+            time.sleep(0.3)
+            before_cancel = time.monotonic()
+            op._machine_host.cancel(other)
+            latency = time.monotonic() - before_cancel
+            receipts = [send.result(timeout=30) for send in sends]
+        elapsed = time.monotonic() - started
+        print(
+            "send storm:",
+            {
+                "sends": len(receipts),
+                "total_s": elapsed,
+                "refreshes": len(calls),
+                "refresh_busy_s": sum(cost for _, cost in calls),
+                "unrelated_cancel_latency_s": latency,
+            },
+        )
+        assert all(receipt.status == "accepted" for receipt in receipts)
+        assert op.fatal_error is None
+        assert latency < 1.5
+        assert len(calls) <= int(elapsed) + 1
+        assert all(b[0] - a[0] >= 1.0 for a, b in zip(calls, calls[1:]))
     finally:
         op.close()
 
