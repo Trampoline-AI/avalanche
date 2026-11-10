@@ -23,7 +23,7 @@ import {
   useMachineVisit,
 } from "./MachineWorkspace";
 import type { MachineGraphView } from "./machineGraph";
-import { GraphCanvas } from "./GraphCanvas";
+import { GraphCanvas, type CanvasReserve } from "./GraphCanvas";
 import { Inspector } from "./Inspector";
 import type { FlowInfoMsg, InputFileAttachment, RunSnapshotMsg } from "./model";
 import { RunLogPane } from "./RunLogPane";
@@ -156,6 +156,10 @@ interface WorkflowWorkspaceSurfaceProps extends Pick<
 }
 
 /** Both hosts share selection policy, graph, run controls, and the inspector column. */
+/** Room left under the floating timeline for the canvas controls (zoom, fit, orientation). */
+const TIMELINE_CONTROLS_CLEARANCE = 210;
+const TIMELINE_MIN_HEIGHT = 160;
+
 export function WorkflowWorkspaceSurface({
   api,
   state,
@@ -352,6 +356,39 @@ export function WorkflowWorkspaceSurface({
     return () => animation.cancel();
   }, [timelineExpanded]);
 
+  // The collapsed timeline floats over the canvas's left edge; the machine graph is
+  // fitted clear of its width (expanded, it is a column beside the canvas).
+  const [timelineReserve, setTimelineReserve] = useState<CanvasReserve>();
+  // The floating timeline stops above the canvas controls (bottom left) and scrolls.
+  const graphShellElement = useRef<HTMLDivElement>(null);
+  const [timelineMaxHeight, setTimelineMaxHeight] = useState<number>();
+  useEffect(() => {
+    const element = timelineElement.current;
+    const shell = graphShellElement.current;
+    if (!element || typeof ResizeObserver === "undefined") {
+      setTimelineReserve(undefined);
+      setTimelineMaxHeight(undefined);
+      return;
+    }
+    const update = () => {
+      const floating = getComputedStyle(element).position === "absolute" && !timelineExpanded;
+      const next = floating
+        ? { width: Math.round(element.offsetLeft + element.offsetWidth) }
+        : undefined;
+      setTimelineReserve((current) => (current?.width === next?.width ? current : next));
+      const limit =
+        floating && shell
+          ? Math.max(TIMELINE_MIN_HEIGHT, shell.clientHeight - TIMELINE_CONTROLS_CLEARANCE)
+          : undefined;
+      setTimelineMaxHeight(limit);
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    if (shell) observer.observe(shell);
+    return () => observer.disconnect();
+  }, [timelineExpanded, workflowId]);
+
   const historical = selectedRunId !== undefined;
   // One input draft for Run, the schedule and the graph's input popup.
   const inputDraft = useInputDraft(!historical ? workflow : undefined, api);
@@ -502,6 +539,63 @@ export function WorkflowWorkspaceSurface({
   );
   // A machine run's send form opens in the side panel, like the run input form.
   const inspectorOpen = nodeInspectorOpen || (sendOpen && run !== undefined);
+  const displayedRunId = run?.summary?.runId;
+  // A live run is still changing; only a settled run is a snapshot of the past.
+  const runStatus = run?.summary?.status;
+  const runLive =
+    runStatus === "requesting" ||
+    runStatus === "pending" ||
+    runStatus === "running" ||
+    runStatus === "waiting" ||
+    runStatus === "interrupted" ||
+    runStatus === "needs_attention";
+  // The run's waits sit beside the graph, never over it: a flow run's pending waits
+  // (decision cards), or a machine run's timer, deferred events and receipts.
+  const waitsPanel =
+    machineRunId && run ? (
+      <div aria-label="Machine run waits">
+        {selectedVisit !== undefined && (
+          <nav
+            aria-label="Machine visit"
+            className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2 font-mono text-[10px] text-secondary"
+          >
+            <button
+              type="button"
+              className="cursor-pointer border-0 bg-transparent p-0 text-acid underline underline-offset-2"
+              onClick={() => selectVisit(undefined)}
+            >
+              State machine
+            </button>
+            <span aria-hidden="true">/</span>
+            <span className="text-ink">
+              Visit {selectedVisit}
+              {visit ? ` · ${visit.state}` : ""}
+              {visitExpired ? " · expired" : ""}
+            </span>
+            {!visit && <span role="status">Loading visit…</span>}
+          </nav>
+        )}
+        {selectedVisit !== undefined ? (
+          <MachineVisitWaits
+            api={api}
+            runId={machineRunId}
+            visit={visit}
+            readError={visitRead.error}
+            refresh={visitRead.refresh}
+            current={currentVisit}
+            enabled={runActionsEnabled && bottomRightPanel !== null}
+          />
+        ) : (
+          <MachineRunWaits
+            instance={machineInstance}
+            readError={machineRead.error}
+            refresh={machineRead.refresh}
+          />
+        )}
+      </div>
+    ) : run && displayedRunId && runActionsEnabled && runStatus === "running" ? (
+      <RunWaitPanel key={displayedRunId} api={api} runId={displayedRunId} />
+    ) : undefined;
   const runListPanel = workflowId ? (
     <RunListPanel
       key={workflowId}
@@ -519,14 +613,35 @@ export function WorkflowWorkspaceSurface({
       timelineView={timelineView}
       onTimelineViewChange={onTimelineViewChange}
       selectedRunSection={
-        machineRunId ? (
-          <MachineVisitTimeline
-            instance={machineInstance}
-            history={machineHistory}
-            selectedVisit={selectedVisit}
-            onSelectVisit={selectVisit}
-            expanded={timelineExpanded}
-          />
+        machineRunId || waitsPanel ? (
+          <>
+            {machineRunId && (
+              <MachineVisitTimeline
+                instance={machineInstance}
+                history={machineHistory}
+                selectedVisit={selectedVisit}
+                onSelectVisit={selectVisit}
+                expanded={timelineExpanded}
+              />
+            )}
+            {waitsPanel && (
+              // The run's waits are a section of its timeline, like visits: a flow
+              // run's decision cards, a machine run's timer, events and receipts.
+              <section
+                aria-label="Run waits section"
+                className="run-waits-section shrink-0 border-t border-run-list-line has-[>div:empty]:hidden"
+              >
+                <div className="flex h-7 items-center justify-between pl-[16px] pr-[30px] font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase">
+                  <span>Waits</span>
+                </div>
+                <div
+                  className={`overflow-auto overscroll-contain ${timelineExpanded ? "max-h-96" : "max-h-48"}`}
+                >
+                  {waitsPanel}
+                </div>
+              </section>
+            )}
+          </>
         ) : undefined
       }
     />
@@ -564,42 +679,6 @@ export function WorkflowWorkspaceSurface({
     ) : (
       normalRunControls
     );
-  const displayedRunId = run?.summary?.runId;
-  // A live run is still changing; only a settled run is a snapshot of the past.
-  const runStatus = run?.summary?.status;
-  const runLive =
-    runStatus === "requesting" ||
-    runStatus === "pending" ||
-    runStatus === "running" ||
-    runStatus === "waiting" ||
-    runStatus === "interrupted" ||
-    runStatus === "needs_attention";
-  // The run's waits sit beside the graph, never over it: a flow run's pending waits
-  // (decision cards), or a machine run's timer, deferred events and receipts.
-  const waitsPanel =
-    machineRunId && run ? (
-      <div aria-label="Machine run waits">
-        {selectedVisit !== undefined ? (
-          <MachineVisitWaits
-            api={api}
-            runId={machineRunId}
-            visit={visit}
-            readError={visitRead.error}
-            refresh={visitRead.refresh}
-            current={currentVisit}
-            enabled={runActionsEnabled && bottomRightPanel !== null}
-          />
-        ) : (
-          <MachineRunWaits
-            instance={machineInstance}
-            readError={machineRead.error}
-            refresh={machineRead.refresh}
-          />
-        )}
-      </div>
-    ) : run && displayedRunId && runActionsEnabled && runStatus === "running" ? (
-      <RunWaitPanel key={displayedRunId} api={api} runId={displayedRunId} />
-    ) : undefined;
   const liveEventDescriptorKey =
     displayedRunId && inspectedNode ? `${displayedRunId}:${inspectedNode}` : "";
   const workspaceStyle = {
@@ -630,6 +709,11 @@ export function WorkflowWorkspaceSurface({
           {runListPanel && (
             <div
               ref={timelineElement}
+              style={
+                timelineMaxHeight === undefined
+                  ? undefined
+                  : { maxHeight: timelineMaxHeight, overflowY: "auto" }
+              }
               className={`workspace-timeline z-20 ${timelineExpanded ? "relative w-[410px] max-w-full shrink-0 max-[1000px]:absolute max-[1000px]:inset-y-0 max-[1000px]:left-0" : "absolute top-3.5 left-3.5 w-[300px] max-w-[calc(100vw-3rem)]"}`}
             >
               {runListPanel}
@@ -640,125 +724,96 @@ export function WorkflowWorkspaceSurface({
           >
             {workflow || run ? (
               <>
-                <div className="run-graph-row flex min-h-0 min-w-0 flex-1 flex-row max-[700px]:flex-col">
-                  <div
-                    className={`run-graph-shell relative min-w-0 flex-1 overflow-hidden ${machineRunId ? "min-h-[300px]" : "min-h-0"}`}
-                  >
-                    <GraphCanvas
-                      machine={visitRun || visitExpired ? undefined : machineView}
-                      workflow={!run || previewWorkflow ? workflow : undefined}
-                      runTopology={
-                        visitRun
-                          ? visitRun.topology
-                          : previewWorkflow || visitExpired
-                            ? undefined
-                            : run?.topology
-                      }
-                      runNodes={
-                        visitRun
-                          ? visitRun.nodes
-                          : requestingRun || visitExpired
-                            ? undefined
-                            : run?.nodes
-                      }
-                      expansions={visitRun ? visitRun.expansions : run?.expansions}
-                      runTriggeredBy={previewWorkflow ? undefined : run?.summary?.triggeredBy}
-                      inspectionDisabled={requestingRun}
-                      evaluations={evaluationState.records}
-                      selectedNodeId={inspectedNode}
-                      onClearNode={closePanel}
-                      onOpenNode={openNode}
-                      bottomRightPanel={
-                        bottomRightPanel === undefined ? runControlsPanel : bottomRightPanel
-                      }
-                    />
-                    {machineRunId && selectedVisit !== undefined && (
-                      <nav
-                        aria-label="Machine visit"
-                        className="absolute top-[18px] left-1/2 z-[6] flex -translate-x-1/2 items-center gap-2 rounded border border-line bg-panel px-3 py-[7px] font-mono text-[10px] text-secondary shadow-[0_4px_14px_var(--color-shadow-4)]"
-                      >
-                        <button
-                          type="button"
-                          className="cursor-pointer border-0 bg-transparent p-0 text-acid underline underline-offset-2"
-                          onClick={() => selectVisit(undefined)}
-                        >
-                          State machine
-                        </button>
-                        <span aria-hidden="true">/</span>
-                        <span className="text-ink">
-                          Visit {selectedVisit}
-                          {visit ? ` · ${visit.state}` : ""}
-                          {visitExpired ? " · expired" : ""}
-                        </span>
-                        {!visit && <span role="status">Loading visit…</span>}
-                      </nav>
-                    )}
-                    {evaluationState.error && (
-                      <p
-                        role="alert"
-                        className="absolute bottom-4 left-4 z-10 m-0 text-xs text-danger"
-                      >
-                        {evaluationState.error}
-                      </p>
-                    )}
-                    {historical && !loadedRun && (
-                      <div
-                        className="absolute right-3 top-3 max-w-[240px] rounded border border-line bg-panel p-3 text-xs text-secondary"
-                        role={state.selectedRunStatus === "error" ? "alert" : "status"}
-                      >
-                        {state.selectedRunStatus === "error" ? (
-                          <>
-                            <strong className="block text-ink">Run snapshot unavailable</strong>
-                            {state.selectedRunError || "The selected run could not be loaded."}
-                          </>
-                        ) : (
-                          "Loading run snapshot"
-                        )}
-                      </div>
-                    )}
-                    {requestingRun ? (
-                      <div
-                        className="pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[240px] rounded border border-line bg-panel px-3 py-2.5 text-xs text-secondary shadow-sm max-[700px]:top-auto max-[700px]:bottom-16"
-                        role="status"
-                        aria-label="Run preparation"
-                      >
-                        <span className="flex items-center gap-2 font-medium text-ink">
-                          <span
-                            className="size-3 animate-spin rounded-full border-2 border-line border-t-amber motion-reduce:animate-none"
-                            aria-hidden="true"
-                          />
-                          Requesting run
-                        </span>
-                        <span className="mt-1 block">
-                          Preparing execution. Nodes will become available when ready.
-                        </span>
-                      </div>
-                    ) : run && (runExpired || visitExpired) ? (
-                      <div
-                        role="status"
-                        data-run-history="expired"
-                        className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[280px] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase"
-                      >
-                        <span>expired</span>
-                        {visitExpired && !runExpired ? "This visit's" : "This run's"} history
-                        and artifacts expired under the run&apos;s retention policy. The run and
-                        its label remain.
-                      </div>
-                    ) : run && !runLive ? (
-                      <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
-                        <span>Viewing a run snapshot</span>This view does not represent the
-                        workflow&apos;s current state.
-                      </div>
-                    ) : null}
-                  </div>
-                  {waitsPanel && (
-                    <aside
-                      aria-label="Run waits panel"
-                      className="run-waits-dock flex w-72 shrink-0 flex-col overflow-auto border-l border-line bg-panel empty:hidden max-[700px]:max-h-48 max-[700px]:w-auto max-[700px]:border-t max-[700px]:border-l-0"
+                <div
+                  ref={graphShellElement}
+                  className={`run-graph-shell relative min-w-0 flex-1 overflow-hidden ${machineRunId ? "min-h-[300px]" : "min-h-0"}`}
+                >
+                  <GraphCanvas
+                    machine={visitRun || visitExpired ? undefined : machineView}
+                    workflow={!run || previewWorkflow ? workflow : undefined}
+                    runTopology={
+                      visitRun
+                        ? visitRun.topology
+                        : previewWorkflow || visitExpired
+                          ? undefined
+                          : run?.topology
+                    }
+                    runNodes={
+                      visitRun
+                        ? visitRun.nodes
+                        : requestingRun || visitExpired
+                          ? undefined
+                          : run?.nodes
+                    }
+                    expansions={visitRun ? visitRun.expansions : run?.expansions}
+                    runTriggeredBy={previewWorkflow ? undefined : run?.summary?.triggeredBy}
+                    inspectionDisabled={requestingRun}
+                    evaluations={evaluationState.records}
+                    selectedNodeId={inspectedNode}
+                    onClearNode={closePanel}
+                    onOpenNode={openNode}
+                    bottomRightPanel={
+                      bottomRightPanel === undefined ? runControlsPanel : bottomRightPanel
+                    }
+                    reserve={machineSpec ? timelineReserve : undefined}
+                  />
+                  {evaluationState.error && (
+                    <p
+                      role="alert"
+                      className="absolute bottom-4 left-4 z-10 m-0 text-xs text-danger"
                     >
-                      {waitsPanel}
-                    </aside>
+                      {evaluationState.error}
+                    </p>
                   )}
+                  {historical && !loadedRun && (
+                    <div
+                      className="absolute right-3 top-3 max-w-[240px] rounded border border-line bg-panel p-3 text-xs text-secondary"
+                      role={state.selectedRunStatus === "error" ? "alert" : "status"}
+                    >
+                      {state.selectedRunStatus === "error" ? (
+                        <>
+                          <strong className="block text-ink">Run snapshot unavailable</strong>
+                          {state.selectedRunError || "The selected run could not be loaded."}
+                        </>
+                      ) : (
+                        "Loading run snapshot"
+                      )}
+                    </div>
+                  )}
+                  {requestingRun ? (
+                    <div
+                      className="pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[240px] rounded border border-line bg-panel px-3 py-2.5 text-xs text-secondary shadow-sm max-[700px]:top-auto max-[700px]:bottom-16"
+                      role="status"
+                      aria-label="Run preparation"
+                    >
+                      <span className="flex items-center gap-2 font-medium text-ink">
+                        <span
+                          className="size-3 animate-spin rounded-full border-2 border-line border-t-amber motion-reduce:animate-none"
+                          aria-hidden="true"
+                        />
+                        Requesting run
+                      </span>
+                      <span className="mt-1 block">
+                        Preparing execution. Nodes will become available when ready.
+                      </span>
+                    </div>
+                  ) : run && (runExpired || visitExpired) ? (
+                    <div
+                      role="status"
+                      data-run-history="expired"
+                      className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[280px] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase"
+                    >
+                      <span>expired</span>
+                      {visitExpired && !runExpired ? "This visit's" : "This run's"} history and
+                      artifacts expired under the run&apos;s retention policy. The run and its
+                      label remain.
+                    </div>
+                  ) : run && !runLive ? (
+                    <div className="historical-badge pointer-events-none absolute top-[18px] right-[18px] z-[5] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase">
+                      <span>Viewing a run snapshot</span>This view does not represent the
+                      workflow&apos;s current state.
+                    </div>
+                  ) : null}
                 </div>
                 {run ? (
                   <RunLogPane

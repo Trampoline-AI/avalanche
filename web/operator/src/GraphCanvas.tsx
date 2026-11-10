@@ -273,6 +273,8 @@ const NODE_DESCRIPTION_ZOOM_THRESHOLD = 0.65;
 // Zooms where a node card changes what it shows.
 const NODE_DETAIL_ZOOM_STEPS = [NODE_DESCRIPTION_ZOOM_THRESHOLD, NODE_DETAIL_ZOOM_THRESHOLD];
 const MIN_ZOOM = 0.25;
+/** A graph fitted beside the floating timeline may shrink further to stay whole. */
+const RESERVED_MIN_ZOOM = 0.12;
 const MAX_ZOOM = 1.8;
 
 export const NodeDuration = memo(
@@ -793,8 +795,32 @@ function firstFrameFor(
   nodes: readonly Node[],
   canvas: CanvasSize | undefined,
   options: FitViewOptions,
+  minZoom = MIN_ZOOM,
 ): FirstFrame | undefined {
   if (!canvas?.width || !canvas.height || nodes.length === 0) return undefined;
+  const viewport = getViewportForBounds(
+    nodeBounds(nodes),
+    canvas.width,
+    canvas.height,
+    minZoom,
+    MAX_ZOOM,
+    options.padding ?? 0.1,
+  );
+  const below = NODE_DETAIL_ZOOM_STEPS.filter((step) => step <= viewport.zoom);
+  const above = NODE_DETAIL_ZOOM_STEPS.filter((step) => step > viewport.zoom);
+  return {
+    viewport,
+    fitViewOptions: {
+      ...options,
+      minZoom: Math.max(minZoom, ...below),
+      // Detail thresholds are inclusive, so stay just under the next one.
+      maxZoom: above.length > 0 ? Math.min(...above) - 0.001 : MAX_ZOOM,
+    },
+  };
+}
+
+/** The cards' bounding box in flow coordinates, as React Flow fits it. */
+function nodeBounds(nodes: readonly Node[]) {
   let left = Infinity;
   let top = Infinity;
   let right = -Infinity;
@@ -809,24 +835,39 @@ function firstFrameFor(
     right = Math.max(right, x + width);
     bottom = Math.max(bottom, y + height);
   }
-  const viewport = getViewportForBounds(
-    { x: left, y: top, width: right - left, height: bottom - top },
-    canvas.width,
-    canvas.height,
-    MIN_ZOOM,
-    MAX_ZOOM,
-    options.padding ?? 0.1,
-  );
-  const below = NODE_DETAIL_ZOOM_STEPS.filter((step) => step <= viewport.zoom);
-  const above = NODE_DETAIL_ZOOM_STEPS.filter((step) => step > viewport.zoom);
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+/** Width kept clear of a panel floating along the canvas's left edge (the run timeline). */
+export interface CanvasReserve {
+  width: number;
+}
+
+const RESERVE_GAP = 16;
+
+/**
+ * Keeps the fitted graph clear of a panel floating over the canvas's left edge (the
+ * run timeline): the layout's own left margin starts past the panel's right edge.
+ * Only the panel's width counts, and it is fixed, so the graph never re-fits when
+ * the panel grows (runs, visits or waits loading).
+ */
+function reserveFit(
+  options: FitViewOptions,
+  reserve: CanvasReserve | undefined,
+): FitViewOptions {
+  if (!reserve) return options;
+  const padding = options.padding ?? 0.1;
+  // A ratio padding (the flow layouts) becomes an even pixel margin.
+  const even =
+    typeof padding === "number" ? (`${Math.round(padding * 200)}px` as const) : undefined;
+  if (!even && typeof padding !== "object") return options;
+  const base = (
+    even ? { top: even, right: even, bottom: even, left: even } : padding
+  ) as Record<"top" | "right" | "bottom" | "left", `${number}px`>;
+  const left = Number.parseFloat(base.left ?? "0") || 0;
   return {
-    viewport,
-    fitViewOptions: {
-      ...options,
-      minZoom: Math.max(MIN_ZOOM, ...below),
-      // Detail thresholds are inclusive, so stay just under the next one.
-      maxZoom: above.length > 0 ? Math.min(...above) - 0.001 : MAX_ZOOM,
-    },
+    ...options,
+    padding: { ...base, left: `${reserve.width + RESERVE_GAP + left}px` as const },
   };
 }
 
@@ -843,20 +884,42 @@ function MeasureGraphHandles({ nodes }: { nodes: readonly Node[] }) {
   return null;
 }
 
-function FitGraphOnWidthChange({ options }: { options: FitViewOptions }) {
-  const width = useStore((state) => state.width);
+function FitGraphOnWidthChange({
+  options,
+  height: followHeight = false,
+}: {
+  options: FitViewOptions;
+  /** Also re-fit when the canvas height changes (the machine graph stays whole). */
+  height?: boolean;
+}) {
+  const storeWidth = useStore((state) => state.width);
+  const storeHeight = useStore((state) => state.height);
+  const width = storeWidth;
+  const height = followHeight ? storeHeight : 0;
   const { fitView } = useReactFlow();
   const previousWidth = useRef(width);
+  const previousHeight = useRef(height);
+  const previousOptions = useRef(options);
 
   useEffect(() => {
     const previous = previousWidth.current;
+    const heightChanged = previousHeight.current !== height && height > 0;
+    const optionsChanged = previousOptions.current !== options;
     previousWidth.current = width;
+    previousHeight.current = height;
+    previousOptions.current = options;
     // Initial fitting belongs to React Flow. Re-fit only after its resize observer
-    // has committed a changed canvas width (timeline, inspector or window resize).
-    if (previous <= 0 || width <= 0 || previous === width) return;
+    // has committed a changed canvas width (timeline, inspector or window resize) or,
+    // when followed, height (the log pane), or when the timeline's reserve changes.
+    if (
+      previous <= 0 ||
+      width <= 0 ||
+      (previous === width && !optionsChanged && !heightChanged)
+    )
+      return;
     const frame = requestAnimationFrame(() => void fitView(options));
     return () => cancelAnimationFrame(frame);
-  }, [width, fitView, options]);
+  }, [width, height, fitView, options]);
 
   return null;
 }
@@ -892,6 +955,8 @@ interface GraphCanvasProps {
   runTriggeredBy?: TriggerKind;
   evaluations?: Record<string, EvaluationRecord>;
   bottomRightPanel?: ReactNode;
+  /** A panel floating along the canvas's left edge; the fit keeps clear of it. */
+  reserve?: CanvasReserve;
   selectedNodeId?: string;
   onClearNode?: () => void;
   onOpenNode: (nodeId: string) => void;
@@ -907,13 +972,14 @@ function GraphCanvasView({
   runTriggeredBy,
   evaluations,
   bottomRightPanel,
+  reserve,
   selectedNodeId,
   onClearNode,
   onOpenNode,
   inspectionDisabled = false,
 }: GraphCanvasProps) {
   const { containerRef, orientation, toggleOrientation, canvasSize } = useGraphOrientation();
-  const fitViewOptions = machine
+  const baseFitViewOptions = machine
     ? orientation === "vertical"
       ? MACHINE_VERTICAL_FIT_VIEW_OPTIONS
       : MACHINE_FIT_VIEW_OPTIONS
@@ -1411,11 +1477,20 @@ function GraphCanvasView({
     selectedNodeId,
   ]);
   const shownNodes = machineGraph ? machineGraph.nodes : nodes;
+  const reserveWidth = reserve?.width;
+  const minZoom = reserveWidth !== undefined ? RESERVED_MIN_ZOOM : MIN_ZOOM;
+  const fitViewOptions = useMemo(
+    () =>
+      reserveWidth === undefined
+        ? baseFitViewOptions
+        : reserveFit(baseFitViewOptions, { width: reserveWidth }),
+    [baseFitViewOptions, reserveWidth],
+  );
   const shownEdges = machineGraph ? machineGraph.edges : edges;
 
   const firstFrame = useMemo(
-    () => firstFrameFor(shownNodes, canvasSize, fitViewOptions),
-    [shownNodes, canvasSize, fitViewOptions],
+    () => firstFrameFor(shownNodes, canvasSize, fitViewOptions, minZoom),
+    [shownNodes, canvasSize, fitViewOptions, minZoom],
   );
 
   return (
@@ -1436,7 +1511,7 @@ function GraphCanvasView({
             defaultViewport={firstFrame?.viewport}
             fitView
             fitViewOptions={firstFrame?.fitViewOptions ?? fitViewOptions}
-            minZoom={MIN_ZOOM}
+            minZoom={minZoom}
             maxZoom={MAX_ZOOM}
             nodesDraggable={false}
             nodesConnectable={false}
@@ -1449,7 +1524,7 @@ function GraphCanvasView({
           >
             <InputEdgeMarkers />
             <MeasureGraphHandles nodes={shownNodes} />
-            <FitGraphOnWidthChange options={fitViewOptions} />
+            <FitGraphOnWidthChange options={fitViewOptions} height={machine !== undefined} />
             {bottomRightPanel && (
               <Panel
                 position="bottom-right"
@@ -1539,6 +1614,7 @@ export const GraphCanvas = memo(
     left.runTriggeredBy === right.runTriggeredBy &&
     left.evaluations === right.evaluations &&
     left.bottomRightPanel === right.bottomRightPanel &&
+    left.reserve?.width === right.reserve?.width &&
     left.selectedNodeId === right.selectedNodeId &&
     left.onClearNode === right.onClearNode &&
     left.onOpenNode === right.onOpenNode &&
