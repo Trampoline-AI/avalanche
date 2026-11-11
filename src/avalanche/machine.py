@@ -186,6 +186,9 @@ class Machine:
         self.builder = builder
         self.input_type = input_type
         self.key_fields = key
+        from .run_keys import key_declarations
+
+        self.key_declarations = key_declarations(input_type, key)
         self.cron = cron
         self.webhook = webhook
         self._definition: Workflow | None = None
@@ -285,6 +288,7 @@ class Machine:
             name=self.__name__,
             input_schema=self.input_type.model_json_schema(),
             key_fields=self.key_fields,
+            key_declarations=self.key_declarations,
             initial=initials[0],
             states=states,
             work_graphs=specs,

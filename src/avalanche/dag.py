@@ -2208,6 +2208,9 @@ class Workflow:
         _validate_workflow_types(input_type, context_type)
         self.input_type = input_type
         self.key_fields = key
+        from .run_keys import key_declarations
+
+        self.key_declarations = key_declarations(input_type, key)
         if key:
             if input_type is None or not set(key) <= input_type.model_fields.keys():
                 raise ValueError("workflow key fields must be declared input fields")
@@ -3149,6 +3152,9 @@ def workflow(
     context_type = context or ctx
     if key is not None and not key:
         raise ValueError("workflow key must contain at least one input field")
+    from .run_keys import key_declarations
+
+    key_declarations(input, key or ())
     webhook = _normalize_webhook(webhook)
     validated_agent_defaults: AgentDefaults | None = None
     if agent_defaults is not None:

@@ -115,6 +115,9 @@ class MachineSpec(BaseModel):
     name: str
     input_schema: dict[str, JsonValue]
     key_fields: tuple[str, ...] = Field(min_length=1)
+    key_declarations: dict[str, JsonValue] = Field(
+        default_factory=dict, exclude_if=lambda value: not value
+    )
     initial: str
     states: dict[str, MachineStateSpec]
     work_graphs: dict[str, MachineWorkSpec]
