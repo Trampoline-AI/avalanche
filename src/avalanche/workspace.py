@@ -798,7 +798,9 @@ def run_workspace_invocation(fn, /, *args: Any, **kwargs: Any) -> Any:
 def snapshot_workspaces(value: Any) -> Any:
     """Capture every workspace in a supported workflow return shape."""
     if isinstance(value, Workspace):
-        return value if value.is_reference else value.snapshot()
+        return (
+            value if value.is_reference and value._directory_path is None else value.snapshot()
+        )
     from .file import File
     from .types import LineagedResult
 

@@ -428,6 +428,35 @@ async def test_machine_run_control_early_events_payloads_and_defer(tmp_path):
     assert len(effects) == 4
     assert any(address[-1] == "delivery-2" for address in routed.host.receipts)
 
+    # The test host follows the same run-owned workspace/commit path as the
+    # spawned operator, including a child started by the final visit.
+    spec = importlib.util.spec_from_file_location(
+        "artifact_machine_fixture", SDK / "test" / "fixtures" / "local_machine.py"
+    )
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    source = tmp_path / "portable"
+    source.mkdir()
+    (source / "data.txt").write_text("captured")
+    ticket = fixture.ArtifactTicket(
+        ticket=90,
+        journal=str(tmp_path / "visits"),
+        document=file,
+        workspace=ava.Workspace.from_path(source),
+    )
+    instance = await fixture.artifact_approval.test_async(ticket)
+    identity = instance.handle.run_id
+    committed = local_workspace(source)
+    await instance.asend(
+        "artifacts", fixture.ArtifactDelivery(document=file, workspace=committed)
+    )
+    assert {file.ref.workspace, committed.reference} <= instance.waits.reference_grants
+    await instance.asend("approved")
+    assert instance.handle.run_id == identity and instance.handle.done()
+    assert instance.host.flow_runs[0].handle.result() == "retained event bytes:capturedxxx"
+    assert (committed.path / "data.txt").read_text() == "captured"
+    assert instance.host.flow_runs[0].input.document.ref == file.ref
+
 
 def test_machine_visit_reconciliation_reuses_local_waits():
     class Input(ava.BaseInput):

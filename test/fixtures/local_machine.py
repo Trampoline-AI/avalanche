@@ -64,6 +64,8 @@ def inspect_artifacts(ticket: ArtifactTicket, context: ava.RunContext) -> Artifa
         + ":"
         + (ticket.workspace.path / "data.txt").read_text()
     )
+    tree_path = ticket.workspace.path / "data.txt"
+    tree_path.write_text(tree_path.read_text() + "x")
     with Path(ticket.journal).open("a") as output:
         output.write(context.node_id + ":" + value + "\n")
     return ArtifactOutput(text=value, counts=[1, 2, 3])
@@ -74,11 +76,66 @@ def artifact_flow():
     return inspect_artifacts()
 
 
+class ArtifactDelivery(BaseModel):
+    document: ava.File
+    workspace: ava.Workspace
+
+
+@ava.step
+def inspect_delivery(
+    delivery: ArtifactDelivery, ticket: ArtifactTicket
+) -> dict[str, JsonValue]:
+    return {
+        "sha256": delivery.document.snapshot().sha256,
+        "reference": delivery.workspace.reference,
+        "bytes": delivery.document.read_bytes().decode(),
+        "tree": (delivery.workspace.path / "data.txt").read_text(),
+    }
+
+
+@ava.step
+def artifact_child_input(ticket: ArtifactTicket) -> ArtifactTicket:
+    return ticket
+
+
+@ava.workflow(input=ArtifactTicket)
+def artifact_child():
+    return inspect_artifacts()
+
+
+@ava.workflow(input=ArtifactTicket)
+def artifact_final_visit():
+    inspected = inspect_artifacts()
+    delivered = inspect_delivery()
+    prepared = artifact_child_input()
+    inspected >> prepared
+    child = ava.start_run(artifact_child, prepared)
+    return delivered, child
+
+
 @ava.machine(input=ArtifactTicket, key=("ticket",))
 def artifact_approval():
-    pending = ava.state(inspect_artifacts, initial=True)
-    done = ava.state(inspect_artifacts, final=True)
-    pending.on("approved") >> done
+    pending = ava.state(inspect_artifacts, initial=True, defer=("artifacts",))
+    reviewed = ava.state(inspect_artifacts)
+    done = ava.state(artifact_final_visit, final=True)
+    pending.on("approved") >> reviewed
+    reviewed.on("artifacts", payload=ArtifactDelivery) >> done
+
+
+@ava.step
+def artifact_delivery(ticket: ArtifactTicket) -> ArtifactDelivery:
+    return ArtifactDelivery(document=ticket.document, workspace=ticket.workspace)
+
+
+@ava.workflow(input=ArtifactTicket)
+def artifact_router():
+    prepared = artifact_child_input()
+    started = ava.start_run(artifact_approval, prepared)
+    buffered = artifact_approval.send(started_key(started), "artifacts", artifact_delivery())
+    started >> buffered
+    approved = artifact_approval.send(started_key(started), "approved")
+    buffered >> approved
+    return started, buffered, approved
 
 
 @ava.step

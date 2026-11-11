@@ -15,6 +15,32 @@ from .policies import WaitSpec
 from .references import LocalReferenceBinder, bind_references
 
 
+def _event_references(value: JsonValue) -> set[str]:
+    from .file import File
+    from .references import LocalWorkspaceStore
+    from .workspace import Workspace
+
+    references: set[str] = set()
+    if isinstance(value, list):
+        for item in value:
+            references.update(_event_references(item))
+    elif isinstance(value, dict):
+        if value.get("kind") == "file" and "ref" in value:
+            file = File.model_validate(value)
+            file.bind(LocalReferenceBinder().bind_file(file)).snapshot()
+            references.add(file.ref.workspace)
+        elif value.get("kind") == "workspace":
+            workspace = Workspace.model_validate(value)
+            if workspace.reference is None:
+                raise ValueError("Event Workspace requires a commit reference")
+            LocalWorkspaceStore.resolve(workspace.reference)
+            references.add(workspace.reference)
+        else:
+            for item in value.values():
+                references.update(_event_references(item))
+    return references
+
+
 class MachineWaits(LocalWaits):
     """Fake-clock inbox; no driver thread, sleeps or executor workers."""
 
@@ -24,6 +50,7 @@ class MachineWaits(LocalWaits):
         self.defer: tuple[str, ...] = ()
         self.buffer: deque[BufferedEvent] = deque()
         self.facts: list[InboxFact] = []
+        self.reference_grants: set[str] = set()
 
     def now(self) -> float:
         return self._offset
@@ -84,6 +111,9 @@ class MachineWaits(LocalWaits):
                     or self._queued_bytes + size > self.max_payload_bytes
                 ):
                     raise WaitRefusalError("inbox_full", 409)
+                # Check all refs, including deferred payloads, before accepting
+                # the receipt. This host has one local-OS project/principal.
+                self.reference_grants.update(_event_references(wire))
                 self.buffer.append(BufferedEvent(key, value, size))
                 self._queued_count += 1
                 self._queued_bytes += size

@@ -23,6 +23,40 @@ def configure_run(connection: sqlite3.Connection, run_id: str) -> LocalWorkspace
     return LocalWorkspaceStore(root, run_id)
 
 
+def index_run_commits(connection: sqlite3.Connection, run_id: str) -> None:
+    """Index filesystem publications when the owner records a finished visit/run."""
+    store = LocalWorkspaceStore.for_run(run_id)
+    issued = store.run_root / "issued"
+    if issued.exists():
+        for marker in issued.iterdir():
+            reference = "local-ws:v2:" + marker.name
+            path = LocalWorkspaceStore.resolve(reference)
+            connection.execute(
+                "INSERT OR IGNORE INTO workspace_commits VALUES (?, ?)",
+                (reference, str(path)),
+            )
+            connection.execute(
+                "INSERT OR IGNORE INTO workspace_grants VALUES (?, ?)", (run_id, reference)
+            )
+    heads = store.run_root / "heads"
+    if heads.exists():
+        connection.executemany(
+            "INSERT INTO workspace_heads VALUES (?, ?, ?) ON CONFLICT(run_id, mount) "
+            "DO UPDATE SET reference=excluded.reference",
+            ((run_id, head.name, head.read_text()) for head in heads.iterdir()),
+        )
+
+
+def restore_references(connection: sqlite3.Connection) -> None:
+    """SQLite is authoritative; the temporary cross-process locator is rebuildable."""
+    from avalanche.references import register_commit
+
+    for row in connection.execute("SELECT reference, path FROM workspace_commits"):
+        register_commit(row[0], Path(row[1]))
+    for row in connection.execute("SELECT run_id FROM runs"):
+        configure_run(connection, row[0])
+
+
 def grant_references(
     connection: sqlite3.Connection,
     value: JsonValue,
@@ -48,8 +82,9 @@ def grant_references(
         reference = file.ref.workspace
         root = LocalWorkspaceStore.resolve(reference)
         path = (root / file.ref.path).resolve(strict=True)
-        if not path.is_relative_to(root) or path.stat().st_size != file.size:
-            raise ValueError("Invalid File commit path or size")
+        if not path.is_relative_to(root):
+            raise ValueError("Invalid File commit path")
+        file.bind(path).snapshot()
     elif value.get("kind") == "workspace":
         workspace = Workspace.model_validate(value)
         reference = workspace.reference

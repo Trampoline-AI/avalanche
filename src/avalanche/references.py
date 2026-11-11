@@ -47,12 +47,32 @@ def local_workspace(path: Path) -> Workspace:
     return LocalWorkspaceStore.for_run().commit(path)
 
 
+def register_commit(reference: str, path: Path) -> None:
+    """Restore a durable host's locator after the temporary registry is cleared."""
+    digest = reference.removeprefix("local-ws:v2:")
+    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
+        raise ValueError("Malformed local workspace commit")
+    target = _registry() / ("commit-" + digest)
+    temporary = target.with_suffix("." + uuid4().hex)
+    temporary.write_text(str(path.resolve(strict=True)))
+    temporary.replace(target)
+
+
 def register_run_store(run_id: str, root: Path) -> None:
     """Publish process-local host configuration for spawned coordinators."""
     target = _registry() / ("run-" + hashlib.sha256(run_id.encode()).hexdigest())
     temporary = target.with_suffix("." + uuid4().hex)
     temporary.write_text(str(root.resolve()))
     temporary.replace(target)
+
+
+_host_run_id: str | None = None
+
+
+def configure_local_run(run_id: str) -> None:
+    """Set the single run owned by a spawned local coordinator process."""
+    global _host_run_id
+    _host_run_id = run_id
 
 
 class LocalWorkspaceStore:
@@ -72,7 +92,7 @@ class LocalWorkspaceStore:
         from .runtime.context import get_current_run_context
 
         context = get_current_run_context()
-        run_id = run_id or (context.run_id if context is not None else None)
+        run_id = run_id or (context.run_id if context is not None else _host_run_id)
         config = (
             _registry() / ("run-" + hashlib.sha256(run_id.encode()).hexdigest())
             if run_id is not None
@@ -122,12 +142,14 @@ class LocalWorkspaceStore:
         reference = "local-ws:v2:" + identity
         destination = self.root / "commits" / identity
         destination.parent.mkdir(parents=True, exist_ok=True)
-        # Reuse an already published object, including one from another local
-        # store. Its host scope is checked by the operator, not this locator.
+        # Deduplicate within this host store. A v2 transfer never calls commit:
+        # it retains its source object and the recipient records a grant.
         locator = _registry() / ("commit-" + identity)
-        if locator.exists():
+        if path.parent.name == "mounts" and path.name == identity:
+            # An unchanged recipient mount still names its source object. Do not
+            # publish a second blob merely because it crossed a run boundary.
             destination = self.resolve(reference)
-        elif not destination.exists():
+        if not destination.exists():
             temporary = destination.with_name("." + uuid4().hex)
             try:
                 shutil.copytree(path, temporary, copy_function=_clone_file)
@@ -180,7 +202,7 @@ class LocalWorkspaceStore:
 
         source = self.resolve(reference)
         if self.run_id is None:
-            return source
+            return LocalWorkspaceStore(self.root, "binding-" + uuid4().hex).mount(reference)
         target = self.run_root / "mounts" / reference.removeprefix("local-ws:v2:")
         target.parent.mkdir(parents=True, exist_ok=True)
         if not target.exists():
@@ -196,7 +218,20 @@ class LocalWorkspaceStore:
         mounts = self.run_root / "mounts"
         if not mounts.exists():
             return ()
-        return tuple(self.commit(path).reference for path in sorted(mounts.iterdir()))
+        heads = self.run_root / "heads"
+        heads.mkdir(parents=True, exist_ok=True)
+        references: list[str] = []
+        for path in sorted(mounts.iterdir()):
+            committed = self.commit(path)
+            reference = committed.reference
+            if reference is None:
+                raise RuntimeError("Commit is missing its identity")
+            target = heads / path.name
+            temporary = target.with_suffix("." + uuid4().hex)
+            temporary.write_text(reference)
+            temporary.replace(target)
+            references.append(reference)
+        return tuple(references)
 
 
 def _clone_file(source: str, destination: str) -> str:
@@ -425,9 +460,11 @@ def agent_output_workspace() -> tuple[Workspace, str]:
         context = get_current_run_context()
         run_id = context.run_id if context is not None else uuid4().hex
         run_key = hashlib.sha256(run_id.encode("utf-8")).hexdigest()
-        root = _registry() / "runs" / run_key
+        store = LocalWorkspaceStore.for_run(run_id)
+        root = store.root / "runs" / run_key / "outputs"
         root.mkdir(parents=True, exist_ok=True)
-        workspace = local_workspace(root)
+        committed = store.commit(root)
+        workspace = Workspace.from_directory(root, reference=committed.reference)
     return workspace, _output_attempt.get() or uuid4().hex
 
 

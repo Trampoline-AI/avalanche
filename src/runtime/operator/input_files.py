@@ -16,7 +16,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from avalanche.file import File
-from avalanche.references import local_workspace
+from avalanche.references import LocalWorkspaceStore
 from avalanche.workspace import Workspace
 
 MAX_STAGED_INPUT_FILE_BYTES = 32 * 1024 * 1024
@@ -137,7 +137,7 @@ class InputFileStaging:
             try:
                 folder.mkdir(mode=0o700)
                 path.write_bytes(content)
-                workspace = local_workspace(folder)
+                workspace = LocalWorkspaceStore(self._root.parent / "workspaces").commit(folder)
             except OSError as exc:
                 failure = InputFileStorageError(f"Could not store input file {name!r}: {exc}")
                 try:

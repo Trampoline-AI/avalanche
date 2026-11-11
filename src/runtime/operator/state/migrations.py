@@ -382,6 +382,9 @@ MIGRATIONS += (
             "path TEXT NOT NULL) STRICT",
             "CREATE TABLE workspace_grants (run_id TEXT NOT NULL, reference TEXT NOT NULL "
             "REFERENCES workspace_commits(reference), PRIMARY KEY(run_id, reference)) STRICT",
+            "CREATE TABLE workspace_heads (run_id TEXT NOT NULL, mount TEXT NOT NULL, "
+            "reference TEXT NOT NULL REFERENCES workspace_commits(reference), "
+            "PRIMARY KEY(run_id, mount)) STRICT",
         ),
     ),
 )

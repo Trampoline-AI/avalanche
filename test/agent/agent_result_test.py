@@ -319,5 +319,5 @@ async def test_predict_rlm_mounts_files_nested_inside_other_types(monkeypatch, t
     )
 
     assert isinstance(received["documents"]["a"], PredictRLMFile)
-    assert received["documents"]["a"].path == str(source)
+    assert Path(received["documents"]["a"].path).read_bytes() == source.read_bytes()
     assert result.outputs.answer == "x"

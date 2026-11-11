@@ -136,6 +136,9 @@ def _run_worker(
     machine_reader: Connection | None = None,
 ) -> None:
     """Import/build exactly once, prepare, wait for the parent, and execute."""
+    from avalanche.references import configure_local_run
+
+    configure_local_run(run_id)
     event_queue = _SealableEventQueue(event_queue)
     if os.name != "nt":
         try:
