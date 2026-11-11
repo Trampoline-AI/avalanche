@@ -445,7 +445,7 @@ def test_keyed_flow_start_restart_and_expired_history(tmp_path):
             with grpc.insecure_channel(address) as channel:
                 grpc.channel_ready_future(channel).result(timeout=30)
                 stub = pb_grpc.OperatorServiceV2Stub(channel)
-                values = {"ticket": 123, "journal": str(journal)}
+                values = {"ticket": "123", "journal": str(journal)}
                 with ThreadPoolExecutor(max_workers=2) as callers:
                     responses = list(
                         callers.map(lambda i: start(stub, f"flow-key-{i}", values), range(2))

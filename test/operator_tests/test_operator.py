@@ -292,7 +292,7 @@ def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path)
         state_db=tmp_path / "state.db",
     )
     try:
-        run_id = op.start_run("approval", input={"ticket": 1, "journal": str(journal)})
+        run_id = op.start_run("approval", input={"ticket": "1", "journal": str(journal)})
         # Existing key lookup validates key fields, not a replacement input document.
         assert op.start_run("approval", input={"ticket": 1}) == run_id
         with pytest.raises(ValueError):
@@ -335,7 +335,9 @@ def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path)
         # Earlier visit logs remain readable after event and timer transitions. The same
         # log API and exact step filter apply to ordinary flows, with nonempty bodies.
         assert {log.node_id for log in op.list_logs(run_id).logs} >= {
-            "v1.observe_1", "v2.observe_1", "v3.observe_1"
+            "v1.observe_1",
+            "v2.observe_1",
+            "v3.observe_1",
         }
         reread_logs = op.list_logs(run_id, node_id="v1.observe_1").logs
         assert [op.read_detail(log.body_token) for log in reread_logs] == [
@@ -547,6 +549,26 @@ def test_machine_router_webhook_retries_without_double_sending(tmp_path):
         assert replay.duplicate and replay.receipt_id == receipt["receipt_id"]
         assert [visit.state for visit in visits] == ["pending", "reviewed", "done"]
         assert len(op.list_runs("approval")) == 1
+        typed = op.start_run("typed_router")
+        assert wait_terminal(op, typed, timeout=30).status is RunStatus.SUCCESS
+        target = op._machine_host.resolve(
+            "typed_approval",
+            {"token": "a0b1c2d3-e4f5-4678-9abc-0123456789ab", "nested": {"ticket": "1"}},
+        )
+        assert wait_terminal(op, target, timeout=30).status is RunStatus.SUCCESS
+        assert (
+            op.start_run(
+                "typed_approval",
+                input={
+                    "token": "{A0B1C2D3-E4F5-4678-9ABC-0123456789AB}",
+                    "nested": {"ticket": 1.0, "ignored": True},
+                },
+            )
+            == target
+        )
+        with op._state_store.transaction() as connection:
+            key = MachinesTable.load(connection, target).key
+        assert key == ["a0b1c2d3-e4f5-4678-9abc-0123456789ab", {"ticket": 1, "label": "nested"}]
     finally:
         op.close()
 

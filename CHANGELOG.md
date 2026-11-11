@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Operator: new keyed flow and machine starts reuse normalized key values before
+  strict full-input validation, matching key lookup and declared-send coercion.
+  Existing keys still ignore replacement non-key input and resources.
+
 - Flow-to-machine `ava.start_run` and declared machine sends work again on
   Delta (scheduler-owned, no tenant credentials), matching the local operator.
 - Delta's CLI retires `delta machine start/show/list`; start machines with

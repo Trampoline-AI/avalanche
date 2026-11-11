@@ -4,6 +4,9 @@ import logging
 import time
 from datetime import timedelta
 from pathlib import Path
+from uuid import UUID
+
+from pydantic import BaseModel, JsonValue
 
 import avalanche as ava
 
@@ -70,12 +73,12 @@ def artifact_approval():
 
 @ava.step
 def router_input(ticket: Ticket) -> dict:
-    return ticket.model_dump(mode="json")
+    return {**ticket.model_dump(mode="json"), "ticket": str(ticket.ticket)}
 
 
 @ava.step
 def started_key(started: ava.RunStart) -> list:
-    return started.key
+    return [float(started.key[0])]
 
 
 @ava.step(retries=1)
@@ -93,6 +96,46 @@ def retry_after_send(
 @ava.workflow(input=Ticket, key=("ticket",))
 def ordinary_child():
     return observe()
+
+
+class NestedIdentity(BaseModel):
+    ticket: int
+    label: str = "nested"
+
+
+class TypedIdentity(ava.BaseInput):
+    token: UUID
+    nested: NestedIdentity
+
+
+@ava.step
+def typed_observe(input: TypedIdentity) -> dict[str, JsonValue]:
+    return input.model_dump(mode="json")
+
+
+@ava.machine(input=TypedIdentity, key=("token", "nested"))
+def typed_approval():
+    pending = ava.state(typed_observe, initial=True)
+    done = ava.state(typed_observe, final=True)
+    pending.on("approved") >> done
+
+
+@ava.step
+def typed_router_input() -> dict[str, JsonValue]:
+    return {
+        "token": "A0B1C2D3-E4F5-4678-9ABC-0123456789AB",
+        "nested": {"ticket": "1", "ignored": "drop"},
+    }
+
+
+@ava.workflow
+def typed_router():
+    started = ava.start_run(typed_approval, typed_router_input())
+    sent = typed_approval.send(
+        ["{a0b1c2d3-e4f5-4678-9abc-0123456789ab}", {"ticket": 1.0}], "approved"
+    )
+    started >> sent
+    return sent
 
 
 @ava.workflow(input=Ticket, webhook=ava.Webhook(path="/router"))

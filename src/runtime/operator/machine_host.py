@@ -537,6 +537,9 @@ class MachineHost:
             existing = MachinesTable.find(connection, descriptor.workflow_id, key)
         if existing is not None:
             return existing
+        # Key fields were accepted by the canonical SDK identity boundary. Reuse
+        # those exact values before strict full-input validation on a NEW key.
+        values = {**values, **dict(zip(descriptor.key_fields, key))}
         values = TypeAdapter(dict[str, JsonValue]).validate_python(
             validate_native(descriptor, root, "input", values)
         )
@@ -566,6 +569,9 @@ class MachineHost:
         if existing is not None:
             return existing
         _, root = self.op._registry.resolve_source(command.selector)
+        # Key fields were accepted by the canonical SDK identity boundary. Reuse
+        # those exact values before strict full-input validation on a NEW key.
+        values = {**values, **dict(zip(descriptor.key_fields, key))}
         values = TypeAdapter(dict[str, JsonValue]).validate_python(
             validate_native(descriptor, root, "input", values)
         )
