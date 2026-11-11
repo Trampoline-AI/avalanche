@@ -18,10 +18,30 @@ const TONE_CLASS: Record<TimelineTone, string> = {
   muted: "bg-line-strong",
 };
 
+/** The time column's one meaning, said once in its header. */
+export const TIME_COLUMN_LABEL = "+ since start";
+
+/** A duration on the row: "0.2s", or "<0.1s" for a step too quick to read. */
+export function durationLabel(seconds: number) {
+  return seconds < 0.05 ? "<0.1s" : formatElapsedSeconds(seconds);
+}
+
 function offsetLabel(offset: number | undefined) {
   if (offset === undefined) return "—";
   return `+${formatElapsedSeconds(Math.max(0, offset))}`;
 }
+
+/** The time cell's tooltip: the local time and the offset, or why there is none. */
+export function timeTooltip(entry: Pick<TimelineEntry, "offset" | "at" | "timeNote">) {
+  if (entry.offset === undefined)
+    return `Time unknown: ${entry.timeNote ?? "the host has not reported when this happened."}`;
+  const since = `${offsetLabel(entry.offset)} since the run started`;
+  return entry.at !== undefined
+    ? `${new Date(entry.at * 1000).toLocaleString()} (${since})`
+    : since;
+}
+
+const ROW_GRID = "grid grid-cols-[72px_10px_minmax(0,1fr)_auto] items-start gap-2 px-[9px]";
 
 function Countdown({ due }: { due: number }) {
   const [now, setNow] = useState(() => Date.now() / 1000);
@@ -119,7 +139,7 @@ export function RunTimeline({
               data-pending-kind={item.kind}
               data-wait-kind={item.kind === "deferred" ? "event" : item.kind}
               data-state={item.state}
-              className="grid grid-cols-[64px_10px_minmax(0,1fr)_auto] items-start gap-2 border-b border-log-line px-[9px] py-1.5 last:border-0"
+              className={`${ROW_GRID} border-b border-log-line py-1.5 last:border-0`}
               onMouseEnter={() => onHover({ ...item, id: `pending:${item.id}` })}
             >
               <span className="text-[8px] tracking-[.12em] text-amber uppercase">Pending</span>
@@ -185,79 +205,101 @@ export function RunTimeline({
                 : "No events recorded for this run yet."}
           </p>
         ) : (
-          <ol aria-label="Run events" className="m-0 list-none p-0">
-            {visible.map((entry) => {
-              const selected = entry.id === selectedId;
-              const actions =
-                selected &&
-                ((onOpenVisit && entry.visit !== undefined) ||
-                  (onOpenLogs && (entry.nodeId !== undefined || entry.visit !== undefined)));
-              return (
-                <li
-                  key={entry.id}
-                  data-entry-id={entry.id}
-                  data-timeline-kind={entry.kind}
-                  data-status={entry.status}
-                  data-state={entry.state}
-                  data-visit={entry.visit}
-                  data-node-id={entry.nodeId}
-                  className={`run-timeline-row grid grid-cols-[64px_10px_minmax(0,1fr)_auto] items-start gap-2 border-b border-log-line px-[9px] py-1.5 ${selected ? "bg-selected shadow-[inset_2px_0_var(--color-acid)]" : "hover:bg-hover"}`}
-                  onMouseEnter={() => onHover(entry)}
-                >
-                  <time
-                    className="whitespace-nowrap text-muted"
-                    dateTime={
-                      entry.at !== undefined
-                        ? new Date(entry.at * 1000).toISOString()
-                        : undefined
-                    }
-                    title={
-                      entry.at !== undefined
-                        ? new Date(entry.at * 1000).toLocaleString()
-                        : undefined
-                    }
+          <>
+            <div
+              className={`run-timeline-columns sticky top-0 z-[1] ${ROW_GRID} border-b border-line bg-panel py-1 text-[8px] tracking-[.12em] text-muted uppercase`}
+              data-timeline-columns
+            >
+              <span
+                className="text-right whitespace-nowrap normal-case tracking-normal"
+                title="Each row's time is how long after the run started it happened. Hover a time for the local clock time."
+                data-time-column-label
+              >
+                {TIME_COLUMN_LABEL}
+              </span>
+              <span />
+              <span>What happened</span>
+              <span />
+            </div>
+            <ol aria-label="Run events" className="m-0 list-none p-0">
+              {visible.map((entry) => {
+                const selected = entry.id === selectedId;
+                const actions =
+                  selected &&
+                  ((onOpenVisit && entry.visit !== undefined) ||
+                    (onOpenLogs && (entry.nodeId !== undefined || entry.visit !== undefined)));
+                return (
+                  <li
+                    key={entry.id}
+                    data-entry-id={entry.id}
+                    data-timeline-kind={entry.kind}
+                    data-status={entry.status}
+                    data-state={entry.state}
+                    data-visit={entry.visit}
+                    data-node-id={entry.nodeId}
+                    className={`run-timeline-row ${ROW_GRID} border-b border-log-line py-1.5 ${selected ? "bg-selected shadow-[inset_2px_0_var(--color-acid)]" : "hover:bg-hover"}`}
+                    onMouseEnter={() => onHover(entry)}
                   >
-                    {offsetLabel(entry.offset)}
-                  </time>
-                  <span
-                    aria-hidden="true"
-                    className={`mt-1 size-2 rounded-full ${TONE_CLASS[entry.tone]}`}
-                  />
-                  <button
-                    type="button"
-                    aria-pressed={selected}
-                    className="min-w-0 cursor-pointer border-0 bg-transparent p-0 text-left [font:inherit] [overflow-wrap:anywhere] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
-                    onFocus={() => onHover(entry)}
-                    onBlur={() => onHover(undefined)}
-                    onClick={() => onSelect(selected ? undefined : entry)}
-                  >
-                    <span className="text-ink">{entry.title}</span>
-                    {entry.detail && <span className="text-secondary"> · {entry.detail}</span>}
-                  </button>
-                  <span className="flex gap-1">
-                    {actions && onOpenVisit && entry.visit !== undefined && (
-                      <button
-                        type="button"
-                        className="cursor-pointer rounded border border-line bg-panel px-1.5 py-0.5 text-[9px] text-acid"
-                        onClick={() => onOpenVisit(entry.visit!)}
-                      >
-                        Steps
-                      </button>
-                    )}
-                    {actions && onOpenLogs && (
-                      <button
-                        type="button"
-                        className="cursor-pointer rounded border border-line bg-panel px-1.5 py-0.5 text-[9px] text-acid"
-                        onClick={() => onOpenLogs(entry)}
-                      >
-                        Logs
-                      </button>
-                    )}
-                  </span>
-                </li>
-              );
-            })}
-          </ol>
+                    <time
+                      className="text-right whitespace-nowrap text-muted tabular-nums"
+                      data-time-unknown={entry.offset === undefined || undefined}
+                      dateTime={
+                        entry.at !== undefined
+                          ? new Date(entry.at * 1000).toISOString()
+                          : undefined
+                      }
+                      title={timeTooltip(entry)}
+                    >
+                      {offsetLabel(entry.offset)}
+                    </time>
+                    <span
+                      aria-hidden="true"
+                      className={`mt-1 size-2 rounded-full ${TONE_CLASS[entry.tone]}`}
+                    />
+                    <button
+                      type="button"
+                      aria-pressed={selected}
+                      className="min-w-0 cursor-pointer border-0 bg-transparent p-0 text-left [font:inherit] [overflow-wrap:anywhere] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid"
+                      onFocus={() => onHover(entry)}
+                      onBlur={() => onHover(undefined)}
+                      onClick={() => onSelect(selected ? undefined : entry)}
+                    >
+                      <span className="text-ink">{entry.title}</span>
+                      {entry.detail && (
+                        <span className="text-secondary"> · {entry.detail}</span>
+                      )}
+                      {entry.took !== undefined && (
+                        <span className="whitespace-nowrap text-secondary" data-took>
+                          {" "}
+                          · took {durationLabel(entry.took)}
+                        </span>
+                      )}
+                    </button>
+                    <span className="flex gap-1">
+                      {actions && onOpenVisit && entry.visit !== undefined && (
+                        <button
+                          type="button"
+                          className="cursor-pointer rounded border border-line bg-panel px-1.5 py-0.5 text-[9px] text-acid"
+                          onClick={() => onOpenVisit(entry.visit!)}
+                        >
+                          Steps
+                        </button>
+                      )}
+                      {actions && onOpenLogs && (
+                        <button
+                          type="button"
+                          className="cursor-pointer rounded border border-line bg-panel px-1.5 py-0.5 text-[9px] text-acid"
+                          onClick={() => onOpenLogs(entry)}
+                        >
+                          Logs
+                        </button>
+                      )}
+                    </span>
+                  </li>
+                );
+              })}
+            </ol>
+          </>
         )}
         {footer}
         {note && (

@@ -54,8 +54,14 @@ export interface TimelineEntry {
   offset?: number;
   /** Wall-clock Unix seconds, when the host reports one for this entry. */
   at?: number;
+  /** Why the time is unknown (shown with the "—" in its place). */
+  timeNote?: string;
+  /** What happened, as a sentence: "Step lint ran in amend (visit 2)". */
   title: string;
+  /** The rest of the sentence: outcome word first ("ok", "failed"), then context. */
   detail?: string;
+  /** How long the step, visit or wait took, in seconds, when both ends are known. */
+  took?: number;
   /** Short outcome word: accepted, deferred, ignored, success, failed, ... */
   status?: string;
   tone: TimelineTone;
@@ -118,17 +124,30 @@ function stepName(node: Pick<NodeSnapshotMsg, "name" | "nodeId">, visit?: number
   return prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name;
 }
 
-const STEP_DONE: Record<string, { word: string; tone: TimelineTone }> = {
-  success: { word: "succeeded", tone: "ok" },
-  succeeded: { word: "succeeded", tone: "ok" },
-  failed: { word: "failed", tone: "danger" },
-  skipped: { word: "skipped", tone: "muted" },
-  cancelled: { word: "cancelled", tone: "warn" },
+const STEP_DONE: Record<string, { verb: string; word?: string; tone: TimelineTone }> = {
+  success: { verb: "ran", word: "ok", tone: "ok" },
+  succeeded: { verb: "ran", word: "ok", tone: "ok" },
+  failed: { verb: "ran", word: "failed", tone: "danger" },
+  skipped: { verb: "was skipped", tone: "muted" },
+  cancelled: { verb: "was cancelled", tone: "warn" },
 };
 
+/** Where a machine entry happened: " in amend (visit 2)"; nothing for a flow run. */
+function inVisit(state: string | undefined, visit: number) {
+  return state ? ` in ${state} (visit ${visit})` : "";
+}
+
+/** Seconds between two readings of one clock, when both are known. */
+function span(from: number | null | undefined, to: number | null | undefined) {
+  return typeof from === "number" && typeof to === "number" && from > 0 && to >= from
+    ? to - from
+    : undefined;
+}
+
 /**
- * Step entries of a run (or a visit's) snapshot. `toOffset` maps a node clock
- * reading to the run's offset scale.
+ * Step entries of a run (or a visit's) snapshot: one row per step, at the time it
+ * finished, saying how it ended and how long it took; a step still running shows
+ * when it started. `toOffset` maps a node clock reading to the run's offset scale.
  */
 function stepEntries(
   nodes: readonly NodeSnapshotMsg[],
@@ -136,25 +155,10 @@ function stepEntries(
   base: { visit: number; phase: number; state?: string; prefix: string },
 ): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
+  const where = inVisit(base.state, base.visit);
   nodes.forEach((node, index) => {
     const name = stepName(node, base.visit || undefined);
     const attempts = node.attempts ?? 0;
-    const retried = attempts > 1 ? `attempt ${attempts}` : undefined;
-    if (node.startedAt > 0) {
-      const offset = toOffset(node.startedAt);
-      entries.push({
-        id: `${base.prefix}step:${node.nodeId}:start`,
-        kind: "step-started",
-        offset,
-        title: `Step ${name} started`,
-        detail: retried,
-        tone: "neutral",
-        visit: base.visit || undefined,
-        state: base.state,
-        nodeId: node.nodeId,
-        sort: [base.visit, base.phase, offset, index * 2],
-      });
-    }
     const done = STEP_DONE[node.status];
     if (node.endedAt > 0 && done) {
       const offset = toOffset(node.endedAt);
@@ -162,16 +166,32 @@ function stepEntries(
         id: `${base.prefix}step:${node.nodeId}:end`,
         kind: "step-finished",
         offset,
-        title: `Step ${name} ${done.word}`,
+        title: `Step ${name} ${done.verb}${where}`,
         detail:
-          [retried && `after ${attempts} attempts`, node.error].filter(Boolean).join(" · ") ||
-          undefined,
+          [done.word, attempts > 1 && `after ${attempts} attempts`, node.error]
+            .filter(Boolean)
+            .join(" · ") || undefined,
+        took: span(node.startedAt, node.endedAt),
         status: node.status,
         tone: done.tone,
         visit: base.visit || undefined,
         state: base.state,
         nodeId: node.nodeId,
         sort: [base.visit, base.phase, offset, index * 2 + 1],
+      });
+    } else if (node.startedAt > 0) {
+      const offset = toOffset(node.startedAt);
+      entries.push({
+        id: `${base.prefix}step:${node.nodeId}:start`,
+        kind: "step-started",
+        offset,
+        title: `Step ${name} started${where}`,
+        detail: ["running", attempts > 1 && `attempt ${attempts}`].filter(Boolean).join(" · "),
+        tone: "neutral",
+        visit: base.visit || undefined,
+        state: base.state,
+        nodeId: node.nodeId,
+        sort: [base.visit, base.phase, offset, index * 2],
       });
     }
   });
@@ -188,8 +208,29 @@ function isTimerWait(card: WaitCard, spec: MachineSpec | undefined, state: strin
   return spec.states[state]?.timers[Number(match[1])] !== undefined;
 }
 
-function waitLabel(card: WaitCard) {
-  return card.prompt ?? (card.kind === "decision" ? "decision" : `${card.kind} wait`);
+/** What a wait waits for, said once: a decision's prompt, the events, or the sleep. */
+function waitSubject(card: WaitCard, step: string, accepts?: readonly string[]) {
+  if (card.kind === "decision") return card.prompt ?? `decision on ${step}`;
+  if (card.kind === "event") return accepts?.length ? accepts.join(" / ") : `event for ${step}`;
+  return card.prompt ?? `sleep in ${step}`;
+}
+
+/** The wait's kind and step, unless its subject already says them. */
+function waitContext(card: WaitCard, step: string, subject: string) {
+  return subject.includes(step) ? undefined : `${card.kind} on ${step}`;
+}
+
+/** A decision's outcome in a few words: a string as is, a flat object as `key: value`. */
+export function outcomeText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const fields = Object.entries(value as Record<string, unknown>).filter(
+      ([, item]) => item !== "" && item !== null && item !== undefined,
+    );
+    if (fields.every(([, item]) => typeof item !== "object"))
+      return fields.map(([key, item]) => `${key}: ${String(item)}`).join(", ") || "{}";
+  }
+  return JSON.stringify(value);
 }
 
 function waitEntries(
@@ -197,18 +238,24 @@ function waitEntries(
   nodes: ReadonlyMap<string, NodeSnapshotMsg>,
   nodeOffset: (clock: number) => number,
   wallOffset: (at: number) => number,
-  base: { visit: number; phase: number; state?: string; prefix: string },
+  base: { visit: number; phase: number; state?: string; prefix: string; accepts?: string[] },
 ): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
+  const where = inVisit(base.state, base.visit);
   cards.forEach((card, index) => {
     const node = nodes.get(card.nodeId);
+    const step = node ? stepName(node, base.visit || undefined) : card.nodeId;
+    const subject = waitSubject(card, step, base.accepts);
+    const context = waitContext(card, step, subject);
     const opened = node && node.startedAt > 0 ? nodeOffset(node.startedAt) : undefined;
     entries.push({
       id: `${base.prefix}wait:${card.nodeId}:open`,
       kind: "wait-opened",
       offset: opened,
-      title: `Wait opened: ${waitLabel(card)}`,
-      detail: `${card.kind} · ${node ? stepName(node, base.visit || undefined) : card.nodeId}`,
+      timeNote:
+        opened === undefined ? "The host has not reported when this wait opened." : undefined,
+      title: `Wait opened${where} · ${subject}`,
+      detail: context,
       tone: "neutral",
       visit: base.visit || undefined,
       state: base.state,
@@ -227,12 +274,21 @@ function waitEntries(
         kind: "wait-resolved",
         offset: closed,
         at: card.audit?.at,
-        title: `Wait ${card.state}: ${waitLabel(card)}`,
-        detail: card.audit
-          ? [card.audit.reason, `outcome ${JSON.stringify(card.audit.outcome)}`]
-              .filter(Boolean)
-              .join(" · ")
-          : undefined,
+        timeNote:
+          closed === undefined ? "The host has not reported when this wait closed." : undefined,
+        title: `Wait ${card.state}${where} · ${subject}`,
+        detail:
+          [
+            card.audit && `decided ${outcomeText(card.audit.outcome)}`,
+            card.audit?.reason && `reason: ${card.audit.reason}`,
+            context,
+          ]
+            .filter(Boolean)
+            .join(" · ") || undefined,
+        took:
+          opened !== undefined && closed !== undefined && closed >= opened
+            ? closed - opened
+            : undefined,
         status: card.state,
         tone: card.state === "resolved" ? "ok" : "muted",
         visit: base.visit || undefined,
@@ -247,6 +303,18 @@ function waitEntries(
 
 function receiptText(receipt: MachineEventReceipt) {
   return `receipt ${receipt.receipt_id.slice(0, 8)} · key ${receipt.key}${receipt.duplicate ? " · duplicate" : ""}`;
+}
+
+/**
+ * Fills each entry's wall-clock time from the run's start where the host gave none
+ * (start + offset), and says why a time is unknown where it is.
+ */
+function withClock(entries: TimelineEntry[], wallBase: number, unknown: string) {
+  for (const entry of entries) {
+    if (entry.offset === undefined) entry.timeNote ??= unknown;
+    else if (entry.at === undefined && wallBase) entry.at = wallBase + entry.offset;
+  }
+  return entries;
 }
 
 function outcomeEntry(
@@ -270,7 +338,7 @@ function outcomeEntry(
     kind: "outcome",
     offset,
     at,
-    title: `Run ${status === "success" ? "succeeded" : status}${state ? ` in ${state}` : ""}`,
+    title: `Run ${status === "success" || status === "succeeded" ? "succeeded" : status}${state ? ` in ${state}` : ""}`,
     detail,
     status,
     tone,
@@ -310,7 +378,7 @@ export function flowTimeline({
       offset: 0,
       at: wallBase || undefined,
       title: "Run started",
-      detail: summary?.triggeredBy,
+      detail: summary?.triggeredBy ? `triggered by ${summary.triggeredBy}` : undefined,
       tone: "neutral",
       sort: [0, PHASE_ENTER, 0, 0],
     },
@@ -337,7 +405,9 @@ export function flowTimeline({
       outcomeEntry(status, ended ?? lastStep, seal?.timestamp || undefined, 0, seal?.reason),
     );
   }
-  return entries.sort(compareTimelineEntries);
+  return withClock(entries, wallBase, "The host has not reported when this happened.").sort(
+    compareTimelineEntries,
+  );
 }
 
 export interface MachineTimelineInput {
@@ -361,6 +431,12 @@ export interface MachineTimelineInput {
    * them rather than showing in the wrong place.
    */
   clocksPending?: boolean;
+}
+
+/** Why a transition happened: "event amended (external)", "timer", "cancel". */
+function arcCause(transition: Pick<MachineTransition, "event" | "source">) {
+  if (transition.event) return `event ${transition.event} (${transition.source})`;
+  return transition.source;
 }
 
 function eventVerdict(
@@ -399,8 +475,7 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
       kind: "run-started",
       offset: wallBase ? 0 : undefined,
       at: wallBase || undefined,
-      title: "Run started",
-      detail: spec ? `initial state ${spec.initial}` : undefined,
+      title: spec ? `Run started in ${spec.initial}` : "Run started",
       tone: "neutral",
       state: spec?.initial,
       sort: [0, PHASE_ENTER, 0, 0],
@@ -434,10 +509,13 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
       kind: "visit-entered",
       offset: entered,
       at: record?.entered_at ?? undefined,
-      title: `Entered ${state}`,
+      timeNote:
+        record?.disposition === "expired"
+          ? "This visit's history has expired, so its times are gone."
+          : undefined,
+      title: `Entered ${state} (visit ${visit})`,
       detail: [
-        `visit ${visit}`,
-        previous ? `via ${previous.event ?? previous.source}` : undefined,
+        previous ? `from ${previous.from} on ${arcCause(previous)}` : undefined,
         record?.disposition === "expired" ? "history expired" : undefined,
         current ? "current" : undefined,
       ]
@@ -464,8 +542,8 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
         kind: "timer-armed",
         offset: entered,
         at: record?.entered_at ?? undefined,
-        title: `Timer armed → ${timer.target}`,
-        detail: `after ${formatDelay(timer.delay_seconds)}${due !== undefined ? ` · due ${new Date(due * 1000).toLocaleTimeString()}` : ""}`,
+        title: `Timer armed in ${state} → ${timer.target}`,
+        detail: `fires after ${formatDelay(timer.delay_seconds)}${due !== undefined ? ` · due ${new Date(due * 1000).toLocaleTimeString()}` : ""}`,
         tone: "neutral",
         visit,
         state,
@@ -479,7 +557,15 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
       // A visit's steps start as the visit is entered: anchor their clock there.
       const anchor = starts.length ? Math.min(...starts) : 0;
       const nodeOffset = (clock: number) => (entered ?? 0) + Math.max(0, clock - anchor);
-      const scope = { visit, phase: PHASE_BODY, state, prefix: `v${visit}:` };
+      const scope = {
+        visit,
+        phase: PHASE_BODY,
+        state,
+        prefix: `v${visit}:`,
+        accepts: declaration?.transitions
+          .map((transition) => transition.event)
+          .filter((event): event is string => Boolean(event)),
+      };
       entries.push(...stepEntries(nodes, nodeOffset, scope));
       const byId = new Map(nodes.map((node) => [node.nodeId, node] as const));
       entries.push(
@@ -508,16 +594,23 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
         (transition) => transition.event === fact.event,
       )?.target;
       const offset = wallOffset(fact.at);
+      const moves = verdict.word === "accepted" || verdict.word === "delivered";
+      const deferredFrom =
+        fact.status === "consumed" && fact.receipt_id
+          ? acceptedIn.get(fact.receipt_id)
+          : undefined;
       entries.push({
         id: `v${visit}:fact:${fact.tseq}`,
         kind: "event",
         offset,
         at: fact.at,
-        title: `Event ${fact.event ?? "—"} ${verdict.word}`,
+        title: `Event ${fact.event ?? "(unnamed)"} ${verdict.word} in ${state}${moves && target !== undefined ? ` → ${target}` : ""}`,
         detail: [
+          verdict.word === "deferred" ? "held for a later state" : undefined,
+          verdict.word === "ignored" ? `${state} does not accept it` : undefined,
+          deferredFrom !== undefined ? `deferred since visit ${deferredFrom}` : undefined,
           fact.source,
           receipt && fact.status === "accepted" ? receiptText(receipt) : undefined,
-          verdict.word === "deferred" ? "held for a later state" : undefined,
         ]
           .filter(Boolean)
           .join(" · "),
@@ -540,7 +633,10 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
         kind: "timer-fired",
         offset: left,
         at: record?.left_at ?? undefined,
-        title: `Timer fired → ${transition.to ?? "closed"}`,
+        title: `Timer fired in ${state} → ${transition.to ?? "closed"}`,
+        detail: declaration?.timers[0]
+          ? `after ${formatDelay(declaration.timers[0].delay_seconds)}`
+          : undefined,
         tone: "neutral",
         visit,
         state,
@@ -553,8 +649,8 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
         kind: "timer-cancelled",
         offset: left,
         at: record?.left_at ?? undefined,
-        title: "Timer cancelled",
-        detail: `left ${state} first`,
+        title: `Timer cancelled in ${state}`,
+        detail: "the visit left before it fired",
         tone: "muted",
         visit,
         state,
@@ -567,7 +663,7 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
         kind: "cancelled",
         offset: left,
         at: record?.left_at ?? undefined,
-        title: `Run cancelled in ${state}`,
+        title: `Run cancelled in ${state} (visit ${visit})`,
         tone: "warn",
         visit,
         state,
@@ -580,8 +676,9 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
       kind: "visit-left",
       offset: left,
       at: record?.left_at ?? undefined,
-      title: `Left ${state} → ${transition.to ?? "closed"}`,
-      detail: `on ${transition.event ?? (transition.source === "timer" ? "timer" : transition.source)} · ${transition.source}`,
+      title: `Left ${state} (visit ${visit}) → ${transition.to ?? "closed"}`,
+      detail: `on ${arcCause(transition)}`,
+      took: span(record?.entered_at, record?.left_at),
       tone: "neutral",
       visit,
       state,
@@ -613,8 +710,8 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
       kind: "receipt",
       offset,
       at: receipt.accepted_at,
-      title: `Send receipt ${receipt.status}`,
-      detail: receiptText(receipt),
+      title: `Send receipt ${receipt.status} for key ${receipt.key}`,
+      detail: `receipt ${receipt.receipt_id.slice(0, 8)}${receipt.duplicate ? " · duplicate" : ""}`,
       status: receipt.status,
       tone: receipt.status === "accepted" ? "ok" : "warn",
       visit,
@@ -645,7 +742,13 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
       );
     }
   }
-  return entries.sort(compareTimelineEntries);
+  return withClock(
+    entries,
+    wallBase,
+    wallBase
+      ? "The host has not reported when this happened."
+      : "The run's start time is not reported, so no time since it can be shown.",
+  ).sort(compareTimelineEntries);
 }
 
 /** What a machine run waits for now: its timer, deferred events, accepted events, waits. */
@@ -687,8 +790,8 @@ export function machinePending(
       items.push({
         id: `wait:${card.nodeId}`,
         kind: "wait",
-        title: `Waiting: ${waitLabel(card)}`,
-        detail: card.kind,
+        title: `Waiting: ${waitSubject(card, stepName({ name: card.nodeId, nodeId: card.nodeId }, instance.visit), instance.accepts)}`,
+        detail: card.prompt ? card.kind : undefined,
         state,
         card,
         visit: instance.visit,
@@ -712,8 +815,8 @@ export function flowPending(waits: readonly WaitCard[], settled: boolean): Pendi
     .map((card) => ({
       id: `wait:${card.nodeId}`,
       kind: "wait" as const,
-      title: `Waiting: ${waitLabel(card)}`,
-      detail: card.kind,
+      title: `Waiting: ${waitSubject(card, card.nodeId)}`,
+      detail: card.prompt ? card.kind : undefined,
       card,
     }));
 }

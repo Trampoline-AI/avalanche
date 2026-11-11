@@ -304,7 +304,20 @@ describe("run timeline in the bottom pane", () => {
       "v3:timer:0:armed",
     ]);
     const timeline = screen.getByRole("region", { name: "Run timeline" });
-    expect(within(timeline).getByText("Event merged deferred")).toBeInTheDocument();
+    expect(within(timeline).getByText("Event merged deferred in amend")).toBeInTheDocument();
+    // One time column, labeled once: every row has a time since the run started,
+    // its tooltip the local clock time (or why there is none).
+    const columns = timeline.querySelectorAll("[data-time-column-label]");
+    expect(columns).toHaveLength(1);
+    expect(columns[0]).toHaveTextContent("+ since start");
+    const times = [...timeline.querySelectorAll(".run-timeline-row time")];
+    expect(times).toHaveLength(events().length);
+    for (const time of times) {
+      expect(time.textContent).toMatch(/^(\+\S+|—)$/);
+      expect(time.getAttribute("title")).toMatch(
+        time.textContent === "—" ? /^Time unknown: \S/ : /since the run started/,
+      );
+    }
     expect(within(timeline).getByText(/receipt r-2 · key k-amended/)).toBeInTheDocument();
     // What the run waits for now stays pinned on top.
     const pending = within(timeline).getByRole("list", { name: "Pending" });
@@ -536,9 +549,11 @@ describe("run timeline in the bottom pane", () => {
       ),
     );
     // The resolved wait's entry carries the audit outcome.
-    const resolved = await screen.findByText(/Wait resolved: Merge this PR\?/);
+    const resolved = await screen.findByText(
+      /Wait resolved in \S+ \(visit 3\) · Merge this PR\?/,
+    );
     expect(resolved.closest("button")).toHaveTextContent(
-      'ship it · outcome {"payload_digest":"sha256:ab12"}',
+      "decided payload_digest: sha256:ab12 · reason: ship it",
     );
   });
 
@@ -614,18 +629,17 @@ describe("run timeline in the bottom pane", () => {
     const tab = await screen.findByRole("tab", { name: "Timeline" });
     expect(screen.getByRole("tab", { name: /^Logs/ })).toHaveAttribute("aria-selected", "true");
     fireEvent.click(tab);
-    await waitFor(() =>
-      expect(events()).toEqual([
-        "run-started",
-        "step:fetch:start",
-        "step:fetch:end",
-        "outcome",
-      ]),
-    );
-    expect(screen.getByText("Step Fetch succeeded")).toBeInTheDocument();
+    await waitFor(() => expect(events()).toEqual(["run-started", "step:fetch:end", "outcome"]));
+    // A step reads as a sentence: its display name, how it ended, retries, how long it took.
+    const step = screen.getByText("Step Fetch ran").closest("button")!;
+    expect(step).toHaveTextContent(/^Step Fetch ran · ok · after 2 attempts · took \S+s$/);
+    const timeline = screen.getByRole("region", { name: "Run timeline" });
+    expect(within(timeline).getByText("+ since start")).toBeInTheDocument();
+    for (const time of timeline.querySelectorAll(".run-timeline-row time"))
+      expect(time.textContent).toMatch(/^\+\d/);
     fireEvent.click(cardAction(container, "fetch"));
     expect(await screen.findByText("Step: Fetch")).toBeInTheDocument();
-    expect(events()).toEqual(["step:fetch:start", "step:fetch:end"]);
+    expect(events()).toEqual(["step:fetch:end"]);
   });
 
   it("keeps the tab labels static while a scope chip shows and clears the pane's scope", async () => {

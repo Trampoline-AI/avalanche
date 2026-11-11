@@ -213,34 +213,29 @@ const line = (entry: TimelineEntry) => `${entry.kind}: ${entry.title}`;
 describe("machine run timeline", () => {
   it("merges visits, steps, events, receipts, timers and the outcome in time order", () => {
     expect(closedRun().map(line)).toEqual([
-      "run-started: Run started",
-      "visit-entered: Entered in_review",
-      "step-started: Step work started",
-      "step-finished: Step work succeeded",
-      "event: Event review_done_with_nits accepted",
-      "visit-left: Left in_review → amend",
-      "visit-entered: Entered amend",
-      "step-started: Step work started",
-      "step-finished: Step work succeeded",
-      "event: Event amended accepted",
-      "event: Event merged deferred",
-      "event: Event closed_without_merge ignored",
-      "visit-left: Left amend → in_review",
-      "visit-entered: Entered in_review",
-      "step-started: Step work started",
-      "step-finished: Step work succeeded",
-      "visit-left: Left in_review → ready_to_merge",
-      "visit-entered: Entered ready_to_merge",
-      "timer-armed: Timer armed → closed",
-      "step-started: Step work started",
-      "step-finished: Step work succeeded",
-      "receipt: Send receipt accepted",
-      "event: Event merged delivered",
-      "timer-cancelled: Timer cancelled",
-      "visit-left: Left ready_to_merge → closed",
-      "visit-entered: Entered closed",
-      "step-started: Step work started",
-      "step-finished: Step work succeeded",
+      "run-started: Run started in in_review",
+      "visit-entered: Entered in_review (visit 1)",
+      "step-finished: Step work ran in in_review (visit 1)",
+      "event: Event review_done_with_nits accepted in in_review → amend",
+      "visit-left: Left in_review (visit 1) → amend",
+      "visit-entered: Entered amend (visit 2)",
+      "step-finished: Step work ran in amend (visit 2)",
+      "event: Event amended accepted in amend → in_review",
+      "event: Event merged deferred in amend",
+      "event: Event closed_without_merge ignored in amend",
+      "visit-left: Left amend (visit 2) → in_review",
+      "visit-entered: Entered in_review (visit 3)",
+      "step-finished: Step work ran in in_review (visit 3)",
+      "visit-left: Left in_review (visit 3) → ready_to_merge",
+      "visit-entered: Entered ready_to_merge (visit 4)",
+      "timer-armed: Timer armed in ready_to_merge → closed",
+      "step-finished: Step work ran in ready_to_merge (visit 4)",
+      "receipt: Send receipt accepted for key seed-late",
+      "event: Event merged delivered in ready_to_merge → closed",
+      "timer-cancelled: Timer cancelled in ready_to_merge",
+      "visit-left: Left ready_to_merge (visit 4) → closed",
+      "visit-entered: Entered closed (visit 5)",
+      "step-finished: Step work ran in closed (visit 5)",
       "outcome: Run succeeded in closed",
     ]);
   });
@@ -257,7 +252,9 @@ describe("machine run timeline", () => {
 
   it("names each entry's state and arc, and attaches send receipts to their events", () => {
     const entries = closedRun();
-    const amended = entries.find((entry) => entry.title === "Event amended accepted")!;
+    const amended = entries.find(
+      (entry) => entry.title === "Event amended accepted in amend → in_review",
+    )!;
     expect(amended).toMatchObject({
       state: "amend",
       arc: { from: "amend", to: "in_review", event: "amended" },
@@ -280,12 +277,12 @@ describe("machine run timeline", () => {
       event: "review_done_with_nits",
     });
     // Inside a visit a step is named without the visit prefix.
-    expect(entries.find((entry) => entry.id === "v2:step:v2.work:start")!.title).toBe(
-      "Step work started",
+    expect(entries.find((entry) => entry.id === "v2:step:v2.work:end")!.title).toBe(
+      "Step work ran in amend (visit 2)",
     );
     // Retries are named on the step.
     expect(entries.find((entry) => entry.id === "v1:step:v1.work:end")!.detail).toBe(
-      "after 2 attempts",
+      "ok · after 2 attempts",
     );
     // A receipt no event fact shows stands alone, in the visit its time falls in.
     expect(entries.find((entry) => entry.kind === "receipt")).toMatchObject({
@@ -315,14 +312,16 @@ describe("machine run timeline", () => {
         ]),
       ),
     });
-    expect(timerRun.map(line)).toContain("timer-fired: Timer fired → closed");
+    expect(timerRun.map(line)).toContain("timer-fired: Timer fired in ready_to_merge → closed");
     expect(timerRun.find((entry) => entry.kind === "timer-fired")!.arc).toEqual({
       from: "ready_to_merge",
       to: "closed",
       event: null,
       timer: true,
     });
-    expect(timerRun.map(line)).not.toContain("timer-cancelled: Timer cancelled");
+    expect(timerRun.map(line)).not.toContain(
+      "timer-cancelled: Timer cancelled in ready_to_merge",
+    );
 
     const cancelled: MachineTransition[] = [
       { from: "in_review", to: null, event: null, source: "cancel", visit: 1 },
@@ -348,7 +347,9 @@ describe("machine run timeline", () => {
       settled: true,
       fromStart: true,
     });
-    expect(cancelRun.map(line).slice(-1)).toEqual(["cancelled: Run cancelled in in_review"]);
+    expect(cancelRun.map(line).slice(-1)).toEqual([
+      "cancelled: Run cancelled in in_review (visit 1)",
+    ]);
     expect(cancelRun.some((entry) => entry.kind === "outcome")).toBe(false);
   });
 
@@ -364,12 +365,14 @@ describe("machine run timeline", () => {
       clocksPending: true,
     });
     expect(entries.map(line)).toEqual([
-      "run-started: Run started",
-      "visit-entered: Entered in_review",
-      "visit-left: Left in_review → amend",
-      "visit-entered: Entered amend",
+      "run-started: Run started in in_review",
+      "visit-entered: Entered in_review (visit 1)",
+      "visit-left: Left in_review (visit 1) → amend",
+      "visit-entered: Entered amend (visit 2)",
     ]);
     expect(entries.every((entry) => entry.offset === undefined)).toBe(true);
+    // An unknown time still says why (the row's "—" carries it as a tooltip).
+    expect(entries.every((entry) => (entry.timeNote ?? "").length > 0)).toBe(true);
   });
 
   it("omits what a host does not report, without placeholders", () => {
@@ -445,7 +448,7 @@ describe("machine pending row", () => {
     expect(titles).toEqual(["Timer → closed", "Deferred merged", "Waiting for event"]);
     const entries = closedRun({ waits: [{ ...timerWait, state: "withdrawn" }] });
     expect(entries.filter((entry) => entry.kind.startsWith("wait-"))).toEqual([]);
-    expect(entries.map(line)).toContain("timer-armed: Timer armed → closed");
+    expect(entries.map(line)).toContain("timer-armed: Timer armed in ready_to_merge → closed");
   });
 
   it("pins nothing on a settled run, and claims nothing while the status is unknown", () => {
@@ -516,24 +519,73 @@ describe("flow run timeline", () => {
     const entries = flowTimeline({ run, waits, settled: true, terminalStatuses: ["success"] });
     expect(entries.map(line)).toEqual([
       "run-started: Run started",
-      "step-started: Step lint started",
-      "step-finished: Step lint succeeded",
-      "step-started: Step review started",
-      "step-finished: Step review succeeded",
-      "step-started: Step approve started",
-      "wait-opened: Wait opened: Ship it?",
-      "wait-resolved: Wait resolved: Ship it?",
-      "step-finished: Step approve succeeded",
+      "step-finished: Step lint ran",
+      "step-finished: Step review ran",
+      "wait-opened: Wait opened · Ship it?",
+      "wait-resolved: Wait resolved · Ship it?",
+      "step-finished: Step approve ran",
       "outcome: Run succeeded",
     ]);
-    expect(entries.find((entry) => entry.id === "step:lint:end")!.detail).toBe(
-      "after 3 attempts",
+    // One row per finished step: how it ended, retries, and how long it took.
+    expect(entries.find((entry) => entry.id === "step:lint:end")).toMatchObject({
+      detail: "ok · after 3 attempts",
+      took: 1,
+    });
+    expect(entries.find((entry) => entry.id === "step:review:end")!.took).toBe(3);
+    // The wait says what it waits for once; the audit says what was decided and why.
+    expect(entries.find((entry) => entry.kind === "wait-opened")!.detail).toBe(
+      "decision on approve",
     );
-    // The audit: who-why and what was decided, on the resolved wait's entry.
-    expect(entries.find((entry) => entry.kind === "wait-resolved")!.detail).toBe(
-      'looks good · outcome {"ok":true}',
-    );
+    expect(entries.find((entry) => entry.kind === "wait-resolved")).toMatchObject({
+      detail: "decided ok: true · reason: looks good · decision on approve",
+      took: 1,
+    });
     expect(entries.at(-1)!.offset).toBe(9);
+    // Every row has a time since the run started, and a wall-clock time for its tooltip.
+    expect(entries.every((entry) => entry.offset !== undefined && entry.at !== undefined)).toBe(
+      true,
+    );
+  });
+
+  it("names a decision without a prompt once, not 'decision · decision'", () => {
+    const bare: WaitCard = { ...waits[0], prompt: null };
+    const entries = flowTimeline({
+      run,
+      waits: [bare],
+      settled: true,
+      terminalStatuses: ["success"],
+    });
+    const opened = entries.find((entry) => entry.kind === "wait-opened")!;
+    expect(`${opened.title} · ${opened.detail ?? ""}`).not.toMatch(/decision.*decision/);
+    expect(opened.title).toBe("Wait opened · decision on approve");
+    expect(opened.detail).toBeUndefined();
+    const pending = flowPending([{ ...bare, state: "waiting", audit: undefined }], false)[0];
+    expect(pending.title).toBe("Waiting: decision on approve");
+    expect(pending.detail).toBeUndefined();
+  });
+
+  it("shows a running step as started, with no duration yet", () => {
+    const running = flowTimeline({
+      run: {
+        ...run,
+        nodes: [
+          NodeSnapshotMsg.create({
+            nodeId: "lint",
+            name: "lint",
+            status: "running",
+            startedAt: 101,
+          }),
+        ],
+      },
+      settled: false,
+      terminalStatuses: ["success"],
+    });
+    expect(running.find((entry) => entry.kind === "step-started")).toMatchObject({
+      title: "Step lint started",
+      detail: "running",
+      offset: 1,
+    });
+    expect(running.find((entry) => entry.kind === "step-started")!.took).toBeUndefined();
   });
 
   it("shows no outcome while the run is live, and pins its open waits", () => {

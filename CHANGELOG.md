@@ -22,6 +22,10 @@
   widths; the pane's scope shows in a chip above its content ("All steps",
   "Step: apply_nits · visit 2", "All states", "State: amend") with a clear
   button, replacing the timeline's "Showing … · Show all" row.
+- Operator UI: every Timeline row has one time column, labeled "+ since start"
+  (hover for the local time; "—" says why a time is unknown), rows read as
+  sentences ("Step apply_nits ran in amend (visit 2) · ok · took 0.2s"), and a
+  finished step, visit or wait shows how long it took on one row.
 - Operator UI: the runs panel is titled **Runs** (was Timeline; its expand and
   collapse actions read "Expand runs" / "Collapse runs"). Run key labels keep
   their full width in the list; the date after them truncates instead, and the
