@@ -362,5 +362,13 @@
         "type": "null"
       }
     }
+  },
+  "key_declarations": {
+    "repo": {
+      "type": "str"
+    },
+    "number": {
+      "type": "int"
+    }
   }
 }

@@ -6,9 +6,11 @@ import json
 from collections.abc import Mapping
 from datetime import UTC, date, datetime
 from enum import Enum
+from types import UnionType
+from typing import Annotated, Literal, Union, get_args, get_origin
 from uuid import UUID
 
-from pydantic import BaseModel, JsonValue, TypeAdapter, create_model
+from pydantic import BaseModel, JsonValue, TypeAdapter
 from pydantic_core import SchemaValidator
 
 # Admission-path work bounds apply to both deployed declarations and input values.
@@ -40,7 +42,10 @@ def _plain_model(model, names, path):
         raise ValueError(f"run key field {path!r}: non-portable model config/alias generator")
     for name in names:
         field = model.model_fields[name]
-        if field.alias or field.validation_alias or field.serialization_alias:
+        if any(
+            alias is not None
+            for alias in (field.alias, field.validation_alias, field.serialization_alias)
+        ):
             raise ValueError(f"run key field {path}.{name}: aliases are not portable")
         if field.default_factory is not None:
             raise ValueError(f"run key field {path}.{name}: default factories are not portable")
@@ -113,6 +118,9 @@ def _export(schema, path, definitions, budget, depth=0):
             raise ValueError(f"run key field {path!r}: only plain nested models are portable")
     if kind == "model-fields" and schema.get("computed_fields"):
         raise ValueError(f"run key field {path!r}: computed fields are not portable")
+    if kind == "default":
+        result["default"] = canonical_value(schema["default"])
+        result["validate_default"] = True
     if kind == "enum":
         result["members"] = [member.value for member in schema["members"]]
         if any(
@@ -140,6 +148,39 @@ def _export(schema, path, definitions, budget, depth=0):
     return result
 
 
+def _check_annotation(annotation, path, seen):
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _check_annotation(get_args(annotation)[0], path, seen)
+    if origin in (Union, UnionType, tuple, set, frozenset, list, dict):
+        for child in get_args(annotation):
+            if child is not Ellipsis:
+                _check_annotation(child, path, seen)
+        return
+    if origin is Literal or annotation in (
+        str,
+        int,
+        float,
+        bool,
+        type(None),
+        UUID,
+        date,
+        datetime,
+    ):
+        return
+    if isinstance(annotation, type) and issubclass(annotation, Enum):
+        return
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+        if annotation in seen:
+            raise ValueError(f"run key field {path!r}: recursive models are not portable")
+        if "__get_pydantic_core_schema__" in annotation.__dict__:
+            raise ValueError(f"run key field {path!r}: custom model schema is not portable")
+        for name, field in annotation.model_fields.items():
+            _check_annotation(field.annotation, f"{path}.{name}", seen | {annotation})
+        return
+    raise ValueError(f"run key field {path!r}: unsupported type {annotation!r}")
+
+
 def key_declarations(input_type, fields) -> dict[str, JsonValue]:
     """Check a declaration, exporting only identity fields, before any host runs it."""
     if not fields:
@@ -153,6 +194,7 @@ def key_declarations(input_type, fields) -> dict[str, JsonValue]:
     budget = [MAX_SCHEMA_NODES]
     for name in fields:
         field = input_type.model_fields[name]
+        _check_annotation(field.annotation, name, set())
         schema = TypeAdapter(field.rebuild_annotation()).core_schema
         if not field.is_required():
             schema = {
@@ -164,6 +206,15 @@ def key_declarations(input_type, fields) -> dict[str, JsonValue]:
         declarations[name] = _export(schema, name, {}, budget)
     bounded(declarations, limit=MAX_SCHEMA_NODES)
     return declarations
+
+
+class _KeyModel:
+    __slots__ = (
+        "__dict__",
+        "__pydantic_extra__",
+        "__pydantic_private__",
+        "__pydantic_fields_set__",
+    )
 
 
 def _compile_portable(schema):
@@ -181,7 +232,7 @@ def _compile_portable(schema):
         )
         result.update(cls=cls, members=list(cls))
     if kind == "model":
-        result["cls"] = create_model("RunKeyModel")
+        result["cls"] = type("RunKeyModel", (_KeyModel,), {})
     for key in _CHILDREN & schema.keys():
         child = schema[key]
         if key == "fields":
@@ -195,7 +246,10 @@ def _compile_portable(schema):
 
 def _native(value):
     if isinstance(value, BaseModel):
-        return {name: _native(item) for name, item in value.__dict__.items()}
+        return {
+            name: _native(item)
+            for name, item in {**value.__dict__, **(value.__pydantic_extra__ or {})}.items()
+        }
     if isinstance(value, Enum):
         return value.value
     if isinstance(value, dict):
@@ -207,8 +261,11 @@ def _native(value):
 
 def canonical_value(value):
     """JSON identity, with UTC datetimes and recursively sorted unordered values."""
-    if isinstance(value, BaseModel):
-        return {name: canonical_value(item) for name, item in value.__dict__.items()}
+    if isinstance(value, (BaseModel, _KeyModel)):
+        return {
+            name: canonical_value(item)
+            for name, item in {**value.__dict__, **(value.__pydantic_extra__ or {})}.items()
+        }
     if isinstance(value, Enum):
         return canonical_value(value.value)
     if isinstance(value, datetime):

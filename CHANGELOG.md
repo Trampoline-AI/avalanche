@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Use one portable run-key contract on the SDK test host, local operator and
+  deployed hosts. UUIDs, dates, UTC datetimes, enums, tuples, sets/frozensets,
+  nested plain models and plain unions now share typed normalization; unordered
+  values are sorted independently of Python's hash seed. Existing supported key
+  bytes and manifests without typed key declarations remain readable.
+- **Breaking:** workflow/machine key fields with custom validators, serializers,
+  aliases/alias generators, default factories or unsupported types/configuration
+  are refused at definition time with the field name. Move business normalization
+  before the start operation and pass a plain portable identity field instead.
+
 ## 0.20.7
 
 - Operator: new keyed flow and machine starts reuse normalized key values before
