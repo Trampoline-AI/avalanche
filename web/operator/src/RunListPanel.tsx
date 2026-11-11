@@ -3,9 +3,19 @@ import { type ReactNode, useEffect, useId, useMemo, useRef, useState } from "rea
 import { ChevronUp, Maximize2, Minimize2, Workflow } from "lucide-react";
 
 import { formatElapsedSeconds } from "./elapsedDuration";
-import type { RunSummaryMsg, TriggerKind } from "./model";
+import type { RunSummaryMsg } from "./model";
+import {
+  type PriorityFit,
+  type TextMeasure,
+  fitPriorityFields,
+  priorityFieldVisible,
+  textMeasure,
+  twoLineWidth,
+  useObservedWidth,
+} from "./priorityFit";
 import { RunStatus } from "./RunStatus";
 import { DeploymentList } from "./DeploymentList";
+import { formatAbsoluteTime, formatTimeAgo, useNow } from "./timeAgo";
 import { useTimelineScrollHandle } from "./useTimelineScrollHandle";
 import type { WorkflowWorkspaceProps } from "./WorkflowWorkspace";
 
@@ -17,12 +27,10 @@ const RUN_ROW_OVERSCAN = 8;
 const RUN_PAGE_SIZE = 25;
 const statusChipClass = (active: boolean) =>
   `inline-flex h-7 shrink-0 cursor-pointer items-center gap-1 whitespace-nowrap rounded border px-2 text-xs transition-colors focus-visible:outline-2 focus-visible:outline-acid ${active ? "border-acid bg-selected text-acid" : "border-transparent bg-panel text-ink hover:border-acid"}`;
-const RUN_TIMESTAMP_FORMAT = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-});
+// The row's horizontal chrome around its fields cell: pl-[16px] pr-[30px], the
+// 12px column gap and the 100px status column.
+const RUN_ROW_CHROME = 16 + 30 + 12 + 100;
+const RUN_FIELD_GAP = 8;
 
 interface RunListPanelProps extends Pick<
   WorkflowWorkspaceProps,
@@ -62,12 +70,57 @@ function runDuration(elapsedSeconds: number | undefined) {
   return elapsedSeconds === undefined ? "—" : formatElapsedSeconds(elapsedSeconds);
 }
 
-const TRIGGER_LABELS: Record<TriggerKind, string> = {
-  scheduled: "Scheduled",
-  manual: "Manual",
-  webhook: "Webhook",
-  api: "API",
-};
+/** A run id short enough for a row ("run_327c3ae7" is "327c3ae7"); the full id stays in the row's title. */
+export function shortRunId(runId: string): string {
+  if (runId.length <= 8) return runId;
+  const bare = runId.replace(/^run[_-]/, "");
+  return bare.length <= 12 ? bare : bare.slice(0, 8);
+}
+
+/**
+ * A run row's secondary text: "3 min ago (36.4s)" once the run has settled with a
+ * known duration, else just "3 min ago". No trigger/source token.
+ */
+export function runSecondaryText(timeAgo: string, elapsedSeconds: number | undefined): string {
+  return elapsedSeconds === undefined
+    ? timeAgo
+    : `${timeAgo} (${formatElapsedSeconds(elapsedSeconds)})`;
+}
+
+/**
+ * Which run row fields fit, most important first. Status (its own column) and the
+ * time ago are never dropped; as the row narrows, the duration drops first, then
+ * the short run id, then the key label. A kept label wraps to two lines rather
+ * than ellipsizing.
+ */
+export function fitRunRow(
+  available: number,
+  fields: { timeText: string; label?: string; shortId: string; duration?: string },
+  measure: TextMeasure,
+  gap = RUN_FIELD_GAP,
+): PriorityFit {
+  const width = (text: string) => Math.ceil(measure(text)) + 1;
+  return fitPriorityFields(
+    available,
+    [
+      { id: "time", width: width(fields.timeText), required: true },
+      ...(fields.label
+        ? [
+            {
+              id: "key",
+              width: width(fields.label),
+              minWidth: Math.min(width(fields.label), twoLineWidth(fields.label, measure)),
+            },
+          ]
+        : []),
+      { id: "id", width: width(fields.shortId) },
+      ...(fields.duration
+        ? [{ id: "duration", width: width(` (${fields.duration})`), attached: true }]
+        : []),
+    ],
+    gap,
+  );
+}
 
 function runTriggeredAt(summary: RunSummaryMsg): Date | undefined {
   return summary.triggeredAt ? new Date(summary.triggeredAt * 1000) : undefined;
@@ -156,6 +209,38 @@ export function RunListPanel({
   const visibleRunCount = expanded
     ? Math.min(RUN_PAGE_SIZE, filteredRuns.length - pageOffset)
     : Math.min(timelinePageCount * RUN_PAGE_SIZE, filteredRuns.length);
+  const now = useNow();
+  const columnsHeader = useRef<HTMLDivElement>(null);
+  const listWidth = useObservedWidth(scrollElement, view === "runs");
+  const fontSize = expanded ? 11 : 10;
+  // One width for every row (they share the grid), measured by the shared
+  // ResizeObserver; each row's fields fit by priority instead of truncating.
+  const rowFits = useMemo(() => {
+    const header = columnsHeader.current;
+    const measure =
+      listWidth && header
+        ? textMeasure(`${fontSize}px ${getComputedStyle(header).fontFamily}`)
+        : undefined;
+    return filteredRuns.slice(pageOffset, pageOffset + visibleRunCount).map((summary) => {
+      if (!measure || !listWidth) return undefined;
+      const triggeredAt = runTriggeredAt(summary);
+      const elapsedSeconds = runElapsedSeconds(summary);
+      return fitRunRow(
+        listWidth - RUN_ROW_CHROME,
+        {
+          timeText: `${summary.expired ? "expired · " : ""}${triggeredAt ? formatTimeAgo(triggeredAt, now) : "start time not recorded"}`,
+          label: summary.label || undefined,
+          shortId: shortRunId(summary.runId),
+          duration:
+            elapsedSeconds === undefined ? undefined : formatElapsedSeconds(elapsedSeconds),
+        },
+        measure,
+      );
+    });
+  }, [filteredRuns, fontSize, listWidth, now, pageOffset, visibleRunCount]);
+  // A wrapped (two-line) key label adds one line to its row.
+  const rowHeights = rowFits.map((fit) => rowHeight + (fit?.wrapped.has("key") ? fontSize : 0));
+  const rowHeightsKey = rowHeights.join(",");
   useEffect(() => {
     setTimelinePageCount(1);
   }, [workflowId]);
@@ -201,13 +286,13 @@ export function RunListPanel({
   const virtualizer = useVirtualizer({
     count: visibleRunCount,
     getScrollElement: () => scrollElement.current,
-    estimateSize: () => rowHeight,
+    estimateSize: (index) => rowHeights[index] ?? rowHeight,
     getItemKey: (index) => `run:${filteredRuns[pageOffset + index].runId}`,
     overscan: RUN_ROW_OVERSCAN,
   });
   useEffect(() => {
     virtualizer.measure();
-  }, [view, rowHeight, virtualizer]);
+  }, [view, rowHeight, rowHeightsKey, virtualizer]);
   useTimelineScrollHandle(scrollElement, scrollHandle, expanded, view === "runs");
 
   return (
@@ -438,6 +523,7 @@ export function RunListPanel({
         ) : (
           <>
             <div
+              ref={columnsHeader}
               className={`run-list-columns grid shrink-0 grid-cols-[minmax(0,1fr)_100px] items-center gap-3 border-b border-run-list-line font-mono text-[9px] tracking-[0.16em] text-run-status-muted uppercase ${expanded ? "h-9 pl-[16px] pr-[30px]" : "h-7 pl-[16px] pr-[30px]"}`}
               aria-hidden="true"
             >
@@ -470,6 +556,14 @@ export function RunListPanel({
                     // startedAt is a monotonic clock reading, not a date.
                     const triggeredAt = runTriggeredAt(summary);
                     const elapsedSeconds = runElapsedSeconds(summary);
+                    const fit = rowFits[virtualRow.index];
+                    const timeAgo = triggeredAt
+                      ? formatTimeAgo(triggeredAt, now)
+                      : "start time not recorded";
+                    const absolute = triggeredAt ? formatAbsoluteTime(triggeredAt) : undefined;
+                    const showKey = Boolean(summary.label) && priorityFieldVisible(fit, "key");
+                    const showDuration =
+                      elapsedSeconds !== undefined && priorityFieldVisible(fit, "duration");
                     return (
                       <button
                         type="button"
@@ -480,60 +574,54 @@ export function RunListPanel({
                         style={rowStyle}
                         title={summary.runId}
                         data-run-history={summary.expired ? "expired" : undefined}
+                        data-fields={
+                          fit
+                            ? ["status", "time", "key", "id", "duration"]
+                                .filter((id) => id === "status" || fit.visible.has(id))
+                                .join(" ")
+                            : undefined
+                        }
                         aria-label={`${summary.label ? `${summary.label}, ` : ""}${summary.runId}, ${summary.status}${summary.expired ? ", expired" : ""}, ${runDuration(elapsedSeconds)}, ${
-                          TRIGGER_LABELS[summary.triggeredBy]
-                        } trigger, ${
                           triggeredAt
-                            ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
+                            ? `started ${timeAgo}, ${absolute}`
                             : "start time not recorded"
                         }`}
                       >
+                        {/* Nothing here ellipsizes: low-priority fields drop out whole
+                            (duration, then run id, then key); a kept key may wrap. */}
                         <span
-                          className="flex min-w-0 font-mono text-secondary"
-                          // The whole label and date, whatever the row width truncates.
-                          title={[
-                            summary.label,
-                            summary.runId,
-                            triggeredAt ? RUN_TIMESTAMP_FORMAT.format(triggeredAt) : undefined,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
+                          className="run-row-fields flex min-w-0 items-center font-mono text-secondary"
+                          style={{ gap: RUN_FIELD_GAP }}
                         >
-                          {/* The key label comes first and keeps its full width; the date,
-                              duration and trigger after it truncate instead. */}
-                          {summary.label && (
-                            <span className="run-label max-w-full shrink-0 truncate text-ink">
-                              {`${summary.label}\u00a0·\u00a0`}
+                          {showKey && (
+                            <span className="run-label min-w-0 text-ink [overflow-wrap:anywhere]">
+                              {summary.label}
                             </span>
                           )}
-                          <span className="min-w-0 truncate">
-                            {/* Beside the label, so truncation never hides it. */}
+                          {priorityFieldVisible(fit, "id") && (
+                            <span className="run-short-id shrink-0 whitespace-nowrap">
+                              {shortRunId(summary.runId)}
+                            </span>
+                          )}
+                          <span className="run-when shrink-0 whitespace-nowrap">
                             {summary.expired && (
                               <span className="run-expired text-amber">expired · </span>
                             )}
                             <time
                               className="run-triggered-at"
                               dateTime={triggeredAt?.toISOString()}
+                              title={absolute}
                             >
-                              {triggeredAt
-                                ? RUN_TIMESTAMP_FORMAT.format(triggeredAt)
-                                : "Start time not recorded"}
+                              {timeAgo}
                             </time>
-                            {" · "}
-                            <span
-                              className="run-duration"
-                              title={
-                                elapsedSeconds === undefined
-                                  ? undefined
-                                  : `${elapsedSeconds.toFixed(1)} seconds`
-                              }
-                            >
-                              {runDuration(elapsedSeconds)}
-                            </span>
-                            {" · "}
-                            <span className="run-trigger" data-trigger={summary.triggeredBy}>
-                              {TRIGGER_LABELS[summary.triggeredBy]}
-                            </span>
+                            {showDuration && (
+                              <span
+                                className="run-duration"
+                                title={`${elapsedSeconds.toFixed(1)} seconds`}
+                              >
+                                {` (${formatElapsedSeconds(elapsedSeconds)})`}
+                              </span>
+                            )}
                           </span>
                         </span>
                         <span className="justify-self-end text-right">

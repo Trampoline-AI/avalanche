@@ -66,4 +66,24 @@ export {
   runStatusTerminal,
 } from "./runLiveness";
 export { runKeyLabel } from "./runKey";
+// Relative run times on one shared low-frequency clock, and the no-truncation
+// priority fit for run rows, for hosts' own run surfaces (the console top bar).
+export {
+  formatAbsoluteTime,
+  formatTimeAgo,
+  TIME_AGO_TICK_MS,
+  TimeAgo,
+  useNow,
+} from "./timeAgo";
+export type { TimeAgoProps } from "./timeAgo";
+export {
+  fitPriorityFields,
+  priorityFieldVisible,
+  textMeasure,
+  twoLineWidth,
+  useObservedWidth,
+  usePriorityFit,
+} from "./priorityFit";
+export type { PriorityField, PriorityFit, PriorityTextField, TextMeasure } from "./priorityFit";
+export { fitRunRow, runSecondaryText, shortRunId } from "./RunListPanel";
 export type { MachineGraphView } from "./machineGraph";

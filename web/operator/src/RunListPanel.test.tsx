@@ -2,7 +2,9 @@ import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { useState } from "react";
 import { expect, it, vi } from "vitest";
 
-import { RunListPanel } from "./RunListPanel";
+import { fitPriorityFields } from "./priorityFit";
+import { RunListPanel, fitRunRow, runSecondaryText, shortRunId } from "./RunListPanel";
+import { formatAbsoluteTime } from "./timeAgo";
 import { RunSummaryMsg } from "./model";
 import { summary, workflow } from "./test/fixtures";
 import type { WorkspaceDeployments } from "./WorkflowWorkspace";
@@ -761,7 +763,7 @@ it.each([
     ...summary,
     startedAt: 100,
     endedAt: 100 + seconds,
-    triggeredAt: new Date(2026, 10, 3, 9, 30).getTime() / 1000,
+    triggeredAt: Date.now() / 1000 - 180,
   });
   render(
     <RunListPanel
@@ -771,19 +773,21 @@ it.each([
     />,
   );
   const row = screen.getByRole("button", { name: new RegExp(`^${run.runId}, .*, ${label},`) });
-  expect(within(row).getByText(label)).toHaveAttribute(
+  expect(row.querySelector(".run-duration")).toHaveAttribute(
     "title",
     `${seconds.toFixed(1)} seconds`,
   );
-  const timestamp = new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(run.triggeredAt * 1000));
-  expect(row.querySelector(".run-triggered-at")?.parentElement).toHaveTextContent(
-    `${timestamp} · ${label}`,
+  // The secondary line is "<time ago> (<duration>)": no trigger token.
+  expect(row.querySelector(".run-when")).toHaveTextContent(`3 min ago (${label})`);
+  expect(row.querySelector(".run-when")!.textContent).toBe(
+    runSecondaryText("3 min ago", seconds),
   );
+  expect(row.querySelector(".run-triggered-at")).toHaveAttribute(
+    "title",
+    formatAbsoluteTime(run.triggeredAt * 1000),
+  );
+  expect(row.querySelector(".run-trigger")).toBeNull();
+  expect(row).not.toHaveTextContent(/API|Manual|Webhook|Scheduled/);
   expect(row).toHaveStyle({ height: "27.5px", paddingTop: "8.25px", paddingBottom: "8.25px" });
   expect(row).toHaveAttribute("title", run.runId);
   expect(row.querySelector(".run-status-text")).toHaveTextContent(run.status);
@@ -794,13 +798,13 @@ it.each([
   expect(row).toHaveClass("text-left");
 });
 
-it("keeps a run's key label whole: the date after it truncates, and the tooltip has both", () => {
+it("shows only the time ago while a run has no settled duration", () => {
   const run = RunSummaryMsg.create({
     ...summary,
-    label: "acme/api #46",
+    triggeredBy: "webhook",
     startedAt: 100,
-    endedAt: 104,
-    triggeredAt: new Date(2026, 10, 10, 9, 30).getTime() / 1000,
+    endedAt: 0,
+    triggeredAt: Date.now() / 1000 - 2 * 3600 - 60,
   });
   render(
     <RunListPanel
@@ -809,13 +813,118 @@ it("keeps a run's key label whole: the date after it truncates, and the tooltip 
       onSelectRun={vi.fn()}
     />,
   );
-  const row = screen.getByRole("button", { name: /^acme\/api #46, / });
-  const label = row.querySelector(".run-label")!;
-  expect(label).toHaveTextContent("acme/api #46");
-  // The label never shrinks; only the date, duration and trigger beside it truncate.
-  expect(label).toHaveClass("shrink-0");
-  expect(label.contains(row.querySelector(".run-triggered-at"))).toBe(false);
-  expect(row.querySelector(".run-triggered-at")!.closest(".truncate")).not.toBe(label);
+  const row = screen.getByRole("button", { name: /^run-1, / });
+  expect(row.querySelector(".run-when")!.textContent).toBe("2 h ago");
+  expect(runSecondaryText("2 h ago", undefined)).toBe("2 h ago");
+  expect(row.querySelector(".run-duration")).toBeNull();
+  expect(row).not.toHaveTextContent(/webhook/i);
+});
+
+it("never ellipsizes a run row: the key wraps and nothing carries truncate", () => {
+  const run = RunSummaryMsg.create({
+    ...summary,
+    label: "acme/api #46",
+    startedAt: 100,
+    endedAt: 104,
+    triggeredAt: Date.now() / 1000 - 30,
+  });
+  render(
+    <RunListPanel
+      workflowId={workflow.workflowId}
+      runs={{ [run.runId]: run }}
+      onSelectRun={vi.fn()}
+    />,
+  );
+  const row = screen.getByRole("button", { name: /^acme\/api #46, run-1, / });
+  expect(row.querySelector(".run-label")).toHaveTextContent("acme/api #46");
+  expect(row.querySelector(".run-label")).toHaveClass("[overflow-wrap:anywhere]");
+  expect(row.querySelector(".run-short-id")).toHaveTextContent("run-1");
+  expect(row.querySelector(".run-when")).toHaveTextContent("just now (4.0s)");
+  expect(row.querySelectorAll(".truncate, .text-ellipsis")).toHaveLength(0);
   expect(row).toHaveAttribute("title", "run-1");
-  expect(label.parentElement!.getAttribute("title")).toMatch(/^acme\/api #46 · run-1 · /);
+});
+
+// 6px per character, so widths are easy to reason about.
+const measure = (text: string) => text.length * 6;
+
+it.each([
+  [300, "time key id duration", ""],
+  [250, "time key id duration", "key"],
+  [200, "time key id", "key"],
+  [130, "time key", "key"],
+  [100, "time", ""],
+  [40, "time", ""],
+])("fits a run row at %spx by priority: %s", (available, visible, wrapped) => {
+  const fit = fitRunRow(
+    available,
+    {
+      timeText: "3 min ago",
+      label: "acme/api #146",
+      shortId: "run_abcd1234",
+      duration: "36.4s",
+    },
+    measure,
+  );
+  expect([...fit.visible].join(" ")).toBe(visible);
+  expect([...fit.wrapped].join(" ")).toBe(wrapped);
+});
+
+it.each([
+  ["run-1", "run-1"],
+  ["run_327c3ae7", "327c3ae7"],
+  ["0b7f8a62-1c2d-4e5f-8a9b-0c1d2e3f4a5b", "0b7f8a62"],
+])("shortens run id %s to %s", (runId, short) => {
+  expect(shortRunId(runId)).toBe(short);
+});
+
+it("drops the run id with the key even when the id alone would fit", () => {
+  const fit = fitPriorityFields(
+    150,
+    [
+      { id: "time", width: 55, required: true },
+      { id: "key", width: 241, minWidth: 128 },
+      { id: "id", width: 73 },
+    ],
+    8,
+  );
+  expect([...fit.visible]).toEqual(["time"]);
+});
+
+it("drops the duration, then the run id, from a narrow row and wraps the key", () => {
+  vi.stubGlobal(
+    "OffscreenCanvas",
+    class {
+      getContext() {
+        return { font: "", measureText: (text: string) => ({ width: measure(text) }) };
+      }
+    },
+  );
+  try {
+    const run = RunSummaryMsg.create({
+      ...summary,
+      label: "acme/api #1466",
+      startedAt: 100,
+      endedAt: 136.4,
+      triggeredAt: Date.now() / 1000 - 180,
+    });
+    render(
+      <RunListPanel
+        workflowId={workflow.workflowId}
+        runs={{ [run.runId]: run }}
+        onSelectRun={vi.fn()}
+      />,
+    );
+    // The test viewport is 300px: 142px for fields beside the status column.
+    const row = screen.getByRole("button", { name: /^acme\/api #1466, run-1, / });
+    expect(row).toHaveAttribute("data-fields", "status time key");
+    expect(row.querySelector(".run-label")).toHaveTextContent("acme/api #1466");
+    expect(row.querySelector(".run-short-id")).toBeNull();
+    expect(row.querySelector(".run-duration")).toBeNull();
+    expect(row.querySelector(".run-when")!.textContent).toBe("3 min ago");
+    expect(row.querySelector(".run-status-text")).toHaveTextContent(run.status);
+    // The wrapped key adds a line to the row instead of ellipsizing.
+    expect(row).toHaveStyle({ height: "37.5px" });
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

@@ -2113,9 +2113,7 @@ describe("cron schedules", () => {
 
     const badge = await screen.findByRole("img", { name: /\* \* \* \* \*/ });
     expect(badge).toHaveAttribute("data-schedule-enabled", "false");
-    expect(
-      await screen.findByRole("button", { name: /run-cron, failed, .*Scheduled trigger/ }),
-    ).toBeVisible();
+    expect(await screen.findByRole("button", { name: /run-cron, failed, / })).toBeVisible();
     const toggle = screen.getByRole("switch", { name: "Run on schedule" });
     expect(toggle).toHaveAttribute("aria-checked", "false");
     // The schedule in words stays hidden until expanded.
