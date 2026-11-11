@@ -11,7 +11,7 @@ from typing import Annotated, Literal, Union, get_args, get_origin
 from uuid import UUID
 
 from pydantic import BaseModel, JsonValue, TypeAdapter
-from pydantic_core import SchemaValidator
+from pydantic_core import SchemaValidator, to_jsonable_python
 
 # Admission-path work bounds apply to both deployed declarations and input values.
 MAX_KEY_DEPTH = 32
@@ -35,6 +35,14 @@ def bounded(value, *, limit=MAX_KEY_NODES):
 
 
 def _plain_model(model, names, path):
+    if model.__pydantic_custom_init__ or model.__pydantic_post_init__:
+        raise ValueError(f"run key field {path!r}: custom model initialization is not portable")
+    if any(
+        "__get_pydantic_core_schema__" in base.__dict__
+        for base in model.__mro__
+        if base is not BaseModel
+    ):
+        raise ValueError(f"run key field {path!r}: custom model schema is not portable")
     decorators = model.__pydantic_decorators__
     if decorators.model_validators or decorators.model_serializers or decorators.validators:
         raise ValueError(f"run key field {path!r}: custom model validator/serializer")
@@ -274,7 +282,11 @@ def canonical_value(value):
     if isinstance(value, (date, UUID)):
         return str(value)
     if isinstance(value, dict):
-        return {str(name): canonical_value(item) for name, item in value.items()}
+        # Use Pydantic's JSON key spelling (not Python str(True), for example).
+        return {
+            next(iter(to_jsonable_python({name: None}))): canonical_value(item)
+            for name, item in value.items()
+        }
     if isinstance(value, (set, frozenset)):
         return sorted((canonical_value(item) for item in value), key=canonical_json)
     if isinstance(value, (list, tuple)):
