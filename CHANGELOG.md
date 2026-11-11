@@ -22,6 +22,16 @@
   of raising a result-publication TypeError.
 - Delta console archived machine steps retain the shared step input/output
   inspector by resolving their immutable attempt observations.
+- Local workspaces are immutable content-addressed commits. Machine visits keep
+  one run-owned writable workspace, so later visits see earlier edits, including
+  after an operator restart. Receiving runs use copy-on-write filesystem clones
+  (ordinary copy only when the filesystem cannot clone).
+- Local child starts and public/declared machine sends carry File and Workspace
+  references with durable run read grants, including deferred events. Passing an
+  existing object never restages it or creates another content object. Local v1
+  references remain readable; new snapshots use local-ws:v2 commit identities.
+- File.from_path captures an immutable local file when no host workspace is
+  supplied. Pass workspace=... to bind a file already in a host-owned workspace.
 
 ## 0.20.7
 

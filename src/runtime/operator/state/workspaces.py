@@ -77,7 +77,7 @@ def grant_references(
         return
     if not isinstance(value, dict):
         return
-    if value.get("kind") == "file":
+    if value.get("kind") == "file" and "ref" in value:
         file = File.model_validate(value)
         reference = file.ref.workspace
         root = LocalWorkspaceStore.resolve(reference)

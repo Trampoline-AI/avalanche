@@ -148,7 +148,6 @@ def test_machine_start_storage_failure_keeps_journal_and_can_retry(tmp_path):
 
 
 def test_machine_send_uses_payload_types_not_json_dictionary_keys(tmp_path):
-    from avalanche.local_waits import WaitRefusalError
 
     fixture = tmp_path / "events.py"
     fixture.write_text("""import avalanche as ava
@@ -186,15 +185,10 @@ def events():
             time.monotonic() < deadline and op.get_run(run_id).status is not RunStatus.WAITING
         ):
             time.sleep(0.03)
-        for name, payload in [
-            ("file", {"files": []}),
-            ("workspace", {"workspace": {"reference": "ref"}}),
-        ]:
-            with pytest.raises(
-                (WaitRefusalError, ValueError),
-                match="machine_events_require_json_not_file_or_workspace",
-            ):
-                op._machine_host.send(run_id, name, payload, name)
+        with pytest.raises(ValueError, match="Malformed local workspace commit"):
+            op._machine_host.send(
+                run_id, "workspace", {"workspace": {"reference": "ref"}}, "invalid-ref"
+            )
         receipt = op._machine_host.send(
             run_id,
             "github",
@@ -213,6 +207,12 @@ def events():
         )
         assert receipt.status == "accepted"
         assert wait_terminal(op, run_id).status is RunStatus.SUCCESS
+        empty = op.start_run("events", input={"ticket": 21})
+        assert (
+            op._machine_host.send(empty, "file", {"files": []}, "empty-files").status
+            == "accepted"
+        )
+        assert wait_terminal(op, empty).status is RunStatus.SUCCESS
     finally:
         op.close()
 

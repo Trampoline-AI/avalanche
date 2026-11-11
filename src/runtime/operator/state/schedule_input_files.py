@@ -46,7 +46,7 @@ class ScheduleInputFile(BaseModel):
 
     folder: str = Field(pattern=r"^[0-9a-f]{32}$")
     name: str
-    workspace_reference: str = Field(pattern=r"^local-ws:v1:[0-9a-f]{32}$")
+    workspace_reference: str = Field(pattern=r"^local-ws:(v1:[0-9a-f]{32}|v2:[0-9a-f]{64})$")
 
     @field_validator("name")
     @classmethod

@@ -607,17 +607,22 @@ class MachineHost:
         self._enter(record, request=command.request)
         return run_id
 
-    def _validate_event(self, record: InstanceRecord, name: str, payload: JsonValue) -> None:
+    def _validate_event(
+        self, record: InstanceRecord, name: str, payload: JsonValue
+    ) -> JsonValue:
         state = record.spec.states[record.state]
         edge = next((edge for edge in state.transitions if edge.event == name), None)
         if edge is None:
-            return
+            return payload
         if edge.payload_schema is None:
             if payload not in ({}, None):
                 raise WaitRefusalError("event_payload_must_be_empty", 422)
         else:
             descriptor, root = self.op._registry.resolve_source(record.machine)
-            validate_native(descriptor, root, "event", payload, state=record.state, event=name)
+            return validate_native(
+                descriptor, root, "event", payload, state=record.state, event=name
+            )
+        return payload
 
     def _defer_inbox_validation(
         self, record: InstanceRecord, summary: str, *, failures: int = 0
@@ -766,6 +771,7 @@ class MachineHost:
         # schema acceptance. Validate against the restored native model before
         # the reducer may consume it, and journal any rejection visibly.
         accepted = True
+        validated_payload = command.payload
         if spec is not None:
             state = spec.states[record.state]
             accepted = (
@@ -773,7 +779,7 @@ class MachineHost:
                 or command.event in state.defer
             )
             try:
-                self._validate_event(record, command.event, command.payload)
+                validated_payload = self._validate_event(record, command.event, command.payload)
             except (MachineDefinitionUnavailableError, FileNotFoundError) as exc:
                 self._definition_unavailable(record, str(exc))
                 spec = None
@@ -791,7 +797,7 @@ class MachineHost:
                 from .state.workspaces import grant_references
 
                 grant_references(
-                    connection, command.payload, record.run_id, sender=command.sender_run_id
+                    connection, validated_payload, record.run_id, sender=command.sender_run_id
                 )
                 rows = MachinesTable.inbox(connection, record.run_id)
                 if (

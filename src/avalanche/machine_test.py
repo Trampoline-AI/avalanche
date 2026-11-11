@@ -533,7 +533,9 @@ class MachineTest:
                     result = await value if inspect.isawaitable(value) else value
                     from .workspace import snapshot_workspaces
 
-                    result = snapshot_workspaces(result)
+                    result = snapshot_workspaces(
+                        bind_references(result, LocalReferenceBinder())
+                    )
                     self.host.reference_grants[self.handle.run_id].update(
                         _output_references(result)
                     )

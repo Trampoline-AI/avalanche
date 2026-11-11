@@ -631,6 +631,21 @@ def _with_local_node_observers(
     return _with_node_streams(node_id, fn, stdout, stderr)
 
 
+def _publish_node_value(value):
+    from avalanche.references import LocalReferenceBinder, bind_references
+    from avalanche.workspace import snapshot_workspaces
+
+    return snapshot_workspaces(bind_references(value, LocalReferenceBinder()))
+
+
+def _commit_node_workspaces() -> None:
+    from avalanche.references import LocalWorkspaceStore
+
+    store = LocalWorkspaceStore.for_run()
+    if store.run_id is not None:
+        store.commit_mounts()
+
+
 def _with_node_streams(
     node_id: str,
     fn: Callable[..., Any],
@@ -648,7 +663,9 @@ def _with_node_streams(
             stdout_binding = stdout.bind_node(name)
             stderr_binding = stderr.bind_node(name)
             try:
-                return await fn(*args, **kwargs)
+                result = _publish_node_value(await fn(*args, **kwargs))
+                _commit_node_workspaces()
+                return result
             finally:
                 stdout.flush()
                 stderr.flush()
@@ -666,7 +683,9 @@ def _with_node_streams(
         stdout_binding = stdout.bind_node(name)
         stderr_binding = stderr.bind_node(name)
         try:
-            return fn(*args, **kwargs)
+            result = _publish_node_value(fn(*args, **kwargs))
+            _commit_node_workspaces()
+            return result
         finally:
             stdout.flush()
             stderr.flush()

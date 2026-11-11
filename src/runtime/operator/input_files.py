@@ -195,6 +195,9 @@ class InputFileStaging:
                     f"Input file {object_key!r} does not match its staged sha256 and size"
                 )
         try:
+            # A staging key whose upload was removed is no longer claimable.
+            if not entry.path.is_file():
+                raise FileNotFoundError(entry.path)
             # An empty media type is how uploads say the type is unknown.
             file = File.from_path(
                 entry.workspace.path / entry.file.name,

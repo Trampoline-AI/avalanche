@@ -158,9 +158,16 @@ class LocalWorkspaceStore:
                     for name in files:
                         with (Path(directory) / name).open("rb") as handle:
                             os.fsync(handle.fileno())
-                temporary.rename(destination)
-            except FileExistsError:
-                shutil.rmtree(temporary)
+                    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
+                    try:
+                        os.fsync(descriptor)
+                    finally:
+                        os.close(descriptor)
+                _publish_tree(temporary, destination)
+            except BaseException:
+                if temporary.exists():
+                    shutil.rmtree(temporary)
+                raise
         temporary_locator = locator.with_suffix("." + uuid4().hex)
         temporary_locator.write_text(str(destination))
         temporary_locator.replace(locator)
@@ -208,10 +215,7 @@ class LocalWorkspaceStore:
         if not target.exists():
             temporary = target.with_name("." + uuid4().hex)
             shutil.copytree(source, temporary, copy_function=_clone_file)
-            try:
-                temporary.rename(target)
-            except FileExistsError:
-                shutil.rmtree(temporary)
+            _publish_tree(temporary, target)
         return target
 
     def commit_mounts(self) -> tuple[str, ...]:
@@ -232,6 +236,23 @@ class LocalWorkspaceStore:
             temporary.replace(target)
             references.append(reference)
         return tuple(references)
+
+
+def _publish_tree(temporary: Path, destination: Path) -> None:
+    import errno
+    import shutil
+
+    try:
+        temporary.rename(destination)
+    except OSError as error:
+        if error.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
+            raise
+        shutil.rmtree(temporary)
+    descriptor = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _clone_file(source: str, destination: str) -> str:

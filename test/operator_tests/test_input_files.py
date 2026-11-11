@@ -127,7 +127,7 @@ def test_staged_files_become_path_backed_files_inside_the_staging_folder(tmp_pat
         file = _claim(staging, staged.object_key, sha256=staged.sha256, size_bytes=5)
 
     assert (file.name, file.content_type, file.size) == ("notes.txt", "text/plain", 5)
-    assert file.path.is_relative_to(tmp_path.resolve())
+    assert file.path.is_relative_to(tmp_path.resolve().parent / "workspaces" / "commits")
     assert file.read_bytes() == b"hello"
 
 
@@ -280,14 +280,14 @@ def test_an_expired_file_that_cannot_be_removed_does_not_fail_an_upload(tmp_path
 def test_close_waits_for_an_upload_that_is_still_being_written(tmp_path, monkeypatch):
     staging = InputFileStaging(tmp_path)
     writing, finish = threading.Event(), threading.Event()
-    register = input_files.local_workspace
+    commit = input_files.LocalWorkspaceStore.commit
 
-    def slow_register(path):
+    def slow_commit(store, path):
         writing.set()
         assert finish.wait(5)
-        return register(path)
+        return commit(store, path)
 
-    monkeypatch.setattr(input_files, "local_workspace", slow_register)
+    monkeypatch.setattr(input_files.LocalWorkspaceStore, "commit", slow_commit)
     upload = threading.Thread(target=staging.stage, args=("notes.txt", "", b"x"))
     upload.start()
     assert writing.wait(5)
@@ -705,7 +705,7 @@ def test_schedule_files_survive_a_restart_and_a_cleared_reference_registry(tmp_p
         operator.close()
     # A reboot clears the temporary folder that registers local workspaces.
     for item in [stored_input["document"], *stored_input["attachments"]]:
-        token = item["ref"]["workspace"].removeprefix("local-ws:v1:")
+        token = "commit-" + item["ref"]["workspace"].removeprefix("local-ws:v2:")
         (Path(tempfile.gettempdir()) / f"avalanche-local-refs-{os.getuid()}" / token).unlink()
 
     operator = _file_operator(flows, state_db)
