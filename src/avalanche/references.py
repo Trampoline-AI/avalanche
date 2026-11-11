@@ -354,6 +354,38 @@ class LocalReferenceBinder:
 T = TypeVar("T")
 
 
+def prepare_run_references(value: T) -> T:
+    """Freeze native workspace values before transport, without resolving old refs.
+
+    Existing-key admission must still ignore replacement references, including
+    expired ones. Authorization and binding belong to the receiving host.
+    """
+    if isinstance(value, Workspace):
+        store = LocalWorkspaceStore.for_run()
+        if value.reference is None:
+            return store.ingest(value.snapshot())
+        if value._directory_path is not None and store.run_id is not None:
+            if value.path.is_relative_to(store.run_root):
+                return store.commit(value.path)
+        return value
+    if isinstance(value, File):
+        return value
+    if isinstance(value, BaseModel):
+        return value.model_copy(
+            update={
+                name: prepare_run_references(getattr(value, name))
+                for name in type(value).model_fields
+            }
+        )
+    if isinstance(value, list):
+        return [prepare_run_references(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(prepare_run_references(item) for item in value)
+    if isinstance(value, dict):
+        return {name: prepare_run_references(item) for name, item in value.items()}
+    return value
+
+
 def bind_references(value: T, binder: ReferenceBinder) -> T:
     """Bind native refs recursively, preserving models and container types."""
     if isinstance(value, File):

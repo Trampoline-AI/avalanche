@@ -15,6 +15,7 @@ from avalanche.machine_host import (
     payload_to_json,
 )
 from avalanche.machine_nodes import MachineNode
+from avalanche.references import prepare_run_references
 from avalanche.run_steps import RunNode, RunOpSpec, RunStart, operation_enabled
 from avalanche.runtime import RunContext
 
@@ -53,7 +54,7 @@ class MachineStepRequest(BaseModel):
                 idempotency_key=context.step_key,
             )
         if isinstance(node, RunNode):
-            value = bound.arguments["input"]
+            value = prepare_run_references(bound.arguments["input"])
             wire = value.model_dump(mode="json") if isinstance(value, BaseModel) else value
             return cls(
                 node_id=context.node_id,
@@ -69,7 +70,7 @@ class MachineStepRequest(BaseModel):
             spec=node.spec,
             key=TypeAdapter(list[JsonValue] | str).validate_python(bound.arguments["key"]),
             event=bound.arguments["event"],
-            payload=payload_to_json(bound.arguments["payload"]),
+            payload=payload_to_json(prepare_run_references(bound.arguments["payload"])),
             idempotency_key=bound.arguments["idempotency_key"] or context.step_key,
         )
 

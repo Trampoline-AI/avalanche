@@ -397,9 +397,20 @@ class MachineTest:
             if not operation_enabled(bound.arguments["when"]):
                 return None
             target = TypeAdapter(str).validate_python(bound.arguments["target"], strict=True)
-            return await self.host._start_run(
-                target, bound.arguments["input"], sender_run_id=self.handle.run_id
+            from .references import prepare_run_references
+            from .runtime.context import _current_run_context
+
+            context = RunContext(
+                run_id=self.handle.run_id, workflow_name=work.name, node_id=ref.future_id
             )
+            token = _current_run_context.set(context)
+            try:
+                value = prepare_run_references(bound.arguments["input"])
+                return await self.host._start_run(
+                    target, value, sender_run_id=self.handle.run_id
+                )
+            finally:
+                _current_run_context.reset(token)
         if isinstance(node, MachineNode):
             self.host.register(node.machine)
             context = RunContext(
@@ -418,6 +429,10 @@ class MachineTest:
 
             token = _current_run_context.set(context)
             try:
+                from .references import prepare_run_references
+
+                args = prepare_run_references(args)
+                kwargs = prepare_run_references(kwargs)
                 return await execute_machine_node(node, args, kwargs, self.host, context)
             finally:
                 _current_run_context.reset(token)
