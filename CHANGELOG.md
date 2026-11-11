@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.5
 
 - Operator: run and visit history recorded before a restart remains readable in
   Timeline; returned cursors use the current instance without accepting stale
