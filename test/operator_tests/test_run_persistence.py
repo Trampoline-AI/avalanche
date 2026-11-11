@@ -522,6 +522,7 @@ def test_keyed_flow_start_restart_and_expired_history(tmp_path):
                             "ticket=123",
                             "--connect",
                             address,
+                            "--json",
                         ],
                         capture_output=True,
                         text=True,
