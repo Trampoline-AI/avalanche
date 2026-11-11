@@ -93,6 +93,7 @@ def delete_run_details(connection: sqlite3.Connection, run_id: str) -> DeletedRu
     Deleting the run's ``runs`` row removes them too; this lets a caller clear a
     run's details on their own, in the same transaction as other changes.
     """
+    connection.execute("DELETE FROM step_results WHERE run_id=?", (run_id,))
     return DeletedRunDetails(
         logs=RunLogsTable.delete_run(connection, run_id),
         agent_events=RunAgentEventsTable.delete_run(connection, run_id),

@@ -38,6 +38,34 @@ class RunResultRow(StoredWorkflowResult):
     run_id: str = Field(min_length=1)
 
 
+class StepResultTable:
+    """Reference-only typed outputs; visit zero means an ordinary flow.
+
+    Empty node_id names the visit return value. Run deletion cascades, while
+    detail expiry explicitly clears these rows with the other run details.
+    """
+
+    @staticmethod
+    def put(
+        connection: sqlite3.Connection, run_id: str, visit: int, node_id: str, value_json: str
+    ) -> None:
+        connection.execute(
+            "INSERT INTO step_results VALUES (?, ?, ?, ?) "
+            "ON CONFLICT (run_id, visit, node_id) DO UPDATE SET value_json=excluded.value_json",
+            (run_id, visit, node_id, value_json),
+        )
+
+    @staticmethod
+    def get(
+        connection: sqlite3.Connection, run_id: str, visit: int, node_id: str
+    ) -> str | None:
+        row = connection.execute(
+            "SELECT value_json FROM step_results WHERE run_id=? AND visit=? AND node_id=?",
+            (run_id, visit, node_id),
+        ).fetchone()
+        return None if row is None else row[0]
+
+
 class RunResultTable:
     """Read and write ``run_results`` rows inside a store transaction."""
 

@@ -358,6 +358,24 @@ MIGRATIONS += (
 
 MIGRATIONS += (Migration(version=9, name="canonical UTF-8 run keys", statements=()),)
 
+MIGRATIONS += (
+    Migration(
+        version=10,
+        name="typed step and visit results",
+        statements=(
+            """
+            CREATE TABLE step_results (
+                run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+                visit INTEGER NOT NULL CHECK (visit >= 0),
+                node_id TEXT NOT NULL,
+                value_json TEXT NOT NULL,
+                PRIMARY KEY (run_id, visit, node_id)
+            ) STRICT
+            """,
+        ),
+    ),
+)
+
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
 
 

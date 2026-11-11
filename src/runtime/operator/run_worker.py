@@ -621,6 +621,7 @@ def _with_local_node_observers(
     if getattr(fn, "__classifier_step__", None) is not None:
         fn = _with_classifier_evidence(node_id, fn, event_queue)
     fn = _with_step_io(node_id, fn, event_queue)
+    fn = _with_step_result(node_id, fn, event_queue)
     return _with_node_streams(node_id, fn, stdout, stderr)
 
 
@@ -794,6 +795,37 @@ def _with_evaluations(
                 return fn(*args, **kwargs)
             finally:
                 report_errors([error.error for error in errors])
+
+    return wrapper
+
+
+def _with_step_result(
+    node_id: str, fn: Callable[..., object], event_queue: _RunEventQueue
+) -> Callable[..., object]:
+    def publish(value: object) -> None:
+        event_queue.put(
+            {
+                "type": "step_result",
+                "node_id": node_id,
+                "value_json": encode_workflow_result(value).value_json,
+            }
+        )
+
+    if inspect.iscoroutinefunction(fn):
+
+        @wraps(fn)
+        async def async_wrapper(*args: object, **kwargs: object) -> object:
+            result = await fn(*args, **kwargs)
+            publish(result)
+            return result
+
+        return async_wrapper
+
+    @wraps(fn)
+    def wrapper(*args: object, **kwargs: object) -> object:
+        result = fn(*args, **kwargs)
+        publish(result)
+        return result
 
     return wrapper
 

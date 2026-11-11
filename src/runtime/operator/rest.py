@@ -105,6 +105,11 @@ class _PageQuery(_Query):
         return ParseDict(value, pb.ContinuationRefV2())
 
 
+class _ResultQuery(_Query):
+    visit: int | None = Field(default=None, ge=1)
+    node_id: str | None = Field(default=None, min_length=1)
+
+
 class _RunsQuery(_PageQuery):
     workflow_selector: str = ""
 
@@ -423,6 +428,21 @@ def create_rest_app(channel: grpc.Channel) -> FastAPI:
                 reason=payload.reason,
             )
         )
+
+    @router.get("/v1/runs/{run_id}/result", summary="Read a run, visit or step result")
+    def get_result(run_id: str, query: Annotated[_ResultQuery, Query()]):
+        from avalanche.results import RunResult
+
+        response = stub.GetRunResult(
+            pb.GetRunResultRequestV2(run_id=run_id, visit=query.visit, node_id=query.node_id),
+            timeout=_RPC_TIMEOUT_SECONDS,
+        )
+        return RunResult(
+            run_id=run_id,
+            visit=query.visit,
+            node_id=query.node_id,
+            **json.loads(response.value.value_json),
+        ).model_dump(mode="json")
 
     @router.get("/v1/runs/{run_id}/output", summary="Get a completed run's output")
     def get_output(run_id: str, query: Annotated[_Query, Query()]) -> Response:

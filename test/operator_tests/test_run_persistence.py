@@ -594,6 +594,32 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
                 )
             )
             assert existing.run_id == run_id
+        from avalanche.results import RunResult
+
+        visit_value = op.get_run_result(run_id, visit=1)
+        step_value = op.get_run_result(run_id, visit=1, node_id="inspect_artifacts_1")
+        assert visit_value == step_value == "document:captured"
+        readback = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ava_cli",
+                "result",
+                run_id,
+                "--visit",
+                "1",
+                "--node",
+                "inspect_artifacts_1",
+                "--json",
+                "--connect",
+                f"127.0.0.1:{port}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert readback.returncode == 0, readback.stderr
+        assert RunResult.model_validate_json(readback.stdout).decode() == step_value
         document.unlink()
         (workspace / "data.txt").unlink()
         workspace.rmdir()
@@ -602,6 +628,8 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
         op = Operator(
             [str(fixture)], watch=False, schedule=False, webhook_port=0, state_db=state_db
         )
+        assert op.get_run_result(run_id, visit=1) == visit_value
+        assert op.get_run_result(run_id, visit=1, node_id="inspect_artifacts_1") == step_value
         op._machine_host.send(run_id, "approved", {}, "late-visit")
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline and op.get_run(run_id).status != RunStatus.SUCCESS:

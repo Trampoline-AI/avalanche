@@ -311,7 +311,6 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     result.add_argument(
         "--output-dir",
-        required=True,
         metavar="PATH",
         help=(
             "new destination directory for result metadata and downloaded files "
@@ -329,6 +328,9 @@ def _build_parser() -> argparse.ArgumentParser:
         default=300.0,
         help="maximum seconds to wait with --wait (default: 300)",
     )
+    result.add_argument("--visit", type=int, help="Completed machine visit (1-based)")
+    result.add_argument("--node", help="Step ID, local to --visit when supplied")
+    result.add_argument("--json", action="store_true", help="Reference-only shared result JSON")
     result.set_defaults(handler=_run_result)
 
     tui = subcommands.add_parser(
@@ -623,6 +625,9 @@ def _run_result(args: argparse.Namespace) -> int:
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         print("--timeout must be positive and finite", file=sys.stderr)
         return 2
+    if not args.json and args.output_dir is None:
+        print("Provide --json or --output-dir PATH", file=sys.stderr)
+        return 2
     provider = _make_provider(args.connect)
     try:
         if args.wait and not _wait_for_terminal_run(
@@ -634,7 +639,25 @@ def _run_result(args: argparse.Namespace) -> int:
                 print(last_error, file=sys.stderr)
             return 1
         try:
-            value = provider.get_run_result(args.run_id)
+            if args.json:
+                from avalanche.results import RunResult
+                from runtime.operator.proto import operator_pb2 as pb
+
+                response = provider._stub.GetRunResult(
+                    pb.GetRunResultRequestV2(
+                        run_id=args.run_id, visit=args.visit, node_id=args.node
+                    ),
+                    timeout=args.timeout,
+                )
+                document = RunResult(
+                    run_id=args.run_id,
+                    visit=args.visit,
+                    node_id=args.node,
+                    **json.loads(response.value.value_json),
+                )
+                print(document.model_dump_json())
+                return 0
+            value = provider.get_run_result(args.run_id, visit=args.visit, node_id=args.node)
         except (grpc.RpcError, TypeError, ValueError) as exc:
             error = provider.last_error or str(exc)
             print(error, file=sys.stderr)

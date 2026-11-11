@@ -693,7 +693,9 @@ class GrpcStateProvider:
         assert last_race is not None
         raise last_race
 
-    def get_run_result(self, run_id: str) -> Any:
+    def get_run_result(
+        self, run_id: str, *, visit: int | None = None, node_id: str | None = None
+    ) -> Any:
         """Retrieve and decode a terminally successful workflow result.
 
         gRPC errors remain exceptions so callers can distinguish unknown,
@@ -705,7 +707,7 @@ class GrpcStateProvider:
             kwargs["metadata"] = self._metadata
         try:
             response = self._stub.GetRunResult(
-                pb.GetRunResultRequestV2(run_id=run_id),
+                pb.GetRunResultRequestV2(run_id=run_id, visit=visit, node_id=node_id),
                 **kwargs,
             )
             value_bytes = response.value.value_json.encode("utf-8")
@@ -3353,8 +3355,7 @@ def _validate_wire_result_payload(
         total_attachment_bytes += size
         if total_attachment_bytes > MAX_RESULT_ATTACHMENTS_BYTES:
             raise ValueError(
-                "Workflow result file attachments exceed "
-                f"{MAX_RESULT_ATTACHMENTS_BYTES} bytes"
+                f"Workflow result file attachments exceed {MAX_RESULT_ATTACHMENTS_BYTES} bytes"
             )
     if value_size + total_attachment_bytes > MAX_RESULT_TOTAL_BYTES:
         raise ValueError(f"Workflow result exceeds {MAX_RESULT_TOTAL_BYTES} bytes")

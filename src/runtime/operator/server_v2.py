@@ -835,9 +835,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
                 row["run_id"]: row
                 for row in connection.execute(
                     "SELECT run_id, key, read_state, machine_json IS NOT NULL AS is_machine "
-                    "FROM runs WHERE run_id IN ("
-                    + ",".join("?" for _ in summaries)
-                    + ")",
+                    "FROM runs WHERE run_id IN (" + ",".join("?" for _ in summaries) + ")",
                     tuple(summary.run_id for summary in summaries),
                 )
             }
@@ -1455,9 +1453,9 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
 
     # ── Results ───────────────────────────────────────────
 
-    def _result_payload(self, run_id: str, context):
+    def _result_payload(self, run_id: str, context, *, visit=None, node_id=None):
         try:
-            return self._op._get_run_result_payload(run_id)
+            return self._op._get_run_result_payload(run_id, visit=visit, node_id=node_id)
         except KeyError:
             context.abort(grpc.StatusCode.NOT_FOUND, f"Run {run_id} not found")
         except (RunResultNotReadyError, RunResultUnavailableError) as exc:
@@ -1479,7 +1477,12 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             descriptor.media_type = item.media_type
 
     def GetRunResult(self, request, context):  # noqa: N802
-        payload = self._result_payload(request.run_id, context)
+        payload = self._result_payload(
+            request.run_id,
+            context,
+            visit=request.visit if request.HasField("visit") else None,
+            node_id=request.node_id if request.HasField("node_id") else None,
+        )
         run_sequence = self._run_sequence(request.run_id)
         value_bytes = payload.value_json.encode("utf-8")
         return pb.RunResultV2(

@@ -1737,6 +1737,14 @@ export interface GetRunResultRequestV2 {
      * @generated from protobuf field: string run_id = 1
      */
     runId: string;
+    /**
+     * @generated from protobuf field: optional uint32 visit = 2
+     */
+    visit?: number;
+    /**
+     * @generated from protobuf field: optional string node_id = 3
+     */
+    nodeId?: string;
 }
 /**
  * @generated from protobuf message avalanche.operator.RunResultV2
@@ -7044,7 +7052,9 @@ export const ResultFileDescriptorV2 = new ResultFileDescriptorV2$Type();
 class GetRunResultRequestV2$Type extends MessageType<GetRunResultRequestV2> {
     constructor() {
         super("avalanche.operator.GetRunResultRequestV2", [
-            { no: 1, name: "run_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+            { no: 1, name: "run_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "visit", kind: "scalar", opt: true, T: 13 /*ScalarType.UINT32*/ },
+            { no: 3, name: "node_id", kind: "scalar", opt: true, T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<GetRunResultRequestV2>): GetRunResultRequestV2 {
@@ -7062,6 +7072,12 @@ class GetRunResultRequestV2$Type extends MessageType<GetRunResultRequestV2> {
                 case /* string run_id */ 1:
                     message.runId = reader.string();
                     break;
+                case /* optional uint32 visit */ 2:
+                    message.visit = reader.uint32();
+                    break;
+                case /* optional string node_id */ 3:
+                    message.nodeId = reader.string();
+                    break;
                 default:
                     let u = options.readUnknownField;
                     if (u === "throw")
@@ -7077,6 +7093,12 @@ class GetRunResultRequestV2$Type extends MessageType<GetRunResultRequestV2> {
         /* string run_id = 1; */
         if (message.runId !== "")
             writer.tag(1, WireType.LengthDelimited).string(message.runId);
+        /* optional uint32 visit = 2; */
+        if (message.visit !== undefined)
+            writer.tag(2, WireType.Varint).uint32(message.visit);
+        /* optional string node_id = 3; */
+        if (message.nodeId !== undefined)
+            writer.tag(3, WireType.LengthDelimited).string(message.nodeId);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

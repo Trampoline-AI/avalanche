@@ -136,7 +136,11 @@ from .result_store import (
     report_result_index,
     require_worker_descriptor_transfer,
 )
-from .results import EncodedWorkflowResult, decode_workflow_result
+from .results import (
+    EncodedWorkflowResult,
+    decode_workflow_result,
+    validate_workflow_result_document,
+)
 from .run_processes import (
     DEFAULT_CANCEL_GRACE_SECONDS,
     RunProcess,
@@ -153,7 +157,7 @@ from .state.evaluations import RunEvaluationsTable
 from .state.logs import RunLogsTable
 from .state.machines import InstanceRecord, MachinesTable
 from .state.metadata import OperatorMetadataTable
-from .state.results import RunResultTable
+from .state.results import RunResultTable, StepResultTable
 from .state.run_details import load_run_detail_totals
 from .state.runs import RunRequest, RunsTable, StoredRun
 from .state.schedule_input_files import (
@@ -1742,22 +1746,46 @@ class Operator:
             revision=self._run_revisions.get(run.run_id, 0),
         )
 
-    def get_run_result(self, run_id: str) -> Any:
+    def get_run_result(
+        self, run_id: str, *, visit: int | None = None, node_id: str | None = None
+    ) -> Any:
         """Return a successful run's decoded workflow result.
 
         Results are available only after terminal success. Failed, cancelled,
         pending, and unknown runs retain their existing state semantics and do
         not expose a partial payload.
         """
-        return decode_workflow_result(self._get_run_result_payload(run_id))
+        return decode_workflow_result(
+            self._get_run_result_payload(run_id, visit=visit, node_id=node_id)
+        )
 
-    def _get_run_result_payload(self, run_id: str) -> EncodedWorkflowResult:
+    def _get_run_result_payload(
+        self, run_id: str, *, visit: int | None = None, node_id: str | None = None
+    ) -> EncodedWorkflowResult:
         """Load one validated result payload from the persisted result store.
 
         A result is indexed only once its run has ended in success, so an indexed
         result is served even when the run itself is not known in memory, such as
         after an operator restart.
         """
+        if visit is not None or node_id is not None:
+            if visit is not None and visit < 1:
+                raise ValueError("visit must be positive")
+            qualified = (
+                f"v{visit}.{node_id}" if visit is not None and node_id else node_id or ""
+            )
+            with self._state_store.transaction() as connection:
+                if (
+                    connection.execute(
+                        "SELECT 1 FROM runs WHERE run_id=?", (run_id,)
+                    ).fetchone()
+                    is None
+                ):
+                    raise KeyError(run_id)
+                value_json = StepResultTable.get(connection, run_id, visit or 0, qualified)
+            if value_json is None:
+                raise RunResultNotReadyError("Requested step or visit has no accepted result")
+            return EncodedWorkflowResult(value_json=value_json)
         with self._lock:
             run = self._runs.get(run_id)
             if run is not None:
@@ -2900,6 +2928,15 @@ class Operator:
         event: dict[str, Any],
     ) -> bool:
         event_type = _validate_run_event(event, validate_result=False)
+        if event_type == "step_result":
+            payload = EncodedWorkflowResult(value_json=event["value_json"])
+            validate_workflow_result_document(payload.value_json, set())
+            visit = handle.machine_visit.visit if isinstance(handle, _MachineRunHandle) else 0
+            with self._state_store.transaction() as connection:
+                StepResultTable.put(
+                    connection, run_id, visit, event["node_id"], payload.value_json
+                )
+            return False
         if event_type == "machine_step":
             from .machine_host import MachineStep
             from .machine_steps import MachineStepRequest, MachineStepResponse
@@ -2976,10 +3013,24 @@ class Operator:
                 outcome["event"] if outcome is not None else None,
             )
             if stored_result is not None:
+                payload = self._result_store.load(stored_result)
+                with self._state_store.transaction() as connection:
+                    StepResultTable.put(
+                        connection, run_id, handle.machine_visit.visit, "", payload.value_json
+                    )
                 if handle.machine_visit.spec.states[handle.machine_visit.state].final:
                     with self._state_store.transaction() as connection:
                         RunResultTable.insert(connection, run_id, stored_result)
                 else:
+                    payload = self._result_store.load(stored_result)
+                    with self._state_store.transaction() as connection:
+                        StepResultTable.put(
+                            connection,
+                            run_id,
+                            handle.machine_visit.visit,
+                            "",
+                            payload.value_json,
+                        )
                     self._result_store.discard(stored_result)
             return True
 
@@ -4501,6 +4552,7 @@ _RUN_EVENT_TYPES = {
     "evaluation_submitted",
     "step_inputs",
     "step_output",
+    "step_result",
     "log",
     "terminal",
     "wait_snapshot",
@@ -4907,6 +4959,10 @@ def _validate_run_event(event: object, *, validate_result: bool = True) -> str:
         agent_event = _required_field(event, "event")
         if type(agent_event) is not dict:
             raise _CoordinatorProtocolError("field 'event' must be a dict")
+    elif event_type == "step_result":
+        _require_exact_event_keys(event, {"type", "node_id", "value_json"})
+        _string_field(event, "node_id", maximum_length=_MAX_EVENT_FIELD_LENGTH)
+        validate_workflow_result_document(_required_field(event, "value_json"), set())
     elif event_type in {"step_inputs", "step_output"}:
         payload_key = "inputs" if event_type == "step_inputs" else "output"
         _require_exact_event_keys(event, {"type", "node_id", payload_key})
