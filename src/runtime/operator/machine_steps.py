@@ -24,6 +24,7 @@ type HostStepOutput = RunStart | MachineEventReceipt | None
 class MachineStepRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     node_id: str
+    sender_run_id: str | None = None
     spec: RunOpSpec | MachineOpSpec
     enabled: bool = True
     target: str = ""
@@ -46,6 +47,7 @@ class MachineStepRequest(BaseModel):
         if not operation_enabled(bound.arguments["when"]):
             return cls(
                 node_id=context.node_id,
+                sender_run_id=context.run_id,
                 spec=node.spec,
                 enabled=False,
                 idempotency_key=context.step_key,
@@ -55,6 +57,7 @@ class MachineStepRequest(BaseModel):
             wire = value.model_dump(mode="json") if isinstance(value, BaseModel) else value
             return cls(
                 node_id=context.node_id,
+                sender_run_id=context.run_id,
                 spec=node.spec,
                 input=wire,
                 target=bound.arguments["target"],
@@ -62,6 +65,7 @@ class MachineStepRequest(BaseModel):
             )
         return cls(
             node_id=context.node_id,
+            sender_run_id=context.run_id,
             spec=node.spec,
             key=TypeAdapter(list[JsonValue] | str).validate_python(bound.arguments["key"]),
             event=bound.arguments["event"],

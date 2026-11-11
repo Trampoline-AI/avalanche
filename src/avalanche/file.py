@@ -126,6 +126,11 @@ class File(BaseModel):
             raise ValueError("File source must be a regular file")
         if workspace is None:
             workspace = local_workspace(host_path.parent)
+            host_path = workspace.path / host_path.name
+        elif workspace.reference.startswith("local-ws:v2:"):
+            relative = host_path.relative_to(workspace.path.resolve())
+            workspace = local_workspace(workspace.path)
+            host_path = workspace.path / relative
         relative = host_path.relative_to(workspace.path.resolve()).as_posix()
         result = cls(
             kind="file",

@@ -141,7 +141,8 @@ def test_large_file_roundtrip_checks_content_hash(tmp_path, monkeypatch):
     monkeypatch.setattr(type(path), "read_bytes", no_read_bytes)
     file = ava.File.from_path(path)
     assert file.sha256 is None
-    assert file.path == path
+    assert file.path != path
+    assert file.ref.workspace.startswith("local-ws:v2:")
     assert file.size == len(content)
     wire = file.model_dump()
     assert wire["kind"] == "file"

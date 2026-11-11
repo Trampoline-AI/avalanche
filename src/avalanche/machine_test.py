@@ -507,8 +507,18 @@ class MachineTest:
             for attempt in range(rounds):
                 self._attempts[ref.future_id] = self._attempts.get(ref.future_id, 0) + 1
                 try:
-                    value = actual_fn(*args, **kwargs)
-                    return await value if inspect.isawaitable(value) else value
+                    from .references import (
+                        LocalReferenceBinder,
+                        LocalWorkspaceStore,
+                        bind_references,
+                    )
+
+                    bound_args = bind_references(args, LocalReferenceBinder())
+                    bound_kwargs = bind_references(kwargs, LocalReferenceBinder())
+                    value = actual_fn(*bound_args, **bound_kwargs)
+                    result = await value if inspect.isawaitable(value) else value
+                    LocalWorkspaceStore.for_run(self.handle.run_id).commit_mounts()
+                    return result
                 except NonRetryableError:
                     raise
                 except OutcomeUnknownError:

@@ -328,5 +328,8 @@ def test_restoring_a_workspace_reference_never_moves_it_to_another_folder(tmp_pa
     reference = local_workspace(first).reference
 
     assert restore_local_workspace(reference, first).reference == reference
-    with pytest.raises(ValueError, match="registered for"):
+    # Equal trees are the same immutable commit, independent of their source path.
+    assert restore_local_workspace(reference, second).reference == reference
+    (second / "changed").write_text("different")
+    with pytest.raises(ValueError, match="differs"):
         restore_local_workspace(reference, second)

@@ -374,6 +374,16 @@ MIGRATIONS += (
             """,
         ),
     ),
+    Migration(
+        version=10,
+        name="immutable workspace commits and run grants",
+        statements=(
+            "CREATE TABLE workspace_commits (reference TEXT PRIMARY KEY, "
+            "path TEXT NOT NULL) STRICT",
+            "CREATE TABLE workspace_grants (run_id TEXT NOT NULL, reference TEXT NOT NULL "
+            "REFERENCES workspace_commits(reference), PRIMARY KEY(run_id, reference)) STRICT",
+        ),
+    ),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version

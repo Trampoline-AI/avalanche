@@ -197,7 +197,7 @@ class InputFileStaging:
         try:
             # An empty media type is how uploads say the type is unknown.
             file = File.from_path(
-                entry.path,
+                entry.workspace.path / entry.file.name,
                 content_type=entry.file.media_type or None,
                 workspace=entry.workspace,
             )

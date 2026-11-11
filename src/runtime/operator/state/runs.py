@@ -232,6 +232,13 @@ class RunsTable:
         process: RunProcess | None,
     ) -> None:
         """Insert a new run with its nodes, request, input files and process group."""
+        from ..run_input_capture import capture_input
+        from .workspaces import configure_run, grant_references
+
+        store = configure_run(connection, stored.run.run_id)
+        captured = capture_input(request.input, store)
+        request = request.model_copy(update={"input": captured})
+        grant_references(connection, captured, stored.run.run_id, ingress=True)
         connection.execute(
             _INSERT_RUN,
             (

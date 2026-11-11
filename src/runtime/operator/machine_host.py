@@ -71,6 +71,7 @@ class Send:
     payload: JsonValue
     idempotency_key: str
     reply: Future[MachineEventReceipt]
+    sender_run_id: str | None = None
     queued_at: float = field(default_factory=time.monotonic)
 
 
@@ -787,6 +788,11 @@ class MachineHost:
         )
         with self.op._state_store.transaction() as connection:
             if accepted:
+                from .state.workspaces import grant_references
+
+                grant_references(
+                    connection, command.payload, record.run_id, sender=command.sender_run_id
+                )
                 rows = MachinesTable.inbox(connection, record.run_id)
                 if (
                     len(rows) >= 1000
@@ -987,7 +993,12 @@ class MachineHost:
             existing = existing or (proposed if self.op.get_run(proposed) is not None else None)
             if existing is not None:
                 run_id = existing
-            elif descriptor.machine_spec_json or descriptor.key_fields:
+            else:
+                from .state.workspaces import grant_references
+
+                with self.op._state_store.transaction() as connection:
+                    grant_references(connection, values, proposed, sender=request.sender_run_id)
+            if existing is None and (descriptor.machine_spec_json or descriptor.key_fields):
                 run_id = self._start(
                     Start(
                         request.target,
@@ -997,7 +1008,7 @@ class MachineHost:
                         Future(),
                     )
                 )
-            else:
+            elif existing is None:
                 run_id = self.op.start_run(
                     request.target, TriggerKind.API, input=values, run_id=proposed
                 )
@@ -1021,7 +1032,14 @@ class MachineHost:
                 request.spec.machine, dict(zip(spec.key_fields, request.key, strict=True))
             )
         return self._send(
-            Send(run_id, request.event, request.payload, request.idempotency_key, Future())
+            Send(
+                run_id,
+                request.event,
+                request.payload,
+                request.idempotency_key,
+                Future(),
+                sender_run_id=request.sender_run_id,
+            )
         )
 
     def _next_command(self, timeout: float | None) -> Command:

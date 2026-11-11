@@ -189,7 +189,7 @@ class ScheduleInputFileClaims:
                 workspace = local_workspace(folder)
                 # An empty media type is how uploads say the type is unknown.
                 file = File.from_path(
-                    folder / staged.name,
+                    workspace.path / staged.name,
                     content_type=staged.media_type or None,
                     workspace=workspace,
                 )

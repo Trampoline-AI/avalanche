@@ -1,4 +1,4 @@
-"""Capture long-lived keyed-run inputs with the ordinary file staging/binding path."""
+"""Capture external portable/v1 input once; keep existing commits by reference."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 from pydantic import JsonValue
 
 from avalanche.file import File
-from avalanche.references import LocalReferenceBinder
+from avalanche.references import LocalReferenceBinder, LocalWorkspaceStore
 from avalanche.workspace import Workspace
 
 from .state.runs import RunRequest
@@ -17,36 +17,28 @@ if TYPE_CHECKING:
 
 
 def capture_keyed_input(op: Operator, request: RunRequest) -> RunRequest:
-    binder = LocalReferenceBinder()
-    with op.input_files.claims() as claims:
+    store = LocalWorkspaceStore(op.input_files.root.parent / "workspaces")
+    return request.model_copy(update={"input": capture_input(request.input, store)})
 
-        def capture(value: JsonValue) -> JsonValue:
-            if isinstance(value, dict):
-                if value.get("kind") == "file" and "ref" in value:
-                    reference = File.model_validate(value)
-                    bound = reference.bind(binder.bind_file(reference))
-                    staged = op.input_files.stage(
-                        bound.name or "input.bin", bound.content_type or "", bound.read_bytes()
-                    )
-                    retained = claims.file(
-                        staged.object_key, sha256=staged.sha256, size_bytes=staged.size_bytes
-                    )
-                    return retained.model_dump(mode="json")
-                if value.get("kind") == "workspace":
-                    workspace = Workspace.model_validate(value)
-                    if workspace.is_reference:
-                        workspace = Workspace.from_path(binder.bind_workspace(workspace))
-                    return workspace.model_dump(mode="json")
-                return {name: capture(child) for name, child in value.items()}
-            if isinstance(value, list):
-                return [capture(child) for child in value]
-            return value
 
-        values = (
-            None
-            if request.input is None
-            else {name: capture(value) for name, value in request.input.items()}
-        )
-        return request.model_copy(
-            update={"input": values, "input_files": request.input_files + claims.files}
-        )
+def capture_input(value: JsonValue, store: LocalWorkspaceStore) -> JsonValue:
+    """No restaging: v2 artifacts are immutable, already-published objects."""
+    if isinstance(value, dict):
+        if value.get("kind") == "file" and "ref" in value:
+            file = File.model_validate(value)
+            if file.ref.workspace.startswith("local-ws:v2:"):
+                return value
+            root = LocalReferenceBinder().bind_workspace(
+                Workspace(reference=file.ref.workspace)
+            )
+            committed = store.commit(root)
+            return {**value, "ref": {"workspace": committed.reference, "path": file.ref.path}}
+        if value.get("kind") == "workspace":
+            return store.ingest(Workspace.model_validate(value)).manifest()
+        # Portable workspaces have no kind tag for wire compatibility.
+        if set(value) == {"version", "entries"}:
+            return store.ingest(Workspace.model_validate(value)).manifest()
+        return {name: capture_input(child, store) for name, child in value.items()}
+    if isinstance(value, list):
+        return [capture_input(child, store) for child in value]
+    return value

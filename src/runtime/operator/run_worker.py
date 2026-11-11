@@ -317,6 +317,9 @@ def _run_worker(
                 run_handle, control_connection, cancel_reader, machine_reader, machine_pending
             )
         result = run_handle.result()
+        from avalanche.references import LocalWorkspaceStore
+
+        LocalWorkspaceStore.for_run(run_id).commit_mounts()
         status = "cancelled" if cancel_event.is_set() else "success"
         terminal_event = {"type": "terminal", "status": status}
         if status == "success":

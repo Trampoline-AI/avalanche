@@ -334,7 +334,7 @@ async def test_machine_run_control_early_events_payloads_and_defer(tmp_path):
 
     (tmp_path / "payload.txt").write_text("retained event bytes")
     tree = local_workspace(tmp_path)
-    file = ava.File.from_path(tmp_path / "payload.txt", workspace=tree)
+    file = ava.File.from_path(tree.path / "payload.txt", workspace=tree)
 
     effects: set[str] = set()
 
