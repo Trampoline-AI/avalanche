@@ -81,6 +81,7 @@ from .results import (
     MAX_RESULT_VALUE_JSON_BYTES,
     EncodedWorkflowResult,
     ResultFileAttachment,
+    RunResult,
     decode_workflow_result,
 )
 
@@ -692,6 +693,26 @@ class GrpcStateProvider:
                 raise
         assert last_race is not None
         raise last_race
+
+    def get_run_result_document(
+        self, run_id: str, *, visit: int | None = None, node_id: str | None = None
+    ) -> RunResult:
+        """Read the shared result model without materializing artifact references."""
+        response = self._call(
+            self._stub.GetRunResult,
+            pb.GetRunResultRequestV2(run_id=run_id, visit=visit, node_id=node_id),
+        )
+        raw = response.value.value_json.encode("utf-8")
+        if response.run_id != run_id or len(raw) != response.value.size_bytes:
+            raise ValueError("Run result identity or size mismatch")
+        if hashlib.sha256(raw).hexdigest() != response.value.sha256:
+            raise ValueError("Run result digest mismatch")
+        return RunResult.from_payload(
+            run_id,
+            EncodedWorkflowResult(value_json=response.value.value_json),
+            visit=visit,
+            node_id=node_id,
+        )
 
     def get_run_result(
         self, run_id: str, *, visit: int | None = None, node_id: str | None = None

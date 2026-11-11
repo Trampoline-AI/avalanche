@@ -238,6 +238,37 @@ ava run history RUN_ID --limit 20
 ava result RUN_ID --wait --output-dir ./approved-result
 ```
 
+### Read run, visit and step outputs
+
+```sh
+ava run result RUN_ID --json                       # final output, after closure
+ava run result RUN_ID --visit 1 --json              # completed visit's return
+ava run result RUN_ID --visit 1 --node inspect_1 --json
+```
+
+The same commands read ordinary flows; omit `--visit` for a flow step.
+`ava result` is equivalent to `ava run result`. `--wait` waits for the selected
+result, so reading a completed visit does not wait for the machine to close.
+Without `--json`, use `--output-dir PATH` to explicitly download artifacts.
+
+Operator REST serves the same document at
+`GET /api/v1/runs/RUN_ID/result?visit=1&node_id=inspect_1`.
+The document has `run_id`, nullable `visit` and `node_id`, `version: 1`, and
+`value` in the shared result codec. Models use JSON aliases; tuples have a tuple
+kind; sets are canonical ordered lists. File and Workspace values carry references,
+not inline bytes. A successful null return is a scalar null value; a missing,
+unfinished or failed result is an error, never a fabricated null.
+
+Completed visit/step outputs survive an operator restart and expire with the
+run's retained details. Outputs discarded by older operator versions cannot be
+reconstructed from display previews.
+
+Delta uses `delta runs result RUN_ID --json` with the same selectors and shape,
+and `GET /v1/orgs/ORG/projects/PROJECT/runs/RUN_ID/result`. A flow deployment
+must carry its explicit return declaration: redeploy older flows to enable final
+run-result reads. Existing per-step `/outputs` reads remain available. Machine
+visit results stay readable after visit compaction through bounded archive reads.
+
 Use `ava machine send approved --run RUN_ID` when the run ID is available;
 this form omits the machine name because the run already identifies it.
 `--key` is repeated for multiple key fields. Values use the ordinary flow-input

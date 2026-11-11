@@ -91,6 +91,8 @@ def _run_wait_command(argv: list[str]) -> int:
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = list(argv) if argv is not None else sys.argv[1:]
+    if arguments[:2] == ["run", "result"]:
+        return main(["result", *arguments[2:]])
     if arguments[:2] in (["event", "send"], ["run", "decide"]):
         return _run_wait_command(arguments)
     if arguments[:2] == ["machine", "send"] or (
@@ -630,30 +632,16 @@ def _run_result(args: argparse.Namespace) -> int:
         return 2
     provider = _make_provider(args.connect)
     try:
-        if args.wait and not _wait_for_terminal_run(
-            provider,
-            args.run_id,
-            timeout=args.timeout,
+        if args.wait and not _wait_for_result(
+            provider, args.run_id, visit=args.visit, node_id=args.node, timeout=args.timeout
         ):
             if last_error := provider.last_error:
                 print(last_error, file=sys.stderr)
             return 1
         try:
             if args.json:
-                from avalanche.results import RunResult
-                from runtime.operator.proto import operator_pb2 as pb
-
-                response = provider._stub.GetRunResult(
-                    pb.GetRunResultRequestV2(
-                        run_id=args.run_id, visit=args.visit, node_id=args.node
-                    ),
-                    timeout=args.timeout,
-                )
-                document = RunResult(
-                    run_id=args.run_id,
-                    visit=args.visit,
-                    node_id=args.node,
-                    **json.loads(response.value.value_json),
+                document = provider.get_run_result_document(
+                    args.run_id, visit=args.visit, node_id=args.node
                 )
                 print(document.model_dump_json())
                 return 0
@@ -675,6 +663,33 @@ def _run_result(args: argparse.Namespace) -> int:
         return 0
     finally:
         provider.close()
+
+
+def _wait_for_result(
+    provider: GrpcStateProvider,
+    run_id: str,
+    *,
+    visit: int | None,
+    node_id: str | None,
+    timeout: float,
+) -> bool:
+    if visit is None and node_id is None:
+        return _wait_for_terminal_run(provider, run_id, timeout=timeout)
+    import grpc
+
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            provider.get_run_result_document(run_id, visit=visit, node_id=node_id)
+            return True
+        except grpc.RpcError as exc:
+            if exc.code() != grpc.StatusCode.FAILED_PRECONDITION:
+                return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            provider.last_error = f"Timed out waiting for the selected result of {run_id}"
+            return False
+        time.sleep(min(0.1, remaining))
 
 
 def _wait_for_terminal_run(provider: GrpcStateProvider, run_id: str, *, timeout: float) -> bool:

@@ -22,6 +22,8 @@ from starlette.requests import ClientDisconnect
 from starlette.routing import Match
 from starlette.types import Scope
 
+from avalanche.results import EncodedWorkflowResult, RunResult
+
 from .models import ScheduleInput
 from .proto import operator_pb2 as pb
 from .proto import operator_pb2_grpc as pb_grpc
@@ -429,20 +431,22 @@ def create_rest_app(channel: grpc.Channel) -> FastAPI:
             )
         )
 
-    @router.get("/v1/runs/{run_id}/result", summary="Read a run, visit or step result")
+    @router.get(
+        "/v1/runs/{run_id}/result",
+        response_model=RunResult,
+        summary="Read a run, visit or step result",
+    )
     def get_result(run_id: str, query: Annotated[_ResultQuery, Query()]):
-        from avalanche.results import RunResult
-
         response = stub.GetRunResult(
             pb.GetRunResultRequestV2(run_id=run_id, visit=query.visit, node_id=query.node_id),
             timeout=_RPC_TIMEOUT_SECONDS,
         )
-        return RunResult(
-            run_id=run_id,
+        return RunResult.from_payload(
+            run_id,
+            EncodedWorkflowResult(value_json=response.value.value_json),
             visit=query.visit,
             node_id=query.node_id,
-            **json.loads(response.value.value_json),
-        ).model_dump(mode="json")
+        )
 
     @router.get("/v1/runs/{run_id}/output", summary="Get a completed run's output")
     def get_output(run_id: str, query: Annotated[_Query, Query()]) -> Response:

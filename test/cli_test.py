@@ -89,7 +89,7 @@ def test_ava_result_materializes_nested_workspace_tree(
     (source / "nested" / "report.txt").write_text("report")
 
     class FakeProvider:
-        def get_run_result(self, run_id):
+        def get_run_result(self, run_id, *, visit=None, node_id=None):
             workspace = (
                 Workspace.from_directory(source, reference="host-managed:export")
                 if reference
@@ -156,7 +156,7 @@ def test_ava_result_safely_materializes_direct_and_nested_files(
     content = b"\x00\xffbinary"
 
     class FakeProvider:
-        def get_run_result(self, run_id):
+        def get_run_result(self, run_id, *, visit=None, node_id=None):
             return {
                 "direct": File(name="../../escape.bin", content=content),
                 "nested": [File(name=r"..\escape.bin", content=b"nested")],
@@ -198,7 +198,7 @@ def test_ava_result_rejects_digest_mismatch_without_writing_file(
     )
 
     class FakeProvider:
-        def get_run_result(self, run_id):
+        def get_run_result(self, run_id, *, visit=None, node_id=None):
             return invalid
 
         def close(self):

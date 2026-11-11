@@ -598,14 +598,16 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
 
         visit_value = op.get_run_result(run_id, visit=1)
         step_value = op.get_run_result(run_id, visit=1, node_id="inspect_artifacts_1")
-        assert visit_value == step_value == "document:captured"
+        assert visit_value == step_value == {"text": "document:captured", "counts": [1, 2, 3]}
         readback = subprocess.run(
             [
                 sys.executable,
                 "-m",
                 "ava_cli",
+                "run",
                 "result",
                 run_id,
+                "--wait",
                 "--visit",
                 "1",
                 "--node",
@@ -620,6 +622,49 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
         )
         assert readback.returncode == 0, readback.stderr
         assert RunResult.model_validate_json(readback.stdout).decode() == step_value
+        import httpx
+
+        from runtime.operator.web import start_browser_server
+
+        browser = start_browser_server(f"127.0.0.1:{port}", port=0)
+        try:
+            response = httpx.get(
+                f"http://{browser.host}:{browser.port}/api/v1/runs/{run_id}/result",
+                params={"visit": 1, "node_id": "inspect_artifacts_1"},
+            )
+            assert response.status_code == 200, response.text
+            assert response.json() == json.loads(readback.stdout)
+            pending = httpx.get(f"http://{browser.host}:{browser.port}/api/v1/runs/{run_id}/result")
+            assert pending.status_code == 409
+        finally:
+            browser.close()
+        equivalent = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ava_cli",
+                "run",
+                "artifact_flow",
+                "--connect",
+                f"127.0.0.1:{port}",
+                "--input",
+                json.dumps({"ticket": 12, "journal": str(tmp_path / "flow.txt")}),
+                "--file",
+                f"document={document}",
+                "--workspace",
+                f"workspace={workspace}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert equivalent.returncode == 0, equivalent.stderr
+        flow_id = equivalent.stdout.strip()
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline and op.get_run(flow_id).status != RunStatus.SUCCESS:
+            time.sleep(0.03)
+        assert op.get_run_result(flow_id) == visit_value
+        assert op.get_run_result(flow_id, node_id="inspect_artifacts_1") == step_value
         document.unlink()
         (workspace / "data.txt").unlink()
         workspace.rmdir()
@@ -635,6 +680,7 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
         while time.monotonic() < deadline and op.get_run(run_id).status != RunStatus.SUCCESS:
             time.sleep(0.03)
         assert op.get_run(run_id).status == RunStatus.SUCCESS
+        assert op.get_run_result(run_id) == op.get_run_result(run_id, visit=2) == visit_value
         assert journal.read_text().splitlines() == [
             "v1.inspect_artifacts_1:document:captured",
             "v2.inspect_artifacts_1:document:captured",
@@ -698,8 +744,10 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
             stub = pb_grpc.OperatorServiceV2Stub(channel)
             (definition,) = stub.DiscoverFlows(pb.DiscoverFlowsRequestV2()).flows
             assert not definition.machine_spec_json
-            (summary,) = stub.ListRunSummaries(pb.ListRunSummariesRequestV2()).runs
-            assert summary.run_id == run_id and summary.kind == "machine"
+            summaries = stub.ListRunSummaries(pb.ListRunSummariesRequestV2()).runs
+            assert {row.run_id for row in summaries} == {run_id, flow_id}
+            summary = next(row for row in summaries if row.run_id == run_id)
+            assert summary.kind == "machine"
             assert summary.read_state == "expired"
             snapshot = stub.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=run_id))
             assert snapshot.summary.kind == "machine" and snapshot.read_state == "expired"

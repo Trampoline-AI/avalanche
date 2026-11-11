@@ -52,8 +52,13 @@ class ArtifactTicket(Ticket):
     workspace: ava.Workspace
 
 
+class ArtifactOutput(BaseModel):
+    text: str
+    counts: list[int]
+
+
 @ava.step
-def inspect_artifacts(ticket: ArtifactTicket, context: ava.RunContext) -> str:
+def inspect_artifacts(ticket: ArtifactTicket, context: ava.RunContext) -> ArtifactOutput:
     value = (
         ticket.document.read_bytes().decode()
         + ":"
@@ -61,7 +66,12 @@ def inspect_artifacts(ticket: ArtifactTicket, context: ava.RunContext) -> str:
     )
     with Path(ticket.journal).open("a") as output:
         output.write(context.node_id + ":" + value + "\n")
-    return value
+    return ArtifactOutput(text=value, counts=[1, 2, 3])
+
+
+@ava.workflow(input=ArtifactTicket)
+def artifact_flow():
+    return inspect_artifacts()
 
 
 @ava.machine(input=ArtifactTicket, key=("ticket",))

@@ -6,14 +6,19 @@ import hashlib
 import json
 import math
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from avalanche.runtime import File
 from avalanche.workspace import _WORKSPACE_SERIALIZER_CONTEXT_KEY, Workspace
+
+type ResultJsonValue = (
+    None | bool | int | float | str | list[ResultJsonValue] | dict[str, ResultJsonValue]
+)
 
 _RESULT_FORMAT_VERSION = 1
 MAX_RESULT_ATTACHMENTS = 1024
@@ -61,7 +66,7 @@ class RunResult(BaseModel):
     visit: int | None = Field(default=None, ge=1)
     node_id: str | None = None
     version: Literal[1] = 1
-    value: JsonValue
+    value: ResultJsonValue
 
     @classmethod
     def from_payload(
@@ -85,6 +90,76 @@ class RunResult(BaseModel):
                 )
             )
         )
+
+
+class NodeResultBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["node"] = "node"
+    node_id: str = Field(min_length=1)
+    index: int | None = Field(default=None, ge=0)
+
+
+class TupleResultBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["tuple"] = "tuple"
+    items: tuple[ResultBinding, ...]
+
+
+class LiteralResultBinding(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    kind: Literal["literal"] = "literal"
+    document: dict[str, ResultJsonValue]
+
+
+type ResultBinding = Annotated[
+    NodeResultBinding | TupleResultBinding | LiteralResultBinding, Field(discriminator="kind")
+]
+TupleResultBinding.model_rebuild()
+RESULT_BINDING = TypeAdapter(ResultBinding)
+
+
+def capture_result_binding(value: object) -> dict[str, ResultJsonValue]:
+    """Capture the SDK's explicit return, never infer it from graph sinks."""
+    from avalanche.dag import NodeFuture, ParallelTasks
+
+    def capture(item: object) -> ResultBinding:
+        if isinstance(item, NodeFuture):
+            target = item.chain_end
+            if isinstance(target, ParallelTasks):
+                return capture(target)
+            return NodeResultBinding(node_id=target.future_id, index=target.tuple_index)
+        if isinstance(item, ParallelTasks):
+            return TupleResultBinding(items=tuple(capture(b) for b in item.branches))
+        if isinstance(item, tuple):
+            return TupleResultBinding(items=tuple(capture(b) for b in item))
+        return LiteralResultBinding(
+            document=strict_json_loads(encode_workflow_result(item).value_json)
+        )
+
+    return capture(value).model_dump(mode="json")
+
+
+def result_binding_nodes(binding: ResultBinding) -> set[str]:
+    if isinstance(binding, NodeResultBinding):
+        return {binding.node_id}
+    if isinstance(binding, TupleResultBinding):
+        return set().union(*(result_binding_nodes(item) for item in binding.items))
+    return set()
+
+
+def resolve_result_binding(binding: ResultBinding, values: Mapping[str, object]) -> object:
+    if isinstance(binding, NodeResultBinding):
+        value = values[binding.node_id]
+        if binding.index is None:
+            return value
+        if not isinstance(value, (tuple, list)):
+            raise ValueError("Indexed run result must be a tuple or list")
+        return value[binding.index]
+    if isinstance(binding, TupleResultBinding):
+        return tuple(resolve_result_binding(item, values) for item in binding.items)
+    return decode_workflow_result(
+        EncodedWorkflowResult(value_json=json.dumps(binding.document))
+    )
 
 
 def encode_workflow_result(value: Any) -> EncodedWorkflowResult:

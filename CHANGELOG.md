@@ -14,6 +14,14 @@
   aliases/alias generators, default factories or unsupported types/configuration
   are refused at definition time with the field name. Move business normalization
   before the start operation and pass a plain portable identity field instead.
+- Read typed flow, machine-final, visit and step results through one versioned
+  reference-only result model. The local operator retains completed non-final
+  visit outputs across restarts; `ava result` (`ava run result`) and
+  `delta runs result` accept `--visit` and `--node` selectors.
+- Bare set and frozenset results serialize as canonical ordered lists instead
+  of raising a result-publication TypeError.
+- Delta console archived machine steps retain the shared step input/output
+  inspector by resolving their immutable attempt observations.
 
 ## 0.20.7
 

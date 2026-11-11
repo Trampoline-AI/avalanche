@@ -2930,7 +2930,6 @@ class Operator:
         event_type = _validate_run_event(event, validate_result=False)
         if event_type == "step_result":
             payload = EncodedWorkflowResult(value_json=event["value_json"])
-            validate_workflow_result_document(payload.value_json, set())
             visit = handle.machine_visit.visit if isinstance(handle, _MachineRunHandle) else 0
             with self._state_store.transaction() as connection:
                 StepResultTable.put(
@@ -3022,15 +3021,6 @@ class Operator:
                     with self._state_store.transaction() as connection:
                         RunResultTable.insert(connection, run_id, stored_result)
                 else:
-                    payload = self._result_store.load(stored_result)
-                    with self._state_store.transaction() as connection:
-                        StepResultTable.put(
-                            connection,
-                            run_id,
-                            handle.machine_visit.visit,
-                            "",
-                            payload.value_json,
-                        )
                     self._result_store.discard(stored_result)
             return True
 

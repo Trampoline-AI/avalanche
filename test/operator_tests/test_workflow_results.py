@@ -290,6 +290,7 @@ def result_client(tmp_path):
         "            'done',\n"
         "        ),\n"
         "        'json': {'count': 3, 'ok': True, 'items': [None, 'value', 2.5]},\n"
+        "        'tags': {'z', 'a'},\n"
         "        'workspace': ava.Workspace.from_path(Path(__file__).parent / 'workspace'),\n"
         "    }\n"
         "@ava.workflow\ndef result_bundle():\n    return bundle()\n"
@@ -321,6 +322,7 @@ def test_spawned_results_materialize_nested_files_workspaces_and_large_payloads(
     assert len(payload.value_json) < 4096
     for result in (operator.get_run_result(run_id), client.get_run_result(run_id)):
         assert result["json"] == {"count": 3, "ok": True, "items": [None, "value", 2.5]}
+        assert result["tags"] == ["a", "z"]
         assert result["report"]["title"] == "weekly"
         empty, unnamed, large = result["report"]["files"]
         assert (empty.name, empty.content_type, empty.content) == ("", "", b"empty-name")
