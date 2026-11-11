@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Flow-to-machine `ava.start_run` and declared machine sends work again on
+  Delta (scheduler-owned, no tenant credentials), matching the local operator.
+- Delta's CLI retires `delta machine start/show/list`; start machines with
+  `delta runs start` and inspect them with `delta flows`/`delta runs`, which
+  show the same flow/machine kind as `ava flow` and `ava run`.
+
 - CLI: `ava flow list` and `ava flow show` (`get` is equivalent) inspect flow
   and machine definitions, including machine states and key fields. Definition
   and run lists show a TYPE column; detail shows Kind. JSON includes `kind`
