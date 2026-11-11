@@ -834,7 +834,8 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             rows = {
                 row["run_id"]: row
                 for row in connection.execute(
-                    "SELECT run_id, key, read_state FROM runs WHERE run_id IN ("
+                    "SELECT run_id, key, read_state, machine_json IS NOT NULL AS is_machine "
+                    "FROM runs WHERE run_id IN ("
                     + ",".join("?" for _ in summaries)
                     + ")",
                     tuple(summary.run_id for summary in summaries),
@@ -848,6 +849,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             message = run_summary_to_v2(summary)
             message.key_json = row["key"] or ""
             message.read_state = row["read_state"]
+            message.kind = "machine" if row["is_machine"] else "flow"
             messages.append(message)
         return messages
 

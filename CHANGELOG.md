@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- CLI: `ava flow list` and `ava flow show` (`get` is equivalent) inspect flow
+  and machine definitions, including machine states and key fields. Definition
+  and run lists show a TYPE column; detail shows Kind. JSON includes `kind`
+  (`flow` or `machine`), derived from stored metadata for historical runs.
+- CLI: `ava run list/show` now default to readable text; use `--json` for
+  machine-readable output. `ava run history RUN` pages machine transitions.
+  Send by run ID with `ava machine send EVENT --run RUN`, or by named key
+  fields with `ava machine send MACHINE EVENT --key FIELD=JSON`. The run-ID
+  form no longer takes a redundant machine name.
+
 ## 0.20.5
 
 - Operator: run and visit history recorded before a restart remains readable in

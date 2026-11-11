@@ -20,7 +20,7 @@ def run_command(argv: list[str]) -> int:
     machine = argv[:2] == ["machine", "send"]
     parser = argparse.ArgumentParser(prog="ava " + " ".join(argv[:2]))
     if machine:
-        parser.add_argument("machine")
+        parser.add_argument("machine", nargs="?", help="Required with --key; omit with --run")
         address = parser.add_mutually_exclusive_group(required=True)
         address.add_argument("--run")
         address.add_argument("--key", action="append", metavar="FIELD=JSON")
@@ -36,12 +36,20 @@ def run_command(argv: list[str]) -> int:
             parser.add_argument("--flow", default="")
         if argv[1] == "retry":
             parser.add_argument("--visit", action="store_true", required=True)
+    if not machine and argv[1] == "history":
+        parser.add_argument("--limit", type=int, default=20, choices=range(1, 101))
+        parser.add_argument("--cursor")
     parser.add_argument("--connect", default="localhost:7433")
-    parser.add_argument("--json", action="store_true", help="emit JSON (the default)")
-    args = parser.parse_args(argv[2:])
+    parser.add_argument("--json", action="store_true", help="emit JSON")
+    args = parser.parse_intermixed_args(argv[2:])
     from .app import _parse_assignment, _parse_json_object, _reject_json_constant
 
     try:
+        if machine:
+            if args.run is not None and args.machine is not None:
+                raise ValueError("Use machine send EVENT --run RUN; omit the machine name")
+            if args.run is None and args.machine is None:
+                raise ValueError("Named --key fields require a machine name")
         with grpc.insecure_channel(args.connect) as channel:
             stub = pb_grpc.OperatorServiceV2Stub(channel)
 
@@ -84,7 +92,7 @@ def run_command(argv: list[str]) -> int:
                 result = control(
                     MachineControlRequest(
                         op="send",
-                        machine=args.machine,
+                        machine=args.machine or "",
                         run_id=run_id,
                         event=args.event,
                         payload=payload,
@@ -93,26 +101,39 @@ def run_command(argv: list[str]) -> int:
                 )
                 print(json.dumps(result, allow_nan=False))
             elif argv[1] == "show":
-                print(
-                    MessageToJson(
-                        stub.GetRunSnapshot(
-                            pb.GetRunSnapshotRequestV2(run_id=run_id), timeout=30
-                        ),
-                        preserving_proto_field_name=True,
-                    )
+                snapshot = stub.GetRunSnapshot(
+                    pb.GetRunSnapshotRequestV2(run_id=run_id), timeout=30
                 )
+                if args.json:
+                    print(MessageToJson(snapshot, preserving_proto_field_name=True))
+                else:
+                    print(f"Kind: {snapshot.summary.kind}")
+                    print(MessageToJson(snapshot, preserving_proto_field_name=True))
             elif argv[1] == "list":
-                print(
-                    MessageToJson(
-                        stub.ListRunSummaries(
-                            pb.ListRunSummariesRequestV2(
-                                workflow_selector=args.flow, page_size=100
-                            ),
-                            timeout=30,
-                        ),
-                        preserving_proto_field_name=True,
-                    )
+                request = pb.ListRunSummariesRequestV2(
+                    workflow_selector=args.flow, page_size=100
                 )
+                runs = []
+                while True:
+                    page = stub.ListRunSummaries(request, timeout=30)
+                    runs.extend(page.runs)
+                    if not page.HasField("next_page"):
+                        break
+                    request.continuation.CopyFrom(page.next_page)
+                if args.json:
+                    print(json.dumps({"runs": [
+                        json.loads(MessageToJson(run, preserving_proto_field_name=True))
+                        for run in runs
+                    ]}))
+                else:
+                    print("TYPE\tRUN\tDEFINITION\tSTATUS")
+                    for run in runs:
+                        print(f"{run.kind}\t{run.run_id}\t{run.workflow_selector}\t{run.status}")
+            elif argv[1] == "history":
+                result = control(MachineControlRequest(
+                    op="history", run_id=run_id, limit=args.limit, cursor=args.cursor
+                ))
+                print(json.dumps(result))
             elif argv[1] == "cancel":
                 stub.CancelRun(pb.CancelRunRequestV2(run_id=run_id), timeout=30)
                 print("{}")

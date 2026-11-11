@@ -401,7 +401,6 @@ def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path)
                 cli(
                     "machine",
                     "send",
-                    "approval",
                     "--run",
                     second,
                     "approved",
@@ -411,9 +410,26 @@ def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path)
             )
             assert sent["receipt_id"] == duplicate["receipt_id"] and duplicate["duplicate"]
             assert wait_terminal(op, second).status == RunStatus.SUCCESS
-            shown = json.loads(cli("run", "show", second))
+            shown = json.loads(cli("run", "show", second, "--json"))
             assert json.loads(shown["machine_json"])["state"] == "done"
-            assert len(json.loads(cli("run", "list", "--flow", "approval"))["runs"]) == 2
+            assert shown["summary"]["kind"] == "machine"
+            listed = json.loads(cli("run", "list", "--flow", "approval", "--json"))["runs"]
+            assert len(listed) == 2 and all(run["kind"] == "machine" for run in listed)
+            mixed = json.loads(cli("run", "list", "--json"))["runs"]
+            assert next(run for run in mixed if run["run_id"] == flow)["kind"] == "flow"
+            assert "TYPE" in cli("run", "list")
+            assert "Kind: machine" in cli("run", "show", second)
+            assert "Kind: flow" in cli("run", "show", flow)
+            definitions = json.loads(cli("flow", "list", "--json"))
+            assert {item["kind"] for item in definitions} == {"flow", "machine"}
+            definition = json.loads(cli("flow", "show", "approval", "--json"))
+            assert definition["kind"] == "machine" and definition["key_fields"] == ["ticket"]
+            assert set(definition["machine"]["states"]) == {"pending", "reviewed", "done"}
+            assert "Kind: machine" in cli("flow", "show", "approval")
+            assert "States:" in cli("flow", "show", "approval")
+            assert "TYPE" in cli("flow", "list")
+            history = json.loads(cli("run", "history", second, "--limit", "1"))
+            assert history["items"] and history["next_cursor"] is not None
             with grpc.insecure_channel(address) as channel:
                 stub = pb_grpc.OperatorServiceV2Stub(channel)
                 flows = stub.DiscoverFlows(pb.DiscoverFlowsRequestV2())

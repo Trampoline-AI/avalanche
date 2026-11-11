@@ -960,6 +960,12 @@ export interface RunSummaryV2 {
      * @generated from protobuf field: string read_state = 12
      */
     readState: string;
+    /**
+     * Immutable run kind, independent of the current definition catalog.
+     *
+     * @generated from protobuf field: string kind = 13
+     */
+    kind: string;
 }
 /**
  * @generated from protobuf message avalanche.operator.ListRunSummariesRequestV2
@@ -4916,7 +4922,8 @@ class RunSummaryV2$Type extends MessageType<RunSummaryV2> {
             { no: 9, name: "triggered_by", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 10, name: "triggered_at", kind: "scalar", T: 1 /*ScalarType.DOUBLE*/ },
             { no: 11, name: "key_json", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
-            { no: 12, name: "read_state", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
+            { no: 12, name: "read_state", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 13, name: "kind", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<RunSummaryV2>): RunSummaryV2 {
@@ -4933,6 +4940,7 @@ class RunSummaryV2$Type extends MessageType<RunSummaryV2> {
         message.triggeredAt = 0;
         message.keyJson = "";
         message.readState = "";
+        message.kind = "";
         if (value !== undefined)
             reflectionMergePartial<RunSummaryV2>(this, message, value);
         return message;
@@ -4977,6 +4985,9 @@ class RunSummaryV2$Type extends MessageType<RunSummaryV2> {
                     break;
                 case /* string read_state */ 12:
                     message.readState = reader.string();
+                    break;
+                case /* string kind */ 13:
+                    message.kind = reader.string();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -5026,6 +5037,9 @@ class RunSummaryV2$Type extends MessageType<RunSummaryV2> {
         /* string read_state = 12; */
         if (message.readState !== "")
             writer.tag(12, WireType.LengthDelimited).string(message.readState);
+        /* string kind = 13; */
+        if (message.kind !== "")
+            writer.tag(13, WireType.LengthDelimited).string(message.kind);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);

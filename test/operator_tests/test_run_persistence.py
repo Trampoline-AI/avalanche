@@ -538,7 +538,9 @@ def test_keyed_flow_start_restart_and_expired_history(tmp_path):
 
 
 def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_path):
-    fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
+    source = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
+    fixture = tmp_path / "local_machine.py"
+    fixture.write_text(source.read_text())
     state_db = tmp_path / "state.db"
     journal = tmp_path / "artifacts.txt"
     document = tmp_path / "document.txt"
@@ -651,6 +653,27 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
             "v1.inspect_artifacts_1:document:captured",
             "v2.inspect_artifacts_1:document:captured",
         ]
+        # Kind belongs to the retained run, even after expiry, restart and a
+        # same-name catalog replacement with an ordinary flow.
+        op.close()
+        fixture.write_text(
+            "import avalanche as ava\n"
+            "@ava.step\ndef value():\n    return 1\n"
+            "@ava.workflow\ndef artifact_approval():\n    return value()\n"
+        )
+        op = Operator(
+            [str(fixture)], watch=False, schedule=False, webhook_port=0, state_db=state_db
+        )
+        server = serve_operator(op, port=port, block=False)
+        with grpc.insecure_channel(f"127.0.0.1:{port}") as channel:
+            stub = pb_grpc.OperatorServiceV2Stub(channel)
+            (definition,) = stub.DiscoverFlows(pb.DiscoverFlowsRequestV2()).flows
+            assert not definition.machine_spec_json
+            (summary,) = stub.ListRunSummaries(pb.ListRunSummariesRequestV2()).runs
+            assert summary.run_id == run_id and summary.kind == "machine"
+            assert summary.read_state == "expired"
+            snapshot = stub.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=run_id))
+            assert snapshot.summary.kind == "machine" and snapshot.read_state == "expired"
     finally:
         server.stop(grace=0).wait()
         op.close()

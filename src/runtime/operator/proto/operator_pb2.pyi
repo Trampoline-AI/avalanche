@@ -610,7 +610,7 @@ class EvaluationListV2(_message.Message):
     def __init__(self, records: _Optional[_Iterable[_Union[EvaluationRecordV2, _Mapping]]] = ...) -> None: ...
 
 class RunSummaryV2(_message.Message):
-    __slots__ = ("run_id", "workflow_selector", "workflow_display_name", "status", "started_at", "ended_at", "created_sequence", "revision", "triggered_by", "triggered_at", "key_json", "read_state")
+    __slots__ = ("run_id", "workflow_selector", "workflow_display_name", "status", "started_at", "ended_at", "created_sequence", "revision", "triggered_by", "triggered_at", "key_json", "read_state", "kind")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
     WORKFLOW_DISPLAY_NAME_FIELD_NUMBER: _ClassVar[int]
@@ -623,6 +623,7 @@ class RunSummaryV2(_message.Message):
     TRIGGERED_AT_FIELD_NUMBER: _ClassVar[int]
     KEY_JSON_FIELD_NUMBER: _ClassVar[int]
     READ_STATE_FIELD_NUMBER: _ClassVar[int]
+    KIND_FIELD_NUMBER: _ClassVar[int]
     run_id: str
     workflow_selector: str
     workflow_display_name: str
@@ -635,7 +636,8 @@ class RunSummaryV2(_message.Message):
     triggered_at: float
     key_json: str
     read_state: str
-    def __init__(self, run_id: _Optional[str] = ..., workflow_selector: _Optional[str] = ..., workflow_display_name: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., created_sequence: _Optional[int] = ..., revision: _Optional[int] = ..., triggered_by: _Optional[str] = ..., triggered_at: _Optional[float] = ..., key_json: _Optional[str] = ..., read_state: _Optional[str] = ...) -> None: ...
+    kind: str
+    def __init__(self, run_id: _Optional[str] = ..., workflow_selector: _Optional[str] = ..., workflow_display_name: _Optional[str] = ..., status: _Optional[str] = ..., started_at: _Optional[float] = ..., ended_at: _Optional[float] = ..., created_sequence: _Optional[int] = ..., revision: _Optional[int] = ..., triggered_by: _Optional[str] = ..., triggered_at: _Optional[float] = ..., key_json: _Optional[str] = ..., read_state: _Optional[str] = ..., kind: _Optional[str] = ...) -> None: ...
 
 class ListRunSummariesRequestV2(_message.Message):
     __slots__ = ("workflow_selector", "page_size", "continuation")

@@ -373,6 +373,8 @@ message RunSummaryV2 {
   double triggered_at = 10;
   string key_json = 11;
   string read_state = 12;
+  // Immutable run kind, independent of the current definition catalog.
+  string kind = 13;
 }
 
 message ListRunSummariesRequestV2 {

@@ -230,12 +230,16 @@ ava run approval --input '{"ticket":44}'
 # Prints a run ID. Repeating this command returns that same run.
 ava machine send approval --key ticket=44 approved \
   --data '{"reviewer":"Ada"}' --idempotency-key approval-44
+ava flow list
+ava flow show approval           # `ava flow get` is equivalent
 ava run list --flow approval
 ava run show RUN_ID
+ava run history RUN_ID --limit 20
 ava result RUN_ID --wait --output-dir ./approved-result
 ```
 
-Use `--run RUN_ID` instead of `--key ticket=44` when the run ID is available.
+Use `ava machine send approved --run RUN_ID` when the run ID is available;
+this form omits the machine name because the run already identifies it.
 `--key` is repeated for multiple key fields. Values use the ordinary flow-input
 JSON field grammar: numbers stay numbers, booleans stay booleans, and strings
 must be JSON quoted (for example `--key 'repo="acme/api"'`). `--data @event.json`
@@ -245,6 +249,14 @@ are JSON only: File/Workspace reference objects are explicitly refused.
 input facilities. Captured input belongs to the original run, not to a visit's
 temporary directory. Repeating an existing key validates the key first, then
 returns the existing run without replacing its input or claiming new files.
+
+Definition and run lists display a TYPE column (`flow` or `machine`); detail
+prints Kind. Machine definition detail includes states and key fields from
+discovery. Add `--json` for machine-readable output: definitions carry `kind`,
+run lists carry it on each run, and run snapshots carry `summary.kind`. Run
+kind comes from persisted run metadata, even when the latest definition has
+changed or the retained evidence has expired. History is paged; continue with
+the returned `next_cursor` using `--cursor`.
 
 A send returns `receipt_id`, `key` (the delivery's idempotency key),
 `accepted_at`, `status` (`accepted` or `ignored`), and `duplicate`. Retrying the

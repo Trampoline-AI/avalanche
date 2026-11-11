@@ -96,7 +96,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments[:2] == ["machine", "send"] or (
         len(arguments) >= 2
         and arguments[0] == "run"
-        and arguments[1] in {"list", "show", "retry", "cancel", "rerun"}
+        and arguments[1] in {"list", "show", "history", "retry", "cancel", "rerun"}
     ):
         from .machine_commands import run_command
 
@@ -132,6 +132,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     subcommands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
+    from .definition_commands import add_definition_command
+
+    add_definition_command(subcommands)
     events = subcommands.add_parser("event", help="send a declared run event")
     events.add_subparsers(dest="event_command").add_parser(
         "send", help="send a typed JSON event"
