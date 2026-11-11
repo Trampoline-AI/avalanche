@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.7
 
 - Operator: new keyed flow and machine starts reuse normalized key values before
   strict full-input validation, matching key lookup and declared-send coercion.
