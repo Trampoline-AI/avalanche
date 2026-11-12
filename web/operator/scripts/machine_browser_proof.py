@@ -513,9 +513,9 @@ def scenario(page, url: str, evidence: Path) -> dict:
     page.screenshot(path=str(evidence / "01-machine-run.png"))
 
     actions.get_by_role("button", name="Retry state entry", exact=True).click()
-    expect(waits.locator('[data-entry-id="v2:enter"]')).to_be_visible()
+    expect(waits.locator('[data-entry-id="e2:enter"]')).to_be_visible()
     # Hovering an entry highlights its state on the graph.
-    waits.locator('[data-entry-id="v2:enter"]').hover()
+    waits.locator('[data-entry-id="e2:enter"]').hover()
     expect(graph.locator(".react-flow__node.timeline-highlight")).to_have_count(1)
     page.screenshot(path=str(evidence / "01b-timeline-hover.png"))
     # A state-entry row opens that state entry's steps on the same canvas, like a flow run.
@@ -578,7 +578,7 @@ def scenario(page, url: str, evidence: Path) -> dict:
     expect(send.get_by_role("alert")).to_be_visible()
     send.get_by_role("button", name="Send event").click()
     expect(send.get_by_role("alert")).to_have_count(0)
-    expect(waits.locator('[data-entry-id="v3:enter"]')).to_be_visible()
+    expect(waits.locator('[data-entry-id="e3:enter"]')).to_be_visible()
     sends = page.evaluate("window.machineHarness.calls.filter(c => c.method === 'send')")
     assert len(sends) == 2 and sends[0]["args"][3] == sends[1]["args"][3], sends
     assert sends[0]["args"][2] == {

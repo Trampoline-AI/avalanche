@@ -1866,7 +1866,7 @@ describe("standard step run values", () => {
 
   it("reads a machine state entry's step through its state entry by the step's own ID", async () => {
     const getRunResult = vi.fn(async () => ({ resolution: "closed" }));
-    const stateEntryNodeId = `v2.${node.nodeId}`;
+    const stateEntryNodeId = `e2.${node.nodeId}`;
     render(
       <Inspector
         api={createApi({ getRunResult })}

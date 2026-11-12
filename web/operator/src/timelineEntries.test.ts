@@ -269,14 +269,14 @@ describe("machine run timeline", () => {
     const deferred = entries.find((entry) => entry.status === "deferred")!;
     expect(deferred.arc).toBeUndefined();
     expect(deferred.detail).toContain("held for a later state");
-    const left = entries.find((entry) => entry.id === "v4:leave")!;
+    const left = entries.find((entry) => entry.id === "e4:leave")!;
     expect(left.arc).toEqual({
       from: "ready_to_merge",
       to: "closed",
       event: "merged",
       timer: false,
     });
-    expect(entries.find((entry) => entry.id === "v2:enter")!.arc).toMatchObject({
+    expect(entries.find((entry) => entry.id === "e2:enter")!.arc).toMatchObject({
       from: "in_review",
       to: "amend",
       event: "review_done_with_nits",
@@ -621,7 +621,7 @@ describe("graph selection", () => {
           entry.state === "amend" || entry.arc?.to === "amend" || entry.arc?.from === "amend",
       ),
     ).toBe(true);
-    expect(amend.some((entry) => entry.id === "v1:leave")).toBe(true);
+    expect(amend.some((entry) => entry.id === "e1:leave")).toBe(true);
     expect(filterTimeline(closedRun(), undefined)).toHaveLength(closedRun().length);
   });
 

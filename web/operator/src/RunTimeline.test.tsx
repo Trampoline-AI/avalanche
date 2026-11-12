@@ -286,7 +286,7 @@ describe("run timeline in the bottom pane", () => {
     expect(screen.getByRole("tab", { name: /^Logs/ })).toBeInTheDocument();
     // A machine run opens on its timeline.
     expect(tab).toHaveAttribute("aria-selected", "true");
-    await waitFor(() => expect(events()).toContain("v2:fact:1"));
+    await waitFor(() => expect(events()).toContain("e2:fact:1"));
     const runs = screen.getByRole("region", { name: "Runs" });
     expect(within(runs).queryByText("State entries")).not.toBeInTheDocument();
     expect(within(runs).queryByText("Waits")).not.toBeInTheDocument();
@@ -296,14 +296,14 @@ describe("run timeline in the bottom pane", () => {
     expect(screen.queryByLabelText("Run waits section")).not.toBeInTheDocument();
     expect(events()).toEqual([
       "run-started",
-      "v1:enter",
-      "v1:leave",
-      "v2:enter",
-      "v2:fact:1",
-      "v2:fact:2",
-      "v2:leave",
-      "v3:enter",
-      "v3:timer:0:armed",
+      "e1:enter",
+      "e1:leave",
+      "e2:enter",
+      "e2:fact:1",
+      "e2:fact:2",
+      "e2:leave",
+      "e3:enter",
+      "e3:timer:0:armed",
     ]);
     const timeline = screen.getByRole("region", { name: "Run timeline" });
     expect(within(timeline).getByText("Event merged deferred in amend")).toBeInTheDocument();
@@ -333,10 +333,10 @@ describe("run timeline in the bottom pane", () => {
 
   it("highlights an entry's state on the graph and filters to a state picked on the graph", async () => {
     const { container } = renderRun(machineApi(), machineFlow.workflowId, "run-m");
-    await waitFor(() => expect(events()).toContain("v2:enter"));
+    await waitFor(() => expect(events()).toContain("e2:enter"));
     const amendCard = () => container.querySelector('.react-flow__node[data-id="amend"]')!;
     expect(amendCard()).not.toHaveClass("timeline-highlight");
-    const row = container.querySelector('[data-entry-id="v2:enter"]')!;
+    const row = container.querySelector('[data-entry-id="e2:enter"]')!;
     fireEvent.mouseEnter(row);
     await waitFor(() => expect(amendCard()).toHaveClass("timeline-highlight"));
     fireEvent.mouseLeave(screen.getByRole("region", { name: "Run timeline" }));
@@ -356,7 +356,7 @@ describe("run timeline in the bottom pane", () => {
     // (jsdom: React Flow keeps unmeasured cards hidden, so click the card's action.)
     fireEvent.click(cardAction(container, "in_review"));
     expect(await screen.findByText("State: in_review")).toBeInTheDocument();
-    expect(events()).toEqual(["run-started", "v1:enter", "v1:leave", "v2:enter"]);
+    expect(events()).toEqual(["run-started", "e1:enter", "e1:leave", "e2:enter"]);
     const selected = () =>
       [...container.querySelectorAll('.react-flow__node[data-selected="true"]')].map((node) =>
         node.getAttribute("data-id"),
@@ -364,7 +364,7 @@ describe("run timeline in the bottom pane", () => {
     expect(selected()).toEqual(["in_review"]);
     // The scope chip's clear clears the graph's selection too, not only the list's filter.
     fireEvent.click(screen.getByRole("button", { name: "Clear scope (State: in_review)" }));
-    expect(events()).toContain("v3:enter");
+    expect(events()).toContain("e3:enter");
     expect(selected()).toEqual([]);
   });
 
@@ -399,7 +399,7 @@ describe("run timeline in the bottom pane", () => {
       />
     );
     const { container, rerender } = render(workspace("run-m"));
-    await waitFor(() => expect(events()).toContain("v2:enter"));
+    await waitFor(() => expect(events()).toContain("e2:enter"));
     fireEvent.click(cardAction(container, "in_review"));
     expect(await screen.findByText("State: in_review")).toBeInTheDocument();
     expect(container.querySelector('.react-flow__node[data-selected="true"]')).not.toBeNull();
@@ -462,8 +462,8 @@ describe("run timeline in the bottom pane", () => {
 
   it("keeps the state entry and the way back to the state machine on the Logs tab", async () => {
     const { container } = renderRun(machineApi(), machineFlow.workflowId, "run-m");
-    await waitFor(() => expect(events()).toContain("v2:enter"));
-    const row = container.querySelector('[data-entry-id="v2:enter"]')!;
+    await waitFor(() => expect(events()).toContain("e2:enter"));
+    const row = container.querySelector('[data-entry-id="e2:enter"]')!;
     fireEvent.click(within(row as HTMLElement).getByRole("button", { name: /Entered amend/ }));
     fireEvent.click(within(row as HTMLElement).getByRole("button", { name: "Logs" }));
     expect(
@@ -576,7 +576,7 @@ describe("run timeline in the bottom pane", () => {
     const baseline = await api.loadBaseline();
     api.loadBaseline = async () => ({ ...baseline, runs: [summary, expiredRun] });
     renderRun(api, machineFlow.workflowId, "run-m");
-    await waitFor(() => expect(events()).toContain("v3:enter"));
+    await waitFor(() => expect(events()).toContain("e3:enter"));
     expect(listRunWaits).not.toHaveBeenCalled();
     expect(getMachineStateEntryEvents).not.toHaveBeenCalled();
   });
@@ -584,7 +584,7 @@ describe("run timeline in the bottom pane", () => {
   it("omits entries a host does not report, with one neutral note", async () => {
     // No event facts, receipts or deferred events (the Delta console's host).
     renderRun(machineApi({}, true), machineFlow.workflowId, "run-m");
-    await waitFor(() => expect(events()).toContain("v3:timer:0:armed"));
+    await waitFor(() => expect(events()).toContain("e3:timer:0:armed"));
     const timeline = screen.getByRole("region", { name: "Run timeline" });
     expect(events().some((id) => id?.includes(":fact:") || id?.startsWith("receipt:"))).toBe(
       false,
@@ -646,7 +646,7 @@ describe("run timeline in the bottom pane", () => {
 
   it("keeps the tab labels static while a scope chip shows and clears the pane's scope", async () => {
     const { container } = renderRun(machineApi(), machineFlow.workflowId, "run-m");
-    await waitFor(() => expect(events()).toContain("v2:enter"));
+    await waitFor(() => expect(events()).toContain("e2:enter"));
     const tabs = () =>
       screen.getAllByRole("tab").map((tab) => ({
         text: tab.textContent,
