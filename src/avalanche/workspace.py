@@ -315,6 +315,22 @@ class Workspace(BaseModel):
     _materialized_path: Path | None = PrivateAttr(default=None)
     _materialized_identity: tuple[int, int] | None = PrivateAttr(default=None)
 
+    @classmethod
+    def __get_pydantic_json_schema__(cls, schema, handler):
+        # Input catalogs validate JSON before Python reconstruction. Describe the
+        # tagged reference accepted by _decode_manifest as well as native fields;
+        # otherwise both public and declared starts reject our own serializer.
+        return {"anyOf": [handler(schema), {
+            "type": "object",
+            "properties": {
+                "kind": {"const": "workspace", "type": "string"},
+                "version": {"const": _MANIFEST_VERSION, "type": "integer"},
+                "reference": {"type": "string", "minLength": 1},
+            },
+            "required": ["kind", "version", "reference"],
+            "additionalProperties": False,
+        }]}
+
     @model_validator(mode="before")
     @classmethod
     def _decode_manifest(cls, value: Any) -> Any:
