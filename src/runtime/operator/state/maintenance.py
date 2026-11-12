@@ -39,7 +39,6 @@ from .runs import RunsTable, RunSummary
 from .schedule_input_files import SCHEDULE_INPUT_FOLDER_NAME
 from .schedules import SchedulesTable
 from .store import MEMORY, OperatorStateStore, StateDbPath
-from .workspaces import sweep_workspaces
 
 UNFINISHED_STATUSES = frozenset(
     {RunStatus.REQUESTING, RunStatus.PENDING, RunStatus.RUNNING, RunStatus.WAITING}
@@ -352,7 +351,6 @@ class StateMaintenance:
             )
             kept = SchedulesTable.read_all(connection)
         try:
-            sweep_workspaces(self._store)
             bundles = self._results.remove_unindexed_bundles()
             input_folders, _ = _token_folders(self._input_root)
             for name in input_folders:
@@ -432,7 +430,6 @@ class StateMaintenance:
             run = self._delete_run(summary)
             on_deleted(run)
             deleted.append(run)
-        sweep_workspaces(self._store)
         return tuple(deleted)
 
     def _delete_run(self, summary: RunSummary) -> DeletedRun:

@@ -51,8 +51,7 @@ class WorkspaceFileRef(BaseModel):
 class File(BaseModel):
     """A file in a workspace, with an optional private, host-local binding.
 
-    ``from_path`` captures a local commit unless a host workspace is supplied.
-    Serialization streams its digest lazily;
+    ``from_path`` only stats the file. Serialization streams its digest lazily;
     ``open`` streams a real read-only handle. Deserialization never grants access
     to a host path: a host must explicitly bind the reference first.
     """
@@ -119,24 +118,14 @@ class File(BaseModel):
         content_type: str | None = None,
         workspace: "Workspace | None" = None,
     ) -> File:
-        """Capture a local file commit, or bind a file in a host-owned workspace."""
-        from .references import LocalWorkspaceStore, _clone_file, local_workspace
+        """Bind an existing file without reading it, optionally inside a workspace."""
+        from .references import local_workspace
 
         host_path = Path(path).resolve(strict=True)
         if not host_path.is_file():
             raise ValueError("File source must be a regular file")
         if workspace is None:
-            # A File captures just this object, never its unrelated siblings.
-            with tempfile.TemporaryDirectory(prefix="avalanche-file-commit-") as folder:
-                target = Path(folder) / host_path.name
-                _clone_file(str(host_path), str(target))
-                workspace = local_workspace(Path(folder))
-            host_path = workspace.path / host_path.name
-        elif workspace.reference is not None and workspace.reference.startswith("local-ws:v2:"):
-            relative = host_path.relative_to(workspace.path.resolve())
-            if workspace.path != LocalWorkspaceStore.resolve(workspace.reference):
-                workspace = local_workspace(workspace.path)
-            host_path = workspace.path / relative
+            workspace = local_workspace(host_path.parent)
         relative = host_path.relative_to(workspace.path.resolve()).as_posix()
         result = cls(
             kind="file",

@@ -428,8 +428,8 @@ async def test_machine_run_control_early_events_payloads_and_defer(tmp_path):
     assert len(effects) == 4
     assert any(address[-1] == "delivery-2" for address in routed.host.receipts)
 
-    # The test host follows the same run-owned workspace/commit path as the
-    # spawned operator, including a child started by the final visit.
+    # The test host binds one persistent local folder across all visits and
+    # passes the same File into the child started by the final visit.
     spec = importlib.util.spec_from_file_location(
         "artifact_machine_fixture", SDK / "test" / "fixtures" / "local_machine.py"
     )
@@ -450,13 +450,14 @@ async def test_machine_run_control_early_events_payloads_and_defer(tmp_path):
     await instance.asend(
         "artifacts", fixture.ArtifactDelivery(document=file, workspace=committed)
     )
-    assert {file.ref.workspace, committed.reference} <= instance.waits.reference_grants
+    assert instance.input.workspace.path != source
     await instance.asend("approved")
     assert instance.handle.run_id == identity and instance.handle.done()
     assert instance.host.flow_runs[0].handle.result().model_dump() == {
         "text": "retained event bytes:capturedxxx",
         "counts": [1, 2, 3],
     }
+    assert (instance.input.workspace.path / "data.txt").read_text() == "capturedxxxx"
     assert (committed.path / "data.txt").read_text() == "captured"
     assert instance.host.flow_runs[0].input.document.ref == file.ref
 

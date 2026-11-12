@@ -374,50 +374,6 @@ MIGRATIONS += (
             """,
         ),
     ),
-    Migration(
-        version=10,
-        name="immutable workspace commits and run grants",
-        statements=(
-            "CREATE TABLE workspace_commits (reference TEXT PRIMARY KEY, "
-            "path TEXT NOT NULL, ref_count INTEGER NOT NULL DEFAULT 0 "
-            "CHECK (ref_count >= 0)) STRICT",
-            "CREATE TABLE workspace_runs (run_id TEXT PRIMARY KEY REFERENCES runs(run_id) "
-            "ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED, "
-            "directory TEXT NOT NULL UNIQUE) STRICT",
-            "CREATE INDEX workspace_commits_unreferenced ON workspace_commits(reference) "
-            "WHERE ref_count=0",
-            "CREATE TABLE workspace_grants (run_id TEXT NOT NULL REFERENCES runs(run_id) "
-            "ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED, reference TEXT NOT NULL "
-            "REFERENCES workspace_commits(reference), PRIMARY KEY(run_id, reference)) STRICT",
-            "CREATE TABLE workspace_heads (run_id TEXT NOT NULL REFERENCES runs(run_id) "
-            "ON DELETE CASCADE, mount TEXT NOT NULL, "
-            "reference TEXT NOT NULL REFERENCES workspace_commits(reference), "
-            "PRIMARY KEY(run_id, mount)) STRICT",
-            *tuple(
-                statement
-                for table in ("workspace_grants", "workspace_heads")
-                for statement in (
-                    f"CREATE TRIGGER {table}_add AFTER INSERT ON {table} BEGIN "
-                    "UPDATE workspace_commits SET ref_count=ref_count+1 "
-                    "WHERE reference=NEW.reference; END",
-                    f"CREATE TRIGGER {table}_drop AFTER DELETE ON {table} BEGIN "
-                    "UPDATE workspace_commits SET ref_count=ref_count-1 "
-                    "WHERE reference=OLD.reference; END",
-                    f"CREATE TRIGGER {table}_move AFTER UPDATE OF reference ON {table} "
-                    "WHEN OLD.reference != NEW.reference BEGIN "
-                    "UPDATE workspace_commits SET ref_count=ref_count-1 "
-                    "WHERE reference=OLD.reference; "
-                    "UPDATE workspace_commits SET ref_count=ref_count+1 "
-                    "WHERE reference=NEW.reference; END",
-                )
-            ),
-            "CREATE TRIGGER expire_workspace_refs AFTER UPDATE OF read_state ON runs "
-            "WHEN NEW.read_state='expired' BEGIN "
-            "DELETE FROM workspace_runs WHERE run_id=NEW.run_id; "
-            "DELETE FROM workspace_heads WHERE run_id=NEW.run_id; "
-            "DELETE FROM workspace_grants WHERE run_id=NEW.run_id; END",
-        ),
-    ),
 )
 
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version

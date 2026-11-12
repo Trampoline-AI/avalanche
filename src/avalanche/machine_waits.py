@@ -7,7 +7,7 @@ from collections import deque
 from collections.abc import Mapping
 from copy import deepcopy
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, ValidationError
 
 from .local_waits import LocalPrincipal, LocalWaits, WaitReceipt, WaitRefusalError
 from .machine_core import BufferedEvent, InboxFact, consumable_index, retain_inbox
@@ -15,30 +15,24 @@ from .policies import WaitSpec
 from .references import LocalReferenceBinder, bind_references
 
 
-def _event_references(value: JsonValue) -> set[str]:
-    from .file import File
-    from .references import LocalWorkspaceStore
-    from .workspace import Workspace
-
-    references: set[str] = set()
-    if isinstance(value, list):
-        for item in value:
-            references.update(_event_references(item))
-    elif isinstance(value, dict):
-        if value.get("kind") == "file" and "ref" in value:
-            file = File.model_validate(value)
-            file.bind(LocalReferenceBinder().bind_file(file)).snapshot()
-            references.add(file.ref.workspace)
-        elif value.get("kind") == "workspace":
-            workspace = Workspace.model_validate(value)
-            if workspace.reference is None:
-                raise ValueError("Event Workspace requires a commit reference")
-            LocalWorkspaceStore.resolve(workspace.reference)
-            references.add(workspace.reference)
-        else:
-            for item in value.values():
-                references.update(_event_references(item))
-    return references
+def validate_event_payload(
+    wire: JsonValue, models: tuple[type[BaseModel] | None, ...]
+) -> BaseModel | None:
+    """A deferred event must fit a declared receiving edge before acceptance."""
+    failure = None
+    for model in models:
+        if model is None:
+            if wire in ({}, None):
+                return None
+            failure = WaitRefusalError("event_payload_must_be_empty", 422)
+            continue
+        try:
+            return model.model_validate_json(json.dumps(wire, allow_nan=False), strict=True)
+        except ValidationError as exc:
+            failure = exc
+    if failure is not None:
+        raise failure
+    raise ValueError("Event has no receiving edge")
 
 
 class MachineWaits(LocalWaits):
@@ -48,9 +42,9 @@ class MachineWaits(LocalWaits):
         super().__init__(run_id, {})
         self.accepts: Mapping[str, type[BaseModel] | None] = {}
         self.defer: tuple[str, ...] = ()
+        self.payloads: Mapping[str, Mapping[str, type[BaseModel] | None]] = {}
         self.buffer: deque[BufferedEvent] = deque()
         self.facts: list[InboxFact] = []
-        self.reference_grants: set[str] = set()
 
     def now(self) -> float:
         return self._offset
@@ -100,7 +94,16 @@ class MachineWaits(LocalWaits):
                     else None
                 )
             else:
+                models = tuple(
+                    edges[key] for edges in self.payloads.values() if key in edges
+                )
+                if key in self.defer and models:
+                    validate_event_payload(wire, models)
                 value = deepcopy(wire) if key in self.defer else None
+            if accepted:
+                from .references import validate_local_references
+
+                validate_local_references(wire)
             schema = model.model_json_schema() if model is not None else {}
             reason = "accepted" if accepted else "ignored"
             receipt = self._receipt(address, wire, schema, principal, reason)
@@ -111,9 +114,6 @@ class MachineWaits(LocalWaits):
                     or self._queued_bytes + size > self.max_payload_bytes
                 ):
                     raise WaitRefusalError("inbox_full", 409)
-                # Check all refs, including deferred payloads, before accepting
-                # the receipt. This host has one local-OS project/principal.
-                self.reference_grants.update(_event_references(wire))
                 self.buffer.append(BufferedEvent(key, value, size))
                 self._queued_count += 1
                 self._queued_bytes += size

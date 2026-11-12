@@ -935,10 +935,7 @@ async def test_a_workspace_is_the_working_directory_and_comes_back_as_an_output(
     monkeypatch.setattr(sdk_module, "_session", edit_then_finish)
     result = await ava.Agent(
         signature=Edit, step_name="edit", runtime=ClaudeAgent(model=MODEL)
-    )(
-        workspace=workspace,
-        document=ava.File.from_path(tmp_path / "draft.txt", workspace=workspace),
-    )
+    )(workspace=workspace, document=ava.File.from_path(tmp_path / "draft.txt"))
 
     options = seen["options"]
     assert options.cwd == str(tmp_path)

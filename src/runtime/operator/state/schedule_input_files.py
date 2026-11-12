@@ -46,7 +46,7 @@ class ScheduleInputFile(BaseModel):
 
     folder: str = Field(pattern=r"^[0-9a-f]{32}$")
     name: str
-    workspace_reference: str = Field(pattern=r"^local-ws:(v1:[0-9a-f]{32}|v2:[0-9a-f]{64})$")
+    workspace_reference: str = Field(pattern=r"^local-ws:v1:[0-9a-f]{32}$")
 
     @field_validator("name")
     @classmethod
@@ -189,7 +189,7 @@ class ScheduleInputFileClaims:
                 workspace = local_workspace(folder)
                 # An empty media type is how uploads say the type is unknown.
                 file = File.from_path(
-                    workspace.path / staged.name,
+                    folder / staged.name,
                     content_type=staged.media_type or None,
                     workspace=workspace,
                 )

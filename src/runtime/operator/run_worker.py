@@ -136,9 +136,6 @@ def _run_worker(
     machine_reader: Connection | None = None,
 ) -> None:
     """Import/build exactly once, prepare, wait for the parent, and execute."""
-    from avalanche.references import configure_local_run
-
-    configure_local_run(run_id)
     event_queue = _SealableEventQueue(event_queue)
     if os.name != "nt":
         try:
@@ -320,9 +317,6 @@ def _run_worker(
                 run_handle, control_connection, cancel_reader, machine_reader, machine_pending
             )
         result = run_handle.result()
-        from avalanche.references import LocalWorkspaceStore
-
-        LocalWorkspaceStore.for_run(run_id).commit_mounts()
         status = "cancelled" if cancel_event.is_set() else "success"
         terminal_event = {"type": "terminal", "status": status}
         if status == "success":
@@ -631,21 +625,6 @@ def _with_local_node_observers(
     return _with_node_streams(node_id, fn, stdout, stderr)
 
 
-def _publish_node_value(value):
-    from avalanche.references import LocalReferenceBinder, bind_references
-    from avalanche.workspace import snapshot_workspaces
-
-    return snapshot_workspaces(bind_references(value, LocalReferenceBinder()))
-
-
-def _commit_node_workspaces() -> None:
-    from avalanche.references import LocalWorkspaceStore
-
-    store = LocalWorkspaceStore.for_run()
-    if store.run_id is not None:
-        store.commit_mounts()
-
-
 def _with_node_streams(
     node_id: str,
     fn: Callable[..., Any],
@@ -836,8 +815,7 @@ def _with_step_result(
 
         @wraps(fn)
         async def async_wrapper(*args: object, **kwargs: object) -> object:
-            result = _publish_node_value(await fn(*args, **kwargs))
-            _commit_node_workspaces()
+            result = await fn(*args, **kwargs)
             publish(result)
             return result
 
@@ -845,8 +823,7 @@ def _with_step_result(
 
     @wraps(fn)
     def wrapper(*args: object, **kwargs: object) -> object:
-        result = _publish_node_value(fn(*args, **kwargs))
-        _commit_node_workspaces()
+        result = fn(*args, **kwargs)
         publish(result)
         return result
 

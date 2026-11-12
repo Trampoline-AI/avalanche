@@ -586,41 +586,39 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
 
         with op._state_store.transaction() as connection:
             captured = RunsTable.read_request(connection, run_id).input
-            pins_before = list(connection.execute("SELECT * FROM workspace_commits"))
         delivery = {name: captured[name] for name in ("document", "workspace")}
         file_ref = delivery["document"]["ref"]["workspace"]
         tree_ref = delivery["workspace"]["reference"]
-        assert file_ref.startswith("local-ws:v2:") and tree_ref.startswith("local-ws:v2:")
-        from avalanche.references import LocalWorkspaceStore
+        assert file_ref.startswith("local-ws:v1:") and tree_ref.startswith("local-ws:v1:")
+        from avalanche.references import LocalReferenceBinder
 
-        original_object = (
-            LocalWorkspaceStore.resolve(file_ref) / delivery["document"]["ref"]["path"]
-        )
+        binder = LocalReferenceBinder()
+        original_object = binder.bind_file(ava.File.model_validate(delivery["document"]))
+        tree_path = binder.bind_workspace(ava.Workspace.model_validate(delivery["workspace"]))
         object_identity = original_object.stat().st_ino
-        # Even a DEFERRED event is authorized before its accepted receipt.
-        foreign = tmp_path / "foreign"
-        foreign.mkdir()
-        (foreign / "secret").write_text("not admitted to this operator")
-        foreign_file = ava.File.from_path(foreign / "secret").model_dump(mode="json")
-        with pytest.raises(ValueError, match="outside this operator project"):
+        tree_identity = tree_path.stat().st_ino
+        # Deferred events validate their declared model and references, just as
+        # current-edge events do. Rejection writes no receipt.
+        with pytest.raises(ValueError):
             op._machine_host.send(
-                run_id, "artifacts", {**delivery, "document": foreign_file}, "foreign"
+                run_id, "artifacts", {"document": delivery["document"]}, "bad"
+            )
+        broken = {**delivery["document"], "sha256": "0" * 64}
+        with pytest.raises(ValueError, match="sha256"):
+            op._machine_host.send(
+                run_id, "artifacts", {**delivery, "document": broken}, "bad-digest"
             )
         deferred = op._machine_host.send(run_id, "artifacts", delivery, "artifact-delivery")
         replay = op._machine_host.send(run_id, "artifacts", delivery, "artifact-delivery")
         assert deferred.status == "accepted" and replay.duplicate
         assert replay.receipt_id == deferred.receipt_id
         with op._state_store.transaction() as connection:
-            assert len(list(connection.execute("SELECT * FROM workspace_commits"))) == len(
-                pins_before
-            )
             assert (
                 connection.execute(
-                    "SELECT COUNT(*) FROM workspace_grants "
-                    "WHERE run_id=? AND reference IN (?, ?)",
-                    (run_id, file_ref, tree_ref),
+                    "SELECT COUNT(*) FROM wait_receipts WHERE run_id=? AND address='artifacts'",
+                    (run_id,),
                 ).fetchone()[0]
-                == 2
+                == 1
             )
         assert original_object.stat().st_ino == object_identity
         with grpc.insecure_channel(f"127.0.0.1:{port}") as channel:
@@ -713,7 +711,9 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
             time.sleep(0.03)
         assert op.get_run_result(flow_id) == visit_value
         assert op.get_run_result(flow_id, node_id="inspect_artifacts_1") == step_value
-        document.unlink()
+        # A local File is a reference to its existing host path, as in flows.
+        # Only the portable workspace ingress has been materialized once.
+        assert original_object == document.resolve()
         (workspace / "data.txt").unlink()
         (workspace / "identity.txt").unlink()
         workspace.rmdir()
@@ -749,18 +749,15 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
         with op._state_store.transaction() as connection:
             child_input = RunsTable.read_request(connection, child_id).input
             assert child_input["document"] == captured["document"]
-            assert (
-                connection.execute(
-                    "SELECT COUNT(*) FROM workspace_grants WHERE run_id=? AND reference=?",
-                    (child_id, file_ref),
-                ).fetchone()[0]
-                == 1
-            )
+            assert child_input["workspace"] == captured["workspace"]
         assert original_object.stat().st_ino == object_identity
         assert (
-            len(list((state_db.parent / "workspaces" / "commits").rglob("document.txt"))) == 1
+            binder.bind_file(ava.File.model_validate(child_input["document"]))
+            == original_object
         )
-        assert (LocalWorkspaceStore.resolve(tree_ref) / "data.txt").read_text() == "captured"
+        assert tree_path.stat().st_ino == tree_identity
+        assert (tree_path / "data.txt").read_text() == "capturedxxxx"
+        assert len(list(state_db.parent.rglob("document.txt"))) == 1
         assert journal.read_text().splitlines() == [
             "v1.inspect_artifacts_1:document:captured",
             "v2.inspect_artifacts_1:document:capturedx",
@@ -840,21 +837,23 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
         op.close()
 
 
-def test_declared_artifact_start_and_send_keep_the_producers_commit(tmp_path):
+def test_declared_artifact_start_and_send_keep_the_producers_local_references(tmp_path):
     source = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
     fixture = tmp_path / "local_machine.py"
     fixture.write_text(source.read_text())
-    from avalanche.references import LocalWorkspaceStore
+    from avalanche.references import LocalReferenceBinder, local_workspace
 
     content = tmp_path / "document.txt"
     content.write_text("declared document")
     document = ava.File.from_path(content)
     document_wire = document.model_dump(mode="json")
-    original = LocalWorkspaceStore.resolve(document.ref.workspace) / document.ref.path
+    original = LocalReferenceBinder().bind_file(document)
+    assert original == content
     inode = original.stat().st_ino
     tree = tmp_path / "tree"
     tree.mkdir()
     (tree / "data.txt").write_text("captured")
+    workspace_wire = local_workspace(tree).manifest()
     op = Operator(
         [str(fixture)],
         watch=False,
@@ -869,7 +868,7 @@ def test_declared_artifact_start_and_send_keep_the_producers_commit(tmp_path):
                 "ticket": 72,
                 "journal": str(tmp_path / "journal"),
                 "document": document_wire,
-                "workspace": ava.Workspace.from_path(tree).model_dump(),
+                "workspace": workspace_wire,
             },
         )
         deadline = time.monotonic() + 30
@@ -903,102 +902,23 @@ def test_declared_artifact_start_and_send_keep_the_producers_commit(tmp_path):
                     RunsTable.read_request(connection, row["run_id"]).input["document"]
                     == document_wire
                 )
-                assert (
-                    connection.execute(
-                        "SELECT COUNT(*) FROM workspace_grants WHERE run_id=? AND reference=?",
-                        (row["run_id"], document.ref.workspace),
-                    ).fetchone()[0]
-                    == 1
+                assert RunsTable.read_request(connection, row["run_id"]).input["workspace"] == (
+                    workspace_wire
                 )
-        assert original.stat().st_ino == inode
-        assert original.read_text() == "declared document"
-        with op._state_store.transaction() as connection:
-            durable = (
-                Path(
-                    connection.execute(
-                        "SELECT path FROM workspace_commits WHERE reference=?",
-                        (document.ref.workspace,),
-                    ).fetchone()[0]
-                )
-                / document.ref.path
-            )
+            assert payload["workspace"] == workspace_wire
             assert (
                 connection.execute(
-                    "SELECT ref_count FROM workspace_commits WHERE reference=?",
-                    (document.ref.workspace,),
-                ).fetchone()[0]
-                == 3
-            )
-            # Counters count both head pins and grants, including moved heads.
-            assert not connection.execute(
-                "SELECT 1 FROM workspace_commits c WHERE ref_count != "
-                "(SELECT COUNT(*) FROM workspace_grants g WHERE g.reference=c.reference) + "
-                "(SELECT COUNT(*) FROM workspace_heads h WHERE h.reference=c.reference)"
-            ).fetchall()
-        roots = {
-            row["run_id"]: LocalWorkspaceStore.for_run(row["run_id"]).run_root for row in runs
-        }
-        child = next(row["run_id"] for row in runs if row["run_id"] not in {router, machine})
-    finally:
-        op.close()
-
-    from runtime.operator.state.maintenance import StateMaintenance
-
-    database = tmp_path / "state.db"
-    with StateMaintenance.open(database) as maintenance:
-        maintenance.delete([router], on_deleted=lambda _: None)
-        assert not roots[router].exists()
-        assert durable.read_text() == "declared document"
-        with maintenance._store.transaction() as connection:
-            assert (
-                connection.execute(
-                    "SELECT ref_count FROM workspace_commits WHERE reference=?",
-                    (document.ref.workspace,),
-                ).fetchone()[0]
-                == 2
-            )
-            assert not connection.execute(
-                "SELECT 1 FROM workspace_grants WHERE run_id=?", (router,)
-            ).fetchall()
-        maintenance.delete([machine], on_deleted=lambda _: None)
-        assert not roots[machine].exists()
-        assert durable.read_text() == "declared document"
-        with maintenance._store.transaction() as connection:
-            assert (
-                connection.execute(
-                    "SELECT read_state FROM runs WHERE run_id=?", (machine,)
-                ).fetchone()[0]
-                == "expired"
-            )
-            assert (
-                connection.execute(
-                    "SELECT ref_count FROM workspace_commits WHERE reference=?",
-                    (document.ref.workspace,),
+                    "SELECT COUNT(*) FROM wait_receipts WHERE run_id=? AND address='artifacts'",
+                    (machine,),
                 ).fetchone()[0]
                 == 1
             )
-        # The child grant alone keeps the original object readable after both
-        # producer deletion and keyed-machine expiry, without any new bytes.
-        assert ava.File.model_validate(document_wire).bind(durable).read_bytes() == (
-            b"declared document"
-        )
-        maintenance.prune_keep_last(0, on_deleted=lambda _: None)
-        assert not roots[child].exists() and not durable.exists()
-        with maintenance._store.transaction() as connection:
-            for table in (
-                "workspace_grants",
-                "workspace_heads",
-                "workspace_commits",
-                "workspace_runs",
-            ):
-                assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
-        assert not list((tmp_path / "workspaces" / "commits").iterdir())
-        # Recover an interrupted publication: no SQLite row was ever committed.
-        orphan = tmp_path / "workspaces" / "commits" / ("f" * 64)
-        orphan.mkdir()
-        (orphan / "unpublished").write_bytes(b"not retained")
-        maintenance.clear(include_schedules=False)
-        assert not orphan.exists()
+        assert original.stat().st_ino == inode
+        assert original.read_text() == "declared document"
+        assert (tree / "data.txt").read_text() == "capturedxxxx"
+        assert list(tmp_path.rglob("document.txt")) == [content]
+    finally:
+        op.close()
 
 
 _KILLED_MACHINE_OPERATOR = """

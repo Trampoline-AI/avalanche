@@ -71,7 +71,6 @@ class Send:
     payload: JsonValue
     idempotency_key: str
     reply: Future[MachineEventReceipt]
-    sender_run_id: str | None = None
     queued_at: float = field(default_factory=time.monotonic)
 
 
@@ -607,22 +606,17 @@ class MachineHost:
         self._enter(record, request=command.request)
         return run_id
 
-    def _validate_event(
-        self, record: InstanceRecord, name: str, payload: JsonValue
-    ) -> JsonValue:
+    def _validate_event(self, record: InstanceRecord, name: str, payload: JsonValue) -> None:
         state = record.spec.states[record.state]
         edge = next((edge for edge in state.transitions if edge.event == name), None)
-        if edge is None:
-            return payload
-        if edge.payload_schema is None:
+        if edge is None and name not in state.defer:
+            return
+        if edge is not None and edge.payload_schema is None:
             if payload not in ({}, None):
                 raise WaitRefusalError("event_payload_must_be_empty", 422)
         else:
             descriptor, root = self.op._registry.resolve_source(record.machine)
-            return validate_native(
-                descriptor, root, "event", payload, state=record.state, event=name
-            )
-        return payload
+            validate_native(descriptor, root, "event", payload, state=record.state, event=name)
 
     def _defer_inbox_validation(
         self, record: InstanceRecord, summary: str, *, failures: int = 0
@@ -771,7 +765,6 @@ class MachineHost:
         # schema acceptance. Validate against the restored native model before
         # the reducer may consume it, and journal any rejection visibly.
         accepted = True
-        validated_payload = command.payload
         if spec is not None:
             state = spec.states[record.state]
             accepted = (
@@ -779,12 +772,16 @@ class MachineHost:
                 or command.event in state.defer
             )
             try:
-                validated_payload = self._validate_event(record, command.event, command.payload)
+                self._validate_event(record, command.event, command.payload)
             except (MachineDefinitionUnavailableError, FileNotFoundError) as exc:
                 self._definition_unavailable(record, str(exc))
                 spec = None
                 unavailable_reason = "definition_unavailable"
                 accepted = True
+        if accepted:
+            from avalanche.references import validate_local_references
+
+            validate_local_references(command.payload)
         receipt = MachineEventReceipt(
             receipt_id=uuid4().hex,
             key=command.idempotency_key,
@@ -794,11 +791,6 @@ class MachineHost:
         )
         with self.op._state_store.transaction() as connection:
             if accepted:
-                from .state.workspaces import grant_references
-
-                grant_references(
-                    connection, validated_payload, record.run_id, sender=command.sender_run_id
-                )
                 rows = MachinesTable.inbox(connection, record.run_id)
                 if (
                     len(rows) >= 1000
@@ -999,12 +991,7 @@ class MachineHost:
             existing = existing or (proposed if self.op.get_run(proposed) is not None else None)
             if existing is not None:
                 run_id = existing
-            else:
-                from .state.workspaces import grant_references
-
-                with self.op._state_store.transaction() as connection:
-                    grant_references(connection, values, None, sender=request.sender_run_id)
-            if existing is None and (descriptor.machine_spec_json or descriptor.key_fields):
+            elif descriptor.machine_spec_json or descriptor.key_fields:
                 run_id = self._start(
                     Start(
                         request.target,
@@ -1014,7 +1001,7 @@ class MachineHost:
                         Future(),
                     )
                 )
-            elif existing is None:
+            else:
                 run_id = self.op.start_run(
                     request.target, TriggerKind.API, input=values, run_id=proposed
                 )
@@ -1038,14 +1025,7 @@ class MachineHost:
                 request.spec.machine, dict(zip(spec.key_fields, request.key, strict=True))
             )
         return self._send(
-            Send(
-                run_id,
-                request.event,
-                request.payload,
-                request.idempotency_key,
-                Future(),
-                sender_run_id=request.sender_run_id,
-            )
+            Send(run_id, request.event, request.payload, request.idempotency_key, Future())
         )
 
     def _next_command(self, timeout: float | None) -> Command:

@@ -556,12 +556,6 @@ class Workspace(BaseModel):
             serializer = context.get(_WORKSPACE_SERIALIZER_CONTEXT_KEY)
         if callable(serializer):
             return serializer(self)
-        if self.is_reference and self._directory_path is not None:
-            from .references import LocalWorkspaceStore
-
-            store = LocalWorkspaceStore.for_run()
-            if store.run_id is not None and self.path.is_relative_to(store.run_root):
-                return store.commit(self.path).manifest()
         return self._manifest_for_serialization()
 
     @property
@@ -600,11 +594,6 @@ class Workspace(BaseModel):
     def snapshot(self) -> "Workspace":
         """Capture a value tree, or retain the same host-owned directory reference."""
         if self.is_reference:
-            from .references import LocalWorkspaceStore
-
-            store = LocalWorkspaceStore.for_run()
-            if store.run_id is not None and self.path.is_relative_to(store.run_root):
-                return store.commit(self.path)
             _ = self.path
             return self
         if self._materialized_path is None:
@@ -791,16 +780,15 @@ def run_workspace_invocation(fn, /, *args: Any, **kwargs: Any) -> Any:
             if primary_error is None:
                 raise
             primary_error.add_note(
-                f"Workspace cleanup failed while preserving invocation error: {cleanup_error!r}"
+                "Workspace cleanup failed while preserving invocation error: "
+                f"{cleanup_error!r}"
             )
 
 
 def snapshot_workspaces(value: Any) -> Any:
     """Capture every workspace in a supported workflow return shape."""
     if isinstance(value, Workspace):
-        return (
-            value if value.is_reference and value._directory_path is None else value.snapshot()
-        )
+        return value if value.is_reference else value.snapshot()
     from .file import File
     from .types import LineagedResult
 

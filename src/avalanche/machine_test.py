@@ -80,18 +80,17 @@ class MachineTest:
         self.host = host if host is not None else InMemoryMachineHost(stub=stub)
         self.machine = machine
         self.spec = machine.spec
-        self.input = machine.input_type.model_validate(input)
+        from .references import LocalReferenceBinder, bind_references, prepare_run_references
+
+        self.input = bind_references(
+            prepare_run_references(machine.input_type.model_validate(input)),
+            LocalReferenceBinder(),
+        )
         self.state = self.spec.initial
         self.history: list[MachineHistory] = []
         self.handle: RunHandle[LocalValue] = RunHandle(uuid4().hex)
         self.waits = MachineWaits(self.handle.run_id)
         self.handle.waits = self.waits
-        from .machine_waits import _event_references
-
-        self.host.reference_grants[self.handle.run_id] = _event_references(
-            self.input.model_dump(mode="json") if self.input is not None else None
-        )
-        self.waits.reference_grants = self.host.reference_grants[self.handle.run_id]
         self._stubs = {node: deque(values) for node, values in (stub or {}).items()}
         self._busy = False
         self._values: dict[str, LocalValue] = {}
@@ -113,6 +112,7 @@ class MachineTest:
     def _enter(self) -> None:
         self._visit += 1
         declaration = self.spec.states[self.state]
+        self.waits.payloads = self.machine.payloads
         self.waits.enter(self.machine.payloads[self.state], declaration.defer)
         self._due = [
             (self.waits.now() + timer.delay_seconds, timer.target)
@@ -397,20 +397,7 @@ class MachineTest:
             if not operation_enabled(bound.arguments["when"]):
                 return None
             target = TypeAdapter(str).validate_python(bound.arguments["target"], strict=True)
-            from .references import prepare_run_references
-            from .runtime.context import _current_run_context
-
-            context = RunContext(
-                run_id=self.handle.run_id, workflow_name=work.name, node_id=ref.future_id
-            )
-            token = _current_run_context.set(context)
-            try:
-                value = prepare_run_references(bound.arguments["input"])
-                return await self.host._start_run(
-                    target, value, sender_run_id=self.handle.run_id
-                )
-            finally:
-                _current_run_context.reset(token)
+            return await self.host._start_run(target, bound.arguments["input"])
         if isinstance(node, MachineNode):
             self.host.register(node.machine)
             context = RunContext(
@@ -425,17 +412,7 @@ class MachineTest:
                 name: _resolve_to_ref(value, self._values) for name, value in ref.kwargs.items()
             }
             args, kwargs = _resolve_input_refs(args, kwargs, self.input, node.name, work.name)
-            from .runtime.context import _current_run_context
-
-            token = _current_run_context.set(context)
-            try:
-                from .references import prepare_run_references
-
-                args = prepare_run_references(args)
-                kwargs = prepare_run_references(kwargs)
-                return await execute_machine_node(node, args, kwargs, self.host, context)
-            finally:
-                _current_run_context.reset(token)
+            return await execute_machine_node(node, args, kwargs, self.host, context)
         if node in self._stubs:
             return self._stub(node)
         plan = _build_node_binding_plan(
@@ -536,26 +513,13 @@ class MachineTest:
             for attempt in range(rounds):
                 self._attempts[ref.future_id] = self._attempts.get(ref.future_id, 0) + 1
                 try:
-                    from .references import (
-                        LocalReferenceBinder,
-                        LocalWorkspaceStore,
-                        bind_references,
-                    )
+                    from .references import LocalReferenceBinder, bind_references
 
-                    bound_args = bind_references(args, LocalReferenceBinder())
-                    bound_kwargs = bind_references(kwargs, LocalReferenceBinder())
-                    value = actual_fn(*bound_args, **bound_kwargs)
-                    result = await value if inspect.isawaitable(value) else value
-                    from .workspace import snapshot_workspaces
-
-                    result = snapshot_workspaces(
-                        bind_references(result, LocalReferenceBinder())
+                    value = actual_fn(
+                        *bind_references(args, LocalReferenceBinder()),
+                        **bind_references(kwargs, LocalReferenceBinder()),
                     )
-                    self.host.reference_grants[self.handle.run_id].update(
-                        _output_references(result)
-                    )
-                    LocalWorkspaceStore.for_run(self.handle.run_id).commit_mounts()
-                    return result
+                    return await value if inspect.isawaitable(value) else value
                 except NonRetryableError:
                     raise
                 except OutcomeUnknownError:
@@ -577,25 +541,6 @@ class MachineTest:
         raise AssertionError("unreachable retry ladder")
 
 
-def _output_references(value: LocalValue) -> set[str]:
-    from .file import File
-    from .workspace import Workspace
-
-    if isinstance(value, File):
-        return {value.ref.workspace}
-    if isinstance(value, Workspace):
-        return {value.reference} if value.reference is not None else set()
-    if isinstance(value, BaseModel):
-        children = (getattr(value, field) for field in type(value).model_fields)
-    elif isinstance(value, dict):
-        children = value.values()
-    elif isinstance(value, (tuple, list)):
-        children = value
-    else:
-        return set()
-    return set().union(*(_output_references(child) for child in children))
-
-
 class InMemoryMachineHost:
     """Test-only host: one instance per canonical key and real machine semantics."""
 
@@ -607,7 +552,6 @@ class InMemoryMachineHost:
         self.instances: dict[tuple[str, str], MachineTest] = {}
         self.receipts: dict[tuple[str, str, str, str], tuple[str, MachineEventReceipt]] = {}
         self.stub = stub
-        self.reference_grants: dict[str, set[str]] = {}
 
     def register(self, target: RunTarget) -> None:
         from .machine import Machine
@@ -625,26 +569,8 @@ class InMemoryMachineHost:
     def _key(key: MachineKey) -> str:
         return canonical_json(key)
 
-    def _authorize_input(
-        self, input: BaseInput | dict[str, JsonValue] | None, sender: str | None
-    ) -> None:
-        from .machine_waits import _event_references
-        from .references import LocalWorkspaceStore
-
-        wire = input.model_dump(mode="json") if isinstance(input, BaseModel) else input
-        references = _event_references(wire)
-        if sender is not None:
-            issued = LocalWorkspaceStore.for_run(sender).run_root / "issued"
-            for reference in references - self.reference_grants[sender]:
-                if not (issued / reference.removeprefix("local-ws:v2:")).is_file():
-                    raise ValueError("Sender has no grant for workspace commit")
-
     async def _start_run(
-        self,
-        target: str,
-        input: BaseInput | dict[str, JsonValue] | None,
-        *,
-        sender_run_id: str | None = None,
+        self, target: str, input: BaseInput | dict[str, JsonValue] | None
     ) -> RunStart:
         """Test scheduler path, not a public host-start transport API."""
         if target in self.flows:
@@ -657,7 +583,6 @@ class InMemoryMachineHost:
                     key=list(key),
                     created=False,
                 )
-            self._authorize_input(input, sender_run_id)
             driver = WorkflowTest(flow, input, stub=self.stub, host=self)
             self.flow_runs.append(driver)
             if address is not None:
@@ -675,7 +600,6 @@ class InMemoryMachineHost:
             return RunStart(
                 run_id=self.instances[address].handle.run_id, key=list(key), created=False
             )
-        self._authorize_input(input, sender_run_id)
         driver = MachineTest(definition, input, stub=self.stub, host=self)
         self.instances[address] = driver
         await driver._drive()
@@ -716,10 +640,6 @@ class InMemoryMachineHost:
             raise WaitRefusalError("run_closed", 409)
         if payload is not None and not isinstance(payload, dict):
             raise WaitRefusalError("event_payload_must_be_object", 422)
-        from .runtime.context import get_current_run_context
-
-        sender = get_current_run_context()
-        self._authorize_input(payload, sender.run_id if sender is not None else None)
         accepted = driver.waits.send_event(
             event,
             {} if payload is None else payload,
@@ -755,16 +675,17 @@ class WorkflowTest(MachineTest):
         self.host = host if host is not None else InMemoryMachineHost(stub=stub)
         for target in targets:
             self.host.register(target)
-        self.input = workflow.input_type.model_validate(input) if workflow.input_type else None
+        from .references import LocalReferenceBinder, bind_references, prepare_run_references
+
+        self.input = bind_references(
+            prepare_run_references(
+                workflow.input_type.model_validate(input) if workflow.input_type else None
+            ),
+            LocalReferenceBinder(),
+        )
         self.handle: RunHandle[LocalValue] = RunHandle(uuid4().hex)
         self.waits = MachineWaits(self.handle.run_id)
         self.handle.waits = self.waits
-        from .machine_waits import _event_references
-
-        self.host.reference_grants[self.handle.run_id] = _event_references(
-            self.input.model_dump(mode="json") if self.input is not None else None
-        )
-        self.waits.reference_grants = self.host.reference_grants[self.handle.run_id]
         self.handle.node_aliases = {slug: name for name, slug in workflow.node_slugs.items()}
         self.waits.add_visit_waits(
             {

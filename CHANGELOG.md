@@ -22,21 +22,13 @@
   of raising a result-publication TypeError.
 - Delta console archived machine steps retain the shared step input/output
   inspector by resolving their immutable attempt observations.
-- Local workspaces are immutable content-addressed commits. Machine visits keep
-  one run-owned writable workspace, so later visits see earlier edits, including
-  after an operator restart. Receiving runs use copy-on-write filesystem clones
-  (ordinary copy only when the filesystem cannot clone).
-- Local child starts and public/declared machine sends carry File and Workspace
-  references with durable run read grants, including deferred events. Passing an
-  existing object never restages it or creates another content object. Local v1
-  references remain readable; new snapshots use local-ws:v2 commit identities.
-- File.from_path captures an immutable local file when no host workspace is
-  supplied. Pass workspace=... to bind a file already in a host-owned workspace.
-- Workspace commits follow run retention. Deleting or expiring a run removes its
-  mounts and read grants; shared commits stay until their last retained run head
-  or grant is gone. State delete/prune/clear sweep unreferenced trees in batches.
-- Local v2 File and Workspace results bind through the shared result codec,
-  including retained visit and step results.
+- Machine visits keep the same local workspace folder across visits and operator
+  restarts, so later visits see earlier edits. The test host binds Workspace.path
+  the same way as flow steps.
+- Local child starts and public/declared machine sends carry the same File and
+  Workspace references flows use, without restaging, exporting or copying an
+  existing reference. Deferred events validate against their declared receiving
+  models before acceptance, just as current-edge events do.
 
 ## 0.20.7
 

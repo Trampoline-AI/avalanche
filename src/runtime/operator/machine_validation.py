@@ -126,13 +126,22 @@ def main() -> None:
                 machine = builder
                 if request.state not in machine.spec.states:
                     raise ValueError("state_missing")
-                model = machine.payloads[request.state][request.event]
-                if model is None:
-                    if request.value not in (None, {}):
-                        raise ValueError("event_payload_must_be_empty")
-                    value = request.value
-                else:
-                    value = model.model_validate_json(wire, strict=True).model_dump(mode="json")
+                from avalanche.machine_waits import validate_event_payload
+
+                edges = machine.payloads[request.state]
+                models = (
+                    (edges[request.event],)
+                    if request.event in edges
+                    else tuple(
+                        edges[request.event]
+                        for edges in machine.payloads.values()
+                        if request.event in edges
+                    )
+                )
+                payload = validate_event_payload(request.value, models)
+                value = (
+                    payload.model_dump(mode="json") if payload is not None else request.value
+                )
         response = ValidationResponse(value=value)
     except MachineDefinitionUnavailableError as exc:
         response = ValidationResponse(error=str(exc), definition_unavailable=True)

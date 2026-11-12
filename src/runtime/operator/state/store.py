@@ -161,9 +161,6 @@ def _open_locked_file(path: Path) -> sqlite3.Connection:
             )
         _configure(connection)
         migrate(connection, str(path))
-        from .workspaces import restore_references
-
-        restore_references(connection)
     except BaseException:
         connection.close()
         raise

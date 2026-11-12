@@ -1093,10 +1093,7 @@ async def test_the_sandbox_edits_a_workspace_in_place_and_returns_it(
             signature=Edit,
             step_name="edit",
             runtime=OpenAIAgent(model=MODEL, builtin_tools=["filesystem", "shell"]),
-        )(
-            workspace=workspace,
-            document=ava.File.from_path(folder / "draft.txt", workspace=workspace),
-        )
+        )(workspace=workspace, document=ava.File.from_path(folder / "draft.txt"))
 
     assert (folder / "notes.txt").read_text() == "written by the agent"
     assert sorted(path.name for path in folder.iterdir()) == [

@@ -16,7 +16,7 @@ from typing import Protocol
 from uuid import uuid4
 
 from avalanche.file import File
-from avalanche.references import LocalWorkspaceStore
+from avalanche.references import local_workspace
 from avalanche.workspace import Workspace
 
 MAX_STAGED_INPUT_FILE_BYTES = 32 * 1024 * 1024
@@ -137,7 +137,7 @@ class InputFileStaging:
             try:
                 folder.mkdir(mode=0o700)
                 path.write_bytes(content)
-                workspace = LocalWorkspaceStore(self._root.parent / "workspaces").commit(folder)
+                workspace = local_workspace(folder)
             except OSError as exc:
                 failure = InputFileStorageError(f"Could not store input file {name!r}: {exc}")
                 try:
@@ -195,12 +195,9 @@ class InputFileStaging:
                     f"Input file {object_key!r} does not match its staged sha256 and size"
                 )
         try:
-            # A staging key whose upload was removed is no longer claimable.
-            if not entry.path.is_file():
-                raise FileNotFoundError(entry.path)
             # An empty media type is how uploads say the type is unknown.
             file = File.from_path(
-                entry.workspace.path / entry.file.name,
+                entry.path,
                 content_type=entry.file.media_type or None,
                 workspace=entry.workspace,
             )

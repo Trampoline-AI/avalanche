@@ -503,9 +503,7 @@ def _decode_value(
         return result
     if kind == "file" and "version" in encoded:
         file = File.model_validate(encoded)
-        if isinstance(attachments, dict) and file.ref.workspace.startswith(
-            ("local-ws:v1:", "local-ws:v2:")
-        ):
+        if isinstance(attachments, dict) and file.ref.workspace.startswith("local-ws:v1:"):
             from avalanche.references import LocalReferenceBinder
 
             return file.bind(LocalReferenceBinder().bind_file(file))
@@ -538,18 +536,12 @@ def _decode_value(
             if (
                 isinstance(attachments, dict)
                 and workspace.reference is not None
-                and workspace.reference.startswith(("local-ws:v1:", "local-ws:v2:"))
+                and workspace.reference.startswith("local-ws:v1:")
             ):
-                from avalanche.references import LocalReferenceBinder, LocalWorkspaceStore
+                from avalanche.references import LocalReferenceBinder
 
-                # Readback is an immutable view, not a new execution mount.
-                path = (
-                    LocalWorkspaceStore.resolve(workspace.reference)
-                    if workspace.reference.startswith("local-ws:v2:")
-                    else LocalReferenceBinder().bind_workspace(workspace)
-                )
                 return Workspace.from_directory(
-                    path,
+                    LocalReferenceBinder().bind_workspace(workspace),
                     reference=workspace.reference,
                 )
             return workspace

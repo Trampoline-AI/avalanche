@@ -232,22 +232,6 @@ class RunsTable:
         process: RunProcess | None,
     ) -> None:
         """Insert a new run with its nodes, request, input files and process group."""
-        from ..run_input_capture import capture_input
-        from .workspaces import configure_run, grant_references
-
-        store = configure_run(connection, stored.run.run_id)
-        captured = capture_input(
-            request.input,
-            store,
-            lambda reference: (
-                connection.execute(
-                    "SELECT 1 FROM workspace_commits WHERE reference=?", (reference,)
-                ).fetchone()
-                is not None
-            ),
-        )
-        request = request.model_copy(update={"input": captured})
-        grant_references(connection, captured, stored.run.run_id, ingress=True)
         connection.execute(
             _INSERT_RUN,
             (
@@ -287,15 +271,6 @@ class RunsTable:
         if cursor.rowcount != 1:
             raise StateRowError(f"Run {stored.run.run_id} is not stored")
         _upsert_nodes(connection, stored, node_ids)
-        if stored.run.status in {
-            RunStatus.SUCCESS,
-            RunStatus.WAITING,
-            RunStatus.FAILED,
-            RunStatus.CANCELLED,
-        }:
-            from .workspaces import index_run_commits
-
-            index_run_commits(connection, stored.run.run_id)
 
     @staticmethod
     def discard_start(connection: sqlite3.Connection, run_id: str) -> None:

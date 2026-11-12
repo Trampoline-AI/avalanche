@@ -43,245 +43,13 @@ def _registry() -> Path:
 
 
 def local_workspace(path: Path) -> Workspace:
-    """Publish an immutable local commit; the wire never contains a host path."""
-    return LocalWorkspaceStore.for_run().commit(path)
-
-
-def register_commit(reference: str, path: Path) -> None:
-    """Restore a durable host's locator after the temporary registry is cleared."""
-    digest = reference.removeprefix("local-ws:v2:")
-    if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
-        raise ValueError("Malformed local workspace commit")
-    target = _registry() / ("commit-" + digest)
-    temporary = target.with_suffix("." + uuid4().hex)
-    temporary.write_text(str(path.resolve(strict=True)))
-    temporary.replace(target)
-
-
-def register_run_store(run_id: str, root: Path) -> None:
-    """Publish process-local host configuration for spawned coordinators."""
-    target = _registry() / ("run-" + hashlib.sha256(run_id.encode()).hexdigest())
-    temporary = target.with_suffix("." + uuid4().hex)
-    temporary.write_text(str(root.resolve()))
-    temporary.replace(target)
-
-
-_host_run_id: str | None = None
-
-
-def configure_local_run(run_id: str) -> None:
-    """Set the single run owned by a spawned local coordinator process."""
-    global _host_run_id
-    _host_run_id = run_id
-
-
-class LocalWorkspaceStore:
-    """Immutable content-addressed trees and run-owned CoW working directories.
-
-    Only clone materialization falls back to a byte copy. Passing an existing
-    commit publishes metadata, never another tree. Hosts own authorization.
-    """
-
-    def __init__(self, root: Path, run_id: str | None = None) -> None:
-        self.root = root.resolve()
-        self.run_id = run_id
-        self.root.mkdir(parents=True, exist_ok=True)
-
-    @classmethod
-    def for_run(cls, run_id: str | None = None) -> LocalWorkspaceStore:
-        from .runtime.context import get_current_run_context
-
-        context = get_current_run_context()
-        run_id = run_id or (context.run_id if context is not None else _host_run_id)
-        config = (
-            _registry() / ("run-" + hashlib.sha256(run_id.encode()).hexdigest())
-            if run_id is not None
-            else None
-        )
-        root = (
-            Path(config.read_text())
-            if config is not None and config.exists()
-            else _registry() / "workspaces"
-        )
-        return cls(root, run_id)
-
-    @staticmethod
-    def resolve(reference: str) -> Path:
-        digest = reference.removeprefix("local-ws:v2:")
-        if (
-            not reference.startswith("local-ws:v2:")
-            or len(digest) != 64
-            or any(c not in "0123456789abcdef" for c in digest)
-        ):
-            raise ValueError("Malformed local workspace commit")
-        target = _registry() / ("commit-" + digest)
-        return Path(target.read_text()).resolve(strict=True)
-
-    def commit(self, path: Path) -> Workspace:
-        import shutil
-        import stat
-
-        path = path.resolve(strict=True)
-        digest = hashlib.sha256()
-        for directory, dirs, files in os.walk(path, followlinks=False):
-            for name in sorted(dirs + files):
-                entry = Path(directory) / name
-                metadata = entry.lstat()
-                relative = entry.relative_to(path).as_posix()
-                if stat.S_ISDIR(metadata.st_mode):
-                    item = [relative, "directory", metadata.st_mode & 0o777]
-                elif stat.S_ISREG(metadata.st_mode):
-                    with entry.open("rb") as handle:
-                        content = hashlib.file_digest(handle, "sha256").hexdigest()
-                    item = [relative, "file", metadata.st_mode & 0o777, content]
-                else:
-                    raise ValueError(f"Unsupported workspace entry: {relative}")
-                digest.update(json.dumps(item, separators=(",", ":")).encode() + b"\n")
-            dirs.sort()
-        identity = digest.hexdigest()
-        reference = "local-ws:v2:" + identity
-        destination = self.root / "commits" / identity
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        # Deduplicate within this host store. A v2 transfer never calls commit:
-        # it retains its source object and the recipient records a grant.
-        locator = _registry() / ("commit-" + identity)
-        if path.parent.name == "mounts" and path.name == identity:
-            # An unchanged recipient mount still names its source object. Do not
-            # publish a second blob merely because it crossed a run boundary.
-            destination = self.resolve(reference)
-        if not destination.exists():
-            temporary = destination.with_name("." + uuid4().hex)
-            try:
-                shutil.copytree(path, temporary, copy_function=_clone_file)
-                # Files are flushed before publishing the immutable directory.
-                for directory, _, files in os.walk(temporary):
-                    for name in files:
-                        with (Path(directory) / name).open("rb") as handle:
-                            os.fsync(handle.fileno())
-                    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
-                    try:
-                        os.fsync(descriptor)
-                    finally:
-                        os.close(descriptor)
-                _publish_tree(temporary, destination)
-            except BaseException:
-                if temporary.exists():
-                    shutil.rmtree(temporary)
-                raise
-        temporary_locator = locator.with_suffix("." + uuid4().hex)
-        temporary_locator.write_text(str(destination))
-        temporary_locator.replace(locator)
-        if self.run_id is not None:
-            issued = self.run_root / "issued"
-            issued.mkdir(parents=True, exist_ok=True)
-            (issued / identity).touch()
-        return Workspace.from_directory(destination, reference=reference)
-
-    def ingest(self, workspace: Workspace) -> Workspace:
-        """Capture portable/v1 ingress once; v2 values already identify commits."""
-        if workspace.reference is not None:
-            if workspace.reference.startswith("local-ws:v2:"):
-                return Workspace.from_directory(
-                    self.resolve(workspace.reference), reference=workspace.reference
-                )
-            return self.commit(LocalReferenceBinder().bind_workspace(workspace))
-        with tempfile.TemporaryDirectory(prefix="avalanche-ingress-") as folder:
-            root = Path(folder)
-            for entry in workspace.entries:
-                target = root / entry.path
-                if entry.kind == "directory":
-                    target.mkdir(parents=True, exist_ok=True)
-                else:
-                    target.parent.mkdir(parents=True, exist_ok=True)
-                    if entry.content is None:
-                        raise ValueError("Workspace file is missing content")
-                    target.write_bytes(entry.content)
-            return self.commit(root)
-
-    @property
-    def run_root(self) -> Path:
-        if self.run_id is None:
-            raise RuntimeError("A mutable workspace needs a run identity")
-        return self.root / "runs" / hashlib.sha256(self.run_id.encode()).hexdigest()
-
-    def mount(self, reference: str) -> Path:
-        import shutil
-
-        source = self.resolve(reference)
-        if self.run_id is None:
-            return LocalWorkspaceStore(self.root, "binding-" + uuid4().hex).mount(reference)
-        target = self.run_root / "mounts" / reference.removeprefix("local-ws:v2:")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.exists():
-            temporary = target.with_name("." + uuid4().hex)
-            shutil.copytree(source, temporary, copy_function=_clone_file)
-            _publish_tree(temporary, target)
-        return target
-
-    def commit_mounts(self) -> tuple[str, ...]:
-        mounts = self.run_root / "mounts"
-        if not mounts.exists():
-            return ()
-        heads = self.run_root / "heads"
-        heads.mkdir(parents=True, exist_ok=True)
-        references: list[str] = []
-        for path in sorted(mounts.iterdir()):
-            committed = self.commit(path)
-            reference = committed.reference
-            if reference is None:
-                raise RuntimeError("Commit is missing its identity")
-            target = heads / path.name
-            temporary = target.with_suffix("." + uuid4().hex)
-            temporary.write_text(reference)
-            temporary.replace(target)
-            references.append(reference)
-        return tuple(references)
-
-
-def _publish_tree(temporary: Path, destination: Path) -> None:
-    import errno
-    import shutil
-
-    try:
-        temporary.rename(destination)
-    except OSError as error:
-        if error.errno not in {errno.EEXIST, errno.ENOTEMPTY}:
-            raise
-        shutil.rmtree(temporary)
-    descriptor = os.open(destination.parent, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
-
-
-def _clone_file(source: str, destination: str) -> str:
-    """Native CoW where available; copying is confined to materialization."""
-    import errno
-    import shutil
-    import sys
-
-    try:
-        if sys.platform == "darwin":
-            import ctypes
-
-            libc = ctypes.CDLL(None, use_errno=True)
-            if libc.clonefile(os.fsencode(source), os.fsencode(destination), 0) != 0:
-                error = ctypes.get_errno()
-                raise OSError(error, os.strerror(error))
-        elif sys.platform == "linux":
-            import fcntl
-
-            with open(source, "rb") as reader, open(destination, "xb") as writer:
-                fcntl.ioctl(writer.fileno(), 0x40049409, reader.fileno())  # FICLONE
-        else:
-            raise OSError(errno.ENOTSUP, "No clone primitive")
-    except OSError as error:
-        if error.errno not in {errno.ENOTSUP, errno.EXDEV, errno.EINVAL, errno.ENOSYS}:
-            raise
-        shutil.copyfile(source, destination)
-    shutil.copystat(source, destination)
-    return destination
+    """Register a host-local capability without putting the path on the wire."""
+    reference = f"local-ws:v1:{uuid4().hex}"
+    target = _registry() / reference.removeprefix("local-ws:v1:")
+    with target.open("x") as handle:
+        os.chmod(target, 0o600)
+        json.dump(str(path.resolve(strict=True)), handle)
+    return Workspace.from_directory(path.resolve(strict=True), reference=reference)
 
 
 def restore_local_workspace(reference: str, path: Path) -> Workspace:
@@ -291,11 +59,6 @@ def restore_local_workspace(reference: str, path: Path) -> Workspace:
     while a folder kept elsewhere outlives it. An entry that still exists must
     already name the same folder.
     """
-    if reference.startswith("local-ws:v2:"):
-        restored = LocalWorkspaceStore.for_run().commit(path)
-        if restored.reference != reference:
-            raise ValueError("Stored workspace commit differs from its reference")
-        return restored
     token = _local_workspace_token(reference)
     root = path.resolve(strict=True)
     target = _registry() / token
@@ -330,8 +93,6 @@ class LocalReferenceBinder:
         identifier = reference.reference
         if identifier is None:
             raise RuntimeError("workspace reference is not bound; supply a ReferenceBinder")
-        if identifier.startswith("local-ws:v2:"):
-            return LocalWorkspaceStore.for_run().mount(identifier)
         target = _registry() / _local_workspace_token(identifier)
         with target.open() as handle:
             root = Path(json.load(handle)).resolve(strict=True)
@@ -340,11 +101,7 @@ class LocalReferenceBinder:
         return root
 
     def bind_file(self, reference: File) -> Path:
-        root = (
-            LocalWorkspaceStore.resolve(reference.ref.workspace)
-            if reference.ref.workspace.startswith("local-ws:v2:")
-            else self.bind_workspace(Workspace(reference=reference.ref.workspace))
-        )
+        root = self.bind_workspace(Workspace(reference=reference.ref.workspace))
         path = (root / reference.ref.path).resolve(strict=True)
         if not path.is_relative_to(root):
             raise ValueError("File reference escapes its workspace")
@@ -354,67 +111,74 @@ class LocalReferenceBinder:
 T = TypeVar("T")
 
 
-def prepare_run_references(value: T) -> T:
-    """Freeze native workspace values before transport, without resolving old refs.
+def prepare_run_references(value: T, *, root: Path | None = None) -> T:
+    """Retain local references; materialize portable workspace ingress only once.
 
-    Existing-key admission must still ignore replacement references, including
-    expired ones. Authorization and binding belong to the receiving host.
+    A reference Workspace already names the folder its steps edit in place.
+    Portable manifests need one folder before crossing a process/visit boundary.
     """
     if isinstance(value, Workspace):
-        store = LocalWorkspaceStore.for_run()
-        if value.reference is None:
-            return store.ingest(value.snapshot())
-        if value._directory_path is not None and store.run_id is not None:
-            if value.path.is_relative_to(store.run_root):
-                return store.commit(value.path)
-        return value
+        if value.is_reference:
+            return value
+        if root is not None:
+            root.mkdir(parents=True, exist_ok=True)
+        folder = Path(tempfile.mkdtemp(prefix="avalanche-workspace-", dir=root))
+        for entry in value.snapshot().entries:
+            target = folder / entry.path
+            if entry.kind == "directory":
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if entry.content is None:
+                    raise ValueError("Workspace file is missing content")
+                target.write_bytes(entry.content)
+        return local_workspace(folder)
     if isinstance(value, File):
         return value
     if isinstance(value, BaseModel):
         return value.model_copy(
             update={
-                name: prepare_run_references(getattr(value, name))
+                name: prepare_run_references(getattr(value, name), root=root)
                 for name in type(value).model_fields
             }
         )
     if isinstance(value, list):
-        return [prepare_run_references(item) for item in value]
+        return [prepare_run_references(item, root=root) for item in value]
     if isinstance(value, tuple):
-        return tuple(prepare_run_references(item) for item in value)
+        return tuple(prepare_run_references(item, root=root) for item in value)
     if isinstance(value, dict):
-        return {name: prepare_run_references(item) for name, item in value.items()}
+        return {name: prepare_run_references(item, root=root) for name, item in value.items()}
     return value
+
+
+def validate_local_references(value) -> None:
+    """Use the flow binder for references arriving at a local JSON boundary."""
+    if isinstance(value, dict):
+        if value.get("kind") == "file" and "ref" in value:
+            file = File.model_validate(value)
+            file.bind(LocalReferenceBinder().bind_file(file)).snapshot()
+        elif value.get("kind") == "workspace":
+            workspace = Workspace.model_validate(value)
+            if workspace.is_reference:
+                LocalReferenceBinder().bind_workspace(workspace)
+        else:
+            for child in value.values():
+                validate_local_references(child)
+    elif isinstance(value, list):
+        for child in value:
+            validate_local_references(child)
 
 
 def bind_references(value: T, binder: ReferenceBinder) -> T:
     """Bind native refs recursively, preserving models and container types."""
     if isinstance(value, File):
-        store = LocalWorkspaceStore.for_run()
-        if (
-            isinstance(binder, LocalReferenceBinder)
-            and store.run_id is not None
-            and value.ref.workspace.startswith("local-ws:v1:")
-        ):
-            root = binder.bind_workspace(Workspace(reference=value.ref.workspace))
-            committed = store.commit(root)
-            return File.from_path(committed.path / value.ref.path, workspace=committed)
         if isinstance(binder, LocalReferenceBinder) and value._host_path is not None:
             return value
         return value.bind(binder.bind_file(value))
     if isinstance(value, Workspace):
         if not value.is_reference:
-            store = LocalWorkspaceStore.for_run()
-            if store.run_id is None:
-                return value
-            committed = store.ingest(value)
-            return Workspace.from_directory(
-                binder.bind_workspace(committed), reference=committed.reference
-            )
-        if (
-            isinstance(binder, LocalReferenceBinder)
-            and value._directory_path is not None
-            and not value.reference.startswith("local-ws:v2:")
-        ):
+            return value
+        if isinstance(binder, LocalReferenceBinder) and value._directory_path is not None:
             return value
         return Workspace.from_directory(binder.bind_workspace(value), reference=value.reference)
     if isinstance(value, BaseModel):
@@ -513,11 +277,9 @@ def agent_output_workspace() -> tuple[Workspace, str]:
         context = get_current_run_context()
         run_id = context.run_id if context is not None else uuid4().hex
         run_key = hashlib.sha256(run_id.encode("utf-8")).hexdigest()
-        store = LocalWorkspaceStore.for_run(run_id)
-        root = store.root / "runs" / run_key / "outputs"
+        root = _registry() / "runs" / run_key
         root.mkdir(parents=True, exist_ok=True)
-        committed = store.commit(root)
-        workspace = Workspace.from_directory(root, reference=committed.reference)
+        workspace = local_workspace(root)
     return workspace, _output_attempt.get() or uuid4().hex
 
 

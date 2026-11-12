@@ -295,9 +295,7 @@ def result_client(tmp_path):
         "    }\n"
         "@ava.workflow\ndef result_bundle():\n    return bundle()\n"
         "@ava.source\ndef fail():\n    raise ValueError('failed result')\n"
-        "@ava.workflow\ndef failed_result():\n"
-        "    produced = bundle()\n    failed = fail()\n"
-        "    produced >> failed\n    return failed\n"
+        "@ava.workflow\ndef failed_result():\n    return fail()\n"
         "@ava.source\ndef slow():\n    time.sleep(10)\n    return 'finished'\n"
         "@ava.workflow\ndef slow_result():\n    return slow()\n"
     )
@@ -339,13 +337,11 @@ def test_spawned_results_materialize_nested_files_workspaces_and_large_payloads(
             b"note",
             "done",
         )
-        workspace = result["workspace"]
-        assert workspace.is_reference and workspace.reference.startswith("local-ws:v2:")
-        assert (workspace.path / "report.txt").read_bytes() == b"workspace-content"
-        # Readback binds the original immutable tree, not an unowned writable mount.
-        from avalanche.references import LocalWorkspaceStore
-
-        assert workspace.path == LocalWorkspaceStore.resolve(workspace.reference)
+        assert {
+            entry.path: entry.content
+            for entry in result["workspace"].entries
+            if entry.kind == "file"
+        } == {"report.txt": b"workspace-content"}
 
 
 def test_failed_and_cancelled_runs_never_expose_results_or_leave_pending_files(result_client):
@@ -359,17 +355,6 @@ def test_failed_and_cancelled_runs_never_expose_results_or_leave_pending_files(r
     assert _wait_for_terminal(client, cancelled).status == RunStatus.CANCELLED
     failed = client.start_run("failed_result")
     assert _wait_for_terminal(client, failed).status == RunStatus.FAILED
-    # A failed run still retains its completed step's reference outputs.
-    partial = operator.get_run_result(failed, node_id="bundle_1")
-    assert partial["report"]["files"][0].read_bytes() == b"empty-name"
-    with operator._state_store.transaction() as connection:
-        assert (
-            connection.execute(
-                "SELECT 1 FROM workspace_grants WHERE run_id=? AND reference=?",
-                (failed, partial["workspace"].reference),
-            ).fetchone()
-            is not None
-        )
     for run_id in (cancelled, failed):
         with pytest.raises(grpc.RpcError) as unavailable:
             client.get_run_result(run_id)
@@ -429,7 +414,7 @@ def test_result_codec_rejects_duplicate_unused_and_traversal_attachment_ids():
         decode_workflow_result(
             EncodedWorkflowResult(
                 value_json=(
-                    '{"version":1,"value":{"attachment_id":"../file_0","kind":"file"}}'
+                    '{"version":1,"value":' '{"attachment_id":"../file_0","kind":"file"}}'
                 ),
                 files=(
                     ResultFileAttachment(
