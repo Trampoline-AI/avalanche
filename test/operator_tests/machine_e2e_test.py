@@ -26,6 +26,52 @@ def load_example():
     return module
 
 
+def test_native_calls():
+    class Input(ava.BaseInput):
+        id: int
+
+    class Output(BaseModel):
+        id: int
+
+    @ava.step
+    def answer(value: Input) -> Output:
+        return Output(id=value.id)
+
+    @ava.workflow(input=Input, output=Output)
+    def child():
+        return answer(ava.input)
+
+    @ava.workflow(input=Input, output=Output)
+    def visit():
+        return ava.call(child, ava.input)
+
+    @ava.machine(input=Input, key=("id",))
+    def instance():
+        done = ava.state(visit, initial=True, final=True)
+        return done
+
+    @ava.workflow(output=Output)
+    def parent():
+        return ava.call(instance, Input(id=7))
+
+    driver = parent().test()
+    assert driver.handle.result(timeout=1) == Output(id=7)
+    assert len(driver.host.instances) == 1
+    assert len(driver.host.flow_runs) == 1
+
+    # A reference to the same definition is not a recursive graph build.
+    @ava.workflow
+    def recursive_work():
+        return ava.start_run(recursive, Input(id=2), when=False)
+
+    @ava.machine(input=Input, key=("id",))
+    def recursive():
+        done = ava.state(recursive_work, initial=True, final=True)
+        return done
+
+    assert recursive.test(Input(id=1)).handle.result(timeout=1) is None
+
+
 def test_review_loop():
     example = load_example()
     example.test_review_loop()

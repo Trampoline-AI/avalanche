@@ -27,6 +27,7 @@ class RunHandle(Generic[T]):
         self._started = False
         self.waits = LocalWaits(run_id, {})
         self.node_aliases: dict[str, str] = {}
+        self.on_cancel: Callable[[], None] | None = None
         self._future.add_done_callback(lambda _: self.waits.close())
 
     def running(self) -> bool:
@@ -57,7 +58,9 @@ class RunHandle(Generic[T]):
                 return False
             self._cancel_event.set()
             self.waits.close()
-            return True
+        if self.on_cancel is not None:
+            self.on_cancel()
+        return True
 
     def send_event(
         self,

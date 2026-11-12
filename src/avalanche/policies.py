@@ -85,7 +85,8 @@ class WaitSpec(BaseModel):
             raise ValueError("until must be timezone-aware")
         return self
 
-    kind: Literal["sleep", "event", "decision"]
+    kind: Literal["sleep", "event", "decision", "run"]
+    run_start_node_id: str | None = None
     timeout_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     until: datetime | None = None
     key: str | None = None

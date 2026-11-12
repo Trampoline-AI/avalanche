@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import timedelta
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 from .dag import Node, NodeFuture, NodeType, Workflow, _workflow_context
-from .policies import StepPolicy
+from .policies import NonRetryableError, StepPolicy, WaitSpec
+from .results import RunResult
 from .runtime import BaseInput
+from .waits import WaitNode, _seconds
 
 
 class RunStart(BaseModel):
@@ -71,9 +74,81 @@ def start_run(
         name, definition = target, None
     else:
         definition = target
-        graph = target if isinstance(target, Workflow) else target()
-        name = graph.name
+        name = target.name if isinstance(target, Workflow) else target.__name__
     return RunNode(definition)(name, input, when=when)
+
+
+class ChildRunError(NonRetryableError):
+    def __init__(self, code: str, run_id: str) -> None:
+        self.code = code
+        self.run_id = run_id
+        super().__init__(f"{code}: {run_id}")
+
+
+def check_run_wait(parent: str, child: str, waiting: dict[str, set[str]]) -> None:
+    """Refuse a new edge if its target can already reach the caller."""
+    if parent == child:
+        raise ChildRunError("child_run_self_wait", child)
+    pending, seen = [child], set()
+    while pending:
+        current = pending.pop()
+        if current == parent:
+            raise ChildRunError("child_run_wait_cycle", child)
+        if current not in seen:
+            seen.add(current)
+            pending.extend(waiting.get(current, ()))
+
+
+class RunWaitNode(WaitNode):
+    def __init__(self, spec: WaitSpec, definition: RunTarget | None) -> None:
+        super().__init__(spec, None)
+        self.definition = definition
+        def call_result(start: RunStart | None) -> RunResult | None:
+            raise RuntimeError("Run waits require a run-capable scheduler host")
+        call_result.__name__ = "call"
+        self.fn = call_result
+
+    def decode(self, result: RunResult | None):
+        if result is None:
+            return None
+        value = result.decode()
+        if self.definition is None:
+            return value
+        from .machine import Machine
+        if isinstance(self.definition, Machine):
+            from functools import reduce
+            from operator import or_
+            self.definition()
+            models = tuple(dict.fromkeys(
+                self.definition.works[state.work].output_type
+                for state in self.definition.spec.states.values() if state.final
+                if self.definition.works[state.work].output_type is not None
+            ))
+            return TypeAdapter(reduce(or_, models)).validate_python(value) if models else value
+        flow = self.definition if isinstance(self.definition, Workflow) else self.definition()
+        return flow.validate_output(value)
+
+
+def call(
+    target: RunTarget | str | NodeFuture,
+    input: BaseInput | dict[str, JsonValue] | NodeFuture | None = None,
+    *,
+    timeout: timedelta | float | None = None,
+    when: bool | NodeFuture = True,
+) -> NodeFuture:
+    """Declare a child start and workerless wait for its final typed output.
+
+    Timeout does not cancel the child. Existing keys attach to the original run.
+    Machine calls resolve only when the instance closes, not after a visit.
+    """
+    spec = WaitSpec(
+        kind="run", timeout_seconds=_seconds(timeout) if timeout is not None else None
+    )
+    started = start_run(target, input, when=when)
+    spec = spec.model_copy(update={"run_start_node_id": started.future_id})
+    result = RunWaitNode(spec, started.node.definition)(started)
+    result.chain_start = started
+    return result
 
 
 def operation_enabled(value: JsonValue) -> bool:

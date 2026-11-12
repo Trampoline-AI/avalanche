@@ -44,9 +44,18 @@ from .machine_host import (
 from .machine_nodes import MachineNode, execute_machine_node
 from .machine_waits import MachineWaits
 from .policies import MAX_GENERATION, Event, NonRetryableError, OutcomeUnknownError, event
+from .results import RunResult, encode_workflow_result
 from .run_handle import RunHandle
 from .run_keys import canonical_json
-from .run_steps import RunNode, RunStart, RunTarget, operation_enabled
+from .run_steps import (
+    ChildRunError,
+    RunNode,
+    RunStart,
+    RunTarget,
+    RunWaitNode,
+    check_run_wait,
+    operation_enabled,
+)
 from .runtime import BaseInput, RunContext
 from .runtime.providers import PROVIDERS
 from .waits import WaitNode
@@ -99,6 +108,7 @@ class MachineTest:
         self._internal_consumed = False
         self._visit = 0
         self._enter()
+        self.host.attach(self)
 
     @staticmethod
     def _sync[T](coroutine: Coroutine[None, None, T]) -> T:
@@ -292,7 +302,36 @@ class MachineTest:
                 ref = work.nodes[name]
                 if name in self._holds and not self.waits.resolved(name):
                     continue
-                if isinstance(ref.node, WaitNode):
+                if isinstance(ref.node, RunWaitNode):
+                    start = _resolve_to_ref(ref.args[0], self._values)
+                    if start is None:
+                        self._values[name] = None
+                        continue
+                    assert isinstance(start, RunStart)
+                    address = (self.handle.run_id, self._visit, name)
+                    if address not in self.host.calls:
+                        check_run_wait(self.handle.run_id, start.run_id, self.host.waiting())
+                        self.host.calls[address] = start
+                        self.waits.arm(name)
+                    child = self.host.runs[start.run_id]
+                    if not child._busy and not child.handle.done():
+                        try:
+                            await child._drive()
+                        except Exception:
+                            pass  # The child's terminal exception is the call's result.
+                    if child.handle.done():
+                        self.host.finished_calls.add(address)
+                        if child.handle.cancelled():
+                            raise ChildRunError("child_run_cancelled", start.run_id)
+                        if child.handle.exception() is not None:
+                            raise ChildRunError("child_run_failed", start.run_id)
+                        result = RunResult.from_payload(start.run_id, encode_workflow_result(
+                            child.handle.result()))
+                        self._values[name] = ref.node.decode(result)
+                    elif self.waits.resolved(name):
+                        self.host.finished_calls.add(address)
+                        raise ChildRunError("child_run_timeout", start.run_id)
+                elif isinstance(ref.node, WaitNode):
                     self.waits.arm(name)
                     if self.waits.resolved(name):
                         self._values[name] = self.waits.result(name)
@@ -397,7 +436,17 @@ class MachineTest:
             if not operation_enabled(bound.arguments["when"]):
                 return None
             target = TypeAdapter(str).validate_python(bound.arguments["target"], strict=True)
-            return await self.host._start_run(target, bound.arguments["input"])
+            address = (self.handle.run_id, self._visit, ref.future_id)
+            if address not in self.host.starts:
+                self.host.starts[address] = await self.host._start_run(
+                    target, bound.arguments["input"], drive=False)
+            started = self.host.starts[address]
+            is_call = any(isinstance(item.node, RunWaitNode)
+                          and item.node.spec.run_start_node_id == ref.future_id
+                          for item in work.nodes.values())
+            if not is_call:
+                await self.host.runs[started.run_id]._drive()
+            return started
         if isinstance(node, MachineNode):
             self.host.register(node.machine)
             context = RunContext(
@@ -552,6 +601,34 @@ class InMemoryMachineHost:
         self.instances: dict[tuple[str, str], MachineTest] = {}
         self.receipts: dict[tuple[str, str, str, str], tuple[str, MachineEventReceipt]] = {}
         self.stub = stub
+        self.runs: dict[str, MachineTest] = {}
+        self.starts: dict[tuple[str, int, str], RunStart] = {}
+        self.calls: dict[tuple[str, int, str], RunStart] = {}
+        self.finished_calls: set[tuple[str, int, str]] = set()
+
+    def waiting(self) -> dict[str, set[str]]:
+        result: dict[str, set[str]] = {}
+        for address, start in self.calls.items():
+            if address not in self.finished_calls and not self.runs[address[0]].handle.done():
+                result.setdefault(address[0], set()).add(start.run_id)
+        return result
+
+    def attach(self, driver: MachineTest) -> None:
+        self.runs[driver.handle.run_id] = driver
+        driver.handle.on_cancel = lambda: self.cancel_children(driver.handle.run_id)
+
+    def cancel_children(self, parent: str) -> None:
+        for (run_id, _, _), started in tuple(self.starts.items()):
+            if run_id == parent and started.created and started.run_id != parent:
+                child = self.runs[started.run_id]
+                child.handle.cancel()
+                child.handle._future.cancel()
+
+    async def wake_parents(self) -> None:
+        for address in tuple(self.calls):
+            driver = self.runs[address[0]]
+            if address not in self.finished_calls and not driver._busy:
+                await driver._drive()
 
     def register(self, target: RunTarget) -> None:
         from .machine import Machine
@@ -570,7 +647,7 @@ class InMemoryMachineHost:
         return canonical_json(key)
 
     async def _start_run(
-        self, target: str, input: BaseInput | dict[str, JsonValue] | None
+        self, target: str, input: BaseInput | dict[str, JsonValue] | None, *, drive: bool = True
     ) -> RunStart:
         """Test scheduler path, not a public host-start transport API."""
         if target in self.flows:
@@ -587,7 +664,8 @@ class InMemoryMachineHost:
             self.flow_runs.append(driver)
             if address is not None:
                 self.keyed_flow_runs[address] = driver
-            await driver._drive()
+            if drive:
+                await driver._drive()
             return RunStart(
                 run_id=driver.handle.run_id,
                 key=list(key) if key is not None else None,
@@ -602,7 +680,8 @@ class InMemoryMachineHost:
             )
         driver = MachineTest(definition, input, stub=self.stub, host=self)
         self.instances[address] = driver
-        await driver._drive()
+        if drive:
+            await driver._drive()
         return RunStart(run_id=driver.handle.run_id, key=list(key), created=True)
 
     async def send(
@@ -702,6 +781,7 @@ class WorkflowTest(MachineTest):
         self._payload = None
         self._visit = 0
         self._busy = False
+        self.host.attach(self)
 
     @property
     def work(self) -> Workflow:

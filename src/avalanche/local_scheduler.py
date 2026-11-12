@@ -14,6 +14,7 @@ from pydantic import BaseModel, JsonValue, TypeAdapter
 from .input_ref import InputRef
 from .local_waits import LocalWaits, Reconcile
 from .policies import MAX_GENERATION, NonRetryableError, OutcomeUnknownError
+from .run_steps import RunWaitNode
 from .waits import WaitNode
 
 if TYPE_CHECKING:
@@ -229,7 +230,7 @@ def run_local_schedule(
                         if parent != show_group_id
                     ):
                         continue
-                    if isinstance(ref.node, WaitNode):
+                    if isinstance(ref.node, WaitNode) and not isinstance(node, RunWaitNode):
                         if hooks and hooks.on_node_start:
                             hooks.on_node_start(node_id)
                         spec = ref.node.spec
@@ -266,7 +267,10 @@ def run_local_schedule(
                         else:
                             waits.arm(node_id, reviewed(node_id))
                             parked.add(node_id)
-                    elif node.node_type.value in {"machine", "run"}:
+                    elif (
+                        node.node_type.value in {"machine", "run"}
+                        or isinstance(node, RunWaitNode)
+                    ):
                         if hooks and hooks.on_node_start:
                             hooks.on_node_start(node_id)
                         attempts[node_id] = attempts.get(node_id, 0) + 1
@@ -274,7 +278,12 @@ def run_local_schedule(
                         pending[task] = node_id
                         task.add_done_callback(notify)
                     else:
-                        if len(pending) >= capacity:
+                        active_workers = sum(
+                            workflow.nodes[item].node.node_type.value not in {"machine", "run"}
+                            and not isinstance(workflow.nodes[item].node, RunWaitNode)
+                            for item in pending.values()
+                        )
+                        if active_workers >= capacity:
                             continue
                         if hooks and hooks.on_node_start:
                             hooks.on_node_start(node_id)

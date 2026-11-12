@@ -2850,11 +2850,11 @@ class Workflow:
             from runtime.operator.machine_steps import MachineStepRequest
 
             from .machine_nodes import MachineNode
-            from .run_steps import RunNode
+            from .run_steps import RunNode, RunWaitNode
 
             ref = nodes[node_id]
             if (
-                not isinstance(ref.node, (MachineNode, RunNode))
+                not isinstance(ref.node, (MachineNode, RunNode, RunWaitNode))
                 or hooks is None
                 or hooks.machine_step is None
             ):
@@ -2886,7 +2886,10 @@ class Workflow:
 
             def complete_machine(future):
                 try:
-                    task.set_result((ref, future.result()))
+                    value = future.result()
+                    if isinstance(ref.node, RunWaitNode):
+                        value = ref.node.decode(value)
+                    task.set_result((ref, value))
                 except Exception as exc:
                     task.set_exception(exc)
 
