@@ -26,6 +26,7 @@ class RunHooks:
         Callable[[MachineStepRequest], Future[HostStepOutput]] | None
     ) = None
     machine_payload: JsonValue = None
+    resume_results: dict[str, str] | None = None
     on_nodes_expanded: Callable[[NodesExpanded], None] | None = None
     on_node_start: Callable[[str], None] | None = None
     on_node_success: Callable[[str], None] | None = None

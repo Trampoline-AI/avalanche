@@ -146,6 +146,64 @@ def mapped():
 """
 
 
+def test_native_call_restart_reattaches_one_child(tmp_path):
+    fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
+    db = tmp_path / "calls.sqlite"
+    script = """
+import json, sys, time
+from runtime.operator.operator import Operator
+op = Operator([sys.argv[1]], watch=False, schedule=False, state_db=sys.argv[2])
+parent = op.start_run('call_parent', input={'id': 101, 'target': 'slow_child'})
+until = time.monotonic() + 60
+while time.monotonic() < until:
+    with op._state_store.transaction() as connection:
+        row = connection.execute('SELECT child_run_id FROM run_waits WHERE parent_run_id=?',
+                                 (parent,)).fetchone()
+    if row is not None and op.get_run(row[0]).status.value == 'running':
+        print(json.dumps({'parent': parent, 'child': row[0]}), flush=True)
+        break
+    time.sleep(.02)
+else:
+    raise RuntimeError('parent did not park')
+sys.stdin.read()
+"""
+    process = subprocess.Popen([sys.executable, "-c", script, str(fixture), str(db)],
+                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, text=True)
+    try:
+        import select
+        ready, _, _ = select.select([process.stdout], [], [], 90)
+        assert ready, "operator did not report a parked call"
+        ids = json.loads(process.stdout.readline())
+        process.kill()
+        process.wait(timeout=10)
+        op = Operator([str(fixture)], watch=False, schedule=False, state_db=db)
+        try:
+            until = time.monotonic() + 60
+            while op.get_run(ids["parent"]).status not in _TERMINAL:
+                assert time.monotonic() < until
+                assert op.fatal_error is None, op.fatal_error
+                time.sleep(.02)
+            assert op.get_run(ids["child"]).status == RunStatus.FAILED
+            parent = op.get_run(ids["parent"])
+            assert parent.status == RunStatus.FAILED, parent
+            assert sum("child_run_failed" in (node.error or "")
+                       for node in parent.nodes.values()) == 1
+            links = op.run_links(ids["parent"])["children"]
+            assert len(links) == 1 and links[0].child_run_id == ids["child"]
+            with op._state_store.transaction() as connection:
+                rows = connection.execute("SELECT response_json FROM run_waits").fetchall()
+            assert len(rows) == 1
+            assert ids["child"] in rows[0][0] and "child_run_failed" in rows[0][0]
+        finally:
+            op.close()
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=10)
+        process.communicate(timeout=10)
+
+
 def test_mapped_run_topology_and_item_metadata_survive_restart(tmp_path):
     path = tmp_path / "mapped.py"
     path.write_text(_MAP_FLOW)

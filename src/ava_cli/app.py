@@ -98,7 +98,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if arguments[:2] == ["machine", "send"] or (
         len(arguments) >= 2
         and arguments[0] == "run"
-        and arguments[1] in {"list", "show", "history", "retry", "cancel", "rerun"}
+        and arguments[1] in {"list", "show", "history", "retry", "cancel", "rerun", "links"}
     ):
         from .machine_commands import run_command
 

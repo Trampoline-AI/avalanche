@@ -100,6 +100,9 @@ class MachineTest:
         self.handle: RunHandle[LocalValue] = RunHandle(uuid4().hex)
         self.waits = MachineWaits(self.handle.run_id)
         self.handle.waits = self.waits
+        self.host.register(machine)
+        address = (machine.builder.__name__, self.host._key(machine.key(self.input)))
+        self.host.instances.setdefault(address, self)
         self._stubs = {node: deque(values) for node, values in (stub or {}).items()}
         self._busy = False
         self._values: dict[str, LocalValue] = {}
@@ -153,7 +156,7 @@ class MachineTest:
             idempotency_key=uuid4().hex,
         )
         if not self._busy:
-            self._sync(self._drive())
+            self._sync(self._drive_and_wake())
         return receipt
 
     async def asend(
@@ -167,7 +170,7 @@ class MachineTest:
             idempotency_key=uuid4().hex,
         )
         if not self._busy:
-            await self._drive()
+            await self._drive_and_wake()
         return receipt
 
     def decide(
@@ -179,7 +182,7 @@ class MachineTest:
     ) -> WaitReceipt:
         receipt = self.handle.decide(node, payload, reason=reason, idempotency_key=uuid4().hex)
         if not self._busy:
-            self._sync(self._drive())
+            self._sync(self._drive_and_wake())
         return receipt
 
     async def adecide(
@@ -191,18 +194,22 @@ class MachineTest:
     ) -> WaitReceipt:
         receipt = self.handle.decide(node, payload, reason=reason, idempotency_key=uuid4().hex)
         if not self._busy:
-            await self._drive()
+            await self._drive_and_wake()
         return receipt
 
     def advance_time(self, duration: timedelta) -> None:
         self.handle.advance_time(duration)
         if not self._busy:
-            self._sync(self._drive())
+            self._sync(self._drive_and_wake())
 
     async def aadvance_time(self, duration: timedelta) -> None:
         self.handle.advance_time(duration)
         if not self._busy:
-            await self._drive()
+            await self._drive_and_wake()
+
+    async def _drive_and_wake(self) -> None:
+        await self._drive()
+        await self.host.wake_parents()
 
     def _transition(
         self,
@@ -312,7 +319,7 @@ class MachineTest:
                     if address not in self.host.calls:
                         check_run_wait(self.handle.run_id, start.run_id, self.host.waiting())
                         self.host.calls[address] = start
-                        self.waits.arm(name)
+                        self.waits.bind_run(name, start.run_id)
                     child = self.host.runs[start.run_id]
                     if not child._busy and not child.handle.done():
                         try:
@@ -320,6 +327,7 @@ class MachineTest:
                         except Exception:
                             pass  # The child's terminal exception is the call's result.
                     if child.handle.done():
+                        self.waits.finish_run(name)
                         self.host.finished_calls.add(address)
                         if child.handle.cancelled():
                             raise ChildRunError("child_run_cancelled", start.run_id)
@@ -735,6 +743,7 @@ class InMemoryMachineHost:
         self.receipts[address] = (body, receipt)
         if not driver._busy:
             await driver._drive()
+        await self.wake_parents()
         return receipt
 
 
@@ -782,6 +791,10 @@ class WorkflowTest(MachineTest):
         self._visit = 0
         self._busy = False
         self.host.attach(self)
+        self.host.flows[workflow.name] = workflow
+        if workflow.key_fields:
+            address = (workflow.name, self.host._key(workflow.key(self.input)))
+            self.host.keyed_flow_runs.setdefault(address, self)
 
     @property
     def work(self) -> Workflow:

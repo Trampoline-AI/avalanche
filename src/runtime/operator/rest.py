@@ -386,6 +386,11 @@ def create_rest_app(channel: grpc.Channel) -> FastAPI:
                 raise HTTPException(422, "invalid_wait_submission") from exc
             raise
 
+    @router.get("/v1/runs/{run_id}/links", summary="Read native child and parent links")
+    def run_links(run_id: str, query: Annotated[_Query, Query()]) -> Response:
+        return _protobuf_response(stub.GetRunLinks(
+            pb.GetRunLinksRequestV2(run_id=run_id), timeout=_RPC_TIMEOUT_SECONDS))
+
     @router.get("/v1/runs/{run_id}/waits", summary="List pinned wait cards")
     def list_waits(run_id: str, query: Annotated[_WaitQuery, Query()]) -> Response:
         return control_wait(

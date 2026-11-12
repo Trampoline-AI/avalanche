@@ -158,6 +158,7 @@ from .state.logs import RunLogsTable
 from .state.machines import InstanceRecord, MachinesTable
 from .state.metadata import OperatorMetadataTable
 from .state.results import RunResultTable, StepResultTable
+from .state.run_calls import RunCallsTable
 from .state.run_details import load_run_detail_totals
 from .state.runs import RunRequest, RunsTable, StoredRun
 from .state.schedule_input_files import (
@@ -650,6 +651,17 @@ class Operator:
             self._start_notification_dispatcher()
             self._fail_interrupted_runs(interrupted_runs)
             self._machine_host = MachineHost(self)
+            with self._state_store.transaction() as connection:
+                parked = RunCallsTable.parents(connection)
+            for parent in parked:
+                run = self._runs[parent]
+                if run.status not in _UNFINISHED_RUN_STATUSES:
+                    continue
+                with self._state_store.transaction() as connection:
+                    request = RunsTable.read_request(connection, parent)
+                    machine = MachinesTable.load(connection, parent)
+                self.start_run(run.workflow_id, run_id=parent, input=request.input,
+                               context=request.context, _resume=True, _machine_visit=machine)
             if watch and self._workflow_paths:
                 self._start_watcher()
             if schedule and self._workflow_paths:
@@ -724,7 +736,9 @@ class Operator:
                 run = self._runs[run_id]
                 with self._state_store.transaction() as connection:
                     machine = MachinesTable.load(connection, run_id)
-                if machine is not None:
+                with self._state_store.transaction() as connection:
+                    parked = run_id in RunCallsTable.parents(connection)
+                if machine is not None or parked:
                     continue
                 run.status = RunStatus.FAILED
                 # Timestamps are monotonic; a reboot restarts that clock.
@@ -1915,6 +1929,7 @@ class Operator:
         input_files: tuple[StagedInputFile, ...] = (),
         _machine_visit: InstanceRecord | None = None,
         _key_claim: list[JsonValue] | None = None,
+        _resume: bool = False,
     ) -> str:
         """Publish a requesting run, then prepare it asynchronously.
 
@@ -1944,7 +1959,7 @@ class Operator:
         ):
             raise ValueError("Workflow version changed; reload the start form")
         if (descriptor.machine_spec_json or descriptor.key_fields) and (
-            _machine_visit is None and _key_claim is None
+            _machine_visit is None and _key_claim is None and not _resume
         ):
             return self._machine_host.start(flow_name, request, run_id, triggered_by)
         if _machine_visit is not None:
@@ -1960,7 +1975,9 @@ class Operator:
             run_id = run_id or f"run_{str(uuid4())[:8]}"
             # Stored runs are loaded at startup, so this also refuses the ID of a run
             # from before a restart, and of any result such a run stored.
-            if run_id in self._active_runs or (run_id in self._runs and _machine_visit is None):
+            if run_id in self._active_runs or (
+                run_id in self._runs and _machine_visit is None and not _resume
+            ):
                 raise RunAlreadyExistsError(f"Run {run_id} already exists")
             # Callers learn about a missing required field now, not from a run that
             # fails while it is prepared. Cron and webhook runs report it as a failed
@@ -2000,6 +2017,7 @@ class Operator:
                         cancel_reader,
                         _machine_visit,
                         machine_reader,
+                        self._resume_results(run_id) if _resume else None,
                     ),
                     name=f"avalanche-run-{run_id}",
                     daemon=False,
@@ -2061,7 +2079,7 @@ class Operator:
                 assignment_event.set()
                 run = (
                     self._runs[run_id]
-                    if _machine_visit is not None
+                    if _machine_visit is not None or _resume
                     else RunState(
                         run_id=run_id,
                         flow_name=descriptor.display_name,
@@ -2073,7 +2091,7 @@ class Operator:
                     )
                 )
                 self._runs[run_id] = run
-                if _machine_visit is None:
+                if _machine_visit is None and not _resume:
 
                     def claim_key(connection: sqlite3.Connection) -> None:
                         if _key_claim is not None:
@@ -2155,6 +2173,14 @@ class Operator:
             cancel_reader.close()
             _close_event_queue(event_queue)
             raise
+
+    def _resume_results(self, run_id: str) -> dict[str, str]:
+        with self._state_store.transaction() as connection:
+            rows = connection.execute(
+                "SELECT node_id, value_json FROM step_results WHERE run_id=? AND node_id != ''",
+                (run_id,),
+            ).fetchall()
+        return {row[0]: row[1] for row in rows}
 
     def _prepare_requested_run(
         self,
@@ -2332,7 +2358,19 @@ class Operator:
             else None,
         )
 
+    def run_links(self, run_id: str) -> dict[str, list]:
+        if self.get_run(run_id) is None:
+            raise KeyError(run_id)
+        with self._state_store.transaction() as connection:
+            return {"parents": RunCallsTable.links(connection, run_id, parents=True),
+                    "children": RunCallsTable.links(connection, run_id, parents=False)}
+
     def cancel_run(self, run_id: str) -> None:
+        with self._state_store.transaction() as connection:
+            children = RunCallsTable.links(connection, run_id, parents=False)
+        for link in children:
+            if link.created and link.child_run_id != run_id:
+                self.cancel_run(link.child_run_id)
         with self._state_store.transaction() as connection:
             machine = MachinesTable.load(connection, run_id)
         if machine is not None:
@@ -2943,13 +2981,21 @@ class Operator:
             request = MachineStepRequest.model_validate_json(event["request_json"])
             reply = Future()
             self._machine_host.queue.put(MachineStep(request, reply))
-            try:
-                response = MachineStepResponse(node_id=request.node_id, output=reply.result())
-            except ValueError as exc:
-                response = MachineStepResponse(node_id=request.node_id, error=str(exc))
-            if handle.controls is None or handle.controls.machine_writer is None:
-                raise _CoordinatorProtocolError("Missing machine reply pipe")
-            handle.controls.machine_writer.send_bytes(response.model_dump_json().encode())
+            def deliver(future):
+                try:
+                    response = MachineStepResponse(
+                        node_id=request.node_id, output=future.result()
+                    )
+                except Exception as exc:
+                    # Host-operation exceptions cross the coordinator pipe as failures.
+                    response = MachineStepResponse(node_id=request.node_id, error=str(exc))
+                if handle.controls is None or handle.controls.machine_writer is None:
+                    raise _CoordinatorProtocolError("Missing machine reply pipe")
+                try:
+                    handle.controls.machine_writer.send_bytes(response.model_dump_json().encode())
+                except (BrokenPipeError, OSError):
+                    pass  # Cancellation or operator shutdown already stopped the coordinator.
+            reply.add_done_callback(deliver)
             return False
         if event_type == "wait_snapshot":
             snapshot = FinalWaitSnapshot.model_validate_json(event["snapshot"])

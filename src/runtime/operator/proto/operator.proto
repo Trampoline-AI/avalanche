@@ -10,6 +10,20 @@ package avalanche.operator;
 // and evaluation results with structured protobuf messages and generated types.
 // Keep user-defined payloads and JSON Schema documents as flexible JSON values.
 
+message GetRunLinksRequestV2 {
+  string run_id = 1;
+}
+message RunLinkV2 {
+  string parent_run_id = 1;
+  string node_id = 2;
+  string child_run_id = 3;
+  bool created = 4;
+}
+message RunLinksV2 {
+  repeated RunLinkV2 parents = 1;
+  repeated RunLinkV2 children = 2;
+}
+
 // ── Service ─────────────────────────────────────────────
 
 // V2 is the only served contract. Requests derive their authorization scope
@@ -42,6 +56,7 @@ service OperatorServiceV2 {
   rpc ReadActivityDetail(ReadActivityDetailRequestV2)
       returns (stream ActivityDetailChunkV2);
   rpc GetRunResult(GetRunResultRequestV2) returns (RunResultV2);
+  rpc GetRunLinks(GetRunLinksRequestV2) returns (RunLinksV2);
   rpc ListRunOutputArtifacts(ListRunOutputArtifactsRequestV2)
       returns (RunOutputArtifactPageV2);
   rpc ReadRunOutputArtifact(ReadRunOutputArtifactRequestV2)

@@ -58,6 +58,32 @@ AGENT_EVENT_KIND_V2_PROMPT_SENT: AgentEventKindV2
 PAGE_ORDER_V2_FORWARD: PageOrderV2
 PAGE_ORDER_V2_NEWEST_FIRST: PageOrderV2
 
+class GetRunLinksRequestV2(_message.Message):
+    __slots__ = ("run_id",)
+    RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    run_id: str
+    def __init__(self, run_id: _Optional[str] = ...) -> None: ...
+
+class RunLinkV2(_message.Message):
+    __slots__ = ("parent_run_id", "node_id", "child_run_id", "created")
+    PARENT_RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    NODE_ID_FIELD_NUMBER: _ClassVar[int]
+    CHILD_RUN_ID_FIELD_NUMBER: _ClassVar[int]
+    CREATED_FIELD_NUMBER: _ClassVar[int]
+    parent_run_id: str
+    node_id: str
+    child_run_id: str
+    created: bool
+    def __init__(self, parent_run_id: _Optional[str] = ..., node_id: _Optional[str] = ..., child_run_id: _Optional[str] = ..., created: bool = ...) -> None: ...
+
+class RunLinksV2(_message.Message):
+    __slots__ = ("parents", "children")
+    PARENTS_FIELD_NUMBER: _ClassVar[int]
+    CHILDREN_FIELD_NUMBER: _ClassVar[int]
+    parents: _containers.RepeatedCompositeFieldContainer[RunLinkV2]
+    children: _containers.RepeatedCompositeFieldContainer[RunLinkV2]
+    def __init__(self, parents: _Optional[_Iterable[_Union[RunLinkV2, _Mapping]]] = ..., children: _Optional[_Iterable[_Union[RunLinkV2, _Mapping]]] = ...) -> None: ...
+
 class ControlMachineRequestV2(_message.Message):
     __slots__ = ("request_json",)
     REQUEST_JSON_FIELD_NUMBER: _ClassVar[int]

@@ -26,6 +26,93 @@ def load_example():
     return module
 
 
+def test_operator_native_calls(tmp_path):
+    import time
+
+    from avalanche.references import local_workspace
+    from avalanche.results import decode_workflow_result
+    from runtime.operator.models import RunStatus
+    from runtime.operator.operator import Operator
+
+    fixture = SDK / "test" / "fixtures" / "local_machine.py"
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "data.txt").write_text("native call")
+    tree = local_workspace(source)
+    file = ava.File.from_path(tree.path / "data.txt", workspace=tree)
+    values = {"id": 10, "document": file.model_dump(), "workspace": tree.model_dump()}
+    op = Operator([str(fixture)], watch=False, schedule=False, state_db=tmp_path / "state.db")
+
+    def wait_for(predicate):
+        until = time.monotonic() + 90
+        while time.monotonic() < until:
+            result = predicate()
+            if result:
+                return result
+            assert op.fatal_error is None, op.fatal_error
+            time.sleep(0.02)
+        raise AssertionError("native call did not progress")
+
+    def terminal(run_id):
+        return wait_for(lambda: op.get_run(run_id).status in {
+            RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED})
+
+    try:
+        for target in ("echo_child", "flow_call_machine", "call_machine"):
+            run = op.start_run("call_parent", input={**values, "target": target, "depth": 1})
+            terminal(run)
+            state = op.get_run(run)
+            assert state.status == RunStatus.SUCCESS, state
+            result = decode_workflow_result(op._get_run_result_payload(run))
+            assert result["id"] == 10
+            assert result["document"].ref == file.ref
+            assert result["workspace"].reference == tree.reference
+            links = op.run_links(run)["children"]
+            assert len(links) == 1 and links[0].created
+            assert op.run_links(links[0].child_run_id)["parents"][0].parent_run_id == run
+
+        failed = op.start_run("call_parent", input={"id": 20, "fail": True})
+        terminal(failed)
+        assert op.get_run(failed).status == RunStatus.FAILED
+        assert any("child_run_failed" in (node.error or "")
+                   for node in op.get_run(failed).nodes.values())
+
+        timed = op.start_run("timeout_parent", input={"id": 30})
+        terminal(timed)
+        assert any("child_run_timeout" in (node.error or "")
+                   for node in op.get_run(timed).nodes.values())
+        timed_child = op.run_links(timed)["children"][0].child_run_id
+        wait_for(lambda: op.get_run(timed_child).status == RunStatus.RUNNING)
+
+        created = op.start_run("call_parent", input={"id": 40, "target": "slow_child"})
+        link = wait_for(lambda: op.run_links(created)["children"])[0]
+        wait_for(lambda: link.child_run_id in op._active_runs)
+        op.cancel_run(created)
+        terminal(created)
+        terminal(link.child_run_id)
+        assert op.get_run(link.child_run_id).status == RunStatus.CANCELLED
+
+        for name, code in (("self_wait_machine", "child_run_self_wait"),
+                           ("cycle_a", "child_run_wait_cycle")):
+            refused = op.start_run(name, input={"id": 60})
+            terminal(refused)
+            states = [op.get_run(refused)]
+            states += [op.get_run(link.child_run_id)
+                       for link in op.run_links(refused)["children"]]
+            assert any(code in (node.error or "") for state in states
+                       for node in state.nodes.values()), states
+
+        existing = op.start_run("slow_child", input={"id": 50})
+        attached = op.start_run("call_parent", input={"id": 50, "target": "slow_child"})
+        link = wait_for(lambda: op.run_links(attached)["children"])[0]
+        assert link.child_run_id == existing and not link.created
+        op.cancel_run(attached)
+        terminal(attached)
+        assert op.get_run(existing).status not in {RunStatus.CANCELLED, RunStatus.FAILED}
+    finally:
+        op.close()
+
+
 def test_native_calls():
     class Input(ava.BaseInput):
         id: int

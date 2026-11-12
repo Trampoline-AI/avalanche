@@ -100,6 +100,9 @@ def run_command(argv: list[str]) -> int:
                     )
                 )
                 print(json.dumps(result, allow_nan=False))
+            elif argv[1] == "links":
+                links = stub.GetRunLinks(pb.GetRunLinksRequestV2(run_id=run_id), timeout=30)
+                print(MessageToJson(links, preserving_proto_field_name=True))
             elif argv[1] == "show":
                 snapshot = stub.GetRunSnapshot(
                     pb.GetRunSnapshotRequestV2(run_id=run_id), timeout=30

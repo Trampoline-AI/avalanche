@@ -53,6 +53,26 @@ def run_local_schedule(
     failure: Exception | None = None
     cancelled = False
 
+    if hooks is not None and hooks.resume_results is not None:
+        from .results import EncodedWorkflowResult, decode_workflow_result
+        for node_id, document in hooks.resume_results.items():
+            if node_id not in workflow.nodes:
+                continue
+            ref = workflow.nodes[node_id]
+            value = decode_workflow_result(EncodedWorkflowResult(value_json=document))
+            if isinstance(ref.node, RunWaitNode):
+                # The stored output is already decoded; use the declared target model.
+                from .results import RunResult, encode_workflow_result
+                value = ref.node.decode(RunResult.from_payload(
+                    waits.run_id, encode_workflow_result(value)))
+            else:
+                annotation = inspect.signature(ref.node.fn, eval_str=True).return_annotation
+                if annotation is not inspect.Signature.empty:
+                    value = TypeAdapter(annotation).validate_python(value)
+            complete(node_id, ref, value)
+            completed.add(node_id)
+            remaining.remove(node_id)
+
     from runtime.operator.map_driver import DynamicMaps
 
     maps = DynamicMaps(

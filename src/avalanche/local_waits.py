@@ -467,6 +467,16 @@ class LocalWaits:
             self.condition.notify_all()
             return receipt.model_copy(deep=True)
 
+    def bind_run(self, node: str, child: str) -> None:
+        with self.condition:
+            self._waits[node].spec = self._waits[node].spec.model_copy(update={"key": child})
+            self.arm(node)
+
+    def finish_run(self, node: str) -> None:
+        with self.condition:
+            self._waits[node].resolved = True
+            self.condition.notify_all()
+
     def resolved(self, node: str) -> bool:
         self._expire()
         return self._waits[node].resolved

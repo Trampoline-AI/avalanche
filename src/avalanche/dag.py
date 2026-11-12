@@ -2881,10 +2881,14 @@ class Workflow:
                 node_slug=ref.node_slug,
             )
             request = MachineStepRequest.bind(ref.node, args, kwargs, node_context)
+            if isinstance(ref.node, RunWaitNode) and request.enabled:
+                local_waits.bind_run(node_id, request.child_run_id)
             result = hooks.machine_step(request)
             task = Future()
 
             def complete_machine(future):
+                if isinstance(ref.node, RunWaitNode) and request.enabled:
+                    local_waits.finish_run(node_id)
                 try:
                     value = future.result()
                     if isinstance(ref.node, RunWaitNode):

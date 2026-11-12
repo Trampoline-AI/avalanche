@@ -52,6 +52,8 @@ def qualify_visit(workflow: Workflow, visit: int) -> Workflow:
     graph.node_waits = {
         identities[node_id]: spec.model_copy(
             update={
+                "run_start_node_id": None if spec.run_start_node_id is None
+                else identities[spec.run_start_node_id],
                 "show_node_id": None
                 if spec.show_node_id is None
                 else identities[spec.show_node_id],

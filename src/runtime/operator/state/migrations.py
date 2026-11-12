@@ -376,6 +376,29 @@ MIGRATIONS += (
     ),
 )
 
+MIGRATIONS += (
+    Migration(version=10, name="native child links and run waits", statements=(
+        """CREATE TABLE run_links (
+            parent_run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+            node_id TEXT NOT NULL,
+            child_run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+            created INTEGER NOT NULL CHECK(created IN (0,1)),
+            receipt_json TEXT NOT NULL,
+            PRIMARY KEY(parent_run_id, node_id)
+        ) STRICT""",
+        "CREATE INDEX run_links_child ON run_links(child_run_id)",
+        """CREATE TABLE run_waits (
+            parent_run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+            node_id TEXT NOT NULL,
+            child_run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
+            deadline REAL,
+            response_json TEXT,
+            PRIMARY KEY(parent_run_id, node_id)
+        ) STRICT""",
+        "CREATE INDEX run_waits_child ON run_waits(child_run_id)",
+    )),
+)
+
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
 
 

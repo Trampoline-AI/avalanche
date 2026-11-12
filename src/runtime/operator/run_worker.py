@@ -86,6 +86,7 @@ def run_worker(
     cancel_reader: Connection | None = None,
     machine_visit: InstanceRecord | None = None,
     machine_reader: Connection | None = None,
+    resume_results: dict[str, str] | None = None,
 ) -> None:
     """Detach exactly one inode-bound bundle capability and close it on exit."""
     bundle_descriptor: int | None = None
@@ -111,6 +112,7 @@ def run_worker(
             cancel_reader,
             machine_visit,
             machine_reader,
+            resume_results,
         )
     finally:
         if bundle_descriptor is not None:
@@ -134,6 +136,7 @@ def _run_worker(
     cancel_reader: Connection | None = None,
     machine_visit: InstanceRecord | None = None,
     machine_reader: Connection | None = None,
+    resume_results: dict[str, str] | None = None,
 ) -> None:
     """Import/build exactly once, prepare, wait for the parent, and execute."""
     event_queue = _SealableEventQueue(event_queue)
@@ -255,7 +258,14 @@ def _run_worker(
             )
             return future
 
+        def record_result(node_id, value):
+            _put_run_event(event_queue, {"type": "step_result", "node_id": node_id,
+                                        "value_json": encode_workflow_result(value).value_json})
+            return value
+
         hooks = RunHooks(
+            resume_results=resume_results,
+            unwrap_result=record_result,
             machine_step=machine_step,
             machine_payload=machine_visit.payload if machine_visit is not None else None,
             on_nodes_expanded=lambda expansion: (

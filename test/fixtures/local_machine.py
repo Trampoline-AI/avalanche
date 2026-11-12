@@ -214,3 +214,130 @@ def router():
     skipped >> child >> started
     skip_send >> started
     return retry_after_send(approval.send(started_key(started), "approved"))
+
+
+class CallInput(ava.BaseInput):
+    id: int
+    depth: int = 0
+    target: str = "echo_child"
+    journal: str = ""
+    fail: bool = False
+    document: ava.File | None = None
+    workspace: ava.Workspace | None = None
+
+
+class CallOutput(BaseModel):
+    id: int
+    document: ava.File | None = None
+    workspace: ava.Workspace | None = None
+
+
+@ava.step(retries=0)
+def echo_result(value: CallInput, context: ava.RunContext) -> CallOutput:
+    if value.journal:
+        with Path(value.journal).open("a") as output:
+            output.write(context.run_id + "\n")
+    if value.fail:
+        raise ValueError("requested child failure")
+    if value.document is not None:
+        assert value.document.read_bytes() == b"native call"
+    if value.workspace is not None:
+        assert (value.workspace.path / "data.txt").read_text() == "native call"
+    return CallOutput(id=value.id, document=value.document, workspace=value.workspace)
+
+
+@ava.workflow(input=CallInput, output=CallOutput)
+def echo_child():
+    return echo_result(ava.input)
+
+
+@ava.workflow(input=CallInput, output=CallOutput, key=("id",))
+def slow_child():
+    waiting = ava.sleep(timedelta(days=1))
+    output = echo_result(ava.input)
+    waiting >> output
+    return output
+
+
+@ava.step
+def call_target(value: CallInput) -> str:
+    return value.target
+
+
+@ava.step
+def next_call(value: CallInput) -> CallInput:
+    return value.model_copy(update={"id": value.id + 1, "depth": value.depth - 1})
+
+
+@ava.step
+def has_child(value: CallInput) -> bool:
+    return value.depth > 0
+
+
+@ava.workflow(input=CallInput, output=CallOutput)
+def call_parent():
+    return ava.call(call_target(ava.input), ava.input)
+
+
+@ava.workflow(input=CallInput, output=CallOutput)
+def timeout_parent():
+    return ava.call(slow_child, ava.input, timeout=0.2)
+
+
+@ava.workflow(input=CallInput, output=CallOutput)
+def machine_call_visit():
+    called = ava.call(call_machine, next_call(ava.input), when=has_child(ava.input))
+    result = echo_result(ava.input)
+    called >> result
+    return result
+
+
+@ava.machine(input=CallInput, key=("id",))
+def call_machine():
+    done = ava.state(machine_call_visit, initial=True, final=True)
+    return done
+
+
+@ava.workflow(input=CallInput, output=CallOutput)
+def call_flow_visit():
+    return ava.call(echo_child, ava.input)
+
+
+@ava.machine(input=CallInput, key=("id",))
+def flow_call_machine():
+    done = ava.state(call_flow_visit, initial=True, final=True)
+    return done
+
+
+@ava.workflow(input=CallInput)
+def self_wait_visit():
+    return ava.call(self_wait_machine, ava.input)
+
+
+@ava.machine(input=CallInput, key=("id",))
+def self_wait_machine():
+    done = ava.state(self_wait_visit, initial=True, final=True)
+    return done
+
+
+@ava.workflow(input=CallInput)
+def cycle_a_visit():
+    return ava.call(cycle_b, ava.input)
+
+
+@ava.workflow(input=CallInput)
+def cycle_b_visit():
+    return ava.call(cycle_a, ava.input)
+
+
+@ava.machine(input=CallInput, key=("id",))
+def cycle_a():
+    done = ava.state(cycle_a_visit, initial=True, final=True)
+    return done
+
+
+@ava.machine(input=CallInput, key=("id",))
+def cycle_b():
+    done = ava.state(cycle_b_visit, initial=True, final=True)
+    return done
+

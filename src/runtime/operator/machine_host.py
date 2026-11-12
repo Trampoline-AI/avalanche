@@ -26,11 +26,12 @@ from avalanche.local_waits import WaitRefusalError
 from avalanche.machine_core import BufferedEvent, MachineRecord, reduce_machine, retain_inbox
 from avalanche.machine_host import MachineEventReceipt
 from avalanche.machine_spec import MachineSpec
-from avalanche.policies import event
+from avalanche.policies import WaitSpec, event
+from avalanche.results import RunResult
 from avalanche.run_steps import RunOpSpec, RunStart
 
 from .discovery import WorkflowDiscoveryError
-from .machine_steps import HostStepOutput, MachineStepRequest
+from .machine_steps import HostStepOutput, MachineStepRequest, MachineStepResponse
 from .machine_validation import (
     MachineDefinitionUnavailableError,
     MachineValidationProcessError,
@@ -47,6 +48,7 @@ from .state.machines import (
     VisitRecord,
     journal_json,
 )
+from .state.run_calls import RunCallsTable
 from .state.runs import RunRequest
 
 logger = logging.getLogger(__name__)
@@ -116,6 +118,11 @@ class Restart:
 
 
 @dataclass(frozen=True)
+class RunChanged:
+    run_id: str
+
+
+@dataclass(frozen=True)
 class CatalogReloaded:
     """The watcher has already done discovery; the owner only needs to drive runs."""
 
@@ -141,6 +148,7 @@ Command = (
     | FireNextTimer
     | Restart
     | CatalogReloaded
+    | RunChanged
     | Stop
 )
 
@@ -162,6 +170,8 @@ class MachineHost:
         self._immediate_reload = False
         self._command_queued_at = 0.0
         self._deferred: deque[tuple[float, Command]] = deque()
+        self.run_waiters: dict[tuple[str, str], Future[HostStepOutput]] = {}
+        self.op.on_run_update(lambda run: self.queue.put(RunChanged(run.run_id)))
         self.thread = threading.Thread(target=self._loop, name="avalanche-machine", daemon=True)
         self.thread.start()
         reply: Future[None] = Future()
@@ -926,10 +936,14 @@ class MachineHost:
         else:
             record.reason = "outcome_unknown"
             visit.disposition = "indeterminate"
+            known_call_failure = any(
+                "child_run_" in (node.error or "")
+                for node in self.op.get_run(record.run_id).nodes.values()
+            )
             self._commit(
                 record,
                 lambda connection: MachinesTable.write_visit(connection, record.run_id, visit),
-                RunStatus.WAITING,
+                RunStatus.FAILED if known_call_failure else RunStatus.WAITING,
             )
 
     def _restart(self) -> None:
@@ -942,7 +956,15 @@ class MachineHost:
             return timers[0].due if timers else float("inf")
 
         for record in sorted(records, key=next_due):
+            with self.op._state_store.transaction() as connection:
+                parked = record.run_id in RunCallsTable.parents(connection)
+            if parked:
+                continue
             if record.phase == "active":
+                with self.op._state_store.transaction() as connection:
+                    called = connection.execute(
+                        "SELECT 1 FROM run_waits WHERE child_run_id=? LIMIT 1",
+                        (record.run_id,)).fetchone() is not None
                 record.reason = "outcome_unknown"
                 with self.op._state_store.transaction() as connection:
                     visit = MachinesTable.visit(connection, record.run_id, record.visit)
@@ -955,7 +977,7 @@ class MachineHost:
                     lambda connection: MachinesTable.write_visit(
                         connection, record.run_id, visit
                     ),
-                    RunStatus.WAITING,
+                    RunStatus.FAILED if called else RunStatus.WAITING,
                 )
             elif record.phase == "waiting":
                 self._drive(record, catchup=True)
@@ -964,6 +986,12 @@ class MachineHost:
         if not request.enabled:
             return None
         if isinstance(request.spec, RunOpSpec):
+            with self.op._state_store.transaction() as connection:
+                previous = RunCallsTable.start(
+                    connection, request.parent_run_id, request.node_id
+                )
+            if previous is not None:
+                return previous
             import hashlib
 
             descriptor = self.op._registry.resolve(request.target)
@@ -1003,9 +1031,13 @@ class MachineHost:
                 read_state = connection.execute(
                     "SELECT read_state FROM runs WHERE run_id=?", (run_id,)
                 ).fetchone()[0]
-            return RunStart(
-                run_id=run_id, key=key, created=existing is None, read_state=read_state
+            started = RunStart(
+                run_id=run_id, key=key, created=existing is None or run_id == proposed,
+                read_state=read_state
             )
+            with self.op._state_store.transaction() as connection:
+                RunCallsTable.link(connection, request.parent_run_id, request.node_id, started)
+            return started
         descriptor, spec = self._descriptor(request.spec.machine)
         if isinstance(request.key, str):
             run_id = request.key
@@ -1035,11 +1067,69 @@ class MachineHost:
                 return self._deferred.popleft()[1]
             raise
 
+    def _arm_run_wait(self, request: MachineStepRequest, reply: Future[HostStepOutput]) -> None:
+        if not request.enabled:
+            reply.set_result(None)
+            return
+        with self.op._state_store.transaction() as connection:
+            RunCallsTable.arm(connection, request)
+        self.run_waiters[(request.parent_run_id, request.node_id)] = reply
+        self._resolve_run_waits()
+
+    def _resolve_run_waits(self) -> float | None:
+        """Repair terminal-before-subscribe and latch once, on the single owner."""
+        with self.op._state_store.transaction() as connection:
+            rows = connection.execute("SELECT * FROM run_waits").fetchall()
+        deadline = None
+        for row in rows:
+            address = (row["parent_run_id"], row["node_id"])
+            parent = self.op.get_run(row["parent_run_id"])
+            if parent is None or parent.status in {RunStatus.SUCCESS, RunStatus.FAILED,
+                                                  RunStatus.CANCELLED}:
+                self.run_waiters.pop(address, None)
+                continue
+            response = (MachineStepResponse.model_validate_json(row["response_json"])
+                        if row["response_json"] is not None else None)
+            if response is None:
+                child = self.op.get_run(row["child_run_id"])
+                code = None
+                output = None
+                if child.status == RunStatus.SUCCESS:
+                    output = RunResult.from_payload(child.run_id,
+                                                    self.op._get_run_result_payload(child.run_id))
+                elif child.status == RunStatus.FAILED:
+                    code = "child_run_failed"
+                elif child.status == RunStatus.CANCELLED:
+                    code = "child_run_cancelled"
+                elif row["deadline"] is not None and row["deadline"] <= time.time():
+                    code = "child_run_timeout"
+                else:
+                    if row["deadline"] is not None:
+                        deadline = (row["deadline"] if deadline is None
+                                    else min(deadline, row["deadline"]))
+                    continue
+                response = MachineStepResponse(
+                    node_id=row["node_id"], output=output,
+                    error=f"{code}: {child.run_id}" if code is not None else None)
+                with self.op._state_store.transaction() as connection:
+                    RunCallsTable.latch(connection, row["parent_run_id"], response)
+            future = self.run_waiters.pop(address, None)
+            if future is not None:
+                if response.error is not None:
+                    future.set_exception(ValueError(response.error))
+                else:
+                    future.set_result(response.output)
+        return deadline
+
     def _loop(self) -> None:
         while True:
             self._pass_reloaded = False
             self._immediate_reload = False
+            run_deadline = self._resolve_run_waits()
             timeout = None if not self.heap else max(0, self.heap[0][0] - time.time())
+            if run_deadline is not None:
+                remaining = max(0, run_deadline - time.time())
+                timeout = remaining if timeout is None else min(timeout, remaining)
             try:
                 command = self._next_command(timeout)
             except queue.Empty:
@@ -1081,7 +1171,12 @@ class MachineHost:
                     case Send():
                         command.reply.set_result(self._send(command))
                     case MachineStep(request=request, reply=reply):
-                        reply.set_result(self._step(request))
+                        if isinstance(request.spec, WaitSpec):
+                            self._arm_run_wait(request, reply)
+                        else:
+                            reply.set_result(self._step(request))
+                    case RunChanged():
+                        pass  # The next pass repairs all terminal-to-parent deliveries.
                     case VisitFinished():
                         self._finished(command)
                     case CatalogReloaded():
@@ -1144,7 +1239,7 @@ class MachineHost:
             except DefinitionReloadDeferredError:
                 self._deferred.append((self._last_reload + 1.0, command))
             except Exception as exc:
-                if isinstance(command, (VisitFinished, CatalogReloaded)):
+                if isinstance(command, (VisitFinished, CatalogReloaded, RunChanged)):
                     self.op._record_fatal_error(exc)
                 else:
                     command.reply.set_exception(exc)
