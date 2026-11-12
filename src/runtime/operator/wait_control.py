@@ -103,6 +103,7 @@ class RunControls:
     connection: Connection
     machine_writer: Connection | None = None
     lock: Lock = field(default_factory=Lock)
+    machine_lock: Lock = field(default_factory=Lock)
     receipts: dict[tuple[str, str, str], tuple[str, WaitControlResponse]] = field(
         default_factory=dict
     )

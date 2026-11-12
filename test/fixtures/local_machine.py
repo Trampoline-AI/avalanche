@@ -294,6 +294,16 @@ def large_call_parent():
     return ava.call(large_child)
 
 
+@ava.step
+def combined_size(first: str, second: str) -> int:
+    return len(first) + len(second)
+
+
+@ava.workflow
+def parallel_call_parent():
+    return combined_size(ava.call(large_child), ava.call(large_child))
+
+
 @ava.workflow(input=CallInput, output=CallOutput)
 def call_parent():
     return ava.call(call_target(ava.input), ava.input)

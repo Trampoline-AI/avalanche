@@ -3000,7 +3000,11 @@ class Operator:
                 if handle.controls is None or handle.controls.machine_writer is None:
                     raise _CoordinatorProtocolError("Missing machine reply pipe")
                 try:
-                    handle.controls.machine_writer.send_bytes(response.model_dump_json().encode())
+                    # A completed future may deliver on this observer while a later
+                    # response delivers on the host owner; frame writes must serialize.
+                    with handle.controls.machine_lock:
+                        handle.controls.machine_writer.send_bytes(
+                            response.model_dump_json().encode())
                 except (BrokenPipeError, OSError):
                     pass  # Cancellation or operator shutdown already stopped the coordinator.
             reply.add_done_callback(deliver)

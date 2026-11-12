@@ -91,6 +91,10 @@ def test_operator_native_calls(tmp_path):
         terminal(large)
         assert op.get_run(large).status == RunStatus.SUCCESS
         assert len(decode_workflow_result(op._get_run_result_payload(large))) == 3 * 1024 * 1024
+        parallel = op.start_run("parallel_call_parent")
+        terminal(parallel)
+        assert decode_workflow_result(op._get_run_result_payload(parallel)) == 6 * 1024 * 1024
+        assert len(op.run_links(parallel)["children"]) == 2
 
         for target in ("echo_child", "failing_child_machine"):
             failed = op.start_run(
