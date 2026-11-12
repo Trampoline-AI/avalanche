@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.9
 
 - Store local flow and machine keys with the shared UTF-8 key serializer, and
   migrate older ASCII-escaped identities without changing their run IDs or receipts.
