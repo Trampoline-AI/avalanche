@@ -296,6 +296,23 @@ describe("machine run timeline", () => {
     });
   });
 
+  it("keeps a deferred delivery when the entry that accepted it is on an older page", () => {
+    // Only the latest page is loaded: entry 2 (which accepted `merged`) is not.
+    const latest = new Map([...details()].filter(([entry]) => entry >= 4));
+    const entries = closedRun({ entries: [4, 5], details: latest, fromStart: false });
+    const delivered = entries.find((entry) => entry.status === "delivered")!;
+    expect(delivered).toMatchObject({
+      entry: 4,
+      title: "Event merged delivered in ready_to_merge → closed",
+    });
+    expect(delivered.detail).toContain(
+      "deferred in an earlier entry (before entry 4, not loaded)",
+    );
+    // With the accepting entry loaded, the delivery names it exactly.
+    const full = closedRun().find((entry) => entry.status === "delivered")!;
+    expect(full.detail).toContain("deferred since entry 2");
+  });
+
   it("shows a timer that fired, and a cancel, instead of a transition", () => {
     const fired: MachineTransition[] = [
       ...transitions.slice(0, 3),

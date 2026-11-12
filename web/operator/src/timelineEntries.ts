@@ -583,11 +583,11 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
     for (const fact of detail?.events ?? []) {
       // A directly accepted event's delivery is the transition itself; only a
       // delivery of an event accepted (deferred) in an earlier state entry is shown.
+      // This entry's own facts are loaded, so a consumed receipt accepted
+      // nowhere among the loaded entries was accepted in an earlier, unloaded one.
       if (fact.status === "consumed") {
-        const acceptedStateEntry = fact.receipt_id
-          ? acceptedIn.get(fact.receipt_id)
-          : undefined;
-        if (acceptedStateEntry === undefined || acceptedStateEntry === entry) continue;
+        if (!fact.receipt_id) continue;
+        if (acceptedIn.get(fact.receipt_id) === entry) continue;
       }
       const verdict = eventVerdict(fact, declaration);
       const receipt = fact.receipt_id ? receipts.get(fact.receipt_id) : undefined;
@@ -610,7 +610,11 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
         detail: [
           verdict.word === "deferred" ? "held for a later state" : undefined,
           verdict.word === "ignored" ? `${state} does not accept it` : undefined,
-          deferredFrom !== undefined ? `deferred since entry ${deferredFrom}` : undefined,
+          deferredFrom !== undefined
+            ? `deferred since entry ${deferredFrom}`
+            : fact.status === "consumed"
+              ? `deferred in an earlier entry (before entry ${stateEntries[0]}, not loaded)`
+              : undefined,
           fact.source,
           receipt && fact.status === "accepted" ? receiptText(receipt) : undefined,
         ]

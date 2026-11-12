@@ -10,6 +10,9 @@
 - Local operator: a machine `send` whose payload validator crashes or times out
   is accepted and queued instead of failing with a server error. The run shows
   the validation failure, and the event is delivered once the validator works.
+- Operator UI Timeline: an event delivered after being deferred in a state entry
+  that is not loaded (an older history page) now shows as delivered, noting it
+  was deferred in an earlier entry, instead of disappearing.
 
 ## 0.20.11
 
