@@ -167,6 +167,32 @@ run = router().test()
 assert run.handle.result().status == "accepted"
 ```
 
+`ava.call(target, input, *, timeout=None, when=True)` declares a start plus a
+workerless wait and returns the child's typed final output. It is a graph
+operation, **not** an awaited function. A visit can call a flow or another
+machine, including a different key of its own definition. A machine call waits
+until the instance closes; its queued events continue to follow ordinary inbox
+rules. The target object is captured by name without eagerly building its graph.
+
+```python
+from datetime import timedelta
+
+@ava.workflow
+def review_and_wait():
+    verdict = ava.call(approval, Request(id=45), timeout=timedelta(days=7))
+    return verdict
+```
+
+The returned future can feed ordinary steps or be a workflow's return value.
+`when=False` returns `None` without starting or waiting. Calls propagate
+`child_run_failed`, `child_run_cancelled`, or `child_run_timeout` with the child
+run ID and stop dependent work. Timeout leaves the child running. Self-instance
+waits (`child_run_self_wait`) and wait cycles (`child_run_wait_cycle`) are refused.
+Cancelling the caller cancels only runs it created, not keyed runs it attached
+to. The local operator stores waits and links in SQLite, restores parked callers
+after restart, and exposes both link directions with `ava run links RUN_ID --json`
+and `GET /api/v1/runs/RUN_ID/links`. No UI tree or Delta port is included yet.
+
 `ava.start_run` returns `ava.RunStart(run_id, key, created, read_state)`. An
 unkeyed flow has `key=None`; a permanent key may resolve to an `expired` run
 whose terminal history/artifacts have been removed by normal retention.

@@ -67,7 +67,32 @@ recipient deduplication, including protection against an earlier request still
 finishing. A missing lookup is not proof that no effect occurred. The submission
 requires `run:decide`, an identity and a reason.
 
-## Three graph-level waits
+## Native child-run waits
+
+`ava.call(target, input, *, timeout=None, when=True)` is a declared graph
+operation, not an async function. It returns a `NodeFuture`: do not `await` it
+inside a step. The graph contains a normal start followed by `kind="run"` wait;
+no executor worker is held while the child runs. `ava.start_run` remains
+fire-and-forget. Existing keys attach to the original run, ignoring replacement
+non-key input. A machine call returns only when the instance closes, not when
+one visit finishes.
+
+Success uses the shared `RunResult` codec and restores the target's declared
+output model. File and Workspace values stay references, not copied bytes.
+Failure stops dependent steps: `child_run_failed`, `child_run_cancelled`, or
+`child_run_timeout`, each including the child run ID. Timeout leaves the child
+running. Self waits and cycles are refused before parking with
+`child_run_self_wait` and `child_run_wait_cycle`.
+
+The local operator stores start receipts and call waits in SQLite. A parked
+parent restores accepted outputs and reattaches after restart; it does not
+restart its child. In-flight children fail on operator restart and deliver
+`child_run_failed`. This does not make ordinary in-flight runs restartable.
+Parent cancellation cancels only children whose original receipt has
+`created=true`; attached keyed runs continue. Inspect those links with
+`ava run links RUN_ID --json` or `GET /api/v1/runs/RUN_ID/links`.
+
+## Three other graph-level waits
 
 Waits are graph nodes composed with `>>` and `&`, never per-step `await` calls:
 

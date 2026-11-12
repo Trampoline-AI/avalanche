@@ -86,5 +86,7 @@ class RunCallsTable:
     @staticmethod
     def parents(connection: sqlite3.Connection) -> set[str]:
         return {row[0] for row in connection.execute(
-            "SELECT DISTINCT parent_run_id FROM run_waits"
+            "SELECT DISTINCT w.parent_run_id FROM run_waits w "
+            "JOIN run_nodes n ON n.run_id=w.parent_run_id AND n.node_id=w.node_id "
+            "WHERE n.status='running'"
         ).fetchall()}

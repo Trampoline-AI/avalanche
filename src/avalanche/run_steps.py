@@ -126,7 +126,15 @@ class RunWaitNode(WaitNode):
             ))
             return TypeAdapter(reduce(or_, models)).validate_python(value) if models else value
         flow = self.definition if isinstance(self.definition, Workflow) else self.definition()
-        return flow.validate_output(value)
+        if flow.output_type is not None:
+            return flow.validate_output(value)
+        if isinstance(flow.returns, NodeFuture):
+            import inspect
+            signature = inspect.signature(flow.returns.node.fn, eval_str=True)
+            annotation = signature.return_annotation
+            if annotation is not inspect.Signature.empty:
+                return TypeAdapter(annotation).validate_python(value)
+        return value
 
 
 def call(

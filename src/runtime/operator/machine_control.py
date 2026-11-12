@@ -16,7 +16,9 @@ if TYPE_CHECKING:
 
 class MachineControlRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
-    op: Literal["get", "resolve", "send", "history", "visit", "events", "retry", "fire_next"]
+    op: Literal[
+        "get", "resolve", "send", "history", "visit", "events", "retry", "fire_next", "links"
+    ]
     run_id: str = ""
     machine: str = ""
     key_fields: dict[str, JsonValue] | None = None
@@ -115,6 +117,9 @@ def control_machine(op: Operator, request: MachineControlRequest) -> JsonValue:
         ).fetchone()[0]
     if read_state == "expired" and request.op in {"history", "events", "visit"}:
         return {"read_state": "expired", "items": [], "next_cursor": None}
+    if request.op == "links":
+        return {direction: [link.model_dump(mode="json") for link in links]
+                for direction, links in op.run_links(request.run_id).items()}
     host = op._machine_host
     if request.op == "send":
         if request.machine:

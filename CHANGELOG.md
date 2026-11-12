@@ -14,6 +14,16 @@
   aliases/alias generators, default factories or unsupported types/configuration
   are refused at definition time with the field name. Move business normalization
   before the start operation and pass a plain portable identity field instead.
+- Add declared `ava.call(target, input, timeout=..., when=...)` for native flow
+  and machine children. Calls wait without occupying an executor worker and return
+  the typed final output, with File/Workspace references unchanged. Child failure,
+  cancellation and timeout fail the call; timeout leaves the child running.
+- Persist call waits and parent/child start receipts in the local operator. A
+  parked parent reattaches after restart; created children alone receive parent
+  cancellation. Refuse self/cyclic waits and capture target names lazily.
+- Inspect native run links with `ava run links RUN_ID --json` or
+  `GET /api/v1/runs/RUN_ID/links`. UI rendering and the Delta port are separate.
+
 - Read typed flow, machine-final, visit and step results through one versioned
   reference-only result model. The local operator retains completed non-final
   visit outputs across restarts; `ava result` (`ava run result`) and

@@ -26,7 +26,15 @@ if _version_not_supported:
 
 
 class OperatorServiceV2Stub(object):
-    """── Service ─────────────────────────────────────────────
+    """Breaking migration: the previous full-state run APIs are replaced by bounded
+    summary, snapshot, detail, and typed update APIs below. Remote operators and
+    clients must upgrade together.
+
+    TODO: Replace JSON-string transport for Avalanche-owned declarations, questions,
+    and evaluation results with structured protobuf messages and generated types.
+    Keep user-defined payloads and JSON Schema documents as flexible JSON values.
+
+    ── Service ─────────────────────────────────────────────
 
     V2 is the only served contract. Requests derive their authorization scope
     from transport metadata and use only V2 request and response messages.
@@ -123,11 +131,6 @@ class OperatorServiceV2Stub(object):
                 request_serializer=operator__pb2.GetRunResultRequestV2.SerializeToString,
                 response_deserializer=operator__pb2.RunResultV2.FromString,
                 _registered_method=True)
-        self.GetRunLinks = channel.unary_unary(
-                '/avalanche.operator.OperatorServiceV2/GetRunLinks',
-                request_serializer=operator__pb2.GetRunLinksRequestV2.SerializeToString,
-                response_deserializer=operator__pb2.RunLinksV2.FromString,
-                _registered_method=True)
         self.ListRunOutputArtifacts = channel.unary_unary(
                 '/avalanche.operator.OperatorServiceV2/ListRunOutputArtifacts',
                 request_serializer=operator__pb2.ListRunOutputArtifactsRequestV2.SerializeToString,
@@ -146,7 +149,15 @@ class OperatorServiceV2Stub(object):
 
 
 class OperatorServiceV2Servicer(object):
-    """── Service ─────────────────────────────────────────────
+    """Breaking migration: the previous full-state run APIs are replaced by bounded
+    summary, snapshot, detail, and typed update APIs below. Remote operators and
+    clients must upgrade together.
+
+    TODO: Replace JSON-string transport for Avalanche-owned declarations, questions,
+    and evaluation results with structured protobuf messages and generated types.
+    Keep user-defined payloads and JSON Schema documents as flexible JSON values.
+
+    ── Service ─────────────────────────────────────────────
 
     V2 is the only served contract. Requests derive their authorization scope
     from transport metadata and use only V2 request and response messages.
@@ -262,12 +273,6 @@ class OperatorServiceV2Servicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def GetRunLinks(self, request, context):
-        """Missing associated documentation comment in .proto file."""
-        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
-        context.set_details('Method not implemented!')
-        raise NotImplementedError('Method not implemented!')
-
     def ListRunOutputArtifacts(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -374,11 +379,6 @@ def add_OperatorServiceV2Servicer_to_server(servicer, server):
                     request_deserializer=operator__pb2.GetRunResultRequestV2.FromString,
                     response_serializer=operator__pb2.RunResultV2.SerializeToString,
             ),
-            'GetRunLinks': grpc.unary_unary_rpc_method_handler(
-                    servicer.GetRunLinks,
-                    request_deserializer=operator__pb2.GetRunLinksRequestV2.FromString,
-                    response_serializer=operator__pb2.RunLinksV2.SerializeToString,
-            ),
             'ListRunOutputArtifacts': grpc.unary_unary_rpc_method_handler(
                     servicer.ListRunOutputArtifacts,
                     request_deserializer=operator__pb2.ListRunOutputArtifactsRequestV2.FromString,
@@ -403,7 +403,15 @@ def add_OperatorServiceV2Servicer_to_server(servicer, server):
 
  # This class is part of an EXPERIMENTAL API.
 class OperatorServiceV2(object):
-    """── Service ─────────────────────────────────────────────
+    """Breaking migration: the previous full-state run APIs are replaced by bounded
+    summary, snapshot, detail, and typed update APIs below. Remote operators and
+    clients must upgrade together.
+
+    TODO: Replace JSON-string transport for Avalanche-owned declarations, questions,
+    and evaluation results with structured protobuf messages and generated types.
+    Keep user-defined payloads and JSON Schema documents as flexible JSON values.
+
+    ── Service ─────────────────────────────────────────────
 
     V2 is the only served contract. Requests derive their authorization scope
     from transport metadata and use only V2 request and response messages.
@@ -858,33 +866,6 @@ class OperatorServiceV2(object):
             '/avalanche.operator.OperatorServiceV2/GetRunResult',
             operator__pb2.GetRunResultRequestV2.SerializeToString,
             operator__pb2.RunResultV2.FromString,
-            options,
-            channel_credentials,
-            insecure,
-            call_credentials,
-            compression,
-            wait_for_ready,
-            timeout,
-            metadata,
-            _registered_method=True)
-
-    @staticmethod
-    def GetRunLinks(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(
-            request,
-            target,
-            '/avalanche.operator.OperatorServiceV2/GetRunLinks',
-            operator__pb2.GetRunLinksRequestV2.SerializeToString,
-            operator__pb2.RunLinksV2.FromString,
             options,
             channel_credentials,
             insecure,

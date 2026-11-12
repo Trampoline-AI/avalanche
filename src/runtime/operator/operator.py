@@ -158,7 +158,7 @@ from .state.logs import RunLogsTable
 from .state.machines import InstanceRecord, MachinesTable
 from .state.metadata import OperatorMetadataTable
 from .state.results import RunResultTable, StepResultTable
-from .state.run_calls import RunCallsTable
+from .state.run_calls import RunCallsTable, RunLink
 from .state.run_details import load_run_detail_totals
 from .state.runs import RunRequest, RunsTable, StoredRun
 from .state.schedule_input_files import (
@@ -2358,7 +2358,7 @@ class Operator:
             else None,
         )
 
-    def run_links(self, run_id: str) -> dict[str, list]:
+    def run_links(self, run_id: str) -> dict[str, list[RunLink]]:
         if self.get_run(run_id) is None:
             raise KeyError(run_id)
         with self._state_store.transaction() as connection:
@@ -2368,13 +2368,16 @@ class Operator:
     def cancel_run(self, run_id: str) -> None:
         with self._state_store.transaction() as connection:
             children = RunCallsTable.links(connection, run_id, parents=False)
-        for link in children:
-            if link.created and link.child_run_id != run_id:
-                self.cancel_run(link.child_run_id)
+        self._cancel_run_process(run_id)
         with self._state_store.transaction() as connection:
             machine = MachinesTable.load(connection, run_id)
         if machine is not None:
             self._machine_host.cancel(run_id)
+        for link in children:
+            if link.created and link.child_run_id != run_id:
+                self.cancel_run(link.child_run_id)
+
+    def _cancel_run_process(self, run_id: str) -> None:
         with self._lock:
             handle = self._active_runs.get(run_id)
             run = self._runs.get(run_id)
@@ -2392,7 +2395,7 @@ class Operator:
                     RunStatus.PENDING,
                     RunStatus.RUNNING,
                 }
-                and machine is None
+                and handle is None
             ):
                 return
         if handle is not None and not already_requested:

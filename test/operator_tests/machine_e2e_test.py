@@ -109,6 +109,33 @@ def test_operator_native_calls(tmp_path):
         op.cancel_run(attached)
         terminal(attached)
         assert op.get_run(existing).status not in {RunStatus.CANCELLED, RunStatus.FAILED}
+
+        # Read the same persisted tree through the real REST bridge and CLI transport.
+        import socket
+        import subprocess
+        import sys
+        from urllib.request import urlopen
+
+        from runtime.operator.server import serve
+        from runtime.operator.web import start_browser_server
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        server = serve(op, port=port, block=False)
+        browser = start_browser_server(f"127.0.0.1:{port}", port=0)
+        try:
+            url = f"http://127.0.0.1:{browser.port}/api/v1/runs/{attached}/links"
+            with urlopen(url) as reply:
+                rest_links = json.load(reply)
+            assert rest_links["children"][0]["child_run_id"] == existing
+            command = subprocess.run(
+                [sys.executable, "-m", "ava_cli", "run", "links", attached,
+                 "--connect", f"127.0.0.1:{port}", "--json"],
+                capture_output=True, text=True, timeout=30, check=True)
+            assert json.loads(command.stdout) == rest_links
+        finally:
+            browser.close()
+            server.stop(grace=0).wait()
     finally:
         op.close()
 
@@ -157,6 +184,38 @@ def test_native_calls():
         return done
 
     assert recursive.test(Input(id=1)).handle.result(timeout=1) is None
+
+    from avalanche.machine_test import MachineTest, WorkflowTest
+    from avalanche.run_steps import ChildRunError
+    spec = importlib.util.spec_from_file_location(
+        "calls_fixture", SDK / "test/fixtures/local_machine.py"
+    )
+    fixture = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture)
+    nested = fixture.call_machine.test(fixture.CallInput(id=1, depth=2))
+    assert nested.handle.result(timeout=1).id == 1
+    assert len(nested.host.instances) == 3
+    self_wait = MachineTest(fixture.self_wait_machine, fixture.CallInput(id=9), stub=None)
+    with pytest.raises(ChildRunError, match="child_run_self_wait"):
+        self_wait._sync(self_wait._drive())
+    cycle = MachineTest(fixture.cycle_a, fixture.CallInput(id=9), stub=None)
+    with pytest.raises(ChildRunError, match="child_run_failed"):
+        cycle._sync(cycle._drive())
+    assert any("child_run_wait_cycle" in str(item.handle.exception())
+               for item in cycle.host.instances.values())
+
+    parked = fixture.call_parent().test(fixture.CallInput(id=80, target="slow_child"),
+                                       targets=(fixture.slow_child,))
+    parked_child = parked.host.flow_runs[0]
+    # Re-attach to the same keyed child and ignore changed non-key input.
+    attached = WorkflowTest(fixture.call_parent(),
+                           fixture.CallInput(id=80, target="slow_child", fail=True),
+                           host=parked.host)
+    attached._sync(attached._drive())
+    attached.handle.cancel()
+    assert attached.handle.cancelled() and not parked_child.handle.cancelled()
+    parked.handle.cancel()
+    assert parked.handle.cancelled() and parked_child.handle.cancelled()
 
 
 def test_review_loop():

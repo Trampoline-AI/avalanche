@@ -171,7 +171,9 @@ class MachineHost:
         self._command_queued_at = 0.0
         self._deferred: deque[tuple[float, Command]] = deque()
         self.run_waiters: dict[tuple[str, str], Future[HostStepOutput]] = {}
-        self.op.on_run_update(lambda run: self.queue.put(RunChanged(run.run_id)))
+        self.op.on_run_update(lambda run: self.queue.put(RunChanged(run.run_id))
+                              if run.status in {RunStatus.SUCCESS, RunStatus.FAILED,
+                                                RunStatus.CANCELLED} else None)
         self.thread = threading.Thread(target=self._loop, name="avalanche-machine", daemon=True)
         self.thread.start()
         reply: Future[None] = Future()
@@ -1037,6 +1039,13 @@ class MachineHost:
             )
             with self.op._state_store.transaction() as connection:
                 RunCallsTable.link(connection, request.parent_run_id, request.node_id, started)
+            parent = self.op.get_run(request.parent_run_id)
+            with self.op._lock:
+                handle = self.op._active_runs.get(request.parent_run_id)
+                cancelled = (parent.status == RunStatus.CANCELLED
+                             or handle is not None and handle.cancel_event.is_set())
+            if cancelled and started.created:
+                self._cancel_created_child(started.run_id)
             return started
         descriptor, spec = self._descriptor(request.spec.machine)
         if isinstance(request.key, str):
@@ -1067,6 +1076,14 @@ class MachineHost:
                 return self._deferred.popleft()[1]
             raise
 
+    def _cancel_created_child(self, run_id: str) -> None:
+        self.op._cancel_run_process(run_id)
+        with self.op._state_store.transaction() as connection:
+            machine = MachinesTable.load(connection, run_id)
+        if machine is not None and machine.phase not in {"closed", "final"}:
+            self._commit(machine, lambda connection: MachinesTable.cancel_timers(
+                connection, run_id), RunStatus.CANCELLED)
+
     def _arm_run_wait(self, request: MachineStepRequest, reply: Future[HostStepOutput]) -> None:
         if not request.enabled:
             reply.set_result(None)
@@ -1079,7 +1096,9 @@ class MachineHost:
     def _resolve_run_waits(self) -> float | None:
         """Repair terminal-before-subscribe and latch once, on the single owner."""
         with self.op._state_store.transaction() as connection:
-            rows = connection.execute("SELECT * FROM run_waits").fetchall()
+            rows = [connection.execute(
+                "SELECT * FROM run_waits WHERE parent_run_id=? AND node_id=?", address
+            ).fetchone() for address in tuple(self.run_waiters)]
         deadline = None
         for row in rows:
             address = (row["parent_run_id"], row["node_id"])

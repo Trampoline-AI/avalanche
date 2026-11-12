@@ -86,7 +86,7 @@ class WaitSpec(BaseModel):
         return self
 
     kind: Literal["sleep", "event", "decision", "run"]
-    run_start_node_id: str | None = None
+    run_start_node_id: str | None = Field(default=None, exclude_if=lambda value: value is None)
     timeout_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
     until: datetime | None = None
     key: str | None = None

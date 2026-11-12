@@ -298,6 +298,10 @@ class MachineTest:
         work = self.work
         dependencies = _reverse_graph(work.graph)
         while len(self._values) < len(work.nodes):
+            if self.handle.cancel_requested():
+                self.handle._execution_receipts.cancel()
+                self.handle._future.cancel()
+                return False
             ready = [
                 name
                 for name in work._topological_sort()
@@ -623,14 +627,17 @@ class InMemoryMachineHost:
 
     def attach(self, driver: MachineTest) -> None:
         self.runs[driver.handle.run_id] = driver
-        driver.handle.on_cancel = lambda: self.cancel_children(driver.handle.run_id)
+        def cancel() -> None:
+            self.cancel_children(driver.handle.run_id)
+            if not driver._busy:
+                driver.handle._future.cancel()
+        driver.handle.on_cancel = cancel
 
     def cancel_children(self, parent: str) -> None:
         for (run_id, _, _), started in tuple(self.starts.items()):
             if run_id == parent and started.created and started.run_id != parent:
                 child = self.runs[started.run_id]
                 child.handle.cancel()
-                child.handle._future.cancel()
 
     async def wake_parents(self) -> None:
         for address in tuple(self.calls):

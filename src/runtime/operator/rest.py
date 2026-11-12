@@ -388,8 +388,11 @@ def create_rest_app(channel: grpc.Channel) -> FastAPI:
 
     @router.get("/v1/runs/{run_id}/links", summary="Read native child and parent links")
     def run_links(run_id: str, query: Annotated[_Query, Query()]) -> Response:
-        return _protobuf_response(stub.GetRunLinks(
-            pb.GetRunLinksRequestV2(run_id=run_id), timeout=_RPC_TIMEOUT_SECONDS))
+        from .machine_control import MachineControlRequest
+        response = stub.ControlMachine(pb.ControlMachineRequestV2(request_json=(
+            MachineControlRequest(op="links", run_id=run_id).model_dump_json()
+        )), timeout=_RPC_TIMEOUT_SECONDS)
+        return JSONResponse(json.loads(response.result_json))
 
     @router.get("/v1/runs/{run_id}/waits", summary="List pinned wait cards")
     def list_waits(run_id: str, query: Annotated[_WaitQuery, Query()]) -> Response:

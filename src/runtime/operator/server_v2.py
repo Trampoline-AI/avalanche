@@ -1476,18 +1476,6 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         if item.media_type is not None:
             descriptor.media_type = item.media_type
 
-    def GetRunLinks(self, request, context):  # noqa: N802
-        if not request.run_id:
-            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "run_id is required")
-        try:
-            links = self._op.run_links(request.run_id)
-        except KeyError:
-            context.abort(grpc.StatusCode.NOT_FOUND, f"Run {request.run_id} not found")
-        return pb.RunLinksV2(**{
-            direction: [pb.RunLinkV2(**link.model_dump()) for link in values]
-            for direction, values in links.items()
-        })
-
     def GetRunResult(self, request, context):  # noqa: N802
         payload = self._result_payload(
             request.run_id,
