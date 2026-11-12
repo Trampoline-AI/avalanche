@@ -146,55 +146,80 @@ def mapped():
 """
 
 
-def test_native_call_restart_reattaches_one_child(tmp_path):
+@pytest.mark.parametrize("stop_signal", [signal.SIGKILL, signal.SIGINT, signal.SIGTERM])
+@pytest.mark.parametrize("child_kind", ["executing", "parked"])
+def test_native_call_restart_reattaches_one_child(tmp_path, stop_signal, child_kind):
     fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
     db = tmp_path / "calls.sqlite"
+    journal = tmp_path / "delivery"
     script = """
-import json, sys, time
+import json, signal, sys, time
 from runtime.operator.operator import Operator
 op = Operator([sys.argv[1]], watch=False, schedule=False, state_db=sys.argv[2])
-parent = op.start_run('call_parent', input={'id': 101, 'target': 'slow_child'})
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+parked = sys.argv[3] == 'parked'
+parent = op.start_run('gated_parent' if parked else 'call_parent',
+                      input={'id': 101, 'target': 'slow_child', 'journal': sys.argv[4]})
 until = time.monotonic() + 60
 while time.monotonic() < until:
     with op._state_store.transaction() as connection:
         row = connection.execute('SELECT child_run_id FROM run_waits WHERE parent_run_id=?',
                                  (parent,)).fetchone()
-    if row is not None and op.get_run(row[0]).status.value == 'running':
+    if row is not None and op.get_run(row[0]).status.value == (
+            'waiting' if parked else 'running'):
         print(json.dumps({'parent': parent, 'child': row[0]}), flush=True)
         break
     time.sleep(.02)
 else:
     raise RuntimeError('parent did not park')
-sys.stdin.read()
+try:
+    sys.stdin.read()
+finally:
+    op.close()
 """
-    process = subprocess.Popen([sys.executable, "-c", script, str(fixture), str(db)],
-                               stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                               stderr=subprocess.PIPE, text=True)
+    process = subprocess.Popen(
+        [sys.executable, "-c", script, str(fixture), str(db), child_kind, str(journal)],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        env={**os.environ, "GRPC_VERBOSITY": "ERROR"},
+    )
     try:
         import select
         ready, _, _ = select.select([process.stdout], [], [], 90)
         assert ready, "operator did not report a parked call"
         ids = json.loads(process.stdout.readline())
-        process.kill()
-        process.wait(timeout=10)
+        process.send_signal(stop_signal)
+        process.wait(timeout=20)
         op = Operator([str(fixture)], watch=False, schedule=False, state_db=db)
         try:
+            parent = op.get_run(ids["parent"])
+            assert parent.status != RunStatus.CANCELLED, parent
+            if child_kind == "parked":
+                assert op.get_run(ids["child"]).status == RunStatus.WAITING
+                op._machine_host.send(
+                    ids["child"], "approved", {}, "approve-once"
+                )
             until = time.monotonic() + 60
             while op.get_run(ids["parent"]).status not in _TERMINAL:
                 assert time.monotonic() < until
                 assert op.fatal_error is None, op.fatal_error
                 time.sleep(.02)
-            assert op.get_run(ids["child"]).status == RunStatus.FAILED
             parent = op.get_run(ids["parent"])
-            assert parent.status == RunStatus.FAILED, parent
-            assert sum("child_run_failed" in (node.error or "")
-                       for node in parent.nodes.values()) == 1
+            if child_kind == "executing":
+                assert op.get_run(ids["child"]).status == RunStatus.FAILED
+                assert parent.status == RunStatus.FAILED, parent
+                assert sum("child_run_failed" in (node.error or "")
+                           for node in parent.nodes.values()) == 1
+            else:
+                assert op.get_run(ids["child"]).status == RunStatus.SUCCESS
+                assert parent.status == RunStatus.SUCCESS, parent
+                assert Path(str(journal) + ".dependent").read_text() == "delivered\n"
             links = op.run_links(ids["parent"])["children"]
             assert len(links) == 1 and links[0].child_run_id == ids["child"]
             with op._state_store.transaction() as connection:
                 rows = connection.execute("SELECT response_json FROM run_waits").fetchall()
-            assert len(rows) == 1
-            assert ids["child"] in rows[0][0] and "child_run_failed" in rows[0][0]
+            assert len(rows) == 1 and ids["child"] in rows[0][0]
+            if child_kind == "executing":
+                assert "child_run_failed" in rows[0][0]
         finally:
             op.close()
     finally:

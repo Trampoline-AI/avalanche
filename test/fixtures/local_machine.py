@@ -381,3 +381,23 @@ def cycle_a():
 def cycle_b():
     done = ava.state(cycle_b_visit, initial=True, final=True)
     return done
+
+
+@ava.machine(input=CallInput, key=("id",))
+def gated_machine():
+    pending = ava.state(echo_result, initial=True)
+    done = ava.state(echo_result, final=True)
+    pending.on("approved") >> done
+
+
+@ava.step(retries=0)
+def after_call(value: CallOutput, original: CallInput) -> CallOutput:
+    if original.journal:
+        with Path(original.journal + ".dependent").open("a") as output:
+            output.write("delivered\n")
+    return value
+
+
+@ava.workflow(input=CallInput, output=CallOutput)
+def gated_parent():
+    return after_call(ava.call(gated_machine, ava.input), ava.input)

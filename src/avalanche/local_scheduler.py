@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 import os
 from collections.abc import Callable
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
@@ -52,6 +53,15 @@ def run_local_schedule(
     attempts: dict[str, int] = dict.fromkeys(order, 0)
     failure: Exception | None = None
     cancelled = False
+    last_idle_counts: tuple[int, int, int] | None = None
+
+    def executor_slots() -> int:
+        # Host-operation futures are resolved by the operator, not by the pool.
+        return sum(
+            workflow.nodes[item].node.node_type.value not in {"machine", "run"}
+            and not isinstance(workflow.nodes[item].node, RunWaitNode)
+            for item in pending.values()
+        )
 
     if hooks is not None and hooks.resume_results is not None:
         from .results import EncodedWorkflowResult, decode_workflow_result
@@ -298,12 +308,7 @@ def run_local_schedule(
                         pending[task] = node_id
                         task.add_done_callback(notify)
                     else:
-                        active_workers = sum(
-                            workflow.nodes[item].node.node_type.value not in {"machine", "run"}
-                            and not isinstance(workflow.nodes[item].node, RunWaitNode)
-                            for item in pending.values()
-                        )
-                        if active_workers >= capacity:
+                        if executor_slots() >= capacity:
                             continue
                         if hooks and hooks.on_node_start:
                             hooks.on_node_start(node_id)
@@ -322,6 +327,15 @@ def run_local_schedule(
                     if remaining or any(not group.finished for group in maps.groups.values()):
                         raise RuntimeError("Local workflow scheduler has no runnable nodes")
                 if not progressed and (remaining or pending or parked or map_groups):
+                    active = executor_slots()
+                    counts = (active, len(pending) - active, len(parked) + len(map_groups))
+                    if counts != last_idle_counts:
+                        logging.getLogger(__name__).info(
+                            "Scheduler idle run_id=%s active_executor_slots=%d capacity=%d "
+                            "pending_host_operations=%d parked_waits=%d coordinator_pid=%d",
+                            waits.run_id, active, capacity, counts[1], counts[2], os.getpid(),
+                        )
+                        last_idle_counts = counts
                     waits.condition.wait(timeout=waits.next_deadline())
 
     if failure is not None:

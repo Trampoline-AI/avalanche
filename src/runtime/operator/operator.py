@@ -2505,19 +2505,11 @@ class Operator:
                 self._watcher_thread.join(timeout=2.0)
             self._evaluation_workers.close()
 
+        # Stopping an operator is not a request to cancel its runs. In particular,
+        # a parked call has no executing step: keep its durable wait and receipts
+        # untouched so startup takes exactly the same recovery path as a crash.
+        # Quiesce coordinators without sending the user-cancellation protocol.
         for _, handle in handles:
-            handle.cancel_event.set()
-            handle.start_event.set()
-            if handle.cancel_writer is not None:
-                try:
-                    handle.cancel_writer.send_bytes(b"cancel")
-                except (BrokenPipeError, OSError):
-                    pass  # Coordinator teardown is already complete.
-
-        deadline = time.monotonic() + self._cancel_grace
-        for _, handle in handles:
-            if handle.process.pid is not None:
-                handle.process.join(timeout=max(0.0, deadline - time.monotonic()))
             _teardown_process_group(handle.process, handle.windows_job)
 
         delayed_drains = []
@@ -2892,7 +2884,7 @@ class Operator:
         pending = list(buffered_events)
         dead_polls = 0
         try:
-            while not terminal:
+            while not terminal and not self._closed:
                 if pending:
                     event = pending.pop(0)
                 else:
@@ -2900,6 +2892,8 @@ class Operator:
                         event = handle.event_queue.get(timeout=0.1)
                         dead_polls = 0
                     except queue.Empty:
+                        if self._closed:
+                            break
                         if handle.process.is_alive():
                             continue
                         dead_polls += 1
@@ -2907,6 +2901,8 @@ class Operator:
                             continue
                         self._finish_exited_run(run_id, handle)
                         break
+                if self._closed:
+                    break
                 try:
                     if _is_provisional_success_event(event):
                         _validate_run_event(event)
@@ -2960,6 +2956,8 @@ class Operator:
                     self._release_evidence_checks_locked(run_id)
                 _close_run_controls(handle)
                 _close_event_queue(handle.event_queue)
+                if self._closed and not terminal:
+                    self._result_store.discard(handle.result_bundle)
                 if (
                     isinstance(handle, _MachineRunHandle)
                     and handle.visit_finished is not None
@@ -3760,7 +3758,7 @@ class Operator:
         self._result_store.discard(handle.result_bundle)
         with self._lock:
             run = self._runs.get(run_id)
-            if run is None:
+            if run is None or self._closed:
                 return
             run.status = RunStatus.CANCELLED if cancelled else RunStatus.FAILED
             run.ended_at = time.monotonic()

@@ -14,6 +14,13 @@
   aliases/alias generators, default factories or unsupported types/configuration
   are refused at definition time with the field name. Move business normalization
   before the start operation and pass a plain portable identity field instead.
+- Graceful operator shutdown no longer sends run-cancellation requests. Parked
+  calls recover the same original child after SIGINT/SIGTERM as after a crash;
+  explicit run cancellation still cascades only to children the parent created.
+- Scheduler idle logs report occupied executor slots, host-operation futures,
+  parked waits and the coordinator PID. Flow waits (including calls) still retain
+  a coordinator process; machine instances between visits do not.
+
 - Add declared `ava.call(target, input, timeout=..., when=...)` for native flow
   and machine children. Calls wait without occupying an executor worker and return
   the typed final output, with File/Workspace references unchanged. Child failure,
