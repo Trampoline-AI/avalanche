@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.11
 
 - The operator UI's schema view reads types the way they are written:
   `string | null`, `Address | null`, `list[Address]`, `"aisle" | "window"`,
