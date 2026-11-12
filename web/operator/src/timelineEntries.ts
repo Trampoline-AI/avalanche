@@ -203,7 +203,7 @@ function stepEntries(
  * the timer's entries already tell it (armed, fired, cancelled), so it is not listed again.
  */
 function isTimerWait(card: WaitCard, spec: MachineSpec | undefined, state: string | undefined) {
-  const match = /^v\d+\.after_(\d+)$/.exec(card.nodeId);
+  const match = /^e\d+\.after_(\d+)$/.exec(card.nodeId);
   if (!match || card.kind !== "sleep" || !spec || !state) return false;
   return spec.states[state]?.timers[Number(match[1])] !== undefined;
 }

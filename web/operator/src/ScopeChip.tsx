@@ -1,6 +1,6 @@
 /** A state-entry-qualified step ID (`e<entry>.<step>`) of a machine run's state entry. */
 export function stateEntryStep(nodeId: string): { entry: number; step: string } | undefined {
-  const match = /^v(\d+)\.(.+)$/.exec(nodeId);
+  const match = /^e(\d+)\.(.+)$/.exec(nodeId);
   return match ? { entry: Number(match[1]), step: match[2] } : undefined;
 }
 
