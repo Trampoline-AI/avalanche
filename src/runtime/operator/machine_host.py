@@ -1003,7 +1003,7 @@ class MachineHost:
                 from .state.workspaces import grant_references
 
                 with self.op._state_store.transaction() as connection:
-                    grant_references(connection, values, proposed, sender=request.sender_run_id)
+                    grant_references(connection, values, None, sender=request.sender_run_id)
             if existing is None and (descriptor.machine_spec_json or descriptor.key_fields):
                 run_id = self._start(
                     Start(

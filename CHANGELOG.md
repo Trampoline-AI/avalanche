@@ -32,6 +32,11 @@
   references remain readable; new snapshots use local-ws:v2 commit identities.
 - File.from_path captures an immutable local file when no host workspace is
   supplied. Pass workspace=... to bind a file already in a host-owned workspace.
+- Workspace commits follow run retention. Deleting or expiring a run removes its
+  mounts and read grants; shared commits stay until their last retained run head
+  or grant is gone. State delete/prune/clear sweep unreferenced trees in batches.
+- Local v2 File and Workspace results bind through the shared result codec,
+  including retained visit and step results.
 
 ## 0.20.7
 

@@ -729,8 +729,10 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
         while time.monotonic() < deadline and op.get_run(run_id).status != RunStatus.SUCCESS:
             time.sleep(0.03)
         assert op.get_run(run_id).status == RunStatus.SUCCESS
-        assert op.get_run_result(run_id) == op.get_run_result(run_id, visit=3) == {
-            "text": "document:capturedxx", "counts": [1, 2, 3]
+        assert op.get_run_result(run_id) == op.get_run_result(run_id, visit=3)
+        assert op.get_run_result(run_id, visit=3, node_id="inspect_artifacts_1") == {
+            "text": "document:capturedxx",
+            "counts": [1, 2, 3],
         }
         with op._state_store.transaction() as connection:
             children = list(
@@ -910,8 +912,93 @@ def test_declared_artifact_start_and_send_keep_the_producers_commit(tmp_path):
                 )
         assert original.stat().st_ino == inode
         assert original.read_text() == "declared document"
+        with op._state_store.transaction() as connection:
+            durable = (
+                Path(
+                    connection.execute(
+                        "SELECT path FROM workspace_commits WHERE reference=?",
+                        (document.ref.workspace,),
+                    ).fetchone()[0]
+                )
+                / document.ref.path
+            )
+            assert (
+                connection.execute(
+                    "SELECT ref_count FROM workspace_commits WHERE reference=?",
+                    (document.ref.workspace,),
+                ).fetchone()[0]
+                == 3
+            )
+            # Counters count both head pins and grants, including moved heads.
+            assert not connection.execute(
+                "SELECT 1 FROM workspace_commits c WHERE ref_count != "
+                "(SELECT COUNT(*) FROM workspace_grants g WHERE g.reference=c.reference) + "
+                "(SELECT COUNT(*) FROM workspace_heads h WHERE h.reference=c.reference)"
+            ).fetchall()
+        roots = {
+            row["run_id"]: LocalWorkspaceStore.for_run(row["run_id"]).run_root for row in runs
+        }
+        child = next(row["run_id"] for row in runs if row["run_id"] not in {router, machine})
     finally:
         op.close()
+
+    from runtime.operator.state.maintenance import StateMaintenance
+
+    database = tmp_path / "state.db"
+    with StateMaintenance.open(database) as maintenance:
+        maintenance.delete([router], on_deleted=lambda _: None)
+        assert not roots[router].exists()
+        assert durable.read_text() == "declared document"
+        with maintenance._store.transaction() as connection:
+            assert (
+                connection.execute(
+                    "SELECT ref_count FROM workspace_commits WHERE reference=?",
+                    (document.ref.workspace,),
+                ).fetchone()[0]
+                == 2
+            )
+            assert not connection.execute(
+                "SELECT 1 FROM workspace_grants WHERE run_id=?", (router,)
+            ).fetchall()
+        maintenance.delete([machine], on_deleted=lambda _: None)
+        assert not roots[machine].exists()
+        assert durable.read_text() == "declared document"
+        with maintenance._store.transaction() as connection:
+            assert (
+                connection.execute(
+                    "SELECT read_state FROM runs WHERE run_id=?", (machine,)
+                ).fetchone()[0]
+                == "expired"
+            )
+            assert (
+                connection.execute(
+                    "SELECT ref_count FROM workspace_commits WHERE reference=?",
+                    (document.ref.workspace,),
+                ).fetchone()[0]
+                == 1
+            )
+        # The child grant alone keeps the original object readable after both
+        # producer deletion and keyed-machine expiry, without any new bytes.
+        assert ava.File.model_validate(document_wire).bind(durable).read_bytes() == (
+            b"declared document"
+        )
+        maintenance.prune_keep_last(0, on_deleted=lambda _: None)
+        assert not roots[child].exists() and not durable.exists()
+        with maintenance._store.transaction() as connection:
+            for table in (
+                "workspace_grants",
+                "workspace_heads",
+                "workspace_commits",
+                "workspace_runs",
+            ):
+                assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        assert not list((tmp_path / "workspaces" / "commits").iterdir())
+        # Recover an interrupted publication: no SQLite row was ever committed.
+        orphan = tmp_path / "workspaces" / "commits" / ("f" * 64)
+        orphan.mkdir()
+        (orphan / "unpublished").write_bytes(b"not retained")
+        maintenance.clear(include_schedules=False)
+        assert not orphan.exists()
 
 
 _KILLED_MACHINE_OPERATOR = """

@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+import os
+import shutil
 import sqlite3
+from itertools import batched
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from pydantic import JsonValue
 
 from avalanche.file import File
 from avalanche.references import LocalWorkspaceStore, register_run_store
 from avalanche.workspace import Workspace
+
+if TYPE_CHECKING:
+    from .store import OperatorStateStore
 
 
 def configure_run(connection: sqlite3.Connection, run_id: str) -> LocalWorkspaceStore:
@@ -20,7 +27,12 @@ def configure_run(connection: sqlite3.Connection, run_id: str) -> LocalWorkspace
         else LocalWorkspaceStore.for_run().root / "operator-memory"
     )
     register_run_store(run_id, root)
-    return LocalWorkspaceStore(root, run_id)
+    store = LocalWorkspaceStore(root, run_id)
+    connection.execute(
+        "INSERT OR IGNORE INTO workspace_runs VALUES (?, ?)",
+        (run_id, store.run_root.name),
+    )
+    return store
 
 
 def index_run_commits(connection: sqlite3.Connection, run_id: str) -> None:
@@ -32,7 +44,7 @@ def index_run_commits(connection: sqlite3.Connection, run_id: str) -> None:
             reference = "local-ws:v2:" + marker.name
             path = LocalWorkspaceStore.resolve(reference)
             connection.execute(
-                "INSERT OR IGNORE INTO workspace_commits VALUES (?, ?)",
+                "INSERT OR IGNORE INTO workspace_commits (reference, path) VALUES (?, ?)",
                 (reference, str(path)),
             )
             connection.execute(
@@ -51,16 +63,74 @@ def restore_references(connection: sqlite3.Connection) -> None:
     """SQLite is authoritative; the temporary cross-process locator is rebuildable."""
     from avalanche.references import register_commit
 
-    for row in connection.execute("SELECT reference, path FROM workspace_commits"):
+    for row in connection.execute(
+        "SELECT reference, path FROM workspace_commits WHERE ref_count>0"
+    ):
         register_commit(row[0], Path(row[1]))
-    for row in connection.execute("SELECT run_id FROM runs"):
+    for row in connection.execute("SELECT run_id FROM runs WHERE read_state='retained'"):
         configure_run(connection, row[0])
+
+
+def sweep_workspaces(store: OperatorStateStore) -> None:
+    """Sweep unpinned operator-owned trees in bounded retention batches.
+
+    Maintenance holds the database lock, so coordinators cannot publish while
+    sweeping. Files go first and index rows second: an interrupted batch remains
+    retryable. Directory scans also recover publications/deletes interrupted
+    before their SQLite commit. Foreign stores remain their owner's concern.
+    """
+    if store.path is None:
+        return
+    root = store.path.parent / "workspaces"
+    while True:
+        with store.transaction() as connection:
+            rows = connection.execute(
+                "SELECT reference, path FROM workspace_commits WHERE ref_count=0 LIMIT 128"
+            ).fetchall()
+            if not rows:
+                break
+            for reference, path in rows:
+                tree = Path(path)
+                if tree.parent == root / "commits":
+                    _remove_tree(tree)
+            connection.executemany(
+                "DELETE FROM workspace_commits WHERE reference=? AND ref_count=0",
+                ((row[0],) for row in rows),
+            )
+    for folder, table, column, prefix in (
+        (root / "commits", "workspace_commits", "reference", "local-ws:v2:"),
+        (root / "runs", "workspace_runs", "directory", ""),
+    ):
+        if not folder.exists():
+            continue
+        with os.scandir(folder) as entries:
+            for batch in batched(entries, 128):
+                keys = tuple(prefix + entry.name for entry in batch)
+                with store.transaction() as connection:
+                    retained = {
+                        row[0]
+                        for row in connection.execute(
+                            f"SELECT {column} FROM {table} WHERE {column} IN "
+                            f"({','.join('?' for _ in keys)})",
+                            keys,
+                        )
+                    }
+                for entry in batch:
+                    if prefix + entry.name not in retained:
+                        _remove_tree(Path(entry.path))
+
+
+def _remove_tree(path: Path) -> None:
+    try:
+        shutil.rmtree(path)
+    except FileNotFoundError:
+        pass
 
 
 def grant_references(
     connection: sqlite3.Connection,
     value: JsonValue,
-    recipient: str,
+    recipient: str | None,
     *,
     sender: str | None = None,
     ingress: bool = False,
@@ -109,8 +179,12 @@ def grant_references(
             raise ValueError("Sender has no grant for workspace commit")
     elif not ingress and pinned is None:
         raise ValueError("Workspace commit is outside this operator project")
+    if recipient is None:
+        # Declared start preflight: the create transaction records its grants.
+        return
     connection.execute(
-        "INSERT OR IGNORE INTO workspace_commits VALUES (?, ?)", (reference, str(root))
+        "INSERT OR IGNORE INTO workspace_commits (reference, path) VALUES (?, ?)",
+        (reference, str(root)),
     )
     connection.execute(
         "INSERT OR IGNORE INTO workspace_grants VALUES (?, ?)", (recipient, reference)
