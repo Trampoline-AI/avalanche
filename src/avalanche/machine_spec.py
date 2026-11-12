@@ -87,7 +87,9 @@ class MachineWorkSpec(BaseModel):
             + sum(wait.map_max_items or 0 for wait in self.node_waits.values())
         )
         if expanded > 64:
-            raise ValueError("state visit work exceeds 64 nodes including mapped children")
+            raise ValueError(
+                "state state entry work exceeds 64 nodes including mapped children"
+            )
         if not set(self.node_runs) <= nodes:
             raise ValueError("unknown work run node")
         if not set(self.node_machines) <= nodes:

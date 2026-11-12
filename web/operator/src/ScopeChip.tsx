@@ -1,26 +1,26 @@
-/** A visit-qualified step ID (`v<visit>.<step>`) of a machine run's visit. */
-export function visitStep(nodeId: string): { visit: number; step: string } | undefined {
+/** A state-entry-qualified step ID (`e<entry>.<step>`) of a machine run's state entry. */
+export function stateEntryStep(nodeId: string): { entry: number; step: string } | undefined {
   const match = /^v(\d+)\.(.+)$/.exec(nodeId);
-  return match ? { visit: Number(match[1]), step: match[2] } : undefined;
+  return match ? { entry: Number(match[1]), step: match[2] } : undefined;
 }
 
 /** What a bottom-pane tab is narrowed to, with the way back to everything. */
 export interface PaneScope {
-  /** E.g. "Step: apply_nits · visit 2" or "State: amend". */
+  /** E.g. "Step: apply_nits · entry 2" or "State: amend". */
   label: string;
   /** Absent: the scope shows without a clear button. */
   onClear?: () => void;
 }
 
 /**
- * A step's scope label: its display name without a machine visit's `v<N>.`
- * prefix, then the visit (`Step: apply_nits · visit 2`).
+ * A step's scope label: its display name without a machine state entry's `e<N>.`
+ * prefix, then the state entry (`Step: apply_nits · entry 2`).
  */
 export function stepScopeLabel(nodeId: string, displayNames?: Record<string, string>): string {
-  const visit = visitStep(nodeId);
+  const entry = stateEntryStep(nodeId);
   const named = displayNames?.[nodeId] || nodeId;
-  const step = visitStep(named)?.step ?? named;
-  return visit ? `Step: ${step} · visit ${visit.visit}` : `Step: ${step}`;
+  const step = stateEntryStep(named)?.step ?? named;
+  return entry ? `Step: ${step} · entry ${entry.entry}` : `Step: ${step}`;
 }
 
 /**

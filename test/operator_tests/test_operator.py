@@ -17,7 +17,7 @@ from runtime.operator.webhooks import WebhookRoute
 
 
 @pytest.mark.parametrize("target", ["approval", "ordinary_child"])
-def test_unacknowledged_start_failure_preserves_visits_or_releases_flow_key(
+def test_unacknowledged_start_failure_preserves_state_entries_or_releases_flow_key(
     tmp_path, monkeypatch, target
 ):
     """Fault at thread launch after real coordinator spawn and durable publication."""
@@ -47,14 +47,14 @@ def test_unacknowledged_start_failure_preserves_visits_or_releases_flow_key(
                 run_id = op.start_run(
                     target,
                     run_id="failed-start",
-                    input={"ticket": 19, "journal": str(tmp_path / "visits")},
+                    input={"ticket": 19, "journal": str(tmp_path / "entries")},
                 )
             else:
                 with pytest.raises(RuntimeError, match="thread launch failure"):
                     op.start_run(
                         target,
                         run_id="failed-start",
-                        input={"ticket": 19, "journal": str(tmp_path / "visits")},
+                        input={"ticket": 19, "journal": str(tmp_path / "entries")},
                     )
         assert fault_fired.is_set()
         if target == "approval":
@@ -67,7 +67,7 @@ def test_unacknowledged_start_failure_preserves_visits_or_releases_flow_key(
                 time.sleep(0.03)
             assert record.phase == "interrupted" and record.run_status is RunStatus.WAITING
             with op._state_store.transaction() as c:
-                assert MachinesTable.visit(c, run_id, 1).disposition == "indeterminate"
+                assert MachinesTable.entry(c, run_id, 1).disposition == "indeterminate"
             assert op.start_run(target, input={"ticket": 19}) == run_id
             op._machine_host.retry(run_id)
             deadline = time.monotonic() + 20
@@ -88,7 +88,7 @@ def test_unacknowledged_start_failure_preserves_visits_or_releases_flow_key(
             run_id = op.start_run(
                 target,
                 run_id="fresh-start",
-                input={"ticket": 19, "journal": str(tmp_path / "visits")},
+                input={"ticket": 19, "journal": str(tmp_path / "entries")},
             )
             assert run_id == "fresh-start"
             assert wait_terminal(op, run_id).status is RunStatus.SUCCESS
@@ -98,7 +98,7 @@ def test_unacknowledged_start_failure_preserves_visits_or_releases_flow_key(
 
 
 def test_machine_start_storage_failure_keeps_journal_and_can_retry(tmp_path):
-    """Real filesystem refusal before a visit coordinator can be prepared."""
+    """Real filesystem refusal before a state entry coordinator can be prepared."""
     import os
 
     from runtime.operator.state.machines import MachinesTable
@@ -120,7 +120,7 @@ def test_machine_start_storage_failure_keeps_journal_and_can_retry(tmp_path):
         run_id = op.start_run(
             "approval",
             run_id="storage-refused",
-            input={"ticket": 22, "journal": str(tmp_path / "visits")},
+            input={"ticket": 22, "journal": str(tmp_path / "entries")},
         )
         pending.chmod(0o700)
         deadline = time.monotonic() + 10
@@ -132,7 +132,7 @@ def test_machine_start_storage_failure_keeps_journal_and_can_retry(tmp_path):
             time.sleep(0.03)
         assert record.phase == "interrupted" and record.run_status is RunStatus.WAITING
         with op._state_store.transaction() as c:
-            assert MachinesTable.visit(c, run_id, 1).disposition == "indeterminate"
+            assert MachinesTable.entry(c, run_id, 1).disposition == "indeterminate"
         op._machine_host.retry(run_id)
         deadline = time.monotonic() + 20
         while (
@@ -259,7 +259,7 @@ def test_list_runs_during_machine_admission_reads_only_committed_rows(tmp_path, 
                 pb.StartRunRequestV2(
                     run_id="in-flight-machine",
                     workflow_selector="approval",
-                    input_json=json.dumps({"ticket": 21, "journal": str(tmp_path / "visits")}),
+                    input_json=json.dumps({"ticket": 21, "journal": str(tmp_path / "entries")}),
                 ),
                 timeout=30,
             )
@@ -278,12 +278,12 @@ def test_list_runs_during_machine_admission_reads_only_committed_rows(tmp_path, 
         op.close()
 
 
-def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path):
-    """A real coordinator per visit, one durable run, stable event admission."""
+def test_machine_instance_is_one_run_with_state_entries_events_and_real_timer(tmp_path):
+    """A real coordinator per state entry, one durable run, stable event admission."""
     from runtime.operator.state.machines import MachinesTable
 
     fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
-    journal = tmp_path / "visits.txt"
+    journal = tmp_path / "entries.txt"
     op = Operator(
         [str(fixture)],
         watch=False,
@@ -303,8 +303,8 @@ def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path)
                 break
             time.sleep(0.03)
         else:
-            pytest.fail("initial machine visit did not park")
-        initial_logs = op.list_logs(run_id, node_id="v1.observe_1").logs
+            pytest.fail("initial machine state entry did not park")
+        initial_logs = op.list_logs(run_id, node_id="e1.observe_1").logs
         assert initial_logs and all(op.read_detail(log.body_token) for log in initial_logs)
         receipt = op._machine_host.send(run_id, "approved", {}, "approval-1")
         replay = op._machine_host.send(run_id, "approved", {}, "approval-1")
@@ -313,37 +313,37 @@ def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path)
         assert wait_terminal(op, run_id).status == RunStatus.SUCCESS
         with op._state_store.transaction() as connection:
             instance = MachinesTable.load(connection, run_id)
-            visits = [MachinesTable.visit(connection, run_id, number) for number in (1, 2, 3)]
+            entries = [MachinesTable.entry(connection, run_id, number) for number in (1, 2, 3)]
             fired = sum(
                 timer.fired_at is not None
                 for timer in MachinesTable.all_timers(connection, run_id)
             )
-        assert instance.state == "done" and instance.visit == 3
-        assert [visit.state for visit in visits] == ["pending", "reviewed", "done"]
-        assert all(visit.catalog_revision for visit in visits)
+        assert instance.state == "done" and instance.entry == 3
+        assert [entry.state for entry in entries] == ["pending", "reviewed", "done"]
+        assert all(entry.catalog_revision for entry in entries)
         assert fired == 1
         assert [line.split(":", 1)[1] for line in journal.read_text().splitlines()] == [
-            "v1.observe_1",
-            "v2.observe_1",
-            "v3.observe_1",
+            "e1.observe_1",
+            "e2.observe_1",
+            "e3.observe_1",
         ]
-        assert {node.node_id for node in visits[1].snapshot.nodes} >= {
-            "v2.mapped_1[0]",
-            "v2.mapped_1[1]",
+        assert {node.node_id for node in entries[1].snapshot.nodes} >= {
+            "e2.mapped_1[0]",
+            "e2.mapped_1[1]",
         }
         assert len(op.list_runs("approval")) == 1
-        # Earlier visit logs remain readable after event and timer transitions. The same
+        # Earlier state entry logs remain readable after event and timer transitions. The same
         # log API and exact step filter apply to ordinary flows, with nonempty bodies.
         assert {log.node_id for log in op.list_logs(run_id).logs} >= {
-            "v1.observe_1",
-            "v2.observe_1",
-            "v3.observe_1",
+            "e1.observe_1",
+            "e2.observe_1",
+            "e3.observe_1",
         }
-        reread_logs = op.list_logs(run_id, node_id="v1.observe_1").logs
+        reread_logs = op.list_logs(run_id, node_id="e1.observe_1").logs
         assert [op.read_detail(log.body_token) for log in reread_logs] == [
             op.read_detail(log.body_token) for log in initial_logs
         ]
-        for node_id in ("v1.observe_1", "v2.observe_1", "v3.observe_1"):
+        for node_id in ("e1.observe_1", "e2.observe_1", "e3.observe_1"):
             logs = op.list_logs(run_id, node_id=node_id).logs
             assert logs and all(log.node_id == node_id for log in logs)
             assert all(op.read_detail(log.body_token) for log in logs)
@@ -453,11 +453,11 @@ def test_machine_instance_is_one_run_with_visits_events_and_real_timer(tmp_path)
                 assert control(
                     op="history", run_id=second, cursor=page["next_cursor"], limit=1
                 )["items"]
-                visit = control(op="visit", run_id=second, visit=2)
-                assert {node["node_id"] for node in visit["snapshot"]["nodes"]} >= {
-                    "v2.mapped_1[0]"
+                entry = control(op="entry", run_id=second, entry=2)
+                assert {node["node_id"] for node in entry["snapshot"]["nodes"]} >= {
+                    "e2.mapped_1[0]"
                 }
-                facts = control(op="events", run_id=second, visit=1)
+                facts = control(op="events", run_id=second, entry=1)
                 assert {row["status"] for row in facts["items"]} >= {"accepted", "consumed"}
                 http = http.client.HTTPConnection(browser.host, browser.port, timeout=10)
                 http.request(
@@ -503,7 +503,7 @@ def test_machine_router_webhook_retries_without_double_sending(tmp_path):
     from runtime.operator.state.machines import MachinesTable
 
     fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
-    journal = tmp_path / "visits.txt"
+    journal = tmp_path / "entries.txt"
     op = Operator(
         [str(fixture)],
         watch=False,
@@ -541,13 +541,13 @@ def test_machine_router_webhook_retries_without_double_sending(tmp_path):
                 "SELECT response_json FROM wait_receipts WHERE run_id=? AND scope='machine'",
                 (target,),
             ).fetchall()
-            visits = [MachinesTable.visit(connection, target, number) for number in (1, 2, 3)]
+            entries = [MachinesTable.entry(connection, target, number) for number in (1, 2, 3)]
         assert len(rows) == 1
         receipt = json.loads(rows[0][0])
         assert receipt["key"] == key
         replay = op._machine_host.send(target, "approved", None, key)
         assert replay.duplicate and replay.receipt_id == receipt["receipt_id"]
-        assert [visit.state for visit in visits] == ["pending", "reviewed", "done"]
+        assert [entry.state for entry in entries] == ["pending", "reviewed", "done"]
         assert len(op.list_runs("approval")) == 1
         typed = op.start_run("typed_router")
         assert wait_terminal(op, typed, timeout=30).status is RunStatus.SUCCESS
@@ -573,14 +573,14 @@ def test_machine_router_webhook_retries_without_double_sending(tmp_path):
         op.close()
 
 
-def test_machine_visits_use_latest_code_keep_deadlines_and_guard_missing_state(tmp_path):
+def test_machine_state_entries_use_latest_code_keep_deadlines_and_guard_missing_state(tmp_path):
     from runtime.operator.state.machines import MachinesTable
 
     fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
     target = tmp_path / "machine.py"
     original = fixture.read_text()
     target.write_text(original)
-    journal = tmp_path / "visits.txt"
+    journal = tmp_path / "entries.txt"
     op = Operator(
         [str(target)],
         watch=False,
@@ -590,12 +590,12 @@ def test_machine_visits_use_latest_code_keep_deadlines_and_guard_missing_state(t
     )
     try:
 
-        def parked(run_id, visit):
+        def parked(run_id, entry):
             deadline = time.monotonic() + 15
             while time.monotonic() < deadline:
                 with op._state_store.transaction() as connection:
                     record = MachinesTable.load(connection, run_id)
-                if record.phase == "waiting" and record.visit == visit:
+                if record.phase == "waiting" and record.entry == entry:
                     return record
                 time.sleep(0.03)
             pytest.fail("machine did not park")
@@ -603,7 +603,7 @@ def test_machine_visits_use_latest_code_keep_deadlines_and_guard_missing_state(t
         run_id = op.start_run("approval", input={"ticket": 1, "journal": str(journal)})
         parked(run_id, 1)
         with op._state_store.transaction() as connection:
-            first_revision = MachinesTable.visit(connection, run_id, 1).catalog_revision
+            first_revision = MachinesTable.entry(connection, run_id, 1).catalog_revision
         changed = original.replace(
             "output.write(context.step_key +", 'output.write("changed:" + context.step_key +'
         )
@@ -613,10 +613,10 @@ def test_machine_visits_use_latest_code_keep_deadlines_and_guard_missing_state(t
         op._machine_host.send(run_id, "approved", {}, "next-code")
         parked(run_id, 2)
         with op._state_store.transaction() as connection:
-            second = MachinesTable.visit(connection, run_id, 2)
+            second = MachinesTable.entry(connection, run_id, 2)
             due = MachinesTable.timers(connection, run_id, 2)[0].due
         assert int(second.catalog_revision) > int(first_revision)
-        assert "changed:" + run_id + ":v2.observe_1" in journal.read_text()
+        assert "changed:" + run_id + ":e2.observe_1" in journal.read_text()
         target.write_text(changed.replace("seconds=15", "seconds=500"))
         op._refresh_workflows()
         with op._state_store.transaction() as connection:
@@ -636,8 +636,8 @@ def test_machine_visits_use_latest_code_keep_deadlines_and_guard_missing_state(t
         with pytest.raises(ValueError, match="state_missing"):
             op._machine_host.retry(missing)
         with op._state_store.transaction() as connection:
-            assert MachinesTable.load(connection, missing).visit == 1
-            assert MachinesTable.visit(connection, missing, 1).state == "pending"
+            assert MachinesTable.load(connection, missing).entry == 1
+            assert MachinesTable.entry(connection, missing, 1).state == "pending"
         target.write_text(changed.replace("seconds=15", "seconds=2"))
         # Explicit retry reloads the restored definition without a catalog rescan.
         op._machine_host.retry(missing)
@@ -647,12 +647,12 @@ def test_machine_visits_use_latest_code_keep_deadlines_and_guard_missing_state(t
         op._machine_host.send(missing, "approved", {}, "restored")
         assert wait_terminal(op, missing, timeout=30).status == RunStatus.SUCCESS
         with op._state_store.transaction() as connection:
-            assert [MachinesTable.visit(connection, missing, i).state for i in (1, 2, 3)] == [
+            assert [MachinesTable.entry(connection, missing, i).state for i in (1, 2, 3)] == [
                 "pending",
                 "reviewed",
                 "done",
             ]
-            assert MachinesTable.load(connection, missing).visit == 3
+            assert MachinesTable.load(connection, missing).entry == 3
     finally:
         op.close()
 

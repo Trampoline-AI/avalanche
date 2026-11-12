@@ -116,7 +116,7 @@ def _work_graph(work: Node | Callable[[], Workflow], input_type: type[BaseInput]
 
 def work_spec(work: Workflow) -> MachineWorkSpec:
     if len(work.nodes) > 64:
-        raise ValueError(f"state visit work {work.name!r} exceeds 64 nodes")
+        raise ValueError(f"state state entry work {work.name!r} exceeds 64 nodes")
     output_node = work.output_node
     schema = (
         work.output_type.model_json_schema()

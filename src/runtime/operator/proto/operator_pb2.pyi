@@ -1013,14 +1013,14 @@ class ResultFileDescriptorV2(_message.Message):
     def __init__(self, artifact_ref: _Optional[_Union[RunOutputArtifactRefV2, _Mapping]] = ..., name: _Optional[str] = ..., media_type: _Optional[str] = ...) -> None: ...
 
 class GetRunResultRequestV2(_message.Message):
-    __slots__ = ("run_id", "visit", "node_id")
+    __slots__ = ("run_id", "entry", "node_id")
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
-    VISIT_FIELD_NUMBER: _ClassVar[int]
+    ENTRY_FIELD_NUMBER: _ClassVar[int]
     NODE_ID_FIELD_NUMBER: _ClassVar[int]
     run_id: str
-    visit: int
+    entry: int
     node_id: str
-    def __init__(self, run_id: _Optional[str] = ..., visit: _Optional[int] = ..., node_id: _Optional[str] = ...) -> None: ...
+    def __init__(self, run_id: _Optional[str] = ..., entry: _Optional[int] = ..., node_id: _Optional[str] = ...) -> None: ...
 
 class RunResultV2(_message.Message):
     __slots__ = ("cursor", "run_id", "value", "files", "scope_ref")

@@ -50,7 +50,7 @@ interface RunListPanelProps extends Pick<
   /** Folds the floating panel to a one-line chip (run pages). */
   onCollapse?: () => void;
   expanded?: boolean;
-  /** Rendered under the run list for the selected run, e.g. a machine run's visits. */
+  /** Rendered under the run list for the selected run, e.g. a machine run's state entries. */
   selectedRunSection?: ReactNode;
 }
 

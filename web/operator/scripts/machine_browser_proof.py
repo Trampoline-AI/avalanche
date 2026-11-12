@@ -243,15 +243,15 @@ def run_timeline(page):
     return timeline
 
 
-def open_visit(page, visit: int) -> None:
-    """Opens a visit's steps from its timeline entry (select, then Steps)."""
-    row = run_timeline(page).locator(f'[data-entry-id="v{visit}:enter"]')
+def open_state_entry(page, entry: int) -> None:
+    """Opens a state entry's steps from its timeline entry (select, then Steps)."""
+    row = run_timeline(page).locator(f'[data-entry-id="e{entry}:enter"]')
     expect(row).to_be_visible()
     if row.locator("button[aria-pressed=true]").count() == 0:
         row.locator("button[aria-pressed]").click()
     row.get_by_role("button", name="Steps", exact=True).click()
-    expect(page.get_by_role("navigation", name="Machine visit")).to_contain_text(
-        f"Visit {visit}"
+    expect(page.get_by_role("navigation", name="Machine state entry")).to_contain_text(
+        f"Entry {entry}"
     )
 
 
@@ -366,7 +366,7 @@ def host_neutral(page, url: str, evidence: Path) -> list[dict]:
             }"""
         )
         assert fit["line_right"] <= fit["panel_right"] and fit["overflowing"] == 0, (tag, fit)
-        # `parked` (the machine waiting between visits) is still live on this host.
+        # `parked` (the machine waiting between state entries) is still live on this host.
         expect(current_state(page)).to_contain_text("ready")
         # The deferred event shows in the timeline from the host's event facts.
         expect(
@@ -470,8 +470,8 @@ def scenario(page, url: str, evidence: Path) -> dict:
     waits = run_timeline(page)
     selected_row = page.locator(".run-list-row.active")
     expect(waits).to_be_visible()
-    # Visits and waits are no longer sections of the runs pane.
-    expect(page.get_by_role("region", name="Machine visits")).to_have_count(0)
+    # State entries and waits are no longer sections of the runs pane.
+    expect(page.get_by_role("region", name="Machine state entries")).to_have_count(0)
     expect(page.get_by_label("Run waits section")).to_have_count(0)
     expect(page.locator(".run-list-row")).to_have_count(1)
     # The key reads as fields, never raw JSON.
@@ -502,7 +502,7 @@ def scenario(page, url: str, evidence: Path) -> dict:
     assert first == viewport.get_attribute("style"), "First-frame viewport moved"
     # Normal run controls stay on the machine run page; no instance table or refresh.
     expect(page.get_by_role("button", name="Cancel run", exact=True)).to_be_visible()
-    # R3: no rerun of a machine run; retry is a new visit in the same run.
+    # R3: no rerun of a machine run; retry is a new state entry in the same run.
     expect(page.get_by_role("button", name=RERUN)).to_have_count(0)
     expect(page.get_by_role("table")).to_have_count(0)
     expect(page.get_by_role("button", name="Refresh instances")).to_have_count(0)
@@ -512,30 +512,30 @@ def scenario(page, url: str, evidence: Path) -> dict:
     arcs.append(arc_geometry(page, "run-horizontal", 4))
     page.screenshot(path=str(evidence / "01-machine-run.png"))
 
-    actions.get_by_role("button", name="Retry visit", exact=True).click()
+    actions.get_by_role("button", name="Retry state entry", exact=True).click()
     expect(waits.locator('[data-entry-id="v2:enter"]')).to_be_visible()
     # Hovering an entry highlights its state on the graph.
     waits.locator('[data-entry-id="v2:enter"]').hover()
     expect(graph.locator(".react-flow__node.timeline-highlight")).to_have_count(1)
     page.screenshot(path=str(evidence / "01b-timeline-hover.png"))
-    # A visit entry opens that visit's steps on the same canvas, like a flow run.
-    open_visit(page, 2)
+    # A state-entry row opens that state entry's steps on the same canvas, like a flow run.
+    open_state_entry(page, 2)
     expect(graph.locator(".react-flow__edge-machine")).to_have_count(0)
     expect(graph.locator(".react-flow__node")).to_have_count(3)
     expect(graph.get_by_label("Map items")).to_be_visible()
-    expect(graph.get_by_role("button", name="Inspect v2.fanout[0]")).to_be_visible()
+    expect(graph.get_by_role("button", name="Inspect e2.fanout[0]")).to_be_visible()
     detail = waits
-    expect(detail.get_by_role("list", name="Pending")).to_contain_text("Approve visit 2?")
-    page.screenshot(path=str(evidence / "02-visit-detail.png"))
+    expect(detail.get_by_role("list", name="Pending")).to_contain_text("Approve entry 2?")
+    page.screenshot(path=str(evidence / "02-state-entry-detail.png"))
     # Its steps open in the normal side inspector with real scoped detail and logs.
     graph.get_by_role("button", name="Inspect check", exact=True).click()
     inspector = page.get_by_role("complementary", name="Run inspector")
     expect(inspector.get_by_label("Execution attempts")).to_contain_text("3")
     expect(inspector).to_contain_text("score")
-    # The step's logs are on the run pane's Logs tab, still scoped to the visit.
+    # The step's logs are on the run pane's Logs tab, still scoped to the state entry.
     page.get_by_role("tab", name="Logs").click()
-    expect(page.get_by_text("visit 2 check finished")).to_be_visible()
-    expect(page.get_by_role("navigation", name="Machine visit")).to_contain_text("Visit 2")
+    expect(page.get_by_text("entry 2 check finished")).to_be_visible()
+    expect(page.get_by_role("navigation", name="Machine state entry")).to_contain_text("Entry 2")
     run_look = {
         "timeline": page.locator(".workspace-timeline").count(),
         "graph": graph.locator(".graph-viewport").count(),
@@ -544,16 +544,16 @@ def scenario(page, url: str, evidence: Path) -> dict:
     }
     page.wait_for_timeout(300)
     page.screenshot(path=str(evidence / "side-machine-run.png"))
-    page.screenshot(path=str(evidence / "03-visit-step.png"))
+    page.screenshot(path=str(evidence / "03-state-entry-step.png"))
     inspector.get_by_role("button", name="Close", exact=True).click()
-    # The first, interrupted visit keeps its own graph and paged event facts.
+    # The first, interrupted state entry keeps its own graph and paged event facts.
     run_timeline(page)
-    open_visit(page, 1)
+    open_state_entry(page, 1)
     expect(graph.locator(".react-flow__node")).to_have_count(1)
-    detail.get_by_role("button", name="More events of visit 1").click()
-    expect(detail.locator('[data-visit="1"][data-status="ignored"]')).to_be_visible()
-    expect(detail.locator('[data-visit="1"][data-status="dropped"]')).to_be_visible()
-    page.get_by_role("navigation", name="Machine visit").get_by_role(
+    detail.get_by_role("button", name="More events of entry 1").click()
+    expect(detail.locator('[data-entry="1"][data-status="ignored"]')).to_be_visible()
+    expect(detail.locator('[data-entry="1"][data-status="dropped"]')).to_be_visible()
+    page.get_by_role("navigation", name="Machine state entry").get_by_role(
         "button", name="State machine"
     ).click()
     expect(graph.locator(".react-flow__edge-machine")).to_have_count(4)
@@ -599,8 +599,8 @@ def scenario(page, url: str, evidence: Path) -> dict:
         waits.locator('[data-timeline-kind="event"]', has_text=re.compile(r"receipt \S+ · key"))
     ).to_have_count(1)
     page.screenshot(path=str(evidence / "04-send-receipt.png"))
-    # The visit that just ended keeps its terminal decision audit.
-    expect(waits.locator('[data-timeline-kind="wait-resolved"][data-visit="2"]')).to_have_count(
+    # The state entry that just ended keeps its terminal decision audit.
+    expect(waits.locator('[data-timeline-kind="wait-resolved"][data-entry="2"]')).to_have_count(
         1
     )
     # Clicking a state on the machine graph filters the timeline to that state.
@@ -633,7 +633,7 @@ def scenario(page, url: str, evidence: Path) -> dict:
     expect(actions).to_have_count(0)
     page.screenshot(path=str(evidence / "06-final.png"))
 
-    # Same-key start returns the existing run; visits never become run-list entries.
+    # Same-key start returns the existing run; state entries never become run-list entries.
     page.get_by_role("button", name="Current definition", exact=True).click()
     start_run(page, 44, 2)
     expect(page.locator(".run-list-row")).to_have_count(1)
@@ -642,7 +642,7 @@ def scenario(page, url: str, evidence: Path) -> dict:
     page.get_by_role("button", name="Current definition", exact=True).click()
     start_run(page, 45, 1)
     expect(selected_row).to_contain_text("acme/api #45")
-    actions.get_by_role("button", name="Retry visit", exact=True).click()
+    actions.get_by_role("button", name="Retry state entry", exact=True).click()
     actions.get_by_role("button", name="Send event", exact=True).click()
     send_panel.get_by_label("Event", exact=True).select_option("advance")
     send.get_by_role("button", name="Send event").click()
@@ -749,12 +749,12 @@ def scenario(page, url: str, evidence: Path) -> dict:
     )
     page.wait_for_timeout(300)
     page.screenshot(path=str(evidence / "14-expired-machine-run.png"))
-    open_visit(page, 1)
-    expect(page.get_by_role("navigation", name="Machine visit")).to_contain_text("expired")
-    # The whole run's history expired, so the badge names the run, not the visit.
+    open_state_entry(page, 1)
+    expect(page.get_by_role("navigation", name="Machine state entry")).to_contain_text("expired")
+    # The whole run's history expired, so the badge names the run, not the state entry.
     expect(badge).to_contain_text("This run's")
     expect(page.locator(".run-graph-shell .react-flow__edge-machine")).to_have_count(0)
-    page.screenshot(path=str(evidence / "14b-expired-visit.png"))
+    page.screenshot(path=str(evidence / "14b-expired-state-entry.png"))
     page.get_by_test_id("flow-nav").click()
     flow_row = page.locator('.run-list-row[data-run-history="expired"]')
     expect(flow_row).to_contain_text("doc-3")

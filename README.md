@@ -272,12 +272,12 @@ uv run ava state delete RUN_ID           # delete one finished run and its files
 uv run ava state clear                   # delete every run (asks first)
 ```
 
-Machine runs additionally keep their key, visits, inbox, receipts and absolute
-timer deadlines in this database, and all visits of an instance share one
+Machine runs additionally keep their key, state entries, inbox, receipts and absolute
+timer deadlines in this database, and all state entries of an instance share one
 workspace folder. A waiting machine re-arms its timers after a
-restart; an overdue timer fires once. A visit interrupted in the middle of work
+restart; an overdue timer fires once. A state entry interrupted in the middle of work
 has an unknown outcome and is not replayed automatically. Use
-`ava run retry RUN_ID --visit` to start a new visit in the same state, or
+`ava run retry RUN_ID --entry` to start a new state entry in the same state, or
 `ava run cancel RUN_ID`. This does not resume arbitrary unfinished flow DAGs.
 A run parked on `ava.call` reattaches to its original child after a restart.
 See [state machines](docs/state-machines.md#run-locally).
@@ -291,7 +291,7 @@ it is not a machine rerun mechanism. Removing the database itself resets identit
 
 ### Application environment for self-hosters
 
-Visits inherit the environment of the operator process, like ordinary flow runs.
+State entries inherit the environment of the operator process, like ordinary flow runs.
 There is no local hosted-secret manager. Load a private environment file before
 starting the operator (or use your service manager's environment-file facility):
 
@@ -306,7 +306,7 @@ ava operator ./flows --state-db .avalanche/operator/state.db
 Keep `operator.env` out of version control and restrict its permissions to its
 owner (`chmod 600 operator.env`). Do not print its contents in logs. Changing an
 environment file requires restarting the operator; waiting machine timers and
-records survive, but an in-flight visit becomes interrupted.
+records survive, but an in-flight state entry becomes interrupted.
 
 ### Development REST API
 
@@ -332,7 +332,7 @@ authentication; do not expose it to an untrusted network. A separately launched
 | GET | `/runs/{run_id}` | Snapshot with `summary`, node states, and topology |
 | POST | `/runs/{run_id}/cancel` | `200` acknowledging cancellation; poll for terminal state |
 | GET | `/runs/{run_id}/output` | Retained result value and file descriptors |
-| GET | `/runs/{run_id}/result` | Typed run, visit (`visit`) or step (`node_id`) result |
+| GET | `/runs/{run_id}/result` | Typed run, state entry (`entry`) or step (`node_id`) result |
 | GET | `/runs/{run_id}/links` | Parent and child runs started by `ava.call` or `ava.start_run` |
 | GET | `/runs/{run_id}/activity` | Paginated log or node-event descriptors |
 

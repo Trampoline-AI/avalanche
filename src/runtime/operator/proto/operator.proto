@@ -678,7 +678,7 @@ message ResultFileDescriptorV2 {
 
 message GetRunResultRequestV2 {
   string run_id = 1;
-  optional uint32 visit = 2;
+  optional uint32 entry = 2;
   optional string node_id = 3;
 }
 

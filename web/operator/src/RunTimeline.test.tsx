@@ -8,8 +8,8 @@ import type {
   MachineInstance,
   MachineSpec,
   MachineTransition,
-  MachineVisit,
-  MachineVisitEvent,
+  MachineStateEntry,
+  MachineStateEntryEvent,
 } from "./machine";
 import {
   CatalogSnapshotMsg,
@@ -147,21 +147,21 @@ const history: MachineTransition[] = [
     to: "amend",
     event: "review_done_with_nits",
     source: "internal",
-    visit: 1,
+    entry: 1,
   },
-  { from: "amend", to: "ready", event: "amended", source: "external", visit: 2 },
+  { from: "amend", to: "ready", event: "amended", source: "external", entry: 2 },
 ];
-const visitRecord = (visit: number, state: string, entered: number, left: number | null) =>
+const stateEntryRecord = (entry: number, state: string, entered: number, left: number | null) =>
   ({
-    visit,
+    entry,
     state,
     entered_at: entered,
     left_at: left,
     disposition: left === null ? "current" : "retained",
-    transition: history.find((item) => item.visit === visit) ?? null,
+    transition: history.find((item) => item.entry === entry) ?? null,
     nodes: {},
-  }) satisfies MachineVisit;
-const facts: Record<number, MachineVisitEvent[]> = {
+  }) satisfies MachineStateEntry;
+const facts: Record<number, MachineStateEntryEvent[]> = {
   1: [],
   2: [
     {
@@ -192,7 +192,7 @@ function machineApi(overrides: Partial<OperatorApi> = {}, foreign = false) {
     deployment_id: "",
     status: "waiting",
     state: "ready",
-    visit: 3,
+    entry: 3,
     version: 1,
     accepts: ["merged"],
     due: T0 + 630,
@@ -219,10 +219,10 @@ function machineApi(overrides: Partial<OperatorApi> = {}, foreign = false) {
           ],
         }),
   };
-  const visits: Record<number, MachineVisit> = {
-    1: visitRecord(1, "in_review", T0 + 1, T0 + 20),
-    2: visitRecord(2, "amend", T0 + 20, T0 + 30),
-    3: visitRecord(3, "ready", T0 + 30, null),
+  const entries: Record<number, MachineStateEntry> = {
+    1: stateEntryRecord(1, "in_review", T0 + 1, T0 + 20),
+    2: stateEntryRecord(2, "amend", T0 + 20, T0 + 30),
+    3: stateEntryRecord(3, "ready", T0 + 30, null),
   };
   const api = createApi({
     loadBaseline: async () => ({
@@ -244,12 +244,12 @@ function machineApi(overrides: Partial<OperatorApi> = {}, foreign = false) {
         : snapshotFor(),
     getMachineInstance: async () => instance,
     getMachineHistory: async () => ({ items: history, next_cursor: null }),
-    getMachineVisit: async (_runId, visit) => visits[visit],
+    getMachineStateEntry: async (_runId, entry) => entries[entry],
     ...(foreign
       ? {}
       : {
-          getMachineVisitEvents: async (_runId: string, visit: number) => ({
-            items: facts[visit] ?? [],
+          getMachineStateEntryEvents: async (_runId: string, entry: number) => ({
+            items: facts[entry] ?? [],
             next_cursor: null,
           }),
         }),
@@ -280,7 +280,7 @@ const events = () =>
     .map((row) => row.getAttribute("data-entry-id"));
 
 describe("run timeline in the bottom pane", () => {
-  it("replaces the Visits and Waits sections of the runs pane with a Timeline tab", async () => {
+  it("replaces the State entries and Waits sections of the runs pane with a Timeline tab", async () => {
     renderRun(machineApi(), machineFlow.workflowId, "run-m");
     const tab = await screen.findByRole("tab", { name: "Timeline" });
     expect(screen.getByRole("tab", { name: /^Logs/ })).toBeInTheDocument();
@@ -288,9 +288,9 @@ describe("run timeline in the bottom pane", () => {
     expect(tab).toHaveAttribute("aria-selected", "true");
     await waitFor(() => expect(events()).toContain("v2:fact:1"));
     const runs = screen.getByRole("region", { name: "Runs" });
-    expect(within(runs).queryByText("Visits")).not.toBeInTheDocument();
+    expect(within(runs).queryByText("State entries")).not.toBeInTheDocument();
     expect(within(runs).queryByText("Waits")).not.toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Machine visits" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Machine state entries" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Run waits section")).not.toBeInTheDocument();
     expect(events()).toEqual([
       "run-started",
@@ -442,7 +442,7 @@ describe("run timeline in the bottom pane", () => {
       fireEvent.click(chip);
       expect(await screen.findByRole("region", { name: "Runs" })).toBeInTheDocument();
       unmount();
-      // Unfolded by the reader: it stays unfolded on the next visit, until folded.
+      // Unfolded by the reader: it stays unfolded on the next state entry, until folded.
       render(workspace());
       fireEvent.click(await screen.findByRole("button", { name: "Fold runs" }));
       expect(await screen.findByRole("button", { name: "Show runs" })).toBeInTheDocument();
@@ -458,7 +458,7 @@ describe("run timeline in the bottom pane", () => {
     expect(screen.queryByRole("button", { name: "Show runs" })).toBeNull();
   });
 
-  it("keeps the visit and the way back to the state machine on the Logs tab", async () => {
+  it("keeps the state entry and the way back to the state machine on the Logs tab", async () => {
     const { container } = renderRun(machineApi(), machineFlow.workflowId, "run-m");
     await waitFor(() => expect(events()).toContain("v2:enter"));
     const row = container.querySelector('[data-entry-id="v2:enter"]')!;
@@ -467,17 +467,17 @@ describe("run timeline in the bottom pane", () => {
     expect(
       await screen.findByRole("tab", { name: /Logs/, selected: true }),
     ).toBeInTheDocument();
-    const nav = await screen.findByRole("navigation", { name: "Machine visit" });
-    expect(nav).toHaveTextContent("Visit 2");
+    const nav = await screen.findByRole("navigation", { name: "Machine state entry" });
+    expect(nav).toHaveTextContent("Entry 2");
     fireEvent.click(within(nav).getByRole("button", { name: "State machine" }));
     await waitFor(() =>
-      expect(screen.queryByRole("navigation", { name: "Machine visit" })).toBeNull(),
+      expect(screen.queryByRole("navigation", { name: "Machine state entry" })).toBeNull(),
     );
   });
 
   it("shows the reviewed artifact in the open Decide panel, then submits", async () => {
     const card: WaitCard = {
-      nodeId: "v3.approve_1",
+      nodeId: "e3.approve_1",
       kind: "decision",
       state: "waiting",
       schema: {
@@ -498,16 +498,16 @@ describe("run timeline in the bottom pane", () => {
         },
       ];
     });
-    // The live visit's snapshot holds the decision step, so its wait is listed.
+    // The live state entry's snapshot holds the decision step, so its wait is listed.
     const live = {
-      ...visitRecord(3, "ready", T0 + 30, null),
+      ...stateEntryRecord(3, "ready", T0 + 30, null),
       snapshot: RunSnapshotMsg.create({
         operatorInstanceId: "operator-1",
         asOfEventUlid: eventUlid(2),
         summary: RunSummaryMsg.create({ ...machineRun, runId: "run-m:v3" }),
         nodes: [
           NodeSnapshotMsg.create({
-            nodeId: "v3.approve_1",
+            nodeId: "e3.approve_1",
             name: "approve",
             nodeType: "wait",
             status: "running",
@@ -516,14 +516,14 @@ describe("run timeline in the bottom pane", () => {
           }),
         ],
       }),
-    } as MachineVisit;
+    } as MachineStateEntry;
     const base = machineApi();
     renderRun(
       machineApi({
         listRunWaits: async () => cards,
         submitDecision,
-        getMachineVisit: async (runId, visit) =>
-          visit === 3 ? live : base.getMachineVisit!(runId, visit),
+        getMachineStateEntry: async (runId, entry) =>
+          entry === 3 ? live : base.getMachineStateEntry!(runId, entry),
       }),
       machineFlow.workflowId,
       "run-m",
@@ -542,7 +542,7 @@ describe("run timeline in the bottom pane", () => {
     await waitFor(() =>
       expect(submitDecision).toHaveBeenCalledWith(
         "run-m",
-        "v3.approve_1",
+        "e3.approve_1",
         { kind: "approve" },
         "ship it",
         expect.any(String),
@@ -550,7 +550,7 @@ describe("run timeline in the bottom pane", () => {
     );
     // The resolved wait's entry carries the audit outcome.
     const resolved = await screen.findByText(
-      /Wait resolved in \S+ \(visit 3\) · Merge this PR\?/,
+      /Wait resolved in \S+ \(entry 3\) · Merge this PR\?/,
     );
     expect(resolved.closest("button")).toHaveTextContent(
       "decided payload_digest: sha256:ab12 · reason: ship it",
@@ -560,10 +560,10 @@ describe("run timeline in the bottom pane", () => {
   it("reads no waits or event facts of a run whose history expired", async () => {
     const expiredRun = RunSummaryMsg.create({ ...machineRun, expired: true });
     const listRunWaits = vi.fn(async () => []);
-    const getMachineVisitEvents = vi.fn(async () => ({ items: [], next_cursor: null }));
+    const getMachineStateEntryEvents = vi.fn(async () => ({ items: [], next_cursor: null }));
     const api = machineApi({
       listRunWaits,
-      getMachineVisitEvents,
+      getMachineStateEntryEvents,
       getLatestRunSnapshot: async () =>
         RunSnapshotMsg.create({
           operatorInstanceId: "operator-1",
@@ -576,7 +576,7 @@ describe("run timeline in the bottom pane", () => {
     renderRun(api, machineFlow.workflowId, "run-m");
     await waitFor(() => expect(events()).toContain("v3:enter"));
     expect(listRunWaits).not.toHaveBeenCalled();
-    expect(getMachineVisitEvents).not.toHaveBeenCalled();
+    expect(getMachineStateEntryEvents).not.toHaveBeenCalled();
   });
 
   it("omits entries a host does not report, with one neutral note", async () => {

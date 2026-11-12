@@ -618,7 +618,7 @@ async def test_operator_tui_extensions_live_pilot(tmp_path):
             assert "10" in code[1].output
             assert "SUBMIT(answer=total)" in code[2].code
             inspector = app.screen.query_one("#agent-trace-content")
-            # Visit each retained turn through the real trace navigation, not
+            # State entry each retained turn through the real trace navigation, not
             # just the provider's hydrated model.
             await pilot.press("up", "up")
             rendered = []

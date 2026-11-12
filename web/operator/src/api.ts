@@ -186,8 +186,8 @@ import type {
   MachinePage,
   MachinePageRequest,
   MachineTransition,
-  MachineVisit,
-  MachineVisitEvent,
+  MachineStateEntry,
+  MachineStateEntryEvent,
 } from "./machine";
 
 /** One parent-to-child edge: `nodeId` is the parent's start node that created or attached to the child. */
@@ -250,13 +250,13 @@ export interface OperatorApi {
     page?: MachinePageRequest,
     signal?: AbortSignal,
   ): Promise<MachinePage<MachineTransition>>;
-  getMachineVisit?(runId: string, visit: number, signal?: AbortSignal): Promise<MachineVisit>;
-  getMachineVisitEvents?(
+  getMachineStateEntry?(runId: string, entry: number, signal?: AbortSignal): Promise<MachineStateEntry>;
+  getMachineStateEntryEvents?(
     runId: string,
-    visit: number,
+    entry: number,
     page?: MachinePageRequest,
     signal?: AbortSignal,
-  ): Promise<MachinePage<MachineVisitEvent>>;
+  ): Promise<MachinePage<MachineStateEntryEvent>>;
   /**
    * `inputFiles` fill File fields of `payload` exactly as they fill a run input
    * (staged with `stageInputFile({ ..., event })`); the host binds them before it
@@ -269,10 +269,10 @@ export interface OperatorApi {
     idempotencyKey: string,
     inputFiles?: InputFileAttachment[],
   ): Promise<MachineEventReceipt>;
-  retryMachineVisit?(runId: string): Promise<void>;
+  retryMachineStateEntry?(runId: string): Promise<void>;
   fireNextMachineTimer?(runId: string): Promise<void>;
   /**
-   * The accepted typed result of a run, a machine visit or one step (of a visit),
+   * The accepted typed result of a run, a machine state entry or one step (of a state entry),
    * in display form (File/Workspace as their references). Rejects while there is
    * no accepted result yet.
    */
@@ -319,8 +319,8 @@ export interface OperatorApi {
     inputFiles?: InputFileAttachment[],
   ): Promise<string>;
   cancelRun(runId: string): Promise<void>;
-  /** A visit filters at the host; never return another visit's cards/audits. */
-  listRunWaits?(runId: string, visit?: number): Promise<WaitCard[]>;
+  /** A state entry filters at the host; never return another state entry's cards/audits. */
+  listRunWaits?(runId: string, entry?: number): Promise<WaitCard[]>;
   submitDecision?(
     runId: string,
     nodeId: string,
@@ -795,11 +795,11 @@ export class GrpcWebOperatorApi implements OperatorApi {
   }
 
   /**
-   * A machine visit's waits are those of its visit-qualified steps (`v<visit>.<step>`);
-   * the host's list holds every visit of the run, so cards of other visits are dropped
-   * here and never reach the visit section.
+   * A machine state entry's waits are those of its state-entry-qualified steps (`e<entry>.<step>`);
+   * the host's list holds every state entry of the run, so cards of other state entries are dropped
+   * here and never reach the state entry section.
    */
-  async listRunWaits(runId: string, visit?: number): Promise<WaitCard[]> {
+  async listRunWaits(runId: string, entry?: number): Promise<WaitCard[]> {
     const wires: string[] = [];
     let offset = 0;
     for (;;) {
@@ -844,9 +844,9 @@ export class GrpcWebOperatorApi implements OperatorApi {
         ...(card.audit != null ? { audit: mapWaitAudit(card.audit) } : {}),
       } satisfies WaitCard;
     });
-    return visit === undefined
+    return entry === undefined
       ? cards
-      : cards.filter((card) => card.nodeId.startsWith(`v${visit}.`));
+      : cards.filter((card) => card.nodeId.startsWith(`e${entry}.`));
   }
 
   async submitDecision(
@@ -903,16 +903,16 @@ export class GrpcWebOperatorApi implements OperatorApi {
     );
   }
 
-  async getMachineVisit(
+  async getMachineStateEntry(
     runId: string,
-    visit: number,
+    entry: number,
     signal?: AbortSignal,
-  ): Promise<MachineVisit> {
-    const result = await this.controlMachine({ op: "visit", run_id: runId, visit }, signal);
-    if (!isUnknownRecord(result)) throw new Error("Invalid machine visit");
+  ): Promise<MachineStateEntry> {
+    const result = await this.controlMachine({ op: "entry", run_id: runId, entry }, signal);
+    if (!isUnknownRecord(result)) throw new Error("Invalid machine state entry");
     if (result.read_state === "expired") {
       return {
-        visit,
+        entry,
         state: "",
         entered_at: null,
         left_at: null,
@@ -921,12 +921,12 @@ export class GrpcWebOperatorApi implements OperatorApi {
         nodes: {},
       };
     }
-    if (result.visit !== visit || typeof result.state !== "string")
-      throw new Error("Invalid machine visit");
+    if (result.entry !== entry || typeof result.state !== "string")
+      throw new Error("Invalid machine state entry");
     const { snapshot, ...rest } = result;
     return {
-      ...(rest as unknown as MachineVisit),
-      // The host's own scoped snapshot of this visit, in the RunSnapshotV2 wire form.
+      ...(rest as unknown as MachineStateEntry),
+      // The host's own scoped snapshot of this state entry, in the RunSnapshotV2 wire form.
       snapshot:
         snapshot == null
           ? undefined
@@ -936,18 +936,18 @@ export class GrpcWebOperatorApi implements OperatorApi {
     };
   }
 
-  async getMachineVisitEvents(
+  async getMachineStateEntryEvents(
     runId: string,
-    visit: number,
+    entry: number,
     page: MachinePageRequest = {},
     signal?: AbortSignal,
-  ): Promise<MachinePage<MachineVisitEvent>> {
-    return machinePage<MachineVisitEvent>(
+  ): Promise<MachinePage<MachineStateEntryEvent>> {
+    return machinePage<MachineStateEntryEvent>(
       await this.controlMachine(
         {
           op: "events",
           run_id: runId,
-          visit,
+          entry,
           cursor: page.cursor ?? null,
           limit: page.limit ?? 20,
         },
@@ -978,7 +978,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
     return receipt as unknown as MachineEventReceipt;
   }
 
-  async retryMachineVisit(runId: string): Promise<void> {
+  async retryMachineStateEntry(runId: string): Promise<void> {
     await this.controlMachine({ op: "retry", run_id: runId });
   }
 
@@ -990,7 +990,7 @@ export class GrpcWebOperatorApi implements OperatorApi {
     const response = await this.client.getRunResult(
       {
         runId,
-        ...(target.visit !== undefined ? { visit: target.visit } : {}),
+        ...(target.entry !== undefined ? { entry: target.entry } : {}),
         ...(target.nodeId !== undefined ? { nodeId: target.nodeId } : {}),
       },
       signal ? { abort: signal } : undefined,

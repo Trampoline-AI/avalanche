@@ -11,8 +11,8 @@ import type {
   MachinePageRequest,
   MachineSpec,
   MachineTransition,
-  MachineVisit,
-  MachineVisitEvent,
+  MachineStateEntry,
+  MachineStateEntryEvent,
 } from "../machine";
 import {
   CatalogSnapshotMsg,
@@ -190,9 +190,9 @@ const ordinary = FlowInfoMsg.create({
     consumer_node_ids: ["fetch"],
   }),
 });
-/** The host's own scoped snapshot for one visit: qualified steps, I/O, logs and .map. */
-function visitSnapshot(runId: string, visit: number, status: string): RunSnapshotMsg {
-  const id = (name: string) => `v${visit}.${name}`;
+/** The host's own scoped snapshot for one state entry: qualified steps, I/O, logs and .map. */
+function stateEntrySnapshot(runId: string, entry: number, status: string): RunSnapshotMsg {
+  const id = (name: string) => `e${entry}.${name}`;
   const output = (value: JsonValue) => ({
     inputs: [],
     output: { kind: "json" as const, typeName: "dict", value, truncated: false },
@@ -213,7 +213,7 @@ function visitSnapshot(runId: string, visit: number, status: string): RunSnapsho
     operatorInstanceId: catalog.operatorInstanceId,
     asOfEventUlid: String(sequence).padStart(26, "0"),
     summary: RunSummaryMsg.create({ runId, workflowId: "review", status }),
-    logPageToken: `logs:${runId}:${visit}`,
+    logPageToken: `logs:${runId}:${entry}`,
     expansions: interrupted ? {} : { [id("fanout")]: 2 },
     topology: WorkflowTopologyMsg.create(
       interrupted
@@ -248,7 +248,7 @@ function visitSnapshot(runId: string, visit: number, status: string): RunSnapsho
     nodes: interrupted
       ? [step("check", { status: "indeterminate", attempts: 2, generation: 1, endedAt: 0 })]
       : [
-          step("check", { attempts: 3, generation: 2, stepIo: output({ visit, score: 7 }) }),
+          step("check", { attempts: 3, generation: 2, stepIo: output({ entry, score: 7 }) }),
           step("fanout"),
           ...[0, 1].map((index) =>
             step(`fanout[${index}]`, {
@@ -269,8 +269,8 @@ const catalog = CatalogSnapshotMsg.create({
 });
 const calls: { method: string; args: JsonValue[] }[] = [];
 const instances = new Map<string, MachineInstance>();
-const visits = new Map<string, Map<number, MachineVisit>>();
-const facts = new Map<string, MachineVisitEvent[]>();
+const entries = new Map<string, Map<number, MachineStateEntry>>();
+const facts = new Map<string, MachineStateEntryEvent[]>();
 const receipts = new Map<string, MachineEventReceipt>();
 const runs = new Map<string, RunSummaryMsg>();
 const updates: OperatorUpdate[] = [];
@@ -304,45 +304,45 @@ function enter(
   event: string | null,
 ) {
   const item = instance(runId);
-  const previous = visits.get(runId)!.get(item.visit)!;
+  const previous = entries.get(runId)!.get(item.entry)!;
   const now = Date.now() / 1000;
   const transition: MachineTransition = {
     from: item.state!,
     to: state,
-    visit: item.visit,
+    entry: item.entry,
     event,
     source,
   };
   previous.left_at = now;
   previous.disposition = "archived";
   previous.transition = transition;
-  item.visit++;
+  item.entry++;
   item.state = state;
   item.status = source === "cancel" ? "cancelled" : state === "closed" ? "final" : "waiting";
   item.finished = state === "closed";
   item.accepts = spec.states[state].transitions.map((t) => t.event);
   item.due = state === "ready" ? now + 6 : null;
-  visits.get(runId)!.set(item.visit, {
-    snapshot: visitSnapshot(runId, item.visit, "success"),
-    visit: item.visit,
+  entries.get(runId)!.set(item.entry, {
+    snapshot: stateEntrySnapshot(runId, item.entry, "success"),
+    entry: item.entry,
     state,
     entered_at: now,
     left_at: null,
     disposition: "current",
     transition: null,
-    catalog_revision: String(item.visit + 10),
+    catalog_revision: String(item.entry + 10),
     nodes: {
-      [`v${item.visit}.check`]: {
+      [`e${item.entry}.check`]: {
         state: "succeeded",
         kind: "step",
         deps: [],
         g: 2,
         attempts: 3,
       },
-      [`v${item.visit}.notify`]: {
+      [`e${item.entry}.notify`]: {
         state: "succeeded",
         kind: "step",
-        deps: [`v${item.visit}.check`],
+        deps: [`e${item.entry}.check`],
         g: 0,
         attempts: 1,
       },
@@ -357,7 +357,7 @@ function enter(
         : foreignHost
           ? "parked"
           : "waiting";
-  summary.revision = String(item.visit);
+  summary.revision = String(item.entry);
   publish({
     oneofKind: "runStatusChanged",
     runStatusChanged: {
@@ -369,9 +369,9 @@ function enter(
     },
   });
   if (state === "ready") {
-    const visit = item.visit;
+    const entry = item.entry;
     setTimeout(() => {
-      if (item.visit === visit && !item.finished) enter(runId, "closed", "timer", null);
+      if (item.entry === entry && !item.finished) enter(runId, "closed", "timer", null);
     }, 6000);
   }
 }
@@ -466,8 +466,8 @@ class FakeOperatorApi implements OperatorApi {
     }
   }
   async listLogPage(request: LogPageRequest) {
-    const [scope, runId, visit] = request.pageToken.split(":");
-    record("logs", runId ?? "", Number(visit));
+    const [scope, runId, entry] = request.pageToken.split(":");
+    record("logs", runId ?? "", Number(entry));
     if (scope === "flowlogs")
       return {
         operatorInstanceId: request.expectedOperatorInstanceId,
@@ -488,15 +488,15 @@ class FakeOperatorApi implements OperatorApi {
     return {
       operatorInstanceId: request.expectedOperatorInstanceId,
       asOfEventUlid: request.expectedAsOfEventUlid,
-      records: visit
+      records: entry
         ? [
             LogRecordDescriptorMsg.create({
               sequence: "1",
               timestamp: Date.now() / 1000,
               level: "INFO",
-              nodeId: `v${visit}.check`,
+              nodeId: `e${entry}.check`,
               sizeBytes: "32",
-              bodyToken: `log:${visit}`,
+              bodyToken: `log:${entry}`,
             }),
           ]
         : [],
@@ -504,26 +504,26 @@ class FakeOperatorApi implements OperatorApi {
       nextPageToken: "",
     };
   }
-  async listRunWaits(runId: string, visit?: number): Promise<WaitCard[]> {
-    record("waits", runId, visit ?? null);
+  async listRunWaits(runId: string, entry?: number): Promise<WaitCard[]> {
+    record("waits", runId, entry ?? null);
     const item = instances.get(runId);
     if (!item) return [];
-    // Without a visit, the run's waits of every visit (as the local operator lists them).
-    if (visit === undefined) {
-      const visits = Array.from({ length: item.visit }, (_, index) => index + 1);
-      return (await Promise.all(visits.map((each) => this.visitWaits(item, each)))).flat();
+    // Without a state entry, the run's waits of every state entry (as the local operator lists them).
+    if (entry === undefined) {
+      const entries = Array.from({ length: item.entry }, (_, index) => index + 1);
+      return (await Promise.all(entries.map((each) => this.stateEntryWaits(item, each)))).flat();
     }
-    return this.visitWaits(item, visit);
+    return this.stateEntryWaits(item, entry);
   }
-  private async visitWaits(
-    item: { visit: number; finished: boolean },
-    visit: number,
+  private async stateEntryWaits(
+    item: { entry: number; finished: boolean },
+    entry: number,
   ): Promise<WaitCard[]> {
-    if (visit < 2) return [];
-    const current = visit === item.visit && !item.finished;
+    if (entry < 2) return [];
+    const current = entry === item.entry && !item.finished;
     return [
       {
-        nodeId: `v${visit}.approve`,
+        nodeId: `e${entry}.approve`,
         kind: "decision",
         state: current ? "waiting" : "resolved",
         schema: {
@@ -531,8 +531,8 @@ class FakeOperatorApi implements OperatorApi {
           properties: { approve: { type: "boolean" } },
           required: ["approve"],
         },
-        prompt: `Approve visit ${visit}?`,
-        show: { visit },
+        prompt: `Approve entry ${entry}?`,
+        show: { entry },
         audit: current
           ? undefined
           : { outcome: { approve: true }, reason: "reviewed in proof", at: Date.now() / 1000 },
@@ -569,7 +569,7 @@ class FakeOperatorApi implements OperatorApi {
   }
   async readTextDetail(token: string) {
     if (token === "log:flow") return "fetched document\n";
-    return token.startsWith("log:") ? `visit ${token.slice(4)} check finished\n` : "";
+    return token.startsWith("log:") ? `entry ${token.slice(4)} check finished\n` : "";
   }
   async cancelRun(runId: string) {
     if (!instances.has(runId)) {
@@ -594,28 +594,28 @@ class FakeOperatorApi implements OperatorApi {
     record("history", runId, request?.cursor ?? null);
     return structuredClone(
       page(
-        [...visits.get(runId)!.values()]
-          .flatMap((visit) => (visit.transition ? [visit.transition] : []))
+        [...entries.get(runId)!.values()]
+          .flatMap((entry) => (entry.transition ? [entry.transition] : []))
           .reverse(),
         request,
       ),
     );
   }
-  async getMachineVisit(runId: string, visit: number) {
-    record("visit", runId, visit);
-    const result = visits.get(runId)?.get(visit);
-    if (!result) throw new Error("Visit unavailable");
+  async getMachineStateEntry(runId: string, entry: number) {
+    record("entry", runId, entry);
+    const result = entries.get(runId)?.get(entry);
+    if (!result) throw new Error("State entry unavailable");
     return structuredClone(result);
   }
-  async getMachineVisitEvents(runId: string, visit: number, request?: MachinePageRequest) {
-    record("facts", runId, visit, request?.cursor ?? null);
+  async getMachineStateEntryEvents(runId: string, entry: number, request?: MachinePageRequest) {
+    record("facts", runId, entry, request?.cursor ?? null);
     // The first archived window is legitimately empty but still advances.
-    // (Not once a send recorded facts for the visit: those read on the first page.)
-    if (visit === 1 && request?.cursor === undefined && !facts.has(`${runId}:${visit}`))
+    // (Not once a send recorded facts for the state entry: those read on the first page.)
+    if (entry === 1 && request?.cursor === undefined && !facts.has(`${runId}:${entry}`))
       return { items: [], next_cursor: "facts-2" };
     return {
       items: structuredClone(
-        facts.get(`${runId}:${visit}`) ?? [
+        facts.get(`${runId}:${entry}`) ?? [
           {
             tseq: 1,
             at: Date.now() / 1000,
@@ -721,7 +721,7 @@ class FakeOperatorApi implements OperatorApi {
       deployment_id: "",
       state: "review",
       status: "interrupted",
-      visit: 1,
+      entry: 1,
       version: 1,
       accepts: ["amend", "advance"],
       due: null,
@@ -738,22 +738,22 @@ class FakeOperatorApi implements OperatorApi {
           }),
     };
     instances.set(run_id, item);
-    visits.set(
+    entries.set(
       run_id,
       new Map([
         [
           1,
           {
-            visit: 1,
+            entry: 1,
             state: "review",
-            snapshot: visitSnapshot(run_id, 1, "indeterminate"),
+            snapshot: stateEntrySnapshot(run_id, 1, "indeterminate"),
             entered_at: Date.now() / 1000,
             left_at: null,
             disposition: "indeterminate",
             transition: null,
             catalog_revision: "10",
             nodes: {
-              "v1.check": { kind: "step", state: "indeterminate", deps: [], g: 1, attempts: 2 },
+              "e1.check": { kind: "step", state: "indeterminate", deps: [], g: 1, attempts: 2 },
             },
           },
         ],
@@ -830,13 +830,13 @@ class FakeOperatorApi implements OperatorApi {
     };
     receipts.set(idempotencyKey, result);
     item.receipts?.push(result);
-    // The visit's event facts accumulate (a later send never erases an earlier fact).
-    const atVisit = item.visit;
-    const visitFacts = facts.get(`${runId}:${atVisit}`) ?? [];
-    facts.set(`${runId}:${atVisit}`, [
-      ...visitFacts,
+    // The state entry's event facts accumulate (a later send never erases an earlier fact).
+    const atStateEntry = item.entry;
+    const stateEntryFacts = facts.get(`${runId}:${atStateEntry}`) ?? [];
+    facts.set(`${runId}:${atStateEntry}`, [
+      ...stateEntryFacts,
       {
-        tseq: visitFacts.length + 1,
+        tseq: stateEntryFacts.length + 1,
         at: result.accepted_at,
         status: result.status,
         event,
@@ -860,7 +860,7 @@ class FakeOperatorApi implements OperatorApi {
     }
     return structuredClone(result);
   }
-  async retryMachineVisit(runId: string) {
+  async retryMachineStateEntry(runId: string) {
     record("retry", runId);
     enter(runId, instance(runId).state!, "internal", null);
   }
@@ -879,10 +879,10 @@ if (expired) {
   // policy. Their run, status and key label stay; history reads back `expired`.
   await api.startRun("review", { repo: "acme/api", pr: 7, priority: 1 });
   enter("machine-1", "closed", "external", "advance");
-  for (const visit of visits.get("machine-1")!.values()) {
-    visit.disposition = "expired";
-    delete visit.snapshot;
-    visit.nodes = {};
+  for (const entry of entries.get("machine-1")!.values()) {
+    entry.disposition = "expired";
+    delete entry.snapshot;
+    entry.nodes = {};
   }
   runs.get("machine-1")!.expired = true;
   await api.startRun("ordinary", { id: "doc-3" });
@@ -894,7 +894,7 @@ if (readOnly) {
   calls.length = 0;
   Object.assign(api, {
     sendMachineEvent: undefined,
-    retryMachineVisit: undefined,
+    retryMachineStateEntry: undefined,
     fireNextMachineTimer: undefined,
   });
 }
@@ -903,7 +903,7 @@ if (foreignHost) {
     liveRunStatuses: FOREIGN_LIVE_STATUSES,
     terminalRunStatuses: FOREIGN_TERMINAL_STATUSES,
   });
-  // machine-1 is admitted (a visit executing); machine-2 already closed.
+  // machine-1 is admitted (a state entry executing); machine-2 already closed.
   await api.startRun("review", { repo: "acme/api", pr: 8, priority: 1 });
   runs.get("machine-1")!.status = "admitted";
   await api.startRun("review", { repo: "acme/api", pr: 9, priority: 1 });

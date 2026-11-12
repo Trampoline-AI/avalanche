@@ -3,7 +3,7 @@
  *
  * Entries come only from the host-neutral OperatorApi reads the run page already
  * makes: the run snapshot (steps, terminal seal), the run's waits, and for a
- * machine run its instance, transition history, visit records and visit event
+ * machine run its instance, transition history, state entry records and state entry event
  * facts. A host that omits an optional read simply contributes no entries of
  * that kind. Every entry names the state, arc or step it belongs to, so the run
  * graph can highlight it and a graph selection can filter the timeline.
@@ -14,16 +14,16 @@ import type {
   MachineInstance,
   MachineSpec,
   MachineTransition,
-  MachineVisit,
-  MachineVisitEvent,
+  MachineStateEntry,
+  MachineStateEntryEvent,
 } from "./machine";
 import type { NodeSnapshotMsg, RunSnapshotMsg } from "./model";
 import type { WaitCard } from "./RunWaitPanel";
 
 export type TimelineKind =
   | "run-started"
-  | "visit-entered"
-  | "visit-left"
+  | "state-entry-entered"
+  | "state-entry-left"
   | "event"
   | "receipt"
   | "timer-armed"
@@ -56,24 +56,24 @@ export interface TimelineEntry {
   at?: number;
   /** Why the time is unknown (shown with the "—" in its place). */
   timeNote?: string;
-  /** What happened, as a sentence: "Step lint ran in amend (visit 2)". */
+  /** What happened, as a sentence: "Step lint ran in amend (entry 2)". */
   title: string;
   /** The rest of the sentence: outcome word first ("ok", "failed"), then context. */
   detail?: string;
-  /** How long the step, visit or wait took, in seconds, when both ends are known. */
+  /** How long the step, state entry or wait took, in seconds, when both ends are known. */
   took?: number;
   /** Short outcome word: accepted, deferred, ignored, success, failed, ... */
   status?: string;
   tone: TimelineTone;
-  /** Machine visit the entry belongs to. */
-  visit?: number;
+  /** Machine state entry the entry belongs to. */
+  entry?: number;
   /** Machine state the entry belongs to (graph highlight and state filter). */
   state?: string;
   /** Transition arc the entry took or would take (graph highlight). */
   arc?: TimelineArc;
-  /** Step node (flow run node ID, or a visit-qualified step `v<visit>.<step>`). */
+  /** Step node (flow run node ID, or a state-entry-qualified step `e<entry>.<step>`). */
   nodeId?: string;
-  /** Sort key: visit, phase within the visit, offset, sequence. */
+  /** Sort key: state entry, phase within the state entry, offset, sequence. */
   sort: readonly [number, number, number, number];
 }
 
@@ -89,19 +89,19 @@ export interface PendingItem {
   arc?: TimelineArc;
   /** A pending wait card (a decision is answered from the pinned row). */
   card?: WaitCard;
-  visit?: number;
+  entry?: number;
 }
 
-/** What the timeline read of one machine visit holds (absent parts are not loaded). */
-export interface MachineVisitDetail {
-  record?: MachineVisit;
-  events?: MachineVisitEvent[];
-  /** Continuation of the visit's event facts; null or absent when complete. */
+/** What the timeline read of one machine state entry holds (absent parts are not loaded). */
+export interface MachineStateEntryDetail {
+  record?: MachineStateEntry;
+  events?: MachineStateEntryEvent[];
+  /** Continuation of the state entry's event facts; null or absent when complete. */
   eventsCursor?: string | null;
   error?: string;
 }
 
-// Phases inside one visit: entry, timer arming, body (steps, events, waits), exit.
+// Phases inside one state entry: entry, timer arming, body (steps, events, waits), exit.
 const PHASE_ENTER = 0;
 const PHASE_ARM = 1;
 const PHASE_BODY = 2;
@@ -117,10 +117,10 @@ export function compareTimelineEntries(left: TimelineEntry, right: TimelineEntry
   return left.id < right.id ? -1 : left.id > right.id ? 1 : 0;
 }
 
-/** A step's name inside its visit: without the `v<visit>.` prefix the visit already says. */
-function stepName(node: Pick<NodeSnapshotMsg, "name" | "nodeId">, visit?: number) {
+/** A step's name inside its state entry: without the `e<entry>.` prefix the state entry already says. */
+function stepName(node: Pick<NodeSnapshotMsg, "name" | "nodeId">, entry?: number) {
   const name = node.name || node.nodeId;
-  const prefix = visit === undefined ? "" : `v${visit}.`;
+  const prefix = entry === undefined ? "" : `e${entry}.`;
   return prefix && name.startsWith(prefix) ? name.slice(prefix.length) : name;
 }
 
@@ -132,9 +132,9 @@ const STEP_DONE: Record<string, { verb: string; word?: string; tone: TimelineTon
   cancelled: { verb: "was cancelled", tone: "warn" },
 };
 
-/** Where a machine entry happened: " in amend (visit 2)"; nothing for a flow run. */
-function inVisit(state: string | undefined, visit: number) {
-  return state ? ` in ${state} (visit ${visit})` : "";
+/** Where a machine entry happened: " in amend (entry 2)"; nothing for a flow run. */
+function inStateEntry(state: string | undefined, entry: number) {
+  return state ? ` in ${state} (entry ${entry})` : "";
 }
 
 /** Seconds between two readings of one clock, when both are known. */
@@ -145,19 +145,19 @@ function span(from: number | null | undefined, to: number | null | undefined) {
 }
 
 /**
- * Step entries of a run (or a visit's) snapshot: one row per step, at the time it
+ * Step entries of a run (or a state entry's) snapshot: one row per step, at the time it
  * finished, saying how it ended and how long it took; a step still running shows
  * when it started. `toOffset` maps a node clock reading to the run's offset scale.
  */
 function stepEntries(
   nodes: readonly NodeSnapshotMsg[],
   toOffset: (clock: number) => number,
-  base: { visit: number; phase: number; state?: string; prefix: string },
+  base: { entry: number; phase: number; state?: string; prefix: string },
 ): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
-  const where = inVisit(base.state, base.visit);
+  const where = inStateEntry(base.state, base.entry);
   nodes.forEach((node, index) => {
-    const name = stepName(node, base.visit || undefined);
+    const name = stepName(node, base.entry || undefined);
     const attempts = node.attempts ?? 0;
     const done = STEP_DONE[node.status];
     if (node.endedAt > 0 && done) {
@@ -174,10 +174,10 @@ function stepEntries(
         took: span(node.startedAt, node.endedAt),
         status: node.status,
         tone: done.tone,
-        visit: base.visit || undefined,
+        entry: base.entry || undefined,
         state: base.state,
         nodeId: node.nodeId,
-        sort: [base.visit, base.phase, offset, index * 2 + 1],
+        sort: [base.entry, base.phase, offset, index * 2 + 1],
       });
     } else if (node.startedAt > 0) {
       const offset = toOffset(node.startedAt);
@@ -188,10 +188,10 @@ function stepEntries(
         title: `Step ${name} started${where}`,
         detail: ["running", attempts > 1 && `attempt ${attempts}`].filter(Boolean).join(" · "),
         tone: "neutral",
-        visit: base.visit || undefined,
+        entry: base.entry || undefined,
         state: base.state,
         nodeId: node.nodeId,
-        sort: [base.visit, base.phase, offset, index * 2],
+        sort: [base.entry, base.phase, offset, index * 2],
       });
     }
   });
@@ -199,7 +199,7 @@ function stepEntries(
 }
 
 /**
- * The host's own wait for a state's timer (`v<visit>.after_<index>`, a sleep wait):
+ * The host's own wait for a state's timer (`e<entry>.after_<index>`, a sleep wait):
  * the timer's entries already tell it (armed, fired, cancelled), so it is not listed again.
  */
 function isTimerWait(card: WaitCard, spec: MachineSpec | undefined, state: string | undefined) {
@@ -238,13 +238,13 @@ function waitEntries(
   nodes: ReadonlyMap<string, NodeSnapshotMsg>,
   nodeOffset: (clock: number) => number,
   wallOffset: (at: number) => number,
-  base: { visit: number; phase: number; state?: string; prefix: string; accepts?: string[] },
+  base: { entry: number; phase: number; state?: string; prefix: string; accepts?: string[] },
 ): TimelineEntry[] {
   const entries: TimelineEntry[] = [];
-  const where = inVisit(base.state, base.visit);
+  const where = inStateEntry(base.state, base.entry);
   cards.forEach((card, index) => {
     const node = nodes.get(card.nodeId);
-    const step = node ? stepName(node, base.visit || undefined) : card.nodeId;
+    const step = node ? stepName(node, base.entry || undefined) : card.nodeId;
     const subject = waitSubject(card, step, base.accepts);
     const context = waitContext(card, step, subject);
     const opened = node && node.startedAt > 0 ? nodeOffset(node.startedAt) : undefined;
@@ -257,10 +257,10 @@ function waitEntries(
       title: `Wait opened${where} · ${subject}`,
       detail: context,
       tone: "neutral",
-      visit: base.visit || undefined,
+      entry: base.entry || undefined,
       state: base.state,
       nodeId: card.nodeId,
-      sort: [base.visit, base.phase, opened ?? Infinity, 1000 + index * 2],
+      sort: [base.entry, base.phase, opened ?? Infinity, 1000 + index * 2],
     });
     if (card.state === "resolved" || card.state === "withdrawn") {
       const closed =
@@ -291,10 +291,10 @@ function waitEntries(
             : undefined,
         status: card.state,
         tone: card.state === "resolved" ? "ok" : "muted",
-        visit: base.visit || undefined,
+        entry: base.entry || undefined,
         state: base.state,
         nodeId: card.nodeId,
-        sort: [base.visit, base.phase, closed ?? Infinity, 1000 + index * 2 + 1],
+        sort: [base.entry, base.phase, closed ?? Infinity, 1000 + index * 2 + 1],
       });
     }
   });
@@ -321,7 +321,7 @@ function outcomeEntry(
   status: string,
   offset: number | undefined,
   at: number | undefined,
-  sortVisit: number,
+  sortStateEntry: number,
   detail: string | undefined,
   state?: string,
 ): TimelineEntry {
@@ -343,7 +343,7 @@ function outcomeEntry(
     status,
     tone,
     state,
-    sort: [sortVisit, PHASE_OUTCOME, offset ?? Infinity, 0],
+    sort: [sortStateEntry, PHASE_OUTCOME, offset ?? Infinity, 0],
   };
 }
 
@@ -383,11 +383,11 @@ export function flowTimeline({
       sort: [0, PHASE_ENTER, 0, 0],
     },
   ];
-  entries.push(...stepEntries(nodes, nodeOffset, { visit: 0, phase: PHASE_BODY, prefix: "" }));
+  entries.push(...stepEntries(nodes, nodeOffset, { entry: 0, phase: PHASE_BODY, prefix: "" }));
   const byId = new Map(nodes.map((node) => [node.nodeId, node] as const));
   entries.push(
     ...waitEntries(waits, byId, nodeOffset, wallOffset, {
-      visit: 0,
+      entry: 0,
       phase: PHASE_BODY,
       prefix: "",
     }),
@@ -415,19 +415,19 @@ export interface MachineTimelineInput {
   instance: MachineInstance;
   /** The loaded window of the run's transitions (any order). */
   history: readonly MachineTransition[];
-  /** Visits to show, by number. Others contribute no entries. */
-  visits: readonly number[];
-  details: ReadonlyMap<number, MachineVisitDetail>;
+  /** State entries to show, by number. Others contribute no entries. */
+  entries: readonly number[];
+  details: ReadonlyMap<number, MachineStateEntryDetail>;
   waits?: readonly WaitCard[];
   /** Wall-clock Unix seconds the run started (RunSummaryMsg.triggeredAt). */
   startedAt?: number;
   /** The run's own status, and whether it has settled on its host. */
   status?: string;
   settled: boolean;
-  /** Whether the shown window starts at the run's first visit (so the start shows). */
+  /** Whether the shown window starts at the run's first state entry (so the start shows). */
   fromStart: boolean;
   /**
-   * Visit clocks are still being read: a receipt outside the known visits waits for
+   * State entry clocks are still being read: a receipt outside the known state entries waits for
    * them rather than showing in the wrong place.
    */
   clocksPending?: boolean;
@@ -440,7 +440,7 @@ function arcCause(transition: Pick<MachineTransition, "event" | "source">) {
 }
 
 function eventVerdict(
-  fact: MachineVisitEvent,
+  fact: MachineStateEntryEvent,
   state: MachineSpec["states"][string] | undefined,
 ): { word: string; tone: TimelineTone } {
   if (fact.status === "ignored") return { word: "ignored", tone: "warn" };
@@ -453,17 +453,17 @@ function eventVerdict(
 }
 
 /**
- * A machine run: start, then per visit its entry (with the arc it came by), timer
+ * A machine run: start, then per state entry its entry (with the arc it came by), timer
  * arming, steps, events received (accepted, deferred, ignored, dropped) with their
  * send receipts, waits, then how it left (transition, timer fired or cancelled,
  * cancel), and the terminal outcome.
  */
 export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
   const { spec, instance, details, history, waits = [] } = input;
-  const transitions = new Map(history.map((transition) => [transition.visit, transition]));
-  const visits = [...input.visits].sort((left, right) => left - right);
-  const firstEntered = visits
-    .map((visit) => details.get(visit)?.record?.entered_at)
+  const transitions = new Map(history.map((transition) => [transition.entry, transition]));
+  const entries = [...input.entries].sort((left, right) => left - right);
+  const firstEntered = entries
+    .map((entry) => details.get(entry)?.record?.entered_at)
     .find((value): value is number => typeof value === "number");
   const wallBase = input.startedAt || firstEntered || 0;
   const wallOffset = (at: number | null | undefined) =>
@@ -482,38 +482,38 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
     });
   const receipts = new Map((instance.receipts ?? []).map((item) => [item.receipt_id, item]));
   const matchedReceipts = new Set<string>();
-  // Which visit accepted each receipt, so a later delivery reads as a deferred one.
+  // Which state entry accepted each receipt, so a later delivery reads as a deferred one.
   const acceptedIn = new Map<string, number>();
-  for (const visit of visits)
-    for (const fact of details.get(visit)?.events ?? [])
-      if (fact.status === "accepted" && fact.receipt_id) acceptedIn.set(fact.receipt_id, visit);
-  const windows: { visit: number; from: number; to: number }[] = [];
-  for (const visit of visits) {
-    const detail = details.get(visit);
+  for (const entry of entries)
+    for (const fact of details.get(entry)?.events ?? [])
+      if (fact.status === "accepted" && fact.receipt_id) acceptedIn.set(fact.receipt_id, entry);
+  const windows: { entry: number; from: number; to: number }[] = [];
+  for (const entry of entries) {
+    const detail = details.get(entry);
     const record = detail?.record;
-    const transition = record?.transition ?? transitions.get(visit) ?? null;
+    const transition = record?.transition ?? transitions.get(entry) ?? null;
     const state =
       (record && record.disposition !== "expired" ? record.state : undefined) ||
       transition?.from ||
-      (visit === instance.visit ? (instance.state ?? undefined) : undefined);
+      (entry === instance.entry ? (instance.state ?? undefined) : undefined);
     if (!state) continue;
     const declaration = spec?.states[state];
-    const previous = details.get(visit - 1)?.record?.transition ?? transitions.get(visit - 1);
+    const previous = details.get(entry - 1)?.record?.transition ?? transitions.get(entry - 1);
     const entered = wallOffset(record?.entered_at);
     const left = wallOffset(record?.left_at);
     if (record?.entered_at != null)
-      windows.push({ visit, from: record.entered_at, to: record.left_at ?? Infinity });
-    const current = visit === instance.visit && !instance.finished;
+      windows.push({ entry, from: record.entered_at, to: record.left_at ?? Infinity });
+    const current = entry === instance.entry && !instance.finished;
     entries.push({
-      id: `v${visit}:enter`,
-      kind: "visit-entered",
+      id: `e${entry}:enter`,
+      kind: "state-entry-entered",
       offset: entered,
       at: record?.entered_at ?? undefined,
       timeNote:
         record?.disposition === "expired"
-          ? "This visit's history has expired, so its times are gone."
+          ? "This state entry's history has expired, so its times are gone."
           : undefined,
-      title: `Entered ${state} (visit ${visit})`,
+      title: `Entered ${state} (entry ${entry})`,
       detail: [
         previous ? `from ${previous.from} on ${arcCause(previous)}` : undefined,
         record?.disposition === "expired" ? "history expired" : undefined,
@@ -522,7 +522,7 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
         .filter(Boolean)
         .join(" · "),
       tone: "neutral",
-      visit,
+      entry,
       state,
       arc: previous
         ? {
@@ -532,36 +532,36 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
             timer: previous.source === "timer",
           }
         : undefined,
-      sort: [visit, PHASE_ENTER, entered ?? 0, 0],
+      sort: [entry, PHASE_ENTER, entered ?? 0, 0],
     });
     (declaration?.timers ?? []).forEach((timer, index) => {
       const due =
         record?.entered_at != null ? record.entered_at + timer.delay_seconds : undefined;
       entries.push({
-        id: `v${visit}:timer:${index}:armed`,
+        id: `e${entry}:timer:${index}:armed`,
         kind: "timer-armed",
         offset: entered,
         at: record?.entered_at ?? undefined,
         title: `Timer armed in ${state} → ${timer.target}`,
         detail: `fires after ${formatDelay(timer.delay_seconds)}${due !== undefined ? ` · due ${new Date(due * 1000).toLocaleTimeString()}` : ""}`,
         tone: "neutral",
-        visit,
+        entry,
         state,
         arc: { from: state, to: timer.target, event: null, timer: true },
-        sort: [visit, PHASE_ARM, entered ?? 0, index],
+        sort: [entry, PHASE_ARM, entered ?? 0, index],
       });
     });
     if (record?.snapshot && record.disposition !== "expired") {
       const nodes = record.snapshot.nodes;
       const starts = nodes.map((node) => node.startedAt).filter((value) => value > 0);
-      // A visit's steps start as the visit is entered: anchor their clock there.
+      // A state entry's steps start as the state entry is entered: anchor their clock there.
       const anchor = starts.length ? Math.min(...starts) : 0;
       const nodeOffset = (clock: number) => (entered ?? 0) + Math.max(0, clock - anchor);
       const scope = {
-        visit,
+        entry,
         phase: PHASE_BODY,
         state,
-        prefix: `v${visit}:`,
+        prefix: `e${entry}:`,
         accepts: declaration?.transitions
           .map((transition) => transition.event)
           .filter((event): event is string => Boolean(event)),
@@ -571,7 +571,7 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
       entries.push(
         ...waitEntries(
           waits.filter(
-            (card) => card.nodeId.startsWith(`v${visit}.`) && !isTimerWait(card, spec, state),
+            (card) => card.nodeId.startsWith(`e${entry}.`) && !isTimerWait(card, spec, state),
           ),
           byId,
           nodeOffset,
@@ -582,10 +582,10 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
     }
     for (const fact of detail?.events ?? []) {
       // A directly accepted event's delivery is the transition itself; only a
-      // delivery of an event accepted (deferred) in an earlier visit is shown.
+      // delivery of an event accepted (deferred) in an earlier state entry is shown.
       if (fact.status === "consumed") {
-        const acceptedVisit = fact.receipt_id ? acceptedIn.get(fact.receipt_id) : undefined;
-        if (acceptedVisit === undefined || acceptedVisit === visit) continue;
+        const acceptedStateEntry = fact.receipt_id ? acceptedIn.get(fact.receipt_id) : undefined;
+        if (acceptedStateEntry === undefined || acceptedStateEntry === entry) continue;
       }
       const verdict = eventVerdict(fact, declaration);
       const receipt = fact.receipt_id ? receipts.get(fact.receipt_id) : undefined;
@@ -600,7 +600,7 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
           ? acceptedIn.get(fact.receipt_id)
           : undefined;
       entries.push({
-        id: `v${visit}:fact:${fact.tseq}`,
+        id: `e${entry}:fact:${fact.tseq}`,
         kind: "event",
         offset,
         at: fact.at,
@@ -608,7 +608,7 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
         detail: [
           verdict.word === "deferred" ? "held for a later state" : undefined,
           verdict.word === "ignored" ? `${state} does not accept it` : undefined,
-          deferredFrom !== undefined ? `deferred since visit ${deferredFrom}` : undefined,
+          deferredFrom !== undefined ? `deferred since entry ${deferredFrom}` : undefined,
           fact.source,
           receipt && fact.status === "accepted" ? receiptText(receipt) : undefined,
         ]
@@ -616,20 +616,20 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
           .join(" · "),
         status: verdict.word,
         tone: verdict.tone,
-        visit,
+        entry,
         state,
         arc:
           target !== undefined && verdict.word !== "ignored" && verdict.word !== "dropped"
             ? { from: state, to: target, event: fact.event }
             : undefined,
-        sort: [visit, PHASE_BODY, offset ?? Infinity, fact.tseq],
+        sort: [entry, PHASE_BODY, offset ?? Infinity, fact.tseq],
       });
     }
     if (!transition) continue;
     const hasTimers = (declaration?.timers.length ?? 0) > 0;
     if (transition.source === "timer") {
       entries.push({
-        id: `v${visit}:timer:fired`,
+        id: `e${entry}:timer:fired`,
         kind: "timer-fired",
         offset: left,
         at: record?.left_at ?? undefined,
@@ -638,49 +638,49 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
           ? `after ${formatDelay(declaration.timers[0].delay_seconds)}`
           : undefined,
         tone: "neutral",
-        visit,
+        entry,
         state,
         arc: { from: state, to: transition.to, event: null, timer: true },
-        sort: [visit, PHASE_EXIT, left ?? Infinity, 0],
+        sort: [entry, PHASE_EXIT, left ?? Infinity, 0],
       });
     } else if (hasTimers) {
       entries.push({
-        id: `v${visit}:timer:cancelled`,
+        id: `e${entry}:timer:cancelled`,
         kind: "timer-cancelled",
         offset: left,
         at: record?.left_at ?? undefined,
         title: `Timer cancelled in ${state}`,
-        detail: "the visit left before it fired",
+        detail: "the state entry left before it fired",
         tone: "muted",
-        visit,
+        entry,
         state,
-        sort: [visit, PHASE_EXIT, left ?? Infinity, 0],
+        sort: [entry, PHASE_EXIT, left ?? Infinity, 0],
       });
     }
     if (transition.source === "cancel") {
       entries.push({
-        id: `v${visit}:cancel`,
+        id: `e${entry}:cancel`,
         kind: "cancelled",
         offset: left,
         at: record?.left_at ?? undefined,
-        title: `Run cancelled in ${state} (visit ${visit})`,
+        title: `Run cancelled in ${state} (entry ${entry})`,
         tone: "warn",
-        visit,
+        entry,
         state,
-        sort: [visit, PHASE_LEAVE, left ?? Infinity, 0],
+        sort: [entry, PHASE_LEAVE, left ?? Infinity, 0],
       });
       continue;
     }
     entries.push({
-      id: `v${visit}:leave`,
-      kind: "visit-left",
+      id: `e${entry}:leave`,
+      kind: "state-entry-left",
       offset: left,
       at: record?.left_at ?? undefined,
-      title: `Left ${state} (visit ${visit}) → ${transition.to ?? "closed"}`,
+      title: `Left ${state} (entry ${entry}) → ${transition.to ?? "closed"}`,
       detail: `on ${arcCause(transition)}`,
       took: span(record?.entered_at, record?.left_at),
       tone: "neutral",
-      visit,
+      entry,
       state,
       arc: {
         from: state,
@@ -688,22 +688,22 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
         event: transition.event,
         timer: transition.source === "timer",
       },
-      sort: [visit, PHASE_LEAVE, left ?? Infinity, 0],
+      sort: [entry, PHASE_LEAVE, left ?? Infinity, 0],
     });
   }
   // Receipts the event facts do not show (not read, or not reported) stand alone,
-  // in the visit whose clocks contain them.
-  const lastVisit = visits.at(-1) ?? instance.visit;
+  // in the state entry whose clocks contain them.
+  const lastStateEntry = entries.at(-1) ?? instance.entry;
   for (const receipt of instance.receipts ?? []) {
     if (matchedReceipts.has(receipt.receipt_id)) continue;
     if (acceptedIn.has(receipt.receipt_id)) continue;
     const window = windows.find(
       (item) => receipt.accepted_at >= item.from && receipt.accepted_at < item.to,
     );
-    const visit =
-      window?.visit ?? (windows.length || input.clocksPending ? undefined : lastVisit);
-    // Outside the shown visits (an older window): not this window's entry.
-    if (visit === undefined) continue;
+    const entry =
+      window?.entry ?? (windows.length || input.clocksPending ? undefined : lastStateEntry);
+    // Outside the shown state entries (an older window): not this window's entry.
+    if (entry === undefined) continue;
     const offset = wallOffset(receipt.accepted_at);
     entries.push({
       id: `receipt:${receipt.receipt_id}`,
@@ -714,17 +714,17 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
       detail: `receipt ${receipt.receipt_id.slice(0, 8)}${receipt.duplicate ? " · duplicate" : ""}`,
       status: receipt.status,
       tone: receipt.status === "accepted" ? "ok" : "warn",
-      visit,
-      state: entries.find((entry) => entry.visit === visit)?.state,
-      sort: [visit, PHASE_BODY, offset ?? Infinity, 10_000],
+      entry,
+      state: entries.find((candidate) => candidate.entry === entry)?.state,
+      sort: [entry, PHASE_BODY, offset ?? Infinity, 10_000],
     });
   }
-  const finalVisit = visits.includes(instance.visit);
-  if (finalVisit && (input.settled || instance.finished)) {
+  const finalStateEntry = entries.includes(instance.entry);
+  if (finalStateEntry && (input.settled || instance.finished)) {
     const status = input.status ?? instance.status;
     if (status && !entries.some((entry) => entry.kind === "cancelled")) {
-      const record = details.get(instance.visit)?.record;
-      // Settled once the final visit's work is done: no earlier than its last entry.
+      const record = details.get(instance.entry)?.record;
+      // Settled once the final state entry's work is done: no earlier than its last entry.
       const offset = entries.reduce<number | undefined>(
         (latest, entry) =>
           entry.offset === undefined ? latest : Math.max(latest ?? 0, entry.offset),
@@ -735,7 +735,7 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
           status,
           offset,
           undefined,
-          instance.visit,
+          instance.entry,
           undefined,
           instance.state ?? undefined,
         ),
@@ -784,17 +784,17 @@ export function machinePending(
   for (const card of waits)
     if (
       (card.state === "pending" || card.state === "waiting") &&
-      card.nodeId.startsWith(`v${instance.visit}.`) &&
+      card.nodeId.startsWith(`e${instance.entry}.`) &&
       !isTimerWait(card, spec, state)
     )
       items.push({
         id: `wait:${card.nodeId}`,
         kind: "wait",
-        title: `Waiting: ${waitSubject(card, stepName({ name: card.nodeId, nodeId: card.nodeId }, instance.visit), instance.accepts)}`,
+        title: `Waiting: ${waitSubject(card, stepName({ name: card.nodeId, nodeId: card.nodeId }, instance.entry), instance.accepts)}`,
         detail: card.prompt ? card.kind : undefined,
         state,
         card,
-        visit: instance.visit,
+        entry: instance.entry,
       });
   if (instance.accepts.length > 0 && settled === false)
     items.push({

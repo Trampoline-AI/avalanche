@@ -219,7 +219,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         retained_floor_sequence: int | None = None,
     ) -> pb.LifecycleCursorV2:
         """Issue one complete, locally retained V2 lifecycle cursor."""
-        # Persisted run/visit history is readable at this instance's baseline,
+        # Persisted run/state entry history is readable at this instance's baseline,
         # but this instance can only name its own lifecycle sequence space.
         as_of_sequence = max(as_of_sequence, self._first_event_sequence)
         floor_sequence = (
@@ -1047,10 +1047,10 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         try:
             command = MachineControlRequest.model_validate_json(request.request_json)
             result = control_machine(self._op, command)
-            if command.op == "visit" and result.get("read_state") != "expired":
+            if command.op == "entry" and result.get("read_state") != "expired":
                 with self._op._state_store.transaction() as connection:
-                    visit = MachinesTable.visit(connection, command.run_id, command.visit)
-                snapshot = visit.snapshot or self._op.get_latest_run_snapshot(
+                    entry = MachinesTable.entry(connection, command.run_id, command.entry)
+                snapshot = entry.snapshot or self._op.get_latest_run_snapshot(
                     command.run_id, operator_instance_id=self._op.operator_instance_id
                 )
                 result["snapshot"] = MessageToDict(
@@ -1453,9 +1453,9 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
 
     # ── Results ───────────────────────────────────────────
 
-    def _result_payload(self, run_id: str, context, *, visit=None, node_id=None):
+    def _result_payload(self, run_id: str, context, *, entry=None, node_id=None):
         try:
-            return self._op._get_run_result_payload(run_id, visit=visit, node_id=node_id)
+            return self._op._get_run_result_payload(run_id, entry=entry, node_id=node_id)
         except KeyError:
             context.abort(grpc.StatusCode.NOT_FOUND, f"Run {run_id} not found")
         except (RunResultNotReadyError, RunResultUnavailableError) as exc:
@@ -1480,7 +1480,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
         payload = self._result_payload(
             request.run_id,
             context,
-            visit=request.visit if request.HasField("visit") else None,
+            entry=request.entry if request.HasField("entry") else None,
             node_id=request.node_id if request.HasField("node_id") else None,
         )
         run_sequence = self._run_sequence(request.run_id)

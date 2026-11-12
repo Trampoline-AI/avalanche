@@ -84,7 +84,7 @@ def reduce_machine(
 ) -> MachineReduction:
     """Select final, earliest expired timer, internal, then first external event.
 
-    No transition interrupts unfinished visit work. Equal timer deadlines retain
+    No transition interrupts unfinished state entry work. Equal timer deadlines retain
     declaration order. None payloads preserve the previous transition payload.
     """
     if not work_done:

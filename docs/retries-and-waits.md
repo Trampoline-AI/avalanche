@@ -75,7 +75,7 @@ inside a step. The graph contains a normal start followed by `kind="run"` wait;
 no executor worker is held while the child runs. `ava.start_run` remains
 fire-and-forget. Existing keys attach to the original run, ignoring replacement
 non-key input. A machine call returns only when the instance closes, not when
-one visit finishes.
+one state entry finishes.
 
 Success uses the shared `RunResult` codec and restores the target's declared
 output model. File and Workspace values stay references, not copied bytes.

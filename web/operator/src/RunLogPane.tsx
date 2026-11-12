@@ -27,7 +27,7 @@ import {
   mergeDescriptorPage,
   SCROLL_LOAD_THRESHOLD_PX,
 } from "./detailProjection";
-import { type PaneScope, ScopeChip, stepScopeLabel, visitStep } from "./ScopeChip";
+import { type PaneScope, ScopeChip, stepScopeLabel, stateEntryStep } from "./ScopeChip";
 import { DescriptorPageOrder, type LogRecordDescriptorMsg, type RunSnapshotMsg } from "./model";
 
 import {
@@ -78,14 +78,14 @@ interface RunLogPaneProps {
   timelineAll?: string;
   /**
    * Shown under the header on both tabs: what the pane is scoped to (a machine
-   * run's visit, with the way back to the state machine).
+   * run's state entry, with the way back to the state machine).
    */
   context?: ReactNode;
 }
 
 export type RunPaneTab = "logs" | "timeline";
 
-export { visitStep };
+export { stateEntryStep };
 
 interface ScrollAnchor {
   height: number;
@@ -713,16 +713,16 @@ export function RunLogPane({
                       >
                         {logTimestamp(entry.timestamp)}
                       </time>
-                      {!graphNodeId && visitStep(entry.nodeId) ? (
-                        // A machine run's step of another visit: opens that visit's step.
+                      {!graphNodeId && stateEntryStep(entry.nodeId) ? (
+                        // A machine run's step of another state entry: opens that state entry's step.
                         <button
                           type="button"
                           className="run-log-node sticky top-1.5 min-w-0 cursor-pointer border-0 bg-inherit p-0 text-left [font:inherit] text-acid focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-acid [&>strong]:block [&>strong]:truncate [&>code]:mt-0.5 [&>code]:block [&>code]:truncate [&>code]:text-[8px] [&>code]:text-muted"
-                          data-log-visit={visitStep(entry.nodeId)!.visit}
+                          data-log-entry={stateEntryStep(entry.nodeId)!.entry}
                           onClick={() => onSelectNode(entry.nodeId)}
                         >
-                          <strong>{visitStep(entry.nodeId)!.step}</strong>
-                          <code>visit {visitStep(entry.nodeId)!.visit}</code>
+                          <strong>{stateEntryStep(entry.nodeId)!.step}</strong>
+                          <code>entry {stateEntryStep(entry.nodeId)!.entry}</code>
                         </button>
                       ) : graphNodeId ? (
                         <button

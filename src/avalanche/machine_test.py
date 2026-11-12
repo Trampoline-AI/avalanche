@@ -109,7 +109,7 @@ class MachineTest:
         self._payload: LocalValue = None
         self._work_done = False
         self._internal_consumed = False
-        self._visit = 0
+        self._entry = 0
         self._enter()
         self.host.attach(self)
 
@@ -123,7 +123,7 @@ class MachineTest:
         raise RuntimeError("use machine.test_async/asend/aadvance_time inside an event loop")
 
     def _enter(self) -> None:
-        self._visit += 1
+        self._entry += 1
         declaration = self.spec.states[self.state]
         self.waits.payloads = self.machine.payloads
         self.waits.enter(self.machine.payloads[self.state], declaration.defer)
@@ -139,7 +139,7 @@ class MachineTest:
         self._internal_consumed = False
         work = self.machine.works[declaration.work]
         self.handle.node_aliases = {slug: name for name, slug in work.node_slugs.items()}
-        self.waits.add_visit_waits(
+        self.waits.add_state_entry_waits(
             {
                 name: (ref.node.spec, ref.node.model)
                 for name, ref in work.nodes.items()
@@ -319,7 +319,7 @@ class MachineTest:
                         self._values[name] = None
                         continue
                     assert isinstance(start, RunStart)
-                    address = (self.handle.run_id, self._visit, name)
+                    address = (self.handle.run_id, self._entry, name)
                     if address not in self.host.calls:
                         check_run_wait(self.handle.run_id, start.run_id, self.host.waiting())
                         self.host.calls[address] = start
@@ -350,7 +350,7 @@ class MachineTest:
                 else:
                     executable.append(name)
             if executable:
-                # TaskGroup owns sibling cancellation on a failed visit; no task leaks.
+                # TaskGroup owns sibling cancellation on a failed state entry; no task leaks.
                 async with asyncio.TaskGroup() as group:
                     tasks = {
                         name: group.create_task(self._invoke(work.nodes[name], dependencies))
@@ -448,7 +448,7 @@ class MachineTest:
             if node.definition is not None:
                 self.host.register(node.definition)
             target = TypeAdapter(str).validate_python(bound.arguments["target"], strict=True)
-            address = (self.handle.run_id, self._visit, ref.future_id)
+            address = (self.handle.run_id, self._entry, ref.future_id)
             if address not in self.host.starts:
                 self.host.starts[address] = await self.host._start_run(
                     target, bound.arguments["input"], drive=False)
@@ -464,7 +464,7 @@ class MachineTest:
             context = RunContext(
                 run_id=self.handle.run_id,
                 workflow_name=work.name,
-                node_id=f"v{self._visit}.{ref.future_id}" if self._visit else ref.future_id,
+                node_id=f"e{self._entry}.{ref.future_id}" if self._entry else ref.future_id,
                 node_name=node.name,
                 node_slug=ref.node_slug,
             )
@@ -482,7 +482,7 @@ class MachineTest:
         context = RunContext(
             run_id=self.handle.run_id,
             workflow_name=work.name,
-            node_id=f"v{self._visit}.{ref.future_id}" if self._visit else ref.future_id,
+            node_id=f"e{self._entry}.{ref.future_id}" if self._entry else ref.future_id,
             node_name=node.name,
             node_slug=ref.node_slug,
         )
@@ -755,7 +755,7 @@ class InMemoryMachineHost:
 
 
 class WorkflowTest(MachineTest):
-    """Reuse the test visit DAG driver, without a synthetic machine definition."""
+    """Reuse the test state entry DAG driver, without a synthetic machine definition."""
 
     def __init__(
         self,
@@ -782,7 +782,7 @@ class WorkflowTest(MachineTest):
         self.waits = MachineWaits(self.handle.run_id)
         self.handle.waits = self.waits
         self.handle.node_aliases = {slug: name for name, slug in workflow.node_slugs.items()}
-        self.waits.add_visit_waits(
+        self.waits.add_state_entry_waits(
             {
                 name: (ref.node.spec, ref.node.model)
                 for name, ref in workflow.nodes.items()
@@ -795,7 +795,7 @@ class WorkflowTest(MachineTest):
         self._holds: set[str] = set()
         self._attempts: dict[str, int] = {}
         self._payload = None
-        self._visit = 0
+        self._entry = 0
         self._busy = False
         self.host.attach(self)
         self.host.flows[workflow.name] = workflow

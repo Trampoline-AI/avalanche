@@ -1,4 +1,4 @@
-"""Real local machine fixture: external event, mapped visit work and UTC timer."""
+"""Real local machine fixture: external event, mapped state entry work and UTC timer."""
 
 import logging
 import time
@@ -104,7 +104,7 @@ def artifact_child():
 
 
 @ava.workflow(input=ArtifactTicket)
-def artifact_final_visit():
+def artifact_final_state_entry():
     inspected = inspect_artifacts()
     delivered = inspect_delivery()
     prepared = artifact_child_input()
@@ -117,7 +117,7 @@ def artifact_final_visit():
 def artifact_approval():
     pending = ava.state(inspect_artifacts, initial=True, defer=("artifacts",))
     reviewed = ava.state(inspect_artifacts)
-    done = ava.state(artifact_final_visit, final=True)
+    done = ava.state(artifact_final_state_entry, final=True)
     pending.on("approved") >> reviewed
     reviewed.on("artifacts", payload=ArtifactDelivery) >> done
 
@@ -315,7 +315,7 @@ def timeout_parent():
 
 
 @ava.workflow(input=CallInput, output=CallOutput)
-def machine_call_visit():
+def machine_call_state_entry():
     called = ava.call(call_machine, next_call(ava.input), when=has_child(ava.input))
     result = echo_result(ava.input)
     called >> result
@@ -324,18 +324,18 @@ def machine_call_visit():
 
 @ava.machine(input=CallInput, key=("id",))
 def call_machine():
-    done = ava.state(machine_call_visit, initial=True, final=True)
+    done = ava.state(machine_call_state_entry, initial=True, final=True)
     return done
 
 
 @ava.workflow(input=CallInput, output=CallOutput)
-def call_flow_visit():
+def call_flow_state_entry():
     return ava.call(echo_child, ava.input)
 
 
 @ava.machine(input=CallInput, key=("id",))
 def flow_call_machine():
-    done = ava.state(call_flow_visit, initial=True, final=True)
+    done = ava.state(call_flow_state_entry, initial=True, final=True)
     return done
 
 
@@ -351,35 +351,35 @@ def lifecycle_call_parent():
 
 
 @ava.workflow(input=CallInput)
-def self_wait_visit():
+def self_wait_state_entry():
     return ava.call(self_wait_machine, ava.input)
 
 
 @ava.machine(input=CallInput, key=("id",))
 def self_wait_machine():
-    done = ava.state(self_wait_visit, initial=True, final=True)
+    done = ava.state(self_wait_state_entry, initial=True, final=True)
     return done
 
 
 @ava.workflow(input=CallInput)
-def cycle_a_visit():
+def cycle_a_state_entry():
     return ava.call(cycle_b, ava.input)
 
 
 @ava.workflow(input=CallInput)
-def cycle_b_visit():
+def cycle_b_state_entry():
     return ava.call(cycle_a, ava.input)
 
 
 @ava.machine(input=CallInput, key=("id",))
 def cycle_a():
-    done = ava.state(cycle_a_visit, initial=True, final=True)
+    done = ava.state(cycle_a_state_entry, initial=True, final=True)
     return done
 
 
 @ava.machine(input=CallInput, key=("id",))
 def cycle_b():
-    done = ava.state(cycle_b_visit, initial=True, final=True)
+    done = ava.state(cycle_b_state_entry, initial=True, final=True)
     return done
 
 

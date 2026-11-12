@@ -15,23 +15,23 @@ export type StepResultRead =
 
 /**
  * Read the accepted result of a finished step: a flow run's step, or (with
- * `visit`) a machine visit's step, whose snapshot node ID is visit-qualified
- * (`v<visit>.<step>`) while the result route takes the step's own ID.
+ * `entry`) a machine state entry's step, whose snapshot node ID is state-entry-qualified
+ * (`e<entry>.<step>`) while the result route takes the step's own ID.
  */
 export function useStepResult(
   api: OperatorApi,
   runId: string | undefined,
   node: NodeSnapshotMsg | undefined,
-  visit?: number,
+  entry?: number,
 ): StepResultRead | undefined {
   const nodeId = node?.nodeId;
   const stepId =
-    nodeId && visit !== undefined && nodeId.startsWith(`v${visit}.`)
-      ? nodeId.slice(`v${visit}.`.length)
+    nodeId && entry !== undefined && nodeId.startsWith(`e${entry}.`)
+      ? nodeId.slice(`e${entry}.`.length)
       : nodeId;
   const load = useCallback(
-    (signal: AbortSignal) => api.getRunResult!(runId!, { visit, nodeId: stepId }, signal),
-    [api, runId, visit, stepId],
+    (signal: AbortSignal) => api.getRunResult!(runId!, { entry, nodeId: stepId }, signal),
+    [api, runId, entry, stepId],
   );
   // A finished step: `success` on the local operator, `succeeded` on Delta.
   const finished = node?.status === "success" || node?.status === "succeeded";
@@ -77,7 +77,7 @@ function StepValue({ label, preview }: { label: string; preview: StepValuePrevie
 /**
  * What a standard step received and returned in this run: bounded input previews,
  * and the step's accepted typed output from the shared result route when the host
- * has one (the same for a flow step and a machine visit's step), else its preview.
+ * has one (the same for a flow step and a machine state entry's step), else its preview.
  */
 export function StepRunValues({
   node,

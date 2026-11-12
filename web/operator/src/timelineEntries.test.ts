@@ -5,8 +5,8 @@ import type {
   MachineInstance,
   MachineSpec,
   MachineTransition,
-  MachineVisit,
-  MachineVisitEvent,
+  MachineStateEntry,
+  MachineStateEntryEvent,
 } from "./machine";
 import { NodeSnapshotMsg, RunSnapshotMsg, RunSummaryMsg } from "./model";
 import type { WaitCard } from "./RunWaitPanel";
@@ -17,7 +17,7 @@ import {
   flowTimeline,
   machinePending,
   machineTimeline,
-  type MachineVisitDetail,
+  type MachineStateEntryDetail,
   type TimelineEntry,
 } from "./timelineEntries";
 
@@ -72,52 +72,52 @@ const transitions: MachineTransition[] = [
     to: "amend",
     event: "review_done_with_nits",
     source: "internal",
-    visit: 1,
+    entry: 1,
   },
-  { from: "amend", to: "in_review", event: "amended", source: "external", visit: 2 },
+  { from: "amend", to: "in_review", event: "amended", source: "external", entry: 2 },
   {
     from: "in_review",
     to: "ready_to_merge",
     event: "review_done",
     source: "internal",
-    visit: 3,
+    entry: 3,
   },
-  { from: "ready_to_merge", to: "closed", event: "merged", source: "external", visit: 4 },
+  { from: "ready_to_merge", to: "closed", event: "merged", source: "external", entry: 4 },
 ];
 
-function visitRecord(visit: number, stateName: string, entered: number, left: number | null) {
+function stateEntryRecord(entry: number, stateName: string, entered: number, left: number | null) {
   return {
-    visit,
+    entry,
     state: stateName,
     entered_at: entered,
     left_at: left,
     disposition: left === null ? "current" : "retained",
-    transition: transitions.find((item) => item.visit === visit) ?? null,
+    transition: transitions.find((item) => item.entry === entry) ?? null,
     nodes: {},
     snapshot: RunSnapshotMsg.create({
       nodes: [
         NodeSnapshotMsg.create({
-          nodeId: `v${visit}.work`,
-          // Some hosts keep the visit prefix in the step's name.
-          name: visit === 2 ? "v2.work" : "work",
+          nodeId: `e${entry}.work`,
+          // Some hosts keep the state entry prefix in the step's name.
+          name: entry === 2 ? "e2.work" : "work",
           status: "success",
-          startedAt: 500 + visit * 10,
-          endedAt: 500 + visit * 10 + 1,
-          attempts: visit === 1 ? 2 : 1,
+          startedAt: 500 + entry * 10,
+          endedAt: 500 + entry * 10 + 1,
+          attempts: entry === 1 ? 2 : 1,
         }),
       ],
     }),
-  } satisfies MachineVisit;
+  } satisfies MachineStateEntry;
 }
 
 const fact = (
   tseq: number,
   at: number,
-  status: MachineVisitEvent["status"],
+  status: MachineStateEntryEvent["status"],
   event: string,
   receipt: string | null,
-  source: MachineVisitEvent["source"] = "external",
-): MachineVisitEvent => ({ tseq, at, status, event, receipt_id: receipt, source });
+  source: MachineStateEntryEvent["source"] = "external",
+): MachineStateEntryEvent => ({ tseq, at, status, event, receipt_id: receipt, source });
 
 const receipts: MachineEventReceipt[] = [
   {
@@ -143,19 +143,19 @@ const receipts: MachineEventReceipt[] = [
   },
 ];
 
-function details(): Map<number, MachineVisitDetail> {
-  return new Map<number, MachineVisitDetail>([
+function details(): Map<number, MachineStateEntryDetail> {
+  return new Map<number, MachineStateEntryDetail>([
     [
       1,
       {
-        record: visitRecord(1, "in_review", T0 + 1, T0 + 20),
+        record: stateEntryRecord(1, "in_review", T0 + 1, T0 + 20),
         events: [fact(1, T0 + 19, "accepted", "review_done_with_nits", null, "internal")],
       },
     ],
     [
       2,
       {
-        record: visitRecord(2, "amend", T0 + 20, T0 + 30),
+        record: stateEntryRecord(2, "amend", T0 + 20, T0 + 30),
         events: [
           fact(2, T0 + 25, "accepted", "amended", "r-amended"),
           fact(3, T0 + 26, "accepted", "merged", "r-merged"),
@@ -163,16 +163,16 @@ function details(): Map<number, MachineVisitDetail> {
         ],
       },
     ],
-    [3, { record: visitRecord(3, "in_review", T0 + 30, T0 + 40), events: [] }],
+    [3, { record: stateEntryRecord(3, "in_review", T0 + 30, T0 + 40), events: [] }],
     [
       4,
       {
-        record: visitRecord(4, "ready_to_merge", T0 + 40, T0 + 45),
-        // The deferred `merged` is delivered here, in a later visit than it was accepted.
+        record: stateEntryRecord(4, "ready_to_merge", T0 + 40, T0 + 45),
+        // The deferred `merged` is delivered here, in a later state entry than it was accepted.
         events: [fact(5, T0 + 45, "consumed", "merged", "r-merged")],
       },
     ],
-    [5, { record: visitRecord(5, "closed", T0 + 45, null), events: [] }],
+    [5, { record: stateEntryRecord(5, "closed", T0 + 45, null), events: [] }],
   ]);
 }
 
@@ -183,7 +183,7 @@ const instance = (overrides: Partial<MachineInstance> = {}): MachineInstance => 
   deployment_id: "",
   status: "success",
   state: "closed",
-  visit: 5,
+  entry: 5,
   version: 1,
   accepts: [],
   due: null,
@@ -198,7 +198,7 @@ function closedRun(overrides: Partial<Parameters<typeof machineTimeline>[0]> = {
     spec,
     instance: instance(),
     history: transitions,
-    visits: [1, 2, 3, 4, 5],
+    entries: [1, 2, 3, 4, 5],
     details: details(),
     startedAt: T0,
     status: "success",
@@ -211,31 +211,31 @@ function closedRun(overrides: Partial<Parameters<typeof machineTimeline>[0]> = {
 const line = (entry: TimelineEntry) => `${entry.kind}: ${entry.title}`;
 
 describe("machine run timeline", () => {
-  it("merges visits, steps, events, receipts, timers and the outcome in time order", () => {
+  it("merges state entries, steps, events, receipts, timers and the outcome in time order", () => {
     expect(closedRun().map(line)).toEqual([
       "run-started: Run started in in_review",
-      "visit-entered: Entered in_review (visit 1)",
-      "step-finished: Step work ran in in_review (visit 1)",
+      "state-entry-entered: Entered in_review (entry 1)",
+      "step-finished: Step work ran in in_review (entry 1)",
       "event: Event review_done_with_nits accepted in in_review → amend",
-      "visit-left: Left in_review (visit 1) → amend",
-      "visit-entered: Entered amend (visit 2)",
-      "step-finished: Step work ran in amend (visit 2)",
+      "state-entry-left: Left in_review (entry 1) → amend",
+      "state-entry-entered: Entered amend (entry 2)",
+      "step-finished: Step work ran in amend (entry 2)",
       "event: Event amended accepted in amend → in_review",
       "event: Event merged deferred in amend",
       "event: Event closed_without_merge ignored in amend",
-      "visit-left: Left amend (visit 2) → in_review",
-      "visit-entered: Entered in_review (visit 3)",
-      "step-finished: Step work ran in in_review (visit 3)",
-      "visit-left: Left in_review (visit 3) → ready_to_merge",
-      "visit-entered: Entered ready_to_merge (visit 4)",
+      "state-entry-left: Left amend (entry 2) → in_review",
+      "state-entry-entered: Entered in_review (entry 3)",
+      "step-finished: Step work ran in in_review (entry 3)",
+      "state-entry-left: Left in_review (entry 3) → ready_to_merge",
+      "state-entry-entered: Entered ready_to_merge (entry 4)",
       "timer-armed: Timer armed in ready_to_merge → closed",
-      "step-finished: Step work ran in ready_to_merge (visit 4)",
+      "step-finished: Step work ran in ready_to_merge (entry 4)",
       "receipt: Send receipt accepted for key seed-late",
       "event: Event merged delivered in ready_to_merge → closed",
       "timer-cancelled: Timer cancelled in ready_to_merge",
-      "visit-left: Left ready_to_merge (visit 4) → closed",
-      "visit-entered: Entered closed (visit 5)",
-      "step-finished: Step work ran in closed (visit 5)",
+      "state-entry-left: Left ready_to_merge (entry 4) → closed",
+      "state-entry-entered: Entered closed (entry 5)",
+      "step-finished: Step work ran in closed (entry 5)",
       "outcome: Run succeeded in closed",
     ]);
   });
@@ -243,7 +243,7 @@ describe("machine run timeline", () => {
   it("orders entries by time even when the host returns history newest first", () => {
     const shuffled = closedRun({
       history: [...transitions].reverse(),
-      visits: [5, 3, 1, 4, 2],
+      entries: [5, 3, 1, 4, 2],
     });
     expect(shuffled.map((entry) => entry.id)).toEqual(closedRun().map((entry) => entry.id));
     const offsets = shuffled.map((entry) => entry.offset ?? 0);
@@ -258,7 +258,7 @@ describe("machine run timeline", () => {
     expect(amended).toMatchObject({
       state: "amend",
       arc: { from: "amend", to: "in_review", event: "amended" },
-      visit: 2,
+      entry: 2,
     });
     expect(amended.detail).toContain("receipt r-amende · key seed-amended");
     const deferred = entries.find((entry) => entry.status === "deferred")!;
@@ -276,17 +276,17 @@ describe("machine run timeline", () => {
       to: "amend",
       event: "review_done_with_nits",
     });
-    // Inside a visit a step is named without the visit prefix.
-    expect(entries.find((entry) => entry.id === "v2:step:v2.work:end")!.title).toBe(
-      "Step work ran in amend (visit 2)",
+    // Inside a state entry a step is named without the state entry prefix.
+    expect(entries.find((entry) => entry.id === "e2:step:e2.work:end")!.title).toBe(
+      "Step work ran in amend (entry 2)",
     );
     // Retries are named on the step.
-    expect(entries.find((entry) => entry.id === "v1:step:v1.work:end")!.detail).toBe(
+    expect(entries.find((entry) => entry.id === "e1:step:e1.work:end")!.detail).toBe(
       "ok · after 2 attempts",
     );
-    // A receipt no event fact shows stands alone, in the visit its time falls in.
+    // A receipt no event fact shows stands alone, in the state entry its time falls in.
     expect(entries.find((entry) => entry.kind === "receipt")).toMatchObject({
-      visit: 4,
+      entry: 4,
       state: "ready_to_merge",
     });
   });
@@ -294,20 +294,20 @@ describe("machine run timeline", () => {
   it("shows a timer that fired, and a cancel, instead of a transition", () => {
     const fired: MachineTransition[] = [
       ...transitions.slice(0, 3),
-      { from: "ready_to_merge", to: "closed", event: null, source: "timer", visit: 4 },
+      { from: "ready_to_merge", to: "closed", event: null, source: "timer", entry: 4 },
     ];
     const timerRun = closedRun({
       history: fired,
       details: new Map(
-        [...details()].map(([visit, item]) => [
-          visit,
+        [...details()].map(([entry, item]) => [
+          entry,
           {
             ...item,
             record: item.record && {
               ...item.record,
-              transition: fired.find((t) => t.visit === visit) ?? null,
+              transition: fired.find((t) => t.entry === entry) ?? null,
             },
-            events: visit === 4 ? [] : item.events,
+            events: entry === 4 ? [] : item.events,
           },
         ]),
       ),
@@ -324,19 +324,19 @@ describe("machine run timeline", () => {
     );
 
     const cancelled: MachineTransition[] = [
-      { from: "in_review", to: null, event: null, source: "cancel", visit: 1 },
+      { from: "in_review", to: null, event: null, source: "cancel", entry: 1 },
     ];
     const cancelRun = machineTimeline({
       spec,
-      instance: instance({ visit: 1, state: "in_review", status: "cancelled", finished: true }),
+      instance: instance({ entry: 1, state: "in_review", status: "cancelled", finished: true }),
       history: cancelled,
-      visits: [1],
+      entries: [1],
       details: new Map([
         [
           1,
           {
             record: {
-              ...visitRecord(1, "in_review", T0 + 1, T0 + 9),
+              ...stateEntryRecord(1, "in_review", T0 + 1, T0 + 9),
               transition: cancelled[0],
             },
           },
@@ -348,17 +348,17 @@ describe("machine run timeline", () => {
       fromStart: true,
     });
     expect(cancelRun.map(line).slice(-1)).toEqual([
-      "cancelled: Run cancelled in in_review (visit 1)",
+      "cancelled: Run cancelled in in_review (entry 1)",
     ]);
     expect(cancelRun.some((entry) => entry.kind === "outcome")).toBe(false);
   });
 
-  it("lists visits it has not read yet from history alone, without times", () => {
+  it("lists state entries it has not read yet from history alone, without times", () => {
     const entries = machineTimeline({
       spec,
-      instance: instance({ finished: false, status: "waiting", state: "amend", visit: 2 }),
+      instance: instance({ finished: false, status: "waiting", state: "amend", entry: 2 }),
       history: transitions.slice(0, 1),
-      visits: [1, 2],
+      entries: [1, 2],
       details: new Map(),
       settled: false,
       fromStart: true,
@@ -366,9 +366,9 @@ describe("machine run timeline", () => {
     });
     expect(entries.map(line)).toEqual([
       "run-started: Run started in in_review",
-      "visit-entered: Entered in_review (visit 1)",
-      "visit-left: Left in_review (visit 1) → amend",
-      "visit-entered: Entered amend (visit 2)",
+      "state-entry-entered: Entered in_review (entry 1)",
+      "state-entry-left: Left in_review (entry 1) → amend",
+      "state-entry-entered: Entered amend (entry 2)",
     ]);
     expect(entries.every((entry) => entry.offset === undefined)).toBe(true);
     // An unknown time still says why (the row's "—" carries it as a tooltip).
@@ -380,13 +380,13 @@ describe("machine run timeline", () => {
     const foreign = closedRun({
       instance: instance({ receipts: undefined, pending_events: undefined }),
       details: new Map(
-        [...details()].map(([visit, item]) => [visit, { record: item.record }] as const),
+        [...details()].map(([entry, item]) => [entry, { record: item.record }] as const),
       ),
     });
     const kinds = new Set(foreign.map((entry) => entry.kind));
     expect(kinds.has("event")).toBe(false);
     expect(kinds.has("receipt")).toBe(false);
-    for (const kind of ["visit-entered", "visit-left", "timer-armed", "outcome"] as const)
+    for (const kind of ["state-entry-entered", "state-entry-left", "timer-armed", "outcome"] as const)
       expect(kinds.has(kind)).toBe(true);
     expect(
       foreign.some((entry) =>
@@ -400,14 +400,14 @@ describe("machine pending row", () => {
   const live = instance({
     status: "waiting",
     state: "ready_to_merge",
-    visit: 4,
+    entry: 4,
     finished: false,
     due: T0 + 640,
     accepts: ["merged", "closed_without_merge"],
     pending_events: [{ event: "merged", receipt_id: "r-merged", payload: null }],
   });
   const decision: WaitCard = {
-    nodeId: "v4.approve",
+    nodeId: "e4.approve",
     kind: "decision",
     state: "waiting",
     schema: { type: "object" },
@@ -419,7 +419,7 @@ describe("machine pending row", () => {
     const items = machinePending(
       live,
       spec,
-      [decision, { ...decision, nodeId: "v3.old" }],
+      [decision, { ...decision, nodeId: "e3.old" }],
       false,
     );
     expect(items.map((item) => [item.kind, item.title])).toEqual([
@@ -435,9 +435,9 @@ describe("machine pending row", () => {
   });
 
   it("lists a state's timer once: not again as the host's own wait for it", () => {
-    // The local operator mirrors ready_to_merge's timer as a sleep wait `v4.after_0`.
+    // The local operator mirrors ready_to_merge's timer as a sleep wait `e4.after_0`.
     const timerWait: WaitCard = {
-      nodeId: "v4.after_0",
+      nodeId: "e4.after_0",
       kind: "sleep",
       state: "waiting",
       schema: {},
@@ -604,7 +604,7 @@ describe("flow run timeline", () => {
 describe("graph selection", () => {
   it("filters to a state's entries (in it, or on an arc into or out of it)", () => {
     const amend = filterTimeline(closedRun(), { state: "amend" });
-    expect(new Set(amend.map((entry) => entry.visit))).toEqual(new Set([1, 2, 3]));
+    expect(new Set(amend.map((entry) => entry.entry))).toEqual(new Set([1, 2, 3]));
     expect(
       amend.every(
         (entry) =>

@@ -40,7 +40,7 @@ export interface MachineTransition {
   to: string | null;
   event: string | null;
   source: "internal" | "external" | "timer" | "cancel";
-  visit: number;
+  entry: number;
 }
 export interface MachineInstance {
   machine: string;
@@ -49,7 +49,7 @@ export interface MachineInstance {
   deployment_id: string;
   status: string;
   state: string | null;
-  visit: number;
+  entry: number;
   version: 1;
   accepts: string[];
   /** Absolute Unix seconds, never a relative delay. */
@@ -61,31 +61,31 @@ export interface MachineInstance {
   pending_events?: { event: string; receipt_id: string; payload: JsonValue }[];
   receipts?: MachineEventReceipt[];
 }
-export interface MachineVisitNode {
+export interface MachineStateEntryNode {
   state: string;
   kind: string;
   deps: string[];
   g: number;
   attempts: number;
 }
-export interface MachineVisit {
-  /** Host-provided bounded snapshot: this run ID, only this visit's qualified
+export interface MachineStateEntry {
+  /** Host-provided bounded snapshot: this run ID, only this state entry's qualified
    * nodes/topology/expansions, retained I/O/trace tokens, scoped log token and seal.
    * Never synthesize it from the status-only nodes below. Absent only when the
-   * visit's history expired (`disposition: "expired"`). */
+   * state entry's history expired (`disposition: "expired"`). */
   snapshot?: RunSnapshotMsg;
-  visit: number;
+  entry: number;
   state: string;
   entered_at: number | null;
   left_at: number | null;
-  /** `expired`: the run's retention policy removed this visit's history and artifacts. */
+  /** `expired`: the run's retention policy removed this state entry's history and artifacts. */
   disposition: "current" | "retained" | "archived" | "indeterminate" | "expired";
   transition: MachineTransition | null;
-  nodes: Record<string, MachineVisitNode>;
-  /** Local operator extension: catalog revision that actually executed this visit. */
+  nodes: Record<string, MachineStateEntryNode>;
+  /** Local operator extension: catalog revision that actually executed this state entry. */
   catalog_revision?: string;
 }
-export interface MachineVisitEvent {
+export interface MachineStateEntryEvent {
   tseq: number;
   at: number;
   status: "accepted" | "consumed" | "ignored" | "dropped";

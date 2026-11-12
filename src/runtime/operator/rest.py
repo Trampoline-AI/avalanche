@@ -108,7 +108,7 @@ class _PageQuery(_Query):
 
 
 class _ResultQuery(_Query):
-    visit: int | None = Field(default=None, ge=1)
+    entry: int | None = Field(default=None, ge=1)
     node_id: str | None = Field(default=None, min_length=1)
 
 
@@ -442,17 +442,17 @@ def create_rest_app(channel: grpc.Channel) -> FastAPI:
     @router.get(
         "/v1/runs/{run_id}/result",
         response_model=RunResult,
-        summary="Read a run, visit or step result",
+        summary="Read a run, state entry or step result",
     )
     def get_result(run_id: str, query: Annotated[_ResultQuery, Query()]):
         response = stub.GetRunResult(
-            pb.GetRunResultRequestV2(run_id=run_id, visit=query.visit, node_id=query.node_id),
+            pb.GetRunResultRequestV2(run_id=run_id, entry=query.entry, node_id=query.node_id),
             timeout=_RPC_TIMEOUT_SECONDS,
         )
         return RunResult.from_payload(
             run_id,
             EncodedWorkflowResult(value_json=response.value.value_json),
-            visit=query.visit,
+            entry=query.entry,
             node_id=query.node_id,
         )
 
@@ -530,20 +530,20 @@ def create_rest_app(channel: grpc.Channel) -> FastAPI:
     def machine_history(run_id: str, cursor: str | None = None, limit: int = 20) -> JsonValue:
         return machine_control(op="history", run_id=run_id, cursor=cursor, limit=limit)
 
-    @router.get("/v1/runs/{run_id}/machine/visits/{visit}")
-    def machine_visit(run_id: str, visit: int) -> JsonValue:
-        return machine_control(op="visit", run_id=run_id, visit=visit)
+    @router.get("/v1/runs/{run_id}/machine/entries/{entry}")
+    def machine_state_entry(run_id: str, entry: int) -> JsonValue:
+        return machine_control(op="entry", run_id=run_id, entry=entry)
 
-    @router.get("/v1/runs/{run_id}/machine/visits/{visit}/events")
-    def machine_visit_events(
-        run_id: str, visit: int, cursor: str | None = None, limit: int = 20
+    @router.get("/v1/runs/{run_id}/machine/entries/{entry}/events")
+    def machine_state_entry_events(
+        run_id: str, entry: int, cursor: str | None = None, limit: int = 20
     ) -> JsonValue:
         return machine_control(
-            op="events", run_id=run_id, visit=visit, cursor=cursor, limit=limit
+            op="events", run_id=run_id, entry=entry, cursor=cursor, limit=limit
         )
 
-    @router.post("/v1/runs/{run_id}/machine/visits:retry")
-    def retry_machine_visit(run_id: str) -> JsonValue:
+    @router.post("/v1/runs/{run_id}/machine/entries:retry")
+    def retry_machine_state_entry(run_id: str) -> JsonValue:
         return machine_control(op="retry", run_id=run_id)
 
     @router.post("/v1/runs/{run_id}/machine/timers:fire-next")

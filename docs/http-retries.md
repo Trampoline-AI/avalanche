@@ -12,7 +12,7 @@ Inside workflows, `ava.start_run(target, input, when=...)` declares one generic
 start for flows or machines, and `machine.send(..., when=...)` declares a send.
 There is no `Machine.start`, `deliver` or public host-start API. A scheduler
 performs the nodes; local operator integration is separate work. A declared send
-without an explicit idempotency key uses the node's stable visit-qualified step
+without an explicit idempotency key uses the node's stable state-entry-qualified step
 key; a host must preserve it across retries. Outside workflows, sends require an
 explicit idempotency key. Retry an uncertain send with the same machine key or
 run ID, event, logical payload and idempotency key; never generate a new identity

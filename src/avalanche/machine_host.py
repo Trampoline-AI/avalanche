@@ -49,7 +49,7 @@ class MachineInstance(BaseModel):
     deployment_id: str | None = None
     status: str
     state: str | None
-    visit: int = Field(ge=0)
+    entry: int = Field(ge=0)
     version: Literal[1] = 1
     accepts: list[str]
     due: float | None

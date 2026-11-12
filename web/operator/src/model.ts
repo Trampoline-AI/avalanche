@@ -282,7 +282,7 @@ export interface RunSummaryMsg {
   label?: string;
   /**
    * The run's history and artifacts expired under its retention policy. The run,
-   * its status and its label stay readable; snapshots and visits read back `expired`.
+   * its status and its label stay readable; snapshots and state entries read back `expired`.
    */
   expired?: boolean;
   /**

@@ -24,7 +24,7 @@ class InstanceRecord(JournalModel):
     key: list[JsonValue] = Field(exclude=True)
     run_status: RunStatus = Field(default=RunStatus.PENDING, exclude=True)
     state: str
-    visit: int = Field(ge=1)
+    entry: int = Field(ge=1)
     spec: MachineSpec
     payload: JsonValue = None
     outcome: JsonValue = None
@@ -53,11 +53,11 @@ class TransitionRecord(JournalModel):
     to: str | None
     event: str | None
     source: Literal["internal", "external", "timer", "cancel"]
-    visit: int
+    entry: int
 
 
-class VisitRecord(JournalModel):
-    visit: int
+class StateEntryRecord(JournalModel):
+    entry: int
     state: str
     catalog_revision: str
     entered_at: float
@@ -69,7 +69,7 @@ class VisitRecord(JournalModel):
 
 class TimerRecord(JournalModel):
     run_id: str
-    visit: int
+    entry: int
     timer_index: int
     due: float
     target: str
@@ -145,24 +145,26 @@ class MachinesTable:
         )
 
     @staticmethod
-    def visit(connection: sqlite3.Connection, run_id: str, visit: int) -> VisitRecord:
+    def entry(connection: sqlite3.Connection, run_id: str, entry: int) -> StateEntryRecord:
         row = connection.execute(
-            "SELECT record_json FROM machine_visits WHERE run_id = ? AND visit = ?",
-            (run_id, visit),
+            "SELECT record_json FROM machine_state_entries WHERE run_id = ? AND entry = ?",
+            (run_id, entry),
         ).fetchone()
         if row is None:
-            raise KeyError(f"Unknown machine visit {visit}")
-        return VisitRecord.model_validate_json(row["record_json"])
+            raise KeyError(f"Unknown machine state entry {entry}")
+        return StateEntryRecord.model_validate_json(row["record_json"])
 
     @staticmethod
-    def write_visit(connection: sqlite3.Connection, run_id: str, record: VisitRecord) -> None:
+    def write_state_entry(
+        connection: sqlite3.Connection, run_id: str, record: StateEntryRecord
+    ) -> None:
         connection.execute(
-            "INSERT INTO machine_visits VALUES (?, ?, ?, ?, ?, ?, ?) "
-            "ON CONFLICT(run_id, visit) DO UPDATE SET left_at=excluded.left_at, "
+            "INSERT INTO machine_state_entries VALUES (?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(run_id, entry) DO UPDATE SET left_at=excluded.left_at, "
             "record_json=excluded.record_json",
             (
                 run_id,
-                record.visit,
+                record.entry,
                 record.state,
                 record.catalog_revision,
                 record.entered_at,
@@ -184,14 +186,14 @@ class MachinesTable:
 
     @staticmethod
     def timers(
-        connection: sqlite3.Connection, run_id: str, visit: int
+        connection: sqlite3.Connection, run_id: str, entry: int
     ) -> tuple[TimerRecord, ...]:
         return tuple(
             sorted(
                 (
                     timer
                     for timer in MachinesTable.all_timers(connection, run_id)
-                    if timer.visit == visit and timer.reason is None
+                    if timer.entry == entry and timer.reason is None
                 ),
                 key=lambda timer: (timer.due, timer.timer_index),
             )
@@ -199,7 +201,7 @@ class MachinesTable:
 
     @staticmethod
     def write_timer(connection: sqlite3.Connection, record: TimerRecord) -> None:
-        node_id = f"v{record.visit}.after_{record.timer_index}"
+        node_id = f"e{record.entry}.after_{record.timer_index}"
         row = connection.execute(
             "SELECT position FROM wait_decisions WHERE run_id=? "
             "AND json_extract(card_json, '$.node_id')=?",
@@ -238,10 +240,10 @@ class MachinesTable:
 
     @staticmethod
     def cancel_timers(
-        connection: sqlite3.Connection, run_id: str, visit: int | None = None
+        connection: sqlite3.Connection, run_id: str, entry: int | None = None
     ) -> None:
         for timer in MachinesTable.all_timers(connection, run_id):
-            if timer.reason is None and (visit is None or timer.visit == visit):
+            if timer.reason is None and (entry is None or timer.entry == entry):
                 MachinesTable.write_timer(
                     connection, timer.model_copy(update={"reason": "cancelled"})
                 )
@@ -264,7 +266,7 @@ class MachinesTable:
     def fact(
         connection: sqlite3.Connection,
         run_id: str,
-        visit: int,
+        entry: int,
         *,
         status: str,
         event: str | None = None,
@@ -287,5 +289,5 @@ class MachinesTable:
         )
         connection.execute(
             "INSERT INTO machine_facts VALUES (?, ?, ?, ?, ?)",
-            (run_id, sequence, visit, at, record.model_dump_json()),
+            (run_id, sequence, entry, at, record.model_dump_json()),
         )

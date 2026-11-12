@@ -1,4 +1,4 @@
-"""Terminal wait evidence, shared by ordinary runs and machine visits."""
+"""Terminal wait evidence, shared by ordinary runs and machine state entries."""
 
 from __future__ import annotations
 

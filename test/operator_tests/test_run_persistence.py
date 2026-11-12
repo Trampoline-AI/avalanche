@@ -720,9 +720,10 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
             assert existing.run_id == run_id
         from avalanche.results import RunResult
 
-        visit_value = op.get_run_result(run_id, visit=1)
-        step_value = op.get_run_result(run_id, visit=1, node_id="inspect_artifacts_1")
-        assert visit_value == step_value == {"text": "document:captured", "counts": [1, 2, 3]}
+        state_entry_value = op.get_run_result(run_id, entry=1)
+        step_value = op.get_run_result(run_id, entry=1, node_id="inspect_artifacts_1")
+        expected = {"text": "document:captured", "counts": [1, 2, 3]}
+        assert state_entry_value == step_value == expected
         readback = subprocess.run(
             [
                 sys.executable,
@@ -732,7 +733,7 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
                 "result",
                 run_id,
                 "--wait",
-                "--visit",
+                "--entry",
                 "1",
                 "--node",
                 "inspect_artifacts_1",
@@ -755,7 +756,7 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
         base = f"http://{browser.host}:{browser.port}/api/v1/runs/{run_id}/result"
         try:
             with urllib.request.urlopen(
-                base + "?visit=1&node_id=inspect_artifacts_1", timeout=30
+                base + "?entry=1&node_id=inspect_artifacts_1", timeout=30
             ) as response:
                 assert response.status == 200
                 assert json.loads(response.read()) == json.loads(readback.stdout)
@@ -792,7 +793,7 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline and op.get_run(flow_id).status != RunStatus.SUCCESS:
             time.sleep(0.03)
-        assert op.get_run_result(flow_id) == visit_value
+        assert op.get_run_result(flow_id) == state_entry_value
         assert op.get_run_result(flow_id, node_id="inspect_artifacts_1") == step_value
         # A local File is a reference to its existing host path, as in flows.
         # Only the portable workspace ingress has been materialized once.
@@ -805,15 +806,15 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
         op = Operator(
             [str(fixture)], watch=False, schedule=False, webhook_port=0, state_db=state_db
         )
-        assert op.get_run_result(run_id, visit=1) == visit_value
-        assert op.get_run_result(run_id, visit=1, node_id="inspect_artifacts_1") == step_value
-        op._machine_host.send(run_id, "approved", {}, "late-visit")
+        assert op.get_run_result(run_id, entry=1) == state_entry_value
+        assert op.get_run_result(run_id, entry=1, node_id="inspect_artifacts_1") == step_value
+        op._machine_host.send(run_id, "approved", {}, "late-state-entry")
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline and op.get_run(run_id).status != RunStatus.SUCCESS:
             time.sleep(0.03)
         assert op.get_run(run_id).status == RunStatus.SUCCESS
-        assert op.get_run_result(run_id) == op.get_run_result(run_id, visit=3)
-        assert op.get_run_result(run_id, visit=3, node_id="inspect_artifacts_1") == {
+        assert op.get_run_result(run_id) == op.get_run_result(run_id, entry=3)
+        assert op.get_run_result(run_id, entry=3, node_id="inspect_artifacts_1") == {
             "text": "document:capturedxx",
             "counts": [1, 2, 3],
         }
@@ -842,9 +843,9 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
         assert (tree_path / "data.txt").read_text() == "capturedxxxx"
         assert len(list(state_db.parent.rglob("document.txt"))) == 1
         assert journal.read_text().splitlines() == [
-            "v1.inspect_artifacts_1:document:captured",
-            "v2.inspect_artifacts_1:document:capturedx",
-            "v3.inspect_artifacts_1:document:capturedxx",
+            "e1.inspect_artifacts_1:document:captured",
+            "e2.inspect_artifacts_1:document:capturedx",
+            "e3.inspect_artifacts_1:document:capturedxx",
             "inspect_artifacts_1:document:capturedxxx",
         ]
         op.close()
@@ -887,9 +888,9 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
             }
         assert not names.intersection({"machine_instances", "machine_timers"})
         assert journal.read_text().splitlines() == [
-            "v1.inspect_artifacts_1:document:captured",
-            "v2.inspect_artifacts_1:document:capturedx",
-            "v3.inspect_artifacts_1:document:capturedxx",
+            "e1.inspect_artifacts_1:document:captured",
+            "e2.inspect_artifacts_1:document:capturedx",
+            "e3.inspect_artifacts_1:document:capturedxx",
             "inspect_artifacts_1:document:capturedxxx",
         ]
         # Kind belongs to the retained run, even after expiry, restart and a
@@ -1019,7 +1020,7 @@ while time.monotonic() < deadline:
     with op._state_store.transaction() as c:
         record = MachinesTable.load(c, run_id)
     active = mode == "active" and Path(journal).exists()
-    waiting = mode == "waiting" and record.visit == 2 and record.phase == "waiting"
+    waiting = mode == "waiting" and record.entry == 2 and record.phase == "waiting"
     if active or waiting:
         break
     time.sleep(0.03)
@@ -1027,7 +1028,7 @@ else:
     raise AssertionError("machine did not reach crash point")
 handle = op._active_runs.get(run_id)
 with op._state_store.transaction() as c:
-    timers = MachinesTable.timers(c, run_id, record.visit)
+    timers = MachinesTable.timers(c, run_id, record.entry)
 print(json.dumps({"run_id": run_id, "coordinator": handle.process.pid if handle else None,
                   "due": timers[0].due if timers else None,
                   "receipt": receipt.model_dump(mode="json")}), flush=True)
@@ -1036,7 +1037,7 @@ sys.stdin.read()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX process groups")
-def test_machine_timer_and_interrupted_visit_survive_sigkill(tmp_path):
+def test_machine_timer_and_interrupted_state_entry_survive_sigkill(tmp_path):
     from runtime.operator.state.machines import MachinesTable
 
     fixture = tmp_path / "machine.py"
@@ -1048,7 +1049,7 @@ def test_machine_timer_and_interrupted_visit_survive_sigkill(tmp_path):
     for mode in ("waiting", "active"):
         root = tmp_path / mode
         root.mkdir()
-        state_db, journal = root / "state.db", root / "visits.txt"
+        state_db, journal = root / "state.db", root / "entries.txt"
         child = subprocess.Popen(
             [
                 sys.executable,
@@ -1084,12 +1085,12 @@ def test_machine_timer_and_interrupted_visit_survive_sigkill(tmp_path):
                 assert journal.read_text() == before  # No automatic side-effect replay.
                 with op._state_store.transaction() as c:
                     instance = MachinesTable.load(c, run_id)
-                    visit = MachinesTable.visit(c, run_id, 1)
+                    entry = MachinesTable.entry(c, run_id, 1)
                 assert (
                     instance.run_status == RunStatus.WAITING
                     and instance.reason == "outcome_unknown"
                 )
-                assert visit.disposition == "indeterminate" and visit.snapshot is not None
+                assert entry.disposition == "indeterminate" and entry.snapshot is not None
                 Path(str(journal) + ".release").touch()
                 op._machine_host.retry(run_id)
             deadline = time.monotonic() + 30
@@ -1107,7 +1108,7 @@ def test_machine_timer_and_interrupted_visit_survive_sigkill(tmp_path):
                     == 1
                 )
                 instance = MachinesTable.load(c, run_id)
-            assert instance.visit == (3 if mode == "waiting" else 4)
+            assert instance.entry == (3 if mode == "waiting" else 4)
             final_journal = journal.read_text()
             op.close()
             op = Operator(
@@ -1146,14 +1147,14 @@ def test_missing_machine_definition_parks_without_stopping_operator(tmp_path, lo
     op = _operator(root, db)
     try:
         run_id = op.start_run(
-            "approval", input={"ticket": 17, "journal": str(tmp_path / "visits")}
+            "approval", input={"ticket": 17, "journal": str(tmp_path / "entries")}
         )
         _wait_until(lambda: op.get_run(run_id).status is RunStatus.WAITING)
         if boundary == "timer":
             op._machine_host.send(run_id, "approved", {"by": "Ada"}, "advance")
             _wait_until(
                 lambda: (
-                    _machine_record(op, run_id).visit == 2
+                    _machine_record(op, run_id).entry == 2
                     and _machine_record(op, run_id).phase == "waiting"
                 )
             )
@@ -1223,16 +1224,16 @@ def test_missing_machine_definition_parks_without_stopping_operator(tmp_path, lo
         fixture.write_text(source.replace("seconds=2", "seconds=4"))
         if boundary == "restart":
             op = _operator(root, db)
-            _wait_until(lambda: _machine_record(op, run_id).visit == 2)
+            _wait_until(lambda: _machine_record(op, run_id).entry == 2)
         # Timer recovery deliberately does not rescan or restart the operator.
         _wait_until(lambda: _machine_record(op, run_id).reason is None)
         assert (
-            op.start_run("approval", input={"ticket": 17, "journal": str(tmp_path / "visits")})
+            op.start_run("approval", input={"ticket": 17, "journal": str(tmp_path / "entries")})
             == run_id
         )
         assert _wait_terminal(op, run_id).status is RunStatus.SUCCESS
         record = _machine_record(op, run_id)
-        assert record.reason is None and record.visit == 3 and record.key == [17]
+        assert record.reason is None and record.entry == 3 and record.key == [17]
         with op._state_store.transaction() as c:
             fired = [
                 timer
@@ -1553,7 +1554,7 @@ def test_unavailable_machine_reload_cost_is_bounded(tmp_path, run_count):
             op._machine_host.send(run_id, "approved", {}, "advance")
         _wait_until(
             lambda: all(
-                _machine_record(op, r).visit == 2 and _machine_record(op, r).phase == "waiting"
+                _machine_record(op, r).entry == 2 and _machine_record(op, r).phase == "waiting"
                 for r in runs
             )
         )
@@ -1669,7 +1670,7 @@ def test_transient_syntax_error_at_restart(tmp_path, recovery):
     db = tmp_path / "state.db"
     op = _operator(root, db)
     try:
-        values = {"ticket": 31, "journal": str(tmp_path / "visits")}
+        values = {"ticket": 31, "journal": str(tmp_path / "entries")}
         run_id = op.start_run("approval", input=values)
         _wait_until(lambda: op.get_run(run_id).status is RunStatus.WAITING)
         print("before:", _machine_record(op, run_id).phase)
@@ -1688,7 +1689,7 @@ def test_transient_syntax_error_at_restart(tmp_path, recovery):
         if recovery == "retry":
             op._machine_host.retry(run_id)
         receipt = op._machine_host.send(run_id, "approved", {}, "after-fix")
-        _wait_until(lambda: _machine_record(op, run_id).visit == 2, seconds=10)
+        _wait_until(lambda: _machine_record(op, run_id).entry == 2, seconds=10)
         record = _machine_record(op, run_id)
         same_key = op.start_run("approval", input=values)
         print(
@@ -1697,7 +1698,7 @@ def test_transient_syntax_error_at_restart(tmp_path, recovery):
                 "recovery": recovery,
                 "send": receipt.status,
                 "after_send_phase": record.phase,
-                "visit": record.visit,
+                "entry": record.entry,
                 "same_key": same_key == run_id,
             },
         )
@@ -1728,20 +1729,20 @@ def _machine_record(op, run_id):
         return MachinesTable.load(c, run_id)
 
 
-def test_machine_visit_import_failure_is_interrupted_and_retryable(tmp_path):
+def test_machine_state_entry_import_failure_is_interrupted_and_retryable(tmp_path):
     fixture = tmp_path / "machine.py"
     source = (Path(__file__).parents[1] / "fixtures" / "local_machine.py").read_text()
     fixture.write_text(source.replace("seconds=2", "seconds=4"))
     op = _operator(fixture, tmp_path / "state.db")
     try:
         run_id = op.start_run(
-            "approval", input={"ticket": 18, "journal": str(tmp_path / "visits")}
+            "approval", input={"ticket": 18, "journal": str(tmp_path / "entries")}
         )
         _wait_until(lambda: op.get_run(run_id).status is RunStatus.WAITING)
         op._machine_host.send(run_id, "approved", {}, "advance")
         _wait_until(
             lambda: (
-                _machine_record(op, run_id).visit == 2
+                _machine_record(op, run_id).entry == 2
                 and _machine_record(op, run_id).phase == "waiting"
             )
         )
@@ -1749,7 +1750,7 @@ def test_machine_visit_import_failure_is_interrupted_and_retryable(tmp_path):
         _wait_until(lambda: _machine_record(op, run_id).phase in {"interrupted", "closed"})
         assert _machine_record(op, run_id).phase == "interrupted"
         assert op.get_run(run_id).status is RunStatus.WAITING
-        interrupted_visit = _machine_record(op, run_id).visit
+        interrupted_state_entry = _machine_record(op, run_id).entry
 
         def retry_refused(reason):
             import http.client
@@ -1757,7 +1758,7 @@ def test_machine_visit_import_failure_is_interrupted_and_retryable(tmp_path):
             from runtime.operator.web import start_browser_server
 
             # Behaviour fix: an unperformed retry must fail on every public path,
-            # not acknowledge success while leaving the interrupted visit alone.
+            # not acknowledge success while leaving the interrupted state entry alone.
             with pytest.raises(ValueError, match=reason):
                 op._machine_host.retry(run_id)
             port = _free_port()
@@ -1780,7 +1781,7 @@ def test_machine_visit_import_failure_is_interrupted_and_retryable(tmp_path):
                 try:
                     http.request(
                         "POST",
-                        f"/api/v1/runs/{run_id}/machine/visits:retry",
+                        f"/api/v1/runs/{run_id}/machine/entries:retry",
                         body="{}",
                         headers={"Content-Type": "application/json"},
                     )
@@ -1797,7 +1798,7 @@ def test_machine_visit_import_failure_is_interrupted_and_retryable(tmp_path):
                         "run",
                         "retry",
                         run_id,
-                        "--visit",
+                        "--entry",
                         "--connect",
                         address,
                     ],
@@ -1810,14 +1811,15 @@ def test_machine_visit_import_failure_is_interrupted_and_retryable(tmp_path):
                 browser.close()
                 server.stop(grace=0).wait()
             assert _machine_record(op, run_id).phase == "interrupted"
-            assert _machine_record(op, run_id).visit == interrupted_visit
+            assert _machine_record(op, run_id).entry == interrupted_state_entry
 
         retry_refused("definition_unavailable")
         with op._state_store.transaction() as c:
             from runtime.operator.state.machines import MachinesTable
 
             assert (
-                MachinesTable.visit(c, run_id, interrupted_visit).disposition == "indeterminate"
+                MachinesTable.entry(c, run_id, interrupted_state_entry).disposition
+                == "indeterminate"
             )
         state = _machine_record(op, run_id).state
         fixture.write_text(source.replace(state, "retired_" + state))
@@ -1838,7 +1840,7 @@ def test_machine_visit_import_failure_is_interrupted_and_retryable(tmp_path):
         fixture.write_text(source)
         op._machine_host.retry(run_id)
         assert _wait_terminal(op, run_id).status is RunStatus.SUCCESS
-        assert _machine_record(op, run_id).visit == 4
+        assert _machine_record(op, run_id).entry == 4
         assert op.fatal_error is None
     finally:
         op.close()
@@ -1961,6 +1963,7 @@ def test_a_connected_client_reads_stored_runs_from_the_restarted_operator(flows,
         server = serve_operator(second, port=port, block=False)
         try:
             from runtime.operator.client import OperatorCallError
+
             after = None
 
             def read_restarted_run():

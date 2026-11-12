@@ -399,6 +399,41 @@ MIGRATIONS += (
     )),
 )
 
+# Migrations 8 and 10 keep their recorded names and original "visit" columns:
+# applied history must match them. Pre-beta, the rename to "state entry" resets
+# local machine data instead of translating its records: machine runs and their
+# journals are dropped (children cascade), then the machine tables are recreated.
+MIGRATIONS += (
+    Migration(version=12, name="state entry rename resets machine records", statements=(
+        "DELETE FROM runs WHERE machine_json IS NOT NULL",
+        "DROP TABLE machine_visits",
+        "DROP TABLE machine_facts",
+        """
+        CREATE TABLE machine_state_entries (
+            run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+            entry INTEGER NOT NULL CHECK (entry > 0),
+            state TEXT NOT NULL,
+            catalog_revision TEXT NOT NULL,
+            entered_at REAL NOT NULL,
+            left_at REAL,
+            record_json TEXT NOT NULL,
+            PRIMARY KEY (run_id, entry)
+        ) STRICT
+        """,
+        """
+        CREATE TABLE machine_facts (
+            run_id TEXT NOT NULL REFERENCES runs (run_id) ON DELETE CASCADE,
+            tseq INTEGER NOT NULL CHECK (tseq > 0),
+            entry INTEGER NOT NULL,
+            at REAL NOT NULL,
+            record_json TEXT NOT NULL,
+            PRIMARY KEY (run_id, tseq)
+        ) STRICT
+        """,
+        "ALTER TABLE step_results RENAME COLUMN visit TO entry",
+    )),
+)
+
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
 
 

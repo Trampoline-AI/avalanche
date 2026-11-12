@@ -1857,26 +1857,26 @@ describe("standard step run values", () => {
     await waitFor(() => expect(within(output).queryByText(/truncated/i)).toBeNull());
     expect(getRunResult).toHaveBeenCalledWith(
       snapshotFor().summary!.runId,
-      { visit: undefined, nodeId: node.nodeId },
+      { entry: undefined, nodeId: node.nodeId },
       expect.any(AbortSignal),
     );
     expect(output).toHaveTextContent("app.Counts");
     expect(output).toHaveTextContent("[30 items]");
   });
 
-  it("reads a machine visit's step through its visit by the step's own ID", async () => {
+  it("reads a machine state entry's step through its state entry by the step's own ID", async () => {
     const getRunResult = vi.fn(async () => ({ resolution: "closed" }));
-    const visitNodeId = `v2.${node.nodeId}`;
+    const stateEntryNodeId = `v2.${node.nodeId}`;
     render(
       <Inspector
         api={createApi({ getRunResult })}
         workflow={workflow}
         run={RunSnapshotMsg.create({
           ...snapshotFor(),
-          nodes: [{ ...node, nodeId: visitNodeId, status: "success" }],
+          nodes: [{ ...node, nodeId: stateEntryNodeId, status: "success" }],
         })}
-        nodeId={visitNodeId}
-        visit={2}
+        nodeId={stateEntryNodeId}
+        entry={2}
         onClose={() => undefined}
       />,
     );
@@ -1885,7 +1885,7 @@ describe("standard step run values", () => {
     expect(value).toHaveTextContent("closed");
     expect(getRunResult).toHaveBeenCalledWith(
       snapshotFor().summary!.runId,
-      { visit: 2, nodeId: node.nodeId },
+      { entry: 2, nodeId: node.nodeId },
       expect.any(AbortSignal),
     );
   });
@@ -1899,14 +1899,14 @@ describe("standard step run values", () => {
     await waitFor(() => expect(output).toHaveTextContent("total"));
     expect(getRunResult).toHaveBeenCalledWith(
       snapshotFor().summary!.runId,
-      { visit: undefined, nodeId: node.nodeId },
+      { entry: undefined, nodeId: node.nodeId },
       expect.any(AbortSignal),
     );
   });
 
   it("falls back to the preview when the host has no accepted result", async () => {
     const getRunResult = vi.fn(async () => {
-      throw new Error("Requested step or visit has no accepted result");
+      throw new Error("Requested step or state entry has no accepted result");
     });
     renderRun({ status: "success", stepIo }, { api: createApi({ getRunResult }) });
 

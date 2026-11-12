@@ -9,7 +9,7 @@ export const LOCAL_LIVE_RUN_STATUSES: readonly string[] = [
   "requesting",
   "pending",
   "running",
-  // A machine run parks between visits; cancelling it closes the instance.
+  // A machine run parks between state entries; cancelling it closes the instance.
   "waiting",
   "interrupted",
   "needs_attention",

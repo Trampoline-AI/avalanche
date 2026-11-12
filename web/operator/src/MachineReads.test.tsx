@@ -2,7 +2,7 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OperatorApi } from "./api";
 import type { MachineInstance } from "./machine";
-import { useMachineInstance, useMachineVisitDetails } from "./MachineWorkspace";
+import { useMachineInstance, useMachineStateEntryDetails } from "./MachineWorkspace";
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -99,8 +99,8 @@ describe("machine reads under a revision burst", () => {
   });
 });
 
-describe("timeline visit reads", () => {
-  function visitHost(latency: number) {
+describe("timeline state entry reads", () => {
+  function stateEntryHost(latency: number) {
     const reads: number[] = [];
     let aborted = 0;
     const later = <T,>(value: T, signal?: AbortSignal) =>
@@ -113,13 +113,13 @@ describe("timeline visit reads", () => {
         });
       });
     const api = {
-      getMachineVisit: (_runId: string, visit: number, signal?: AbortSignal) => {
-        reads.push(visit);
-        return later({ visit, state: "s", entered_at: visit, left_at: null }, signal);
+      getMachineStateEntry: (_runId: string, entry: number, signal?: AbortSignal) => {
+        reads.push(entry);
+        return later({ entry, state: "s", entered_at: entry, left_at: null }, signal);
       },
-      getMachineVisitEvents: (
+      getMachineStateEntryEvents: (
         _runId: string,
-        _visit: number,
+        _entry: number,
         _page: unknown,
         signal?: AbortSignal,
       ) => later({ items: [], next_cursor: null }, signal),
@@ -127,10 +127,10 @@ describe("timeline visit reads", () => {
     return { api, reads, aborted: () => aborted };
   }
 
-  it("reads left visits once and the live visit again on each change, without polling", async () => {
-    const host = visitHost(50);
+  it("reads left state entries once and the live state entry again on each change, without polling", async () => {
+    const host = stateEntryHost(50);
     const { result, rerender } = renderHook(
-      ({ key }) => useMachineVisitDetails(host.api, "run-1", [1, 2, 3], 3, key),
+      ({ key }) => useMachineStateEntryDetails(host.api, "run-1", [1, 2, 3], 3, key),
       { initialProps: { key: "a" } },
     );
     await act(() => vi.advanceTimersByTimeAsync(1000));
@@ -139,16 +139,16 @@ describe("timeline visit reads", () => {
     // Quiet: no further reads.
     await act(() => vi.advanceTimersByTimeAsync(60_000));
     expect(host.reads).toHaveLength(3);
-    // A run change re-reads only the live visit.
+    // A run change re-reads only the live state entry.
     rerender({ key: "b" });
     await act(() => vi.advanceTimersByTimeAsync(1000));
     expect(host.reads).toEqual([3, 2, 1, 3]);
   });
 
   it("completes reads during a burst of changes and never aborts them", async () => {
-    const host = visitHost(300);
+    const host = stateEntryHost(300);
     const { rerender } = renderHook(
-      ({ key }) => useMachineVisitDetails(host.api, "run-1", [1, 2], 2, key),
+      ({ key }) => useMachineStateEntryDetails(host.api, "run-1", [1, 2], 2, key),
       { initialProps: { key: "0" } },
     );
     for (let tick = 1; tick <= 30; tick += 1) {

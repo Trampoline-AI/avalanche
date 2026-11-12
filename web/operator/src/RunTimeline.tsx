@@ -5,7 +5,7 @@ import { formatRemaining } from "./machineGraph";
 import type { PendingItem, TimelineEntry, TimelineTone } from "./timelineEntries";
 
 /** What a hovered or selected row points at on the graph. */
-export type TimelineFocus = Pick<TimelineEntry, "id" | "state" | "arc" | "nodeId" | "visit">;
+export type TimelineFocus = Pick<TimelineEntry, "id" | "state" | "arc" | "nodeId" | "entry">;
 
 /** Rows rendered at once; earlier rows load in pages of this size. */
 export const TIMELINE_PAGE = 200;
@@ -70,15 +70,15 @@ export interface RunTimelineProps {
   selectedId?: string;
   onHover: (focus: TimelineFocus | undefined) => void;
   onSelect: (entry: TimelineEntry | undefined) => void;
-  /** Opens a machine visit's steps on the graph (absent: no Steps action). */
-  onOpenVisit?: (visit: number) => void;
-  /** Shows the entry's step or visit logs in the Logs tab (absent: no Logs action). */
+  /** Opens a machine state entry's steps on the graph (absent: no Steps action). */
+  onOpenStateEntry?: (entry: number) => void;
+  /** Shows the entry's step or state entry logs in the Logs tab (absent: no Logs action). */
   onOpenLogs?: (entry: TimelineEntry) => void;
   /** An inline action for a pending row (a decision form). */
   renderPending?: (item: PendingItem) => ReactNode;
-  /** Above the list: the open visit's breadcrumb. */
+  /** Above the list: the open state entry's breadcrumb. */
   header?: ReactNode;
-  /** Below the list: paging for earlier visits. */
+  /** Below the list: paging for earlier state entries. */
   footer?: ReactNode;
   /** One neutral line about entries this host does not report. */
   note?: string;
@@ -98,7 +98,7 @@ export function RunTimeline({
   selectedId,
   onHover,
   onSelect,
-  onOpenVisit,
+  onOpenStateEntry,
   onOpenLogs,
   renderPending,
   header,
@@ -226,8 +226,8 @@ export function RunTimeline({
                 const selected = entry.id === selectedId;
                 const actions =
                   selected &&
-                  ((onOpenVisit && entry.visit !== undefined) ||
-                    (onOpenLogs && (entry.nodeId !== undefined || entry.visit !== undefined)));
+                  ((onOpenStateEntry && entry.entry !== undefined) ||
+                    (onOpenLogs && (entry.nodeId !== undefined || entry.entry !== undefined)));
                 return (
                   <li
                     key={entry.id}
@@ -235,7 +235,7 @@ export function RunTimeline({
                     data-timeline-kind={entry.kind}
                     data-status={entry.status}
                     data-state={entry.state}
-                    data-visit={entry.visit}
+                    data-entry={entry.entry}
                     data-node-id={entry.nodeId}
                     className={`run-timeline-row ${ROW_GRID} border-b border-log-line py-1.5 ${selected ? "bg-selected shadow-[inset_2px_0_var(--color-acid)]" : "hover:bg-hover"}`}
                     onMouseEnter={() => onHover(entry)}
@@ -276,11 +276,11 @@ export function RunTimeline({
                       )}
                     </button>
                     <span className="flex gap-1">
-                      {actions && onOpenVisit && entry.visit !== undefined && (
+                      {actions && onOpenStateEntry && entry.entry !== undefined && (
                         <button
                           type="button"
                           className="cursor-pointer rounded border border-line bg-panel px-1.5 py-0.5 text-[9px] text-acid"
-                          onClick={() => onOpenVisit(entry.visit!)}
+                          onClick={() => onOpenStateEntry(entry.entry!)}
                         >
                           Steps
                         </button>

@@ -57,7 +57,7 @@ function at(state: string, accepts: string[], finished = false): MachineInstance
     deployment_id: "",
     status: finished ? "final" : "waiting",
     state,
-    visit: 1,
+    entry: 1,
     version: 1,
     accepts,
     due: null,

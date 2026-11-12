@@ -1,4 +1,4 @@
-"""Qualify a freshly imported visit graph before preparation or execution."""
+"""Qualify a freshly imported state entry graph before preparation or execution."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from avalanche.dag import NodeFuture, Workflow
 from avalanche.waits import WaitNode
 
 
-def qualify_visit(workflow: Workflow, visit: int) -> Workflow:
+def qualify_state_entry(workflow: Workflow, entry: int) -> Workflow:
     graph = deepcopy(workflow)
-    prefix = f"v{visit}."
+    prefix = f"e{entry}."
     identities = {node_id: prefix + node_id for node_id in graph.nodes}
     seen: set[int] = set()
 
@@ -52,7 +52,8 @@ def qualify_visit(workflow: Workflow, visit: int) -> Workflow:
     graph.node_waits = {
         identities[node_id]: spec.model_copy(
             update={
-                "run_start_node_id": None if spec.run_start_node_id is None
+                "run_start_node_id": None
+                if spec.run_start_node_id is None
                 else identities[spec.run_start_node_id],
                 "show_node_id": None
                 if spec.show_node_id is None

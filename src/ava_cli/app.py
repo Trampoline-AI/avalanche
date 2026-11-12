@@ -330,8 +330,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=300.0,
         help="maximum seconds to wait with --wait (default: 300)",
     )
-    result.add_argument("--visit", type=int, help="Completed machine visit (1-based)")
-    result.add_argument("--node", help="Step ID, local to --visit when supplied")
+    result.add_argument("--entry", type=int, help="Completed machine state entry (1-based)")
+    result.add_argument("--node", help="Step ID, local to --entry when supplied")
     result.add_argument("--json", action="store_true", help="Reference-only shared result JSON")
     result.set_defaults(handler=_run_result)
 
@@ -633,7 +633,7 @@ def _run_result(args: argparse.Namespace) -> int:
     provider = _make_provider(args.connect)
     try:
         if args.wait and not _wait_for_result(
-            provider, args.run_id, visit=args.visit, node_id=args.node, timeout=args.timeout
+            provider, args.run_id, entry=args.entry, node_id=args.node, timeout=args.timeout
         ):
             if last_error := provider.last_error:
                 print(last_error, file=sys.stderr)
@@ -641,11 +641,11 @@ def _run_result(args: argparse.Namespace) -> int:
         try:
             if args.json:
                 document = provider.get_run_result_document(
-                    args.run_id, visit=args.visit, node_id=args.node
+                    args.run_id, entry=args.entry, node_id=args.node
                 )
                 print(document.model_dump_json())
                 return 0
-            value = provider.get_run_result(args.run_id, visit=args.visit, node_id=args.node)
+            value = provider.get_run_result(args.run_id, entry=args.entry, node_id=args.node)
         except (grpc.RpcError, TypeError, ValueError) as exc:
             error = provider.last_error or str(exc)
             print(error, file=sys.stderr)
@@ -669,18 +669,18 @@ def _wait_for_result(
     provider: GrpcStateProvider,
     run_id: str,
     *,
-    visit: int | None,
+    entry: int | None,
     node_id: str | None,
     timeout: float,
 ) -> bool:
-    if visit is None and node_id is None:
+    if entry is None and node_id is None:
         return _wait_for_terminal_run(provider, run_id, timeout=timeout)
     import grpc
 
     deadline = time.monotonic() + timeout
     while True:
         try:
-            provider.get_run_result_document(run_id, visit=visit, node_id=node_id)
+            provider.get_run_result_document(run_id, entry=entry, node_id=node_id)
             return True
         except grpc.RpcError as exc:
             if exc.code() != grpc.StatusCode.FAILED_PRECONDITION:

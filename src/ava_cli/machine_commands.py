@@ -35,7 +35,7 @@ def run_command(argv: list[str]) -> int:
         else:
             parser.add_argument("--flow", default="")
         if argv[1] == "retry":
-            parser.add_argument("--visit", action="store_true", required=True)
+            parser.add_argument("--entry", action="store_true", required=True)
     if not machine and argv[1] == "history":
         parser.add_argument("--limit", type=int, default=20, choices=range(1, 101))
         parser.add_argument("--cursor")
@@ -145,7 +145,7 @@ def run_command(argv: list[str]) -> int:
             else:
                 raise ValueError(
                     "Machine reruns are not supported; use a new key "
-                    "or retry an interrupted visit"
+                    "or retry an interrupted state entry"
                 )
         return 0
     except (grpc.RpcError, ValueError, OSError) as exc:

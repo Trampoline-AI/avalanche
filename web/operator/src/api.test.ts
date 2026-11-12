@@ -1293,9 +1293,9 @@ describe("operator transport boundary", () => {
   it("drives machine sections and controls through ControlMachine", async () => {
     const requests: unknown[] = [];
     const results: Record<string, unknown> = {
-      get: { run_id: "run-1", state: "amend", visit: 2, accepts: ["amended"], due: null },
+      get: { run_id: "run-1", state: "amend", entry: 2, accepts: ["amended"], due: null },
       history: {
-        items: [{ from: "in_review", to: "amend", event: "x", source: "internal", visit: 1 }],
+        items: [{ from: "in_review", to: "amend", event: "x", source: "internal", entry: 1 }],
         next_cursor: null,
       },
       events: { items: [], next_cursor: "next" },
@@ -1320,18 +1320,18 @@ describe("operator transport boundary", () => {
     await expect(api.getMachineHistory("run-1", { limit: 5 })).resolves.toMatchObject({
       next_cursor: null,
     });
-    await expect(api.getMachineVisitEvents("run-1", 2, { cursor: "c" })).resolves.toEqual({
+    await expect(api.getMachineStateEntryEvents("run-1", 2, { cursor: "c" })).resolves.toEqual({
       items: [],
       next_cursor: "next",
     });
     await expect(api.sendMachineEvent("run-1", "amended", {}, "key-1")).resolves.toMatchObject({
       receipt_id: "r1",
     });
-    await api.retryMachineVisit("run-1");
+    await api.retryMachineStateEntry("run-1");
     expect(requests).toEqual([
       { op: "get", run_id: "run-1" },
       { op: "history", run_id: "run-1", cursor: null, limit: 5 },
-      { op: "events", run_id: "run-1", visit: 2, cursor: "c", limit: 20 },
+      { op: "events", run_id: "run-1", entry: 2, cursor: "c", limit: 20 },
       { op: "send", run_id: "run-1", event: "amended", payload: {}, idempotency_key: "key-1" },
       { op: "retry", run_id: "run-1" },
     ]);
@@ -1354,7 +1354,7 @@ describe("operator transport boundary", () => {
     expect("fireNextMachineTimer" in api).toBe(false);
   });
 
-  it("reads a machine visit's own scoped snapshot", async () => {
+  it("reads a machine state entry's own scoped snapshot", async () => {
     const snapshot = RunSnapshotV2.toJson(
       RunSnapshotV2.create({
         scopeRef,
@@ -1367,14 +1367,14 @@ describe("operator transport boundary", () => {
           keyJson: '["acme/api",42]',
           readState: "expired",
         }),
-        nodes: [NodeSnapshotV2.create({ nodeId: "v2.amend_round", name: "amend_round" })],
+        nodes: [NodeSnapshotV2.create({ nodeId: "e2.amend_round", name: "amend_round" })],
       }),
       { useProtoFieldName: true },
     );
     const controlMachine = vi.fn(() => ({
       response: Promise.resolve({
         resultJson: JSON.stringify({
-          visit: 2,
+          entry: 2,
           state: "amend",
           catalog_revision: "1",
           entered_at: 1,
@@ -1386,17 +1386,17 @@ describe("operator transport boundary", () => {
         }),
       }),
     }));
-    const visit = await apiWith({ controlMachine }).getMachineVisit("run-1", 2);
-    expect(visit.snapshot?.nodes.map((node) => node.nodeId)).toEqual(["v2.amend_round"]);
+    const entry = await apiWith({ controlMachine }).getMachineStateEntry("run-1", 2);
+    expect(entry.snapshot?.nodes.map((node) => node.nodeId)).toEqual(["e2.amend_round"]);
     // Run summaries carry the readable key label and expired history state.
-    expect(visit.snapshot?.summary).toMatchObject({
+    expect(entry.snapshot?.summary).toMatchObject({
       runId: "run-1",
       label: "acme/api #42",
       expired: true,
     });
   });
 
-  it("reads shared run, visit and step results in display form", async () => {
+  it("reads shared run, state entry and step results in display form", async () => {
     // The host's versioned codec, exactly as the operator's GetRunResult returns it.
     const valueJson = JSON.stringify({
       version: 1,
@@ -1438,7 +1438,7 @@ describe("operator transport boundary", () => {
       }),
     }));
     const api = apiWith({ getRunResult });
-    await expect(api.getRunResult("run-1", { visit: 2, nodeId: "close_1" })).resolves.toEqual({
+    await expect(api.getRunResult("run-1", { entry: 2, nodeId: "close_1" })).resolves.toEqual({
       ticket: 611,
       pair: ["a", null],
       counts: [1, 2.5],
@@ -1450,7 +1450,7 @@ describe("operator transport boundary", () => {
     });
     await api.getRunResult("run-1");
     expect(getRunResult.mock.calls.map(([request]) => request)).toEqual([
-      { runId: "run-1", visit: 2, nodeId: "close_1" },
+      { runId: "run-1", entry: 2, nodeId: "close_1" },
       { runId: "run-1" },
     ]);
     const malformed = apiWith({
@@ -1500,7 +1500,7 @@ describe("operator transport boundary", () => {
     await expect(invalid.getRunLinks("run-1")).rejects.toThrow(/Invalid run link/);
   });
 
-  it("keeps only the selected visit's waits and maps retained audits", async () => {
+  it("keeps only the selected state entry's waits and maps retained audits", async () => {
     const card = (nodeId: string, audit: unknown = null) =>
       JSON.stringify({
         node_id: nodeId,
@@ -1514,19 +1514,19 @@ describe("operator transport boundary", () => {
     const controlWait = vi.fn(() => ({
       response: Promise.resolve({
         waitsJson: [
-          card("v1.approve", {
+          card("e1.approve", {
             accepted_at: "2026-11-09T22:00:00Z",
             reason: "ok",
             payload_digest: "abc",
           }),
-          card("v2.approve"),
+          card("e2.approve"),
         ],
       }),
     }));
     const api = apiWith({ controlWait });
-    const visitOne = await api.listRunWaits("run-1", 1);
-    expect(visitOne.map((wait) => wait.nodeId)).toEqual(["v1.approve"]);
-    expect(visitOne[0].audit).toEqual({
+    const stateEntryOne = await api.listRunWaits("run-1", 1);
+    expect(stateEntryOne.map((wait) => wait.nodeId)).toEqual(["e1.approve"]);
+    expect(stateEntryOne[0].audit).toEqual({
       outcome: { payload_digest: "abc" },
       reason: "ok",
       at: Date.parse("2026-11-09T22:00:00Z") / 1000,

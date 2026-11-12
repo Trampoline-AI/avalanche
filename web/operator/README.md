@@ -319,9 +319,9 @@ page, instance table or extra panel type:
 | State graph                                              | `GraphCanvas` (`machine` mode): same cards, grid, controls, input dot    |
 | Current state                                            | The graph's node card (ring + run status)                                |
 | One arc per trigger, loops, timer arcs                   | The graph's edges (cubic arcs, dotted timers with countdown)             |
-| Visits                                                   | Entries of the run's Timeline tab (bottom pane, beside Logs)             |
-| A visit's steps                                          | The run graph and side inspector (outputs, attempts, trace) and log pane |
-| Send, retry visit, dev timer                             | Run controls, beside Cancel                                              |
+| State entries                                                   | Entries of the run's Timeline tab (bottom pane, beside Logs)             |
+| A state entry's steps                                          | The run graph and side inspector (outputs, attempts, trace) and log pane |
+| Send, retry state entry, dev timer                             | Run controls, beside Cancel                                              |
 | Send form                                                | The side panel, like the run input form                                  |
 | Pending timer, deferred events, open waits, decisions    | The Timeline tab's pinned Pending rows                                   |
 | Events, receipts, timers, waits, audits, cancel, outcome | Timeline entries, in time order, each naming its state and arc           |
@@ -330,35 +330,35 @@ page, instance table or extra panel type:
 | Send payload fields, File and Workspace included         | The run input form's fields (`InputFieldList`) and upload path           |
 | Expired history                                          | The run row and run page read `expired`; the key label stays             |
 
-Clicking a state on the graph filters the Timeline to that state; a visit
-entry's **Steps** action opens that visit's steps on the graph, and "State
+Clicking a state on the graph filters the Timeline to that state; a state entry
+entry's **Steps** action opens that state entry's steps on the graph, and "State
 machine" in the Timeline's breadcrumb returns to the state graph. The host
-supplies `MachineVisit.snapshot`, a run snapshot scoped to that visit (qualified
+supplies `MachineStateEntry.snapshot`, a run snapshot scoped to that state entry (qualified
 node IDs, retained I/O, trace and log tokens); the UI never synthesizes step
 detail. The pieces are exported for hosts composing the page (`MachineRunActions`,
 `MachineSendPanel`, `RunTimeline` and the timeline builders, the `useMachine*` and
-`useRunWaits` hooks and `runKeyLabel`). `MachineRunWaits`, `MachineVisitWaits` and
-`MachineVisitTimeline` were removed with the side-pane sections they drew.
+`useRunWaits` hooks and `runKeyLabel`). `MachineRunWaits`, `MachineStateEntryWaits` and
+`MachineStateEntryTimeline` were removed with the side-pane sections they drew.
 
 All machine methods on `OperatorApi` are optional:
 
 - Reads: `getMachineInstance(runId, signal?)`, `getMachineHistory(runId, page?, signal?)`,
-  `getMachineVisit(runId, visit, signal?)`, and
-  `getMachineVisitEvents(runId, visit, page?, signal?)`.
+  `getMachineStateEntry(runId, entry, signal?)`, and
+  `getMachineStateEntryEvents(runId, entry, page?, signal?)`.
 - Machine-only writes: `sendMachineEvent(runId, event, payload, idempotencyKey, inputFiles?)`,
-  `retryMachineVisit(runId)` (interrupted visits) and `fireNextMachineTimer(runId)`
+  `retryMachineStateEntry(runId)` (interrupted state entries) and `fireNextMachineTimer(runId)`
   (development hosts only).
-- `listRunWaits(runId, visit?)` takes an optional visit, filtered by the host.
+- `listRunWaits(runId, entry?)` takes an optional state entry, filtered by the host.
 
 There is no machine start, list, close or rerun method, and the run page has no
-rerun control for machine runs: retrying an interrupted visit makes a new visit
+rerun control for machine runs: retrying an interrupted state entry makes a new state entry
 in the same run, and a replay is a new key. Cancel is the normal run cancel. The exported types in
 `src/machine.ts` follow the public machine JSON field names (`run_id`,
 `next_cursor`, `entered_at`, etc.). A deployment-based host supplies
 `MachineInstance.machine_spec` with the pinned definition; a local host may omit
 it to use the catalog definition. `catalog_revision`, `pending_events` and
 `receipts` are optional local-operator extensions; when a host omits them (or
-`getMachineVisitEvents`), the Timeline leaves those entries out and shows one
+`getMachineStateEntryEvents`), the Timeline leaves those entries out and shows one
 neutral line ("… aren't listed for this run"), never an empty inbox.
 
 ### Run timeline (bottom pane)
@@ -372,25 +372,25 @@ pinned on top:
 | Run kind | Entries                                                                                                                                                           | Reads (existing `OperatorApi` only)                                                                   |
 | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
 | Flow     | run started, step started/finished (attempts), wait opened/resolved, outcome                                                                                      | `getLatestRunSnapshot` (live projection), `listRunWaits`                                              |
-| Machine  | visit entered/left (with the arc), steps, event accepted/deferred/ignored/dropped/delivered with its receipt, timer armed/fired/cancelled, waits, cancel, outcome | `getMachineInstance`, `getMachineHistory`, `getMachineVisit`, `getMachineVisitEvents`, `listRunWaits` |
+| Machine  | state entry entered/left (with the arc), steps, event accepted/deferred/ignored/dropped/delivered with its receipt, timer armed/fired/cancelled, waits, cancel, outcome | `getMachineInstance`, `getMachineHistory`, `getMachineStateEntry`, `getMachineStateEntryEvents`, `listRunWaits` |
 
 Times read as offsets from the run start (`+1m 05s`); a wall-clock time is the
 row's tooltip when the host reports one. Every entry names its state, arc or
 step: hovering it (or selecting it) highlights that state card and transition
 arc on the graph (a flow's step card), and picking a state or step on the graph
 filters the Timeline to its entries. A selected entry offers **Steps** (a
-machine visit) and **Logs** (that visit's step logs). Reads follow the run's
-revision like the other machine reads: a visit the run has left is read once,
-only the live visit re-reads, one read at a time and never on a timer of its
-own. The newest 10 visits are listed first (earlier ones on request) and at
+machine state entry) and **Logs** (that state entry's step logs). Reads follow the run's
+revision like the other machine reads: a state entry the run has left is read once,
+only the live state entry re-reads, one read at a time and never on a timer of its
+own. The newest 10 state entries are listed first (earlier ones on request) and at
 most 200 rows render at once.
 
 The Logs tab uses the run's ordinary log read: `listLogPage` with the run
-snapshot's `logPageToken` (the machine run's own snapshot covers every visit),
-returning `LogRecordDescriptorMsg` rows whose `nodeId` is the visit-qualified
-step (`v<visit>.<step>`, `.map` items `v<visit>.<step>[i]`). Those rows read
-"step · visit N" and open that visit's step. With a visit open, the pane reads
-that visit's own snapshot token, and an inspected step filters with the exact
+snapshot's `logPageToken` (the machine run's own snapshot covers every state entry),
+returning `LogRecordDescriptorMsg` rows whose `nodeId` is the state-entry-qualified
+step (`e<entry>.<step>`, `.map` items `e<entry>.<step>[i]`). Those rows read
+"step · entry N" and open that state entry's step. With a state entry open, the pane reads
+that state entry's own snapshot token, and an inspected step filters with the exact
 `nodeId`. A host that returns no rows gets the normal empty state.
 
 The send form is the run input form over each transition's payload schema
@@ -408,17 +408,17 @@ with the same event, payload and files.
 Retention: a run whose history and artifacts expired keeps its run, status and
 label; the host sets `RunSummaryMsg.expired` and returns a snapshot without
 topology or nodes. The timeline row and run page read `expired`. An expired
-machine visit has `disposition: "expired"` and no `snapshot`; its waits, facts
+machine state entry has `disposition: "expired"` and no `snapshot`; its waits, facts
 and steps are not read. The state graph (the definition) still draws. Missing write methods hide their controls, so read-only hosts issue no
 mutation; `runActionsEnabled={false}` or `bottomRightPanel={null}` also hide them.
 
 `GrpcWebOperatorApi` implements the machine methods against the local operator's
-`ControlMachine` RPC (typed JSON: `get`, `history`, `visit`, `events`, `send`,
+`ControlMachine` RPC (typed JSON: `get`, `history`, `entry`, `events`, `send`,
 `retry`). It maps `FlowInfoV2.machine_spec_json` to `FlowInfoMsg.machineSpec`,
 `RunSummaryV2.key_json` to the run label and `read_state: "expired"` to
-`expired`, parses a visit's host snapshot (`RunSnapshotV2` JSON) with the same
-mapping as any run snapshot, keeps only a visit's qualified (`v<visit>.`) wait
-cards for `listRunWaits(runId, visit)` and maps retained decision receipts to
+`expired`, parses a state entry's host snapshot (`RunSnapshotV2` JSON) with the same
+mapping as any run snapshot, keeps only a state entry's qualified (`e<entry>.`) wait
+cards for `listRunWaits(runId, entry)` and maps retained decision receipts to
 `WaitCard.audit` (the receipt carries the payload digest, not the payload). It
 does not offer `fireNextMachineTimer` (the operator advertises no development
 capability) and refuses event payload files (`ControlMachine` has no attachment
@@ -442,7 +442,7 @@ browsers check that a machine and a flow share the canvas and the run page (same
 cards, grid, controls, input dot, timeline, side panel and logs), then exercise: run-form start with typed input, staged
 file and workspace values; one timeline row per instance and same-key identity;
 one arc per trigger (self-loop, back and timer arcs) and a stable first frame;
-interrupted-visit retry; visits in the timeline opening real step detail (side
+interrupted-state-entry retry; state entries in the timeline opening real step detail (side
 inspector outputs and attempts, scoped logs, `.map` items, wait and decision
 cards, terminal audits); paged event facts; typed
 send with a lost-response retry and receipts; host timer countdown on the page and

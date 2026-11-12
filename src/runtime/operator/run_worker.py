@@ -38,7 +38,7 @@ from avalanche.runtime import BaseInput
 from ..executor import LocalExecutor
 from .evaluation_worker import EvaluationRequest, snapshot_evaluation
 from .hooks import RunHooks
-from .machine_visit import qualify_visit
+from .machine_state_entry import qualify_state_entry
 from .models import display_name_from_id
 from .registry import (
     agent_field_schemas_for_workflow,
@@ -84,7 +84,7 @@ def run_worker(
     result_bundle_identity: tuple[int, int],
     control_connection: Connection | None = None,
     cancel_reader: Connection | None = None,
-    machine_visit: InstanceRecord | None = None,
+    machine_state_entry: InstanceRecord | None = None,
     machine_reader: Connection | None = None,
     resume_results: dict[str, str] | None = None,
 ) -> None:
@@ -110,7 +110,7 @@ def run_worker(
             result_bundle_identity,
             control_connection,
             cancel_reader,
-            machine_visit,
+            machine_state_entry,
             machine_reader,
             resume_results,
         )
@@ -134,7 +134,7 @@ def _run_worker(
     result_bundle_identity: tuple[int, int],
     control_connection: Connection | None = None,
     cancel_reader: Connection | None = None,
-    machine_visit: InstanceRecord | None = None,
+    machine_state_entry: InstanceRecord | None = None,
     machine_reader: Connection | None = None,
     resume_results: dict[str, str] | None = None,
 ) -> None:
@@ -171,14 +171,14 @@ def _run_worker(
         ):
             raise LookupError(f"Workflow builder is unavailable: {builder_symbol}")
         workflow = builder()
-        if machine_visit is not None:
+        if machine_state_entry is not None:
             if not isinstance(builder, Machine):
                 raise TypeError("Machine builder was replaced by an ordinary workflow")
-            if machine_visit.state not in builder.spec.states:
+            if machine_state_entry.state not in builder.spec.states:
                 raise ValueError("state_missing")
-            workflow = qualify_visit(
-                builder.works[builder.spec.states[machine_visit.state].work],
-                machine_visit.visit,
+            workflow = qualify_state_entry(
+                builder.works[builder.spec.states[machine_state_entry.state].work],
+                machine_state_entry.entry,
             )
         if not isinstance(workflow, Workflow):
             raise TypeError("Marked builder did not return a Workflow")
@@ -267,7 +267,9 @@ def _run_worker(
             resume_results=resume_results,
             unwrap_result=record_result,
             machine_step=machine_step,
-            machine_payload=machine_visit.payload if machine_visit is not None else None,
+            machine_payload=machine_state_entry.payload
+            if machine_state_entry is not None
+            else None,
             on_nodes_expanded=lambda expansion: (
                 None
                 if expansion.parent in show_groups
@@ -341,7 +343,7 @@ def _run_worker(
                 terminal_event = {"type": "terminal", "status": "cancelled"}
             else:
                 terminal_event["result_manifest_sha256"] = manifest_sha256
-                if machine_visit is not None:
+                if machine_state_entry is not None:
                     terminal_event["machine_outcome_json"] = json.dumps(
                         {
                             "event": result.name if isinstance(result, Event) else None,

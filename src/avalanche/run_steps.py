@@ -161,7 +161,7 @@ def call(
     """Declare a child start and workerless wait for its final typed output.
 
     Timeout does not cancel the child. Existing keys attach to the original run.
-    Machine calls resolve only when the instance closes, not after a visit.
+    Machine calls resolve only when the instance closes, not after a state entry.
     """
     spec = WaitSpec(
         kind="run", timeout_seconds=_seconds(timeout) if timeout is not None else None

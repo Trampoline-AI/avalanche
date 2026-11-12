@@ -300,7 +300,7 @@ class RunsTable:
             "wait_decisions",
             "wait_receipts",
             "wait_inbox",
-            "machine_visits",
+            "machine_state_entries",
             "machine_facts",
         ):
             connection.execute(f"DELETE FROM {table} WHERE run_id=?", (run_id,))

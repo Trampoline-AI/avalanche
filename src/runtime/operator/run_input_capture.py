@@ -1,4 +1,4 @@
-"""Retain keyed-run references and materialize portable ingress once, not per visit."""
+"""Retain keyed-run references and materialize portable ingress once, not per state entry."""
 
 from __future__ import annotations
 

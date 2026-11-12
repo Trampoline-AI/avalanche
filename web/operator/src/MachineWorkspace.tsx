@@ -18,7 +18,7 @@ import type {
 import type { FlowInfoMsg, InputFileAttachment } from "./model";
 import { parseRunInput } from "./RunControls";
 import { runKeyLabel } from "./runKey";
-import type { MachineVisitDetail } from "./timelineEntries";
+import type { MachineStateEntryDetail } from "./timelineEntries";
 import { parseJsonValue, type JsonSchema, type JsonValue } from "./stepInterface";
 import { applyInputFiles, useInputDraft } from "./useInputDraft";
 import { InputFieldList } from "./WorkflowInputInspector";
@@ -40,7 +40,7 @@ export interface MachineReadRefresh {
 
 const READ_POLL_FIRST_MS = 1000;
 const READ_POLL_MAX_MS = 30_000;
-/** Stream bursts (many revisions a second while a visit runs) coalesce to this spacing. */
+/** Stream bursts (many revisions a second while a state entry runs) coalesce to this spacing. */
 const READ_MIN_SPACING_MS = 250;
 
 /**
@@ -163,19 +163,19 @@ export function useMachineHistory(
 }
 export type MachineHistory = ReturnType<typeof useMachineHistory>;
 
-/** One visit; follows the run while it is the instance's current visit. */
-export function useMachineVisit(
+/** One state entry; follows the run while it is the instance's current state entry. */
+export function useMachineStateEntry(
   api: OperatorApi,
   runId: string | undefined,
-  visit: number | undefined,
+  entry: number | undefined,
   live: boolean,
   refreshKey: string,
 ) {
   const load = useCallback(
-    (signal: AbortSignal) => api.getMachineVisit!(runId!, visit!, signal),
-    [api, runId, visit],
+    (signal: AbortSignal) => api.getMachineStateEntry!(runId!, entry!, signal),
+    [api, runId, entry],
   );
-  return useRead(api.getMachineVisit && runId && visit !== undefined ? load : undefined, {
+  return useRead(api.getMachineStateEntry && runId && entry !== undefined ? load : undefined, {
     live,
     refreshKey,
   });
@@ -194,82 +194,82 @@ export function useRunWaits(
   return useRead(api.listRunWaits && runId ? load : undefined, refresh);
 }
 
-const EMPTY_VISIT_DETAILS: ReadonlyMap<number, MachineVisitDetail> = new Map();
-/** Event facts read per visit for the timeline; later pages load on request. */
-export const VISIT_EVENTS_PAGE = 50;
+const EMPTY_STATE_ENTRY_DETAILS: ReadonlyMap<number, MachineStateEntryDetail> = new Map();
+/** Event facts read per state entry for the timeline; later pages load on request. */
+export const STATE_ENTRY_EVENTS_PAGE = 50;
 
 /**
- * The visit records and first event-fact pages of the visits the timeline shows.
- * A visit the run has left never changes, so it is read once; only the live visit
- * re-reads, when `refreshKey` (the run's change signal) moves. One visit is read at
- * a time, and a key change never aborts a read in flight (it marks the live visit
+ * The state entry records and first event-fact pages of the state entries the timeline shows.
+ * A state entry the run has left never changes, so it is read once; only the live state entry
+ * re-reads, when `refreshKey` (the run's change signal) moves. One state entry is read at
+ * a time, and a key change never aborts a read in flight (it marks the live state entry
  * stale, read again READ_MIN_SPACING_MS after the read ends), so a burst of
  * revisions still completes reads. No timer polls.
  */
-export function useMachineVisitDetails(
+export function useMachineStateEntryDetails(
   api: OperatorApi,
   runId: string | undefined,
-  visits: readonly number[],
-  liveVisit: number | undefined,
+  entries: readonly number[],
+  liveStateEntry: number | undefined,
   refreshKey: string | undefined,
-  /** Read the visits' event facts too (not once the run's history expired). */
+  /** Read the state entries' event facts too (not once the run's history expired). */
   facts = true,
 ) {
   const [store, setStore] = useState<{
     runId?: string;
-    details: ReadonlyMap<number, MachineVisitDetail>;
-  }>({ details: EMPTY_VISIT_DETAILS });
-  const details = store.runId === runId ? store.details : EMPTY_VISIT_DETAILS;
-  const visitsKey = visits.join(",");
-  const wanted = useRef({ visits: [] as number[], liveVisit, refreshKey });
+    details: ReadonlyMap<number, MachineStateEntryDetail>;
+  }>({ details: EMPTY_STATE_ENTRY_DETAILS });
+  const details = store.runId === runId ? store.details : EMPTY_STATE_ENTRY_DETAILS;
+  const stateEntriesKey = entries.join(",");
+  const wanted = useRef({ entries: [] as number[], liveStateEntry, refreshKey });
   const loader = useRef<{ request: () => void; retry: () => void }>(undefined);
-  const readable = Boolean(api.getMachineVisit || api.getMachineVisitEvents);
+  const readable = Boolean(api.getMachineStateEntry || api.getMachineStateEntryEvents);
   useLayoutEffect(() => {
     wanted.current = {
-      visits: visitsKey ? visitsKey.split(",").map(Number) : [],
-      liveVisit,
+      entries: stateEntriesKey ? stateEntriesKey.split(",").map(Number) : [],
+      liveStateEntry,
       refreshKey,
     };
     loader.current?.request();
-  }, [visitsKey, liveVisit, refreshKey]);
+  }, [stateEntriesKey, liveStateEntry, refreshKey]);
   useEffect(() => {
     if (!runId || !readable) return;
     const controller = new AbortController();
-    // visit -> the key it was read at ("" for a visit the run has left).
+    // state entry -> the key it was read at ("" for a state entry the run has left).
     const read = new Map<number, string>();
     let reading = false;
     let endedAt = -Infinity;
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const spaced = () => Math.max(0, READ_MIN_SPACING_MS - (Date.now() - endedAt));
-    const keyFor = (visit: number) =>
-      visit === wanted.current.liveVisit ? (wanted.current.refreshKey ?? "") : "";
+    const keyFor = (entry: number) =>
+      entry === wanted.current.liveStateEntry ? (wanted.current.refreshKey ?? "") : "";
     const next = () => {
-      const { visits: shown, liveVisit: live } = wanted.current;
-      // The live visit first, then newest to oldest.
+      const { entries: shown, liveStateEntry: live } = wanted.current;
+      // The live state entry first, then newest to oldest.
       const order = [...shown].sort((left, right) =>
         left === live ? -1 : right === live ? 1 : right - left,
       );
-      return order.find((visit) => read.get(visit) !== keyFor(visit));
+      return order.find((entry) => read.get(entry) !== keyFor(entry));
     };
     const schedule = (ms: number) => {
       clearTimeout(timeout);
       timeout = setTimeout(() => void step(), ms);
     };
     async function step() {
-      const visit = next();
-      if (visit === undefined || controller.signal.aborted) return;
+      const entry = next();
+      if (entry === undefined || controller.signal.aborted) return;
       reading = true;
-      const key = keyFor(visit);
-      read.set(visit, key);
-      const detail: MachineVisitDetail = {};
+      const key = keyFor(entry);
+      read.set(entry, key);
+      const detail: MachineStateEntryDetail = {};
       try {
         const [record, events] = await Promise.all([
-          api.getMachineVisit?.(runId!, visit, controller.signal),
+          api.getMachineStateEntry?.(runId!, entry, controller.signal),
           facts
-            ? api.getMachineVisitEvents?.(
+            ? api.getMachineStateEntryEvents?.(
                 runId!,
-                visit,
-                { limit: VISIT_EVENTS_PAGE },
+                entry,
+                { limit: STATE_ENTRY_EVENTS_PAGE },
                 controller.signal,
               )
             : undefined,
@@ -288,11 +288,11 @@ export function useMachineVisitDetails(
       if (controller.signal.aborted) return;
       setStore((current) => {
         const map = new Map(current.runId === runId ? current.details : []);
-        map.set(visit, detail);
+        map.set(entry, detail);
         return { runId, details: map };
       });
-      // A live visit whose key moved during the read is read again, spaced.
-      // Unchanged visits still to read go at once; a re-read waits for the spacing.
+      // A live state entry whose key moved during the read is read again, spaced.
+      // Unchanged state entries still to read go at once; a re-read waits for the spacing.
       const following = next();
       if (following !== undefined) schedule(read.has(following) ? spaced() : 0);
     }
@@ -303,7 +303,7 @@ export function useMachineVisitDetails(
         if (following !== undefined) schedule(read.has(following) ? spaced() : 0);
       },
       retry() {
-        for (const [visit] of read) read.delete(visit);
+        for (const [entry] of read) read.delete(entry);
         if (!reading) schedule(0);
       },
     };
@@ -315,19 +315,19 @@ export function useMachineVisitDetails(
     };
   }, [api, runId, readable, facts]);
   const loadMoreEvents = useCallback(
-    async (visit: number) => {
-      const cursor = details.get(visit)?.eventsCursor;
-      if (!runId || !cursor || !api.getMachineVisitEvents) return;
+    async (entry: number) => {
+      const cursor = details.get(entry)?.eventsCursor;
+      if (!runId || !cursor || !api.getMachineStateEntryEvents) return;
       try {
-        const page = await api.getMachineVisitEvents(runId, visit, {
+        const page = await api.getMachineStateEntryEvents(runId, entry, {
           cursor,
-          limit: VISIT_EVENTS_PAGE,
+          limit: STATE_ENTRY_EVENTS_PAGE,
         });
         setStore((current) => {
           if (current.runId !== runId) return current;
-          const previous = current.details.get(visit) ?? {};
+          const previous = current.details.get(entry) ?? {};
           const map = new Map(current.details);
-          map.set(visit, {
+          map.set(entry, {
             ...previous,
             events: [...(previous.events ?? []), ...page.items],
             eventsCursor: page.next_cursor,
@@ -338,8 +338,8 @@ export function useMachineVisitDetails(
         setStore((current) => {
           if (current.runId !== runId) return current;
           const map = new Map(current.details);
-          map.set(visit, {
-            ...current.details.get(visit),
+          map.set(entry, {
+            ...current.details.get(entry),
             error: cause instanceof Error ? cause.message : "Read failed",
           });
           return { runId, details: map };
@@ -355,21 +355,21 @@ export function useMachineVisitDetails(
   };
 }
 
-/** The state each visit ran in, newest first, from the instance and its history. */
-export function machineVisits(
+/** The state each state entry ran in, newest first, from the instance and its history. */
+export function machineStateEntries(
   instance: MachineInstance,
   history: MachinePage<MachineTransition> | undefined,
-): { visit: number; state: string; left?: MachineTransition }[] {
-  const visits = new Map<number, { visit: number; state: string; left?: MachineTransition }>();
+): { entry: number; state: string; left?: MachineTransition }[] {
+  const entries = new Map<number, { entry: number; state: string; left?: MachineTransition }>();
   for (const transition of history?.items ?? [])
-    visits.set(transition.visit, {
-      visit: transition.visit,
+    entries.set(transition.entry, {
+      entry: transition.entry,
       state: transition.from,
       left: transition,
     });
-  if (instance.visit > 0 && instance.state && !visits.has(instance.visit))
-    visits.set(instance.visit, { visit: instance.visit, state: instance.state });
-  return [...visits.values()].sort((a, b) => b.visit - a.visit);
+  if (instance.entry > 0 && instance.state && !entries.has(instance.entry))
+    entries.set(instance.entry, { entry: instance.entry, state: instance.state });
+  return [...entries.values()].sort((a, b) => b.entry - a.entry);
 }
 
 type MachineTransitionSpec = MachineSpec["states"][string]["transitions"][number];
@@ -421,7 +421,7 @@ const runAction =
 
 /**
  * Machine-only run actions, placed beside the normal run controls (Cancel): send
- * an event (opens its form in the side panel), retry an interrupted visit, and the
+ * an event (opens its form in the side panel), retry an interrupted state entry, and the
  * development timer trigger. Each appears only when the host implements it.
  */
 export function MachineRunActions({
@@ -481,15 +481,15 @@ export function MachineRunActions({
         Send event
       </button>
     ),
-    api.retryMachineVisit && retryable && (
+    api.retryMachineStateEntry && retryable && (
       <button
         key="retry"
         type="button"
         className={runAction}
         disabled={busy}
-        onClick={() => void act(() => api.retryMachineVisit!(runId))}
+        onClick={() => void act(() => api.retryMachineStateEntry!(runId))}
       >
-        Retry visit
+        Retry entry
       </button>
     ),
     api.fireNextMachineTimer && instance.due !== null && (

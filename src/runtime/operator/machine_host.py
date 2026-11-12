@@ -1,6 +1,6 @@
 """Single-owner machine coordinator: typed ingress, SQLite journal and timer heap.
 
-Only this thread mutates machine records. Coordinators execute one visit, never a
+Only this thread mutates machine records. Coordinators execute one state entry, never a
 second top-level run. Admission and transitions commit before replies/publication.
 """
 
@@ -50,9 +50,9 @@ from .source import resolve_live_source
 from .state.machines import (
     InstanceRecord,
     MachinesTable,
+    StateEntryRecord,
     TimerRecord,
     TransitionRecord,
-    VisitRecord,
     journal_json,
 )
 from .state.run_calls import RunCallsTable
@@ -91,9 +91,9 @@ class MachineStep:
 
 
 @dataclass(frozen=True)
-class VisitFinished:
+class StateEntryFinished:
     run_id: str
-    visit: int
+    entry: int
     status: str
     output: JsonValue
     internal_event: str | None
@@ -149,7 +149,7 @@ Command = (
     Start
     | Send
     | MachineStep
-    | VisitFinished
+    | StateEntryFinished
     | Retry
     | Close
     | FireNextTimer
@@ -345,7 +345,7 @@ class MachineHost:
             lambda connection: MachinesTable.fact(
                 connection,
                 record.run_id,
-                record.visit,
+                record.entry,
                 status="definition_unavailable",
                 source="internal",
                 reason=summary[:2000],
@@ -356,7 +356,7 @@ class MachineHost:
 
     def _arm_timers(self, record: InstanceRecord, *, unavailable: bool = False) -> None:
         with self.op._state_store.transaction() as connection:
-            timers = MachinesTable.timers(connection, record.run_id, record.visit)
+            timers = MachinesTable.timers(connection, record.run_id, record.entry)
         self.heap = [entry for entry in self.heap if entry[1] != record.run_id]
         heapq.heapify(self.heap)
         inbox_retry = self._inbox_retries.get(record.run_id)
@@ -370,7 +370,7 @@ class MachineHost:
             )
             if next_at != float("inf"):
                 wake = time.time() + max(0.0, next_at - time.monotonic())
-                heapq.heappush(self.heap, (wake, record.run_id, record.visit, -1))
+                heapq.heappush(self.heap, (wake, record.run_id, record.entry, -1))
             return
         retry = (
             self._definition_retries.setdefault(
@@ -389,7 +389,7 @@ class MachineHost:
                 if retry is None
                 else max(timer.due, time.time() + max(0.0, retry.next_at - time.monotonic()))
             )
-            heapq.heappush(self.heap, (wake, record.run_id, record.visit, timer.timer_index))
+            heapq.heappush(self.heap, (wake, record.run_id, record.entry, timer.timer_index))
 
     def _commit(
         self,
@@ -425,22 +425,22 @@ class MachineHost:
         record: InstanceRecord,
         *,
         request: RunRequest | None = None,
-        previous: VisitRecord | None = None,
+        previous: StateEntryRecord | None = None,
         transition: TransitionRecord | None = None,
         consumed_receipt: str | None = None,
         fired: TimerRecord | None = None,
     ) -> None:
-        # Callers resolve the definition before changing state/visit. Once entry
-        # starts, always persist its visit row; a source race becomes an interrupted
-        # spawned visit, never a visit number with no journal row.
+        # Callers resolve the definition before changing state/state entry. Once entry
+        # starts, always persist its state entry row; a source race becomes an interrupted
+        # spawned state entry, never a state entry number with no journal row.
         spec = record.spec
         record.reason = None
         record.outcome = None
         record.internal_event = None
         record.internal_consumed = False
         now = time.time()
-        visit = VisitRecord(
-            visit=record.visit,
+        state_entry = StateEntryRecord(
+            entry=record.entry,
             state=record.state,
             entered_at=now,
             catalog_revision=str(self.op.get_catalog().revision),
@@ -452,14 +452,14 @@ class MachineHost:
                 previous.left_at = now
                 previous.disposition = "retained"
                 previous.transition = transition
-                MachinesTable.write_visit(connection, record.run_id, previous)
-                MachinesTable.cancel_timers(connection, record.run_id, previous.visit)
+                MachinesTable.write_state_entry(connection, record.run_id, previous)
+                MachinesTable.cancel_timers(connection, record.run_id, previous.entry)
             if fired is not None:
                 MachinesTable.write_timer(connection, fired)
                 MachinesTable.fact(
                     connection,
                     record.run_id,
-                    fired.visit,
+                    fired.entry,
                     status="timer_fired",
                     source="timer",
                     reason=fired.reason,
@@ -473,7 +473,7 @@ class MachineHost:
                 MachinesTable.fact(
                     connection,
                     record.run_id,
-                    record.visit - 1,
+                    record.entry - 1,
                     status="consumed",
                     receipt_id=consumed_receipt,
                     event=transition.event,
@@ -494,19 +494,19 @@ class MachineHost:
                     MachinesTable.fact(
                         connection,
                         record.run_id,
-                        record.visit,
+                        record.entry,
                         status="dropped",
                         event=row.event,
                         receipt_id=row.receipt_id,
                         at=now,
                     )
-            MachinesTable.write_visit(connection, record.run_id, visit)
+            MachinesTable.write_state_entry(connection, record.run_id, state_entry)
             for index, timer in enumerate(spec.states[record.state].timers):
                 MachinesTable.write_timer(
                     connection,
                     TimerRecord(
                         run_id=record.run_id,
-                        visit=record.visit,
+                        entry=record.entry,
                         timer_index=index,
                         due=now + timer.delay_seconds,
                         target=timer.target,
@@ -522,14 +522,18 @@ class MachineHost:
             run.expansions = {}
         self._commit(record, write, RunStatus.PENDING, request=request)
         try:
-            self.op.start_run(record.machine, run_id=record.run_id, _machine_visit=record)
+            self.op.start_run(record.machine, run_id=record.run_id, _machine_state_entry=record)
         except Exception:
             # Admission/entry already committed. A launch failure cannot erase
             # that journal or turn an accepted timer/send into a fatal host error.
             logger.exception(
-                "Machine visit could not start: %s visit %s", record.run_id, record.visit
+                "Machine state entry could not start: %s state entry %s",
+                record.run_id,
+                record.entry,
             )
-            self.queue.put(VisitFinished(record.run_id, record.visit, "failed", None, None))
+            self.queue.put(
+                StateEntryFinished(record.run_id, record.entry, "failed", None, None)
+            )
 
     def resolve(self, selector: str, fields: dict[str, JsonValue]) -> str:
         descriptor = self.op._registry.resolve(selector)
@@ -619,7 +623,7 @@ class MachineHost:
             machine=descriptor.workflow_id,
             key=key,
             state=spec.initial,
-            visit=1,
+            entry=1,
             spec=spec,
         )
         self._enter(record, request=command.request)
@@ -643,7 +647,9 @@ class MachineHost:
         retry = self._inbox_retries.setdefault(record.run_id, DefinitionRetry())
         if failures >= 3:
             retry.next_at = float("inf")
-            summary = "validation_retry_limit: " + summary + "; repair source and retry visit"
+            summary = (
+                "validation_retry_limit: " + summary + "; repair source and retry state entry"
+            )
         else:
             retry.next_at = time.monotonic() + retry.delay
             retry.delay = min(60.0, retry.delay * 2)
@@ -654,7 +660,7 @@ class MachineHost:
         retry = self._inbox_retries.get(record.run_id)
         if retry is not None and time.monotonic() < retry.next_at:
             summary = (
-                "validation_retry_limit: repair source and retry visit"
+                "validation_retry_limit: repair source and retry state entry"
                 if retry.next_at == float("inf")
                 else "Validation recovery pending"
             )
@@ -711,7 +717,7 @@ class MachineHost:
                         MachinesTable.fact(
                             connection,
                             record.run_id,
-                            record.visit,
+                            record.entry,
                             status="validation_failed",
                             receipt_id=row.receipt_id,
                             event=row.event,
@@ -741,7 +747,7 @@ class MachineHost:
                 MachinesTable.fact(
                     connection,
                     record.run_id,
-                    record.visit,
+                    record.entry,
                     status=status,
                     event=row.event,
                     receipt_id=row.receipt_id,
@@ -834,7 +840,7 @@ class MachineHost:
             MachinesTable.fact(
                 connection,
                 record.run_id,
-                record.visit,
+                record.entry,
                 status=receipt.status,
                 event=command.event,
                 receipt_id=receipt.receipt_id,
@@ -862,9 +868,9 @@ class MachineHost:
             self._arm_timers(record, unavailable=True)
             return
         with self.op._state_store.transaction() as connection:
-            timers = MachinesTable.timers(connection, record.run_id, record.visit)
+            timers = MachinesTable.timers(connection, record.run_id, record.entry)
             inbox = MachinesTable.inbox(connection, record.run_id)
-            visit = MachinesTable.visit(connection, record.run_id, record.visit)
+            entry = MachinesTable.entry(connection, record.run_id, record.entry)
         now = time.time()
         if manual:
             if not timers:
@@ -882,17 +888,17 @@ class MachineHost:
             work_done=True,
         )
         if reduction.finished:
-            visit.left_at = time.time()
-            visit.disposition = "retained"
+            entry.left_at = time.time()
+            entry.disposition = "retained"
 
             def finish(connection: sqlite3.Connection) -> None:
-                MachinesTable.write_visit(connection, record.run_id, visit)
+                MachinesTable.write_state_entry(connection, record.run_id, entry)
                 MachinesTable.cancel_timers(connection, record.run_id)
 
             self._commit(record, finish, RunStatus.SUCCESS)
         elif reduction.transition is not None:
             transition = reduction.transition
-            old_visit = record.visit
+            old_state_entry = record.entry
             chosen = timers[0] if transition.source == "timer" else None
             if chosen is not None:
                 chosen.fired_at = time.time()
@@ -904,19 +910,19 @@ class MachineHost:
             )
             record.state = reduction.record.state
             record.payload = reduction.record.payload
-            record.visit += 1
+            record.entry += 1
             self._enter(
                 record,
-                previous=visit,
+                previous=entry,
                 consumed_receipt=receipt_id,
                 fired=chosen,
                 transition=TransitionRecord(
                     **{
-                        "from": visit.state,
+                        "from": entry.state,
                         "to": record.state,
                         "event": transition.event,
                         "source": transition.source,
-                        "visit": old_visit,
+                        "entry": old_state_entry,
                     }
                 ),
             )
@@ -925,36 +931,41 @@ class MachineHost:
             self._commit(record, lambda connection: None, RunStatus.WAITING)
             self._arm_timers(record)
 
-    def _finished(self, command: VisitFinished) -> None:
+    def _finished(self, command: StateEntryFinished) -> None:
         record = self._load(command.run_id)
-        if record.visit != command.visit or record.phase != "active":
+        if record.entry != command.entry or record.phase != "active":
             return
         with self.op._state_store.transaction() as connection:
-            visit = MachinesTable.visit(connection, record.run_id, record.visit)
-        visit.snapshot = self.op.get_latest_run_snapshot(
+            entry = MachinesTable.entry(connection, record.run_id, record.entry)
+        entry.snapshot = self.op.get_latest_run_snapshot(
             record.run_id, operator_instance_id=self.op._operator_instance_id
         )
         if command.status == "success":
             record.outcome, record.internal_event = command.output, command.internal_event
             self._commit(
                 record,
-                lambda connection: MachinesTable.write_visit(connection, record.run_id, visit),
+                lambda connection: MachinesTable.write_state_entry(
+                    connection, record.run_id, entry
+                ),
                 RunStatus.WAITING,
             )
             self._drive(record)
         else:
             record.reason = "outcome_unknown"
-            visit.disposition = "indeterminate"
+            entry.disposition = "indeterminate"
             work = record.spec.work_graphs[record.spec.states[record.state].work]
             run = self.op.get_run(record.run_id)
             assert run is not None
             known_call_failure = any(
-                run.nodes[f"v{record.visit}.{node_id}"].status == NodeStatus.FAILED
-                for node_id, wait in work.node_waits.items() if wait.kind == "run"
+                run.nodes[f"e{record.entry}.{node_id}"].status == NodeStatus.FAILED
+                for node_id, wait in work.node_waits.items()
+                if wait.kind == "run"
             )
             self._commit(
                 record,
-                lambda connection: MachinesTable.write_visit(connection, record.run_id, visit),
+                lambda connection: MachinesTable.write_state_entry(
+                    connection, record.run_id, entry
+                ),
                 RunStatus.FAILED if known_call_failure else RunStatus.WAITING,
             )
 
@@ -964,7 +975,7 @@ class MachineHost:
 
         def next_due(record: InstanceRecord) -> float:
             with self.op._state_store.transaction() as connection:
-                timers = MachinesTable.timers(connection, record.run_id, record.visit)
+                timers = MachinesTable.timers(connection, record.run_id, record.entry)
             return timers[0].due if timers else float("inf")
 
         for record in sorted(records, key=next_due):
@@ -974,20 +985,24 @@ class MachineHost:
                 continue
             if record.phase == "active":
                 with self.op._state_store.transaction() as connection:
-                    called = connection.execute(
-                        "SELECT 1 FROM run_waits WHERE child_run_id=? LIMIT 1",
-                        (record.run_id,)).fetchone() is not None
+                    called = (
+                        connection.execute(
+                            "SELECT 1 FROM run_waits WHERE child_run_id=? LIMIT 1",
+                            (record.run_id,),
+                        ).fetchone()
+                        is not None
+                    )
                 record.reason = "outcome_unknown"
                 with self.op._state_store.transaction() as connection:
-                    visit = MachinesTable.visit(connection, record.run_id, record.visit)
-                visit.disposition = "indeterminate"
-                visit.snapshot = self.op.get_latest_run_snapshot(
+                    entry = MachinesTable.entry(connection, record.run_id, record.entry)
+                entry.disposition = "indeterminate"
+                entry.snapshot = self.op.get_latest_run_snapshot(
                     record.run_id, operator_instance_id=self.op.operator_instance_id
                 )
                 self._commit(
                     record,
-                    lambda connection: MachinesTable.write_visit(
-                        connection, record.run_id, visit
+                    lambda connection: MachinesTable.write_state_entry(
+                        connection, record.run_id, entry
                     ),
                     RunStatus.FAILED if called else RunStatus.WAITING,
                 )
@@ -1044,16 +1059,21 @@ class MachineHost:
                     "SELECT read_state FROM runs WHERE run_id=?", (run_id,)
                 ).fetchone()[0]
             started = RunStart(
-                run_id=run_id, key=key, created=existing is None or run_id == proposed,
-                read_state=read_state
+                run_id=run_id,
+                key=key,
+                created=existing is None or run_id == proposed,
+                read_state=read_state,
             )
             with self.op._state_store.transaction() as connection:
                 RunCallsTable.link(connection, request.parent_run_id, request.node_id, started)
             parent = self.op.get_run(request.parent_run_id)
             with self.op._lock:
                 handle = self.op._active_runs.get(request.parent_run_id)
-                cancelled = (parent.status == RunStatus.CANCELLED
-                             or handle is not None and handle.cancel_event.is_set())
+                cancelled = (
+                    parent.status == RunStatus.CANCELLED
+                    or handle is not None
+                    and handle.cancel_event.is_set()
+                )
             if cancelled and started.created:
                 self._cancel_created_child(started.run_id)
             return started
@@ -1091,8 +1111,11 @@ class MachineHost:
         with self.op._state_store.transaction() as connection:
             machine = MachinesTable.load(connection, run_id)
         if machine is not None and machine.phase not in {"closed", "final"}:
-            self._commit(machine, lambda connection: MachinesTable.cancel_timers(
-                connection, run_id), RunStatus.CANCELLED)
+            self._commit(
+                machine,
+                lambda connection: MachinesTable.cancel_timers(connection, run_id),
+                RunStatus.CANCELLED,
+            )
 
     def _arm_run_wait(self, request: MachineStepRequest, reply: Future[HostStepOutput]) -> None:
         if not request.enabled:
@@ -1106,19 +1129,28 @@ class MachineHost:
     def _resolve_run_waits(self) -> float | None:
         """Repair terminal-before-subscribe and latch once, on the single owner."""
         with self.op._state_store.transaction() as connection:
-            rows = [connection.execute(
-                "SELECT * FROM run_waits WHERE parent_run_id=? AND node_id=?", address
-            ).fetchone() for address in tuple(self.run_waiters)]
+            rows = [
+                connection.execute(
+                    "SELECT * FROM run_waits WHERE parent_run_id=? AND node_id=?", address
+                ).fetchone()
+                for address in tuple(self.run_waiters)
+            ]
         deadline = None
         for row in rows:
             address = (row["parent_run_id"], row["node_id"])
             parent = self.op.get_run(row["parent_run_id"])
-            if parent is None or parent.status in {RunStatus.SUCCESS, RunStatus.FAILED,
-                                                  RunStatus.CANCELLED}:
+            if parent is None or parent.status in {
+                RunStatus.SUCCESS,
+                RunStatus.FAILED,
+                RunStatus.CANCELLED,
+            }:
                 self.run_waiters.pop(address, None)
                 continue
-            response = (MachineStepResponse.model_validate_json(row["response_json"])
-                        if row["response_json"] is not None else None)
+            response = (
+                MachineStepResponse.model_validate_json(row["response_json"])
+                if row["response_json"] is not None
+                else None
+            )
             if response is None:
                 child = self.op.get_run(row["child_run_id"])
                 assert child is not None
@@ -1135,7 +1167,8 @@ class MachineHost:
                 if child.status == RunStatus.SUCCESS:
                     try:
                         output = RunResult.from_payload(
-                            child.run_id, self.op._get_run_result_payload(child.run_id))
+                            child.run_id, self.op._get_run_result_payload(child.run_id)
+                        )
                     except (OSError, RuntimeError, TypeError, ValueError) as exc:
                         code = "child_run_failed"
                         detail = f": result unavailable ({exc})"
@@ -1147,12 +1180,17 @@ class MachineHost:
                     code = "child_run_timeout"
                 else:
                     if row["deadline"] is not None:
-                        deadline = (row["deadline"] if deadline is None
-                                    else min(deadline, row["deadline"]))
+                        deadline = (
+                            row["deadline"]
+                            if deadline is None
+                            else min(deadline, row["deadline"])
+                        )
                     continue
                 response = MachineStepResponse(
-                    node_id=row["node_id"], output=output,
-                    error=f"{code}: {child.run_id}{detail}" if code is not None else None)
+                    node_id=row["node_id"],
+                    output=output,
+                    error=f"{code}: {child.run_id}{detail}" if code is not None else None,
+                )
                 with self.op._state_store.transaction() as connection:
                     RunCallsTable.latch(connection, row["parent_run_id"], response)
             future = self.run_waiters.pop(address, None)
@@ -1181,12 +1219,12 @@ class MachineHost:
                 now = time.time()
                 while self.heap and self.heap[0][0] <= now:
                     due.append(heapq.heappop(self.heap))
-                for _, run_id, visit, index in due:
+                for _, run_id, entry, index in due:
                     try:
                         record = self._load(run_id)
-                        if record.phase == "waiting" and record.visit == visit:
+                        if record.phase == "waiting" and record.entry == entry:
                             with self.op._state_store.transaction() as connection:
-                                timers = MachinesTable.timers(connection, run_id, visit)
+                                timers = MachinesTable.timers(connection, run_id, entry)
                             if index == -1 or any(
                                 timer.timer_index == index for timer in timers
                             ):
@@ -1219,7 +1257,7 @@ class MachineHost:
                             reply.set_result(self._step(request))
                     case RunChanged():
                         pass  # The next pass repairs all terminal-to-parent deliveries.
-                    case VisitFinished():
+                    case StateEntryFinished():
                         self._finished(command)
                     case CatalogReloaded():
                         self._pass_reloaded = True
@@ -1253,15 +1291,15 @@ class MachineHost:
                             MachinesTable.fact(
                                 connection,
                                 run_id,
-                                record.visit,
+                                record.entry,
                                 status="validation_retry_reset",
                                 source="internal",
                                 at=time.time(),
                             )
                         if phase == "interrupted":
                             with self.op._state_store.transaction() as connection:
-                                previous = MachinesTable.visit(connection, run_id, record.visit)
-                            record.visit += 1
+                                previous = MachinesTable.entry(connection, run_id, record.entry)
+                            record.entry += 1
                             self._enter(record, previous=previous)
                         else:
                             self._drive(record, catchup=True)
@@ -1281,7 +1319,7 @@ class MachineHost:
             except DefinitionReloadDeferredError:
                 self._deferred.append((self._last_reload + 1.0, command))
             except Exception as exc:
-                if isinstance(command, (VisitFinished, CatalogReloaded, RunChanged)):
+                if isinstance(command, (StateEntryFinished, CatalogReloaded, RunChanged)):
                     self.op._record_fatal_error(exc)
                 else:
                     command.reply.set_exception(exc)

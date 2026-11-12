@@ -106,7 +106,7 @@ def test_operator_native_calls(tmp_path):
                        for node in op.get_run(failed).nodes.values())
 
         lifecycle = op.start_run("lifecycle_call_parent", input={
-            "ticket": 70, "journal": str(tmp_path / "lifecycle-visits")})
+            "ticket": 70, "journal": str(tmp_path / "lifecycle-state-entries")})
         lifecycle_link = wait_for(lambda: op.run_links(lifecycle)["children"])[0]
         wait_for(lambda: op.get_run(lifecycle_link.child_run_id).status == RunStatus.WAITING)
         assert op.get_run(lifecycle).status == RunStatus.RUNNING
@@ -202,12 +202,12 @@ def test_native_calls():
         return answer(ava.input)
 
     @ava.workflow(input=Input, output=Output)
-    def visit():
+    def entry():
         return ava.call(child, ava.input)
 
     @ava.machine(input=Input, key=("id",))
     def instance():
-        done = ava.state(visit, initial=True, final=True)
+        done = ava.state(entry, initial=True, final=True)
         return done
 
     @ava.workflow(output=Output)
@@ -526,7 +526,7 @@ def test_review_loop():
         ("a = ava.state(bad_workflow, initial=True)", "workflow emits"),
     ],
 )
-def test_machine_discovery_rejects_invalid_visit(tmp_path, body, error):
+def test_machine_discovery_rejects_invalid_state_entry(tmp_path, body, error):
     fixture = tmp_path / "flow.py"
     fixture.write_text(
         """import avalanche as ava
@@ -578,7 +578,7 @@ async def test_machine_run_control_early_events_payloads_and_defer(tmp_path):
 
     @ava.step
     async def idle(context: ava.RunContext) -> None:
-        # A recipient dedupes retry identities but must not collapse distinct visits.
+        # A recipient dedupes retry identities but must not collapse distinct state entries.
         effects.add(context.step_key)
 
     @ava.step
@@ -668,8 +668,8 @@ async def test_machine_run_control_early_events_payloads_and_defer(tmp_path):
     assert len(effects) == 4
     assert any(address[-1] == "delivery-2" for address in routed.host.receipts)
 
-    # The test host binds one persistent local folder across all visits and
-    # passes the same File into the child started by the final visit.
+    # The test host binds one persistent local folder across all state entries and
+    # passes the same File into the child started by the final state entry.
     spec = importlib.util.spec_from_file_location(
         "artifact_machine_fixture", SDK / "test" / "fixtures" / "local_machine.py"
     )
@@ -680,7 +680,7 @@ async def test_machine_run_control_early_events_payloads_and_defer(tmp_path):
     (source / "data.txt").write_text("captured")
     ticket = fixture.ArtifactTicket(
         ticket=90,
-        journal=str(tmp_path / "visits"),
+        journal=str(tmp_path / "entries"),
         document=file,
         workspace=ava.Workspace.from_path(source),
     )
@@ -702,7 +702,7 @@ async def test_machine_run_control_early_events_payloads_and_defer(tmp_path):
     assert instance.host.flow_runs[0].input.document.ref == file.ref
 
 
-def test_machine_visit_reconciliation_reuses_local_waits():
+def test_machine_state_entry_reconciliation_reuses_local_waits():
     class Input(ava.BaseInput):
         id: int
 

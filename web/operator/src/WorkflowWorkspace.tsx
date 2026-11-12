@@ -14,18 +14,18 @@ import type { OperatorApi } from "./api";
 import {
   MachineRunActions,
   MachineSendPanel,
-  machineVisits,
+  machineStateEntries,
   useMachineHistory,
   useMachineInstance,
-  useMachineVisit,
-  useMachineVisitDetails,
+  useMachineStateEntry,
+  useMachineStateEntryDetails,
   useRunWaits,
 } from "./MachineWorkspace";
 import type { MachineGraphView } from "./machineGraph";
 import { GraphCanvas, type CanvasReserve } from "./GraphCanvas";
 import { Inspector } from "./Inspector";
 import type { FlowInfoMsg, InputFileAttachment, RunSnapshotMsg } from "./model";
-import { RunLogPane, visitStep } from "./RunLogPane";
+import { RunLogPane, stateEntryStep } from "./RunLogPane";
 import { stepScopeLabel } from "./ScopeChip";
 import { RunControls } from "./RunControls";
 import { DecisionForm, type WaitCard } from "./RunWaitPanel";
@@ -190,8 +190,8 @@ const TIMELINE_MIN_HEIGHT = 160;
  * choice, either way, is remembered).
  */
 export const RUNS_FOLD_WIDTH = 900;
-/** Machine visits the run timeline lists at first; earlier ones load on request. */
-const TIMELINE_VISITS = 10;
+/** Machine state entries the run timeline lists at first; earlier ones load on request. */
+const TIMELINE_STATE_ENTRIES = 10;
 const EMPTY_WAITS: WaitCard[] = [];
 
 const paneAction =
@@ -526,7 +526,7 @@ export function WorkflowWorkspaceSurface({
     run?.summary?.runId,
   );
   // A machine instance is a run: the same page, with the graph in machine mode,
-  // its visits as a section of the run timeline and its detail in the side panel.
+  // its state entries as a section of the run timeline and its detail in the side panel.
   const machineSpec = workflow?.machineSpec;
   const machineRunId = machineSpec ? selectedRunId : undefined;
   // Machine reads follow the run's revision from the update stream (each host bumps
@@ -548,28 +548,28 @@ export function WorkflowWorkspaceSurface({
       ? machineRead.value
       : undefined;
   const machineHistory = useMachineHistory(api, machineRunId, machineRefresh);
-  const [visitSelection, setVisitSelection] = useState<{ runId: string; visit: number }>();
-  const selectedVisit =
-    visitSelection && visitSelection.runId === machineRunId ? visitSelection.visit : undefined;
-  const currentVisit =
-    selectedVisit !== undefined &&
-    selectedVisit === machineInstance?.visit &&
+  const [stateEntrySelection, setStateEntrySelection] = useState<{ runId: string; entry: number }>();
+  const selectedStateEntry =
+    stateEntrySelection && stateEntrySelection.runId === machineRunId ? stateEntrySelection.entry : undefined;
+  const currentStateEntry =
+    selectedStateEntry !== undefined &&
+    selectedStateEntry === machineInstance?.entry &&
     !machineInstance.finished;
-  const visitRead = useMachineVisit(
+  const stateEntryRead = useMachineStateEntry(
     api,
     machineRunId,
-    selectedVisit,
-    currentVisit,
-    `${machineInstance?.visit}:${machineInstance?.status}:${runRevision}`,
+    selectedStateEntry,
+    currentStateEntry,
+    `${machineInstance?.entry}:${machineInstance?.status}:${runRevision}`,
   );
-  const visit =
-    selectedVisit !== undefined && visitRead.value?.visit === selectedVisit
-      ? visitRead.value
+  const stateEntry =
+    selectedStateEntry !== undefined && stateEntryRead.value?.entry === selectedStateEntry
+      ? stateEntryRead.value
       : undefined;
-  // A selected visit's steps are shown exactly like a flow run's.
-  const visitRun = visit?.snapshot;
-  // Retention removed this visit's steps; say so instead of drawing another graph.
-  const visitExpired = visit?.disposition === "expired";
+  // A selected state entry's steps are shown exactly like a flow run's.
+  const stateEntryRun = stateEntry?.snapshot;
+  // Retention removed this state entry's steps; say so instead of drawing another graph.
+  const stateEntryExpired = stateEntry?.disposition === "expired";
   // The key-to-run link outlives history: the run stays, its history reads `expired`.
   const runExpired =
     run?.summary?.expired === true ||
@@ -580,13 +580,13 @@ export function WorkflowWorkspaceSurface({
     setInspectedNode(undefined);
     setSendFor(machineRunId);
   }, [machineRunId]);
-  const selectVisit = useCallback(
+  const selectStateEntry = useCallback(
     (next: number | undefined) => {
       setInspectedNode(undefined);
-      setVisitSelection(
+      setStateEntrySelection(
         next === undefined || machineRunId === undefined
           ? undefined
-          : { runId: machineRunId, visit: next },
+          : { runId: machineRunId, entry: next },
       );
     },
     [machineRunId],
@@ -651,8 +651,8 @@ export function WorkflowWorkspaceSurface({
   // Requesting snapshots have no run-pinned graph yet. Keep the definition visible
   // through the status update and the subsequent prepared-snapshot refresh.
   const previewWorkflow = requestingRun && !run?.topology?.nodeIds.length;
-  const shownTopology = visitRun
-    ? visitRun.topology
+  const shownTopology = stateEntryRun
+    ? stateEntryRun.topology
     : previewWorkflow
       ? workflow
       : run
@@ -691,41 +691,41 @@ export function WorkflowWorkspaceSurface({
     machineRefresh,
   );
   const waitCards = runWaits.value ?? EMPTY_WAITS;
-  const windowVisits = useMemo(() => {
+  const windowStateEntries = useMemo(() => {
     if (!machineInstance) return [];
-    // A window before the latest page of history does not hold the current visit.
+    // A window before the latest page of history does not hold the current state entry.
     const latestWindow = historyPage?.next_cursor == null;
-    return machineVisits(machineInstance, historyPage)
-      .map((item) => item.visit)
+    return machineStateEntries(machineInstance, historyPage)
+      .map((item) => item.entry)
       .filter(
-        (visitNumber) =>
-          latestWindow || historyPage?.items.some((item) => item.visit === visitNumber),
+        (stateEntryNumber) =>
+          latestWindow || historyPage?.items.some((item) => item.entry === stateEntryNumber),
       )
       .sort((left, right) => left - right);
   }, [historyPage, machineInstance]);
-  const [visitCount, setVisitCount] = useState<{ runId?: string; count: number }>({
-    count: TIMELINE_VISITS,
+  const [stateEntryCount, setStateEntryCount] = useState<{ runId?: string; count: number }>({
+    count: TIMELINE_STATE_ENTRIES,
   });
-  const shownVisitCount =
-    visitCount.runId === machineRunId ? visitCount.count : TIMELINE_VISITS;
-  const shownVisits = useMemo(
-    () => windowVisits.slice(-shownVisitCount),
-    [shownVisitCount, windowVisits],
+  const shownStateEntryCount =
+    stateEntryCount.runId === machineRunId ? stateEntryCount.count : TIMELINE_STATE_ENTRIES;
+  const shownStateEntries = useMemo(
+    () => windowStateEntries.slice(-shownStateEntryCount),
+    [shownStateEntryCount, windowStateEntries],
   );
-  const hiddenVisits = windowVisits.length - shownVisits.length;
-  const liveVisit =
-    machineInstance && !machineInstance.finished && runLive ? machineInstance.visit : undefined;
-  const visitDetails = useMachineVisitDetails(
+  const hiddenStateEntries = windowStateEntries.length - shownStateEntries.length;
+  const liveStateEntry =
+    machineInstance && !machineInstance.finished && runLive ? machineInstance.entry : undefined;
+  const stateEntryDetails = useMachineStateEntryDetails(
     api,
     machineRunId,
-    shownVisits,
-    liveVisit,
-    `${machineInstance?.visit}:${machineInstance?.status}:${runRevision}`,
+    shownStateEntries,
+    liveStateEntry,
+    `${machineInstance?.entry}:${machineInstance?.status}:${runRevision}`,
     !runExpired,
   );
   const terminalStatuses = api.terminalRunStatuses ?? LOCAL_TERMINAL_RUN_STATUSES;
   const fromStart =
-    machineHistory.cursor === undefined && hiddenVisits === 0 && (shownVisits[0] ?? 1) <= 1;
+    machineHistory.cursor === undefined && hiddenStateEntries === 0 && (shownStateEntries[0] ?? 1) <= 1;
   const timelineEntries = useMemo<TimelineEntry[]>(() => {
     if (!run) return [];
     if (machineRunId) {
@@ -734,24 +734,24 @@ export function WorkflowWorkspaceSurface({
         spec: shownMachineSpec,
         instance: machineInstance,
         history: historyPage?.items ?? [],
-        visits: shownVisits,
-        details: visitDetails.details,
+        entries: shownStateEntries,
+        details: stateEntryDetails.details,
         waits: waitCards,
         startedAt: run.summary?.triggeredAt,
         status: runStatusValue,
         settled: settled === true,
         fromStart,
         clocksPending:
-          api.getMachineVisit !== undefined &&
-          shownVisits.some((item) => {
-            const read = visitDetails.details.get(item);
+          api.getMachineStateEntry !== undefined &&
+          shownStateEntries.some((item) => {
+            const read = stateEntryDetails.details.get(item);
             return !read?.record && !read?.error;
           }),
       });
     }
     return flowTimeline({ run, waits: waitCards, settled: settled === true, terminalStatuses });
   }, [
-    api.getMachineVisit,
+    api.getMachineStateEntry,
     fromStart,
     historyPage,
     machineInstance,
@@ -760,9 +760,9 @@ export function WorkflowWorkspaceSurface({
     runStatusValue,
     settled,
     shownMachineSpec,
-    shownVisits,
+    shownStateEntries,
     terminalStatuses,
-    visitDetails.details,
+    stateEntryDetails.details,
     waitCards,
   ]);
   const pendingItems = useMemo<PendingItem[]>(
@@ -774,7 +774,7 @@ export function WorkflowWorkspaceSurface({
   );
   // A graph selection narrows the timeline: a state, or an inspected step.
   const filterNode =
-    inspectedNode && inspectedNode !== INPUT_NODE_ID && (visitRun || !machineRunId)
+    inspectedNode && inspectedNode !== INPUT_NODE_ID && (stateEntryRun || !machineRunId)
       ? inspectedNode
       : undefined;
   const timelineFilter = useMemo(
@@ -790,7 +790,7 @@ export function WorkflowWorkspaceSurface({
     () => filterTimeline(timelineEntries, timelineFilter),
     [timelineEntries, timelineFilter],
   );
-  const shownTopologyNames = (visitRun ?? run)?.topology?.displayNames;
+  const shownTopologyNames = (stateEntryRun ?? run)?.topology?.displayNames;
   const filterLabel =
     stateFilter !== undefined
       ? `State: ${stateFilter}`
@@ -819,7 +819,7 @@ export function WorkflowWorkspaceSurface({
   const hoverFocus = hover.runId === selectedRunId ? hover.focus : undefined;
   const chosenEntry = selectedEntry.runId === selectedRunId ? selectedEntry.entry : undefined;
   const focus: TimelineFocus | undefined = hoverFocus ?? chosenEntry;
-  const machineGraphShown = machineView !== undefined && !visitRun && !visitExpired;
+  const machineGraphShown = machineView !== undefined && !stateEntryRun && !stateEntryExpired;
   const focusKey = focus
     ? JSON.stringify([focus.id, focus.state, focus.arc, focus.nodeId, machineGraphShown])
     : "";
@@ -843,44 +843,44 @@ export function WorkflowWorkspaceSurface({
     (entry: TimelineEntry | undefined) => setSelectedEntry({ runId: selectedRunId, entry }),
     [selectedRunId],
   );
-  // A visit's step opens once that visit's steps are on the graph.
-  const [pendingVisitNode, setPendingVisitNode] = useState<{ visit: number; nodeId: string }>();
+  // A state entry's step opens once that state entry's steps are on the graph.
+  const [pendingStateEntryNode, setPendingStateEntryNode] = useState<{ entry: number; nodeId: string }>();
   useEffect(() => {
     if (
-      !pendingVisitNode ||
-      visit?.visit !== pendingVisitNode.visit ||
-      !topologyNodeIds?.includes(pendingVisitNode.nodeId)
+      !pendingStateEntryNode ||
+      stateEntry?.entry !== pendingStateEntryNode.entry ||
+      !topologyNodeIds?.includes(pendingStateEntryNode.nodeId)
     )
       return;
-    setInspectedNode(pendingVisitNode.nodeId);
-    setPendingVisitNode(undefined);
-  }, [pendingVisitNode, topologyNodeIds, visit]);
-  const openVisitStep = useCallback(
-    (visitNumber: number, nodeId?: string) => {
-      selectVisit(visitNumber);
-      setPendingVisitNode(nodeId ? { visit: visitNumber, nodeId } : undefined);
+    setInspectedNode(pendingStateEntryNode.nodeId);
+    setPendingStateEntryNode(undefined);
+  }, [pendingStateEntryNode, topologyNodeIds, stateEntry]);
+  const openStateEntryStep = useCallback(
+    (stateEntryNumber: number, nodeId?: string) => {
+      selectStateEntry(stateEntryNumber);
+      setPendingStateEntryNode(nodeId ? { entry: stateEntryNumber, nodeId } : undefined);
     },
-    [selectVisit],
+    [selectStateEntry],
   );
   const openEntryLogs = useCallback(
     (entry: TimelineEntry) => {
       setRunPaneTab("logs");
       if (machineRunId) {
-        if (entry.visit !== undefined) openVisitStep(entry.visit, entry.nodeId);
+        if (entry.entry !== undefined) openStateEntryStep(entry.entry, entry.nodeId);
       } else if (entry.nodeId) {
         setInspectedNode(entry.nodeId);
       }
     },
-    [machineRunId, openVisitStep, setRunPaneTab],
+    [machineRunId, openStateEntryStep, setRunPaneTab],
   );
-  // A log row of another visit's step opens that visit and step.
+  // A log row of another state entry's step opens that state entry and step.
   const openLogNode = useCallback(
     (nodeId: string) => {
-      const step = machineRunId && !visitRun ? visitStep(nodeId) : undefined;
-      if (step) openVisitStep(step.visit, nodeId);
+      const step = machineRunId && !stateEntryRun ? stateEntryStep(nodeId) : undefined;
+      if (step) openStateEntryStep(step.entry, nodeId);
       else setInspectedNode(nodeId);
     },
-    [machineRunId, openVisitStep, visitRun],
+    [machineRunId, openStateEntryStep, stateEntryRun],
   );
   const decisionsEnabled =
     runActionsEnabled && bottomRightPanel !== null && api.submitDecision !== undefined;
@@ -900,7 +900,7 @@ export function WorkflowWorkspaceSurface({
   );
   const missingFacts: string[] = [];
   if (machineRunId && machineInstance) {
-    if (!api.getMachineVisitEvents) missingFacts.push("received events");
+    if (!api.getMachineStateEntryEvents) missingFacts.push("received events");
     if (machineInstance.pending_events === undefined && settled === false)
       missingFacts.push("deferred events");
     if (machineInstance.receipts === undefined) missingFacts.push("send receipts");
@@ -908,73 +908,73 @@ export function WorkflowWorkspaceSurface({
   const timelineNote = missingFacts.length
     ? `${sentenceList(missingFacts)} aren't listed for this run.`
     : undefined;
-  const visitErrors = [...visitDetails.details.values()].filter((item) => item.error);
+  const stateEntryErrors = [...stateEntryDetails.details.values()].filter((item) => item.error);
   const timelineError =
-    machineRead.error || machineHistory.error || visitErrors.length > 0 ? (
+    machineRead.error || machineHistory.error || stateEntryErrors.length > 0 ? (
       <p role="alert" className="m-2 text-[10px] text-danger">
-        {machineRead.error ?? machineHistory.error ?? visitErrors[0].error}{" "}
+        {machineRead.error ?? machineHistory.error ?? stateEntryErrors[0].error}{" "}
         <button
           type="button"
           className="underline"
           onClick={() => {
             machineRead.refresh();
             machineHistory.refresh();
-            visitDetails.retry();
+            stateEntryDetails.retry();
           }}
         >
           Retry read
         </button>
       </p>
     ) : undefined;
-  // On both tabs of the run pane: a step entry's Logs action opens the visit there too.
-  const visitNav =
-    machineRunId && selectedVisit !== undefined ? (
+  // On both tabs of the run pane: a step entry's Logs action opens the state entry there too.
+  const stateEntryNav =
+    machineRunId && selectedStateEntry !== undefined ? (
       <nav
-        aria-label="Machine visit"
+        aria-label="Machine state entry"
         className="flex flex-wrap items-center gap-2 border-b border-line px-[9px] py-1.5 font-mono text-[10px] text-secondary"
       >
         <button
           type="button"
           className="cursor-pointer border-0 bg-transparent p-0 text-acid underline underline-offset-2"
-          onClick={() => selectVisit(undefined)}
+          onClick={() => selectStateEntry(undefined)}
         >
           State machine
         </button>
         <span aria-hidden="true">/</span>
         <span className="text-ink">
-          Visit {selectedVisit}
-          {visit && !visitExpired ? ` · ${visit.state}` : ""}
-          {visitExpired ? " · expired" : ""}
-          {visit?.catalog_revision ? ` · revision ${visit.catalog_revision}` : ""}
+          Entry {selectedStateEntry}
+          {stateEntry && !stateEntryExpired ? ` · ${stateEntry.state}` : ""}
+          {stateEntryExpired ? " · expired" : ""}
+          {stateEntry?.catalog_revision ? ` · revision ${stateEntry.catalog_revision}` : ""}
         </span>
         <span>steps on the graph</span>
-        {!visit && <span role="status">Loading visit…</span>}
+        {!stateEntry && <span role="status">Loading entry…</span>}
       </nav>
     ) : undefined;
   const timelineHeader =
-    machineRunId && hiddenVisits > 0 ? (
+    machineRunId && hiddenStateEntries > 0 ? (
       <>
-        {hiddenVisits > 0 && (
+        {hiddenStateEntries > 0 && (
           <div className="px-[9px] py-1.5">
             <button
               type="button"
               className={paneAction}
               onClick={() =>
-                setVisitCount({
+                setStateEntryCount({
                   runId: machineRunId,
-                  count: shownVisitCount + TIMELINE_VISITS,
+                  count: shownStateEntryCount + TIMELINE_STATE_ENTRIES,
                 })
               }
             >
-              Show {Math.min(hiddenVisits, TIMELINE_VISITS)} earlier visits
+              Show {Math.min(hiddenStateEntries, TIMELINE_STATE_ENTRIES)} earlier entries
             </button>
           </div>
         )}
       </>
     ) : undefined;
-  // Visits whose event facts continue past the first page (an empty page may too).
-  const moreEvents = shownVisits.filter(
-    (item) => visitDetails.details.get(item)?.eventsCursor != null,
+  // State entries whose event facts continue past the first page (an empty page may too).
+  const moreEvents = shownStateEntries.filter(
+    (item) => stateEntryDetails.details.get(item)?.eventsCursor != null,
   );
   const timelineFooter =
     machineRunId &&
@@ -987,9 +987,9 @@ export function WorkflowWorkspaceSurface({
             key={item}
             type="button"
             className={paneAction}
-            onClick={() => void visitDetails.loadMoreEvents(item)}
+            onClick={() => void stateEntryDetails.loadMoreEvents(item)}
           >
-            More events of visit {item}
+            More events of entry {item}
           </button>
         ))}
         {machineHistory.cursor !== undefined && (
@@ -998,7 +998,7 @@ export function WorkflowWorkspaceSurface({
             className={paneAction}
             onClick={() => machineHistory.setCursor(undefined)}
           >
-            First visits
+            First entries
           </button>
         )}
         {historyPage?.next_cursor != null && (
@@ -1007,7 +1007,7 @@ export function WorkflowWorkspaceSurface({
             className={paneAction}
             onClick={() => machineHistory.setCursor(historyPage.next_cursor!)}
           >
-            More visits
+            More entries
           </button>
         )}
       </div>
@@ -1021,9 +1021,9 @@ export function WorkflowWorkspaceSurface({
       selectedId={chosenEntry?.id}
       onHover={onTimelineHover}
       onSelect={onTimelineSelect}
-      onOpenVisit={
-        machineRunId && api.getMachineVisit
-          ? (visitNumber: number) => openVisitStep(visitNumber)
+      onOpenStateEntry={
+        machineRunId && api.getMachineStateEntry
+          ? (stateEntryNumber: number) => openStateEntryStep(stateEntryNumber)
           : undefined
       }
       onOpenLogs={openEntryLogs}
@@ -1219,23 +1219,23 @@ export function WorkflowWorkspaceSurface({
                   className={`run-graph-shell relative min-w-0 flex-1 overflow-hidden ${machineRunId ? "min-h-[300px]" : "min-h-0"}`}
                 >
                   <GraphCanvas
-                    machine={visitRun || visitExpired ? undefined : machineView}
+                    machine={stateEntryRun || stateEntryExpired ? undefined : machineView}
                     workflow={!run || previewWorkflow ? workflow : undefined}
                     runTopology={
-                      visitRun
-                        ? visitRun.topology
-                        : previewWorkflow || visitExpired
+                      stateEntryRun
+                        ? stateEntryRun.topology
+                        : previewWorkflow || stateEntryExpired
                           ? undefined
                           : run?.topology
                     }
                     runNodes={
-                      visitRun
-                        ? visitRun.nodes
-                        : requestingRun || visitExpired
+                      stateEntryRun
+                        ? stateEntryRun.nodes
+                        : requestingRun || stateEntryExpired
                           ? undefined
                           : run?.nodes
                     }
-                    expansions={visitRun ? visitRun.expansions : run?.expansions}
+                    expansions={stateEntryRun ? stateEntryRun.expansions : run?.expansions}
                     runTriggeredBy={previewWorkflow ? undefined : run?.summary?.triggeredBy}
                     inspectionDisabled={requestingRun}
                     evaluations={evaluationState.records}
@@ -1289,7 +1289,7 @@ export function WorkflowWorkspaceSurface({
                         Preparing execution. Nodes will become available when ready.
                       </span>
                     </div>
-                  ) : run && (runExpired || visitExpired) ? (
+                  ) : run && (runExpired || stateEntryExpired) ? (
                     <div
                       ref={bannerRef}
                       role="status"
@@ -1298,7 +1298,7 @@ export function WorkflowWorkspaceSurface({
                       className={`historical-badge${bannerHidden} pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[280px] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase`}
                     >
                       <span>expired</span>
-                      {visitExpired && !runExpired ? "This visit's" : "This run's"} history and
+                      {stateEntryExpired && !runExpired ? "This state entry's" : "This run's"} history and
                       artifacts expired under the run&apos;s retention policy. The run and its
                       label remain.
                     </div>
@@ -1320,10 +1320,10 @@ export function WorkflowWorkspaceSurface({
                     onHeightChange={setLogHeight}
                     onExpandedChange={setLogExpanded}
                     api={api}
-                    run={visitRun ?? run}
+                    run={stateEntryRun ?? run}
                     nodeId={inspectedNode === INPUT_NODE_ID ? undefined : inspectedNode}
                     liveLogs={
-                      displayedRunId && !visitRun ? state.liveLogs[displayedRunId] : undefined
+                      displayedRunId && !stateEntryRun ? state.liveLogs[displayedRunId] : undefined
                     }
                     onSelectNode={openLogNode}
                     onClearNode={() => setInspectedNode(undefined)}
@@ -1332,7 +1332,7 @@ export function WorkflowWorkspaceSurface({
                     timelineAll={machineRunId ? "All states" : "All steps"}
                     tab={runPaneTab}
                     onTabChange={setRunPaneTab}
-                    context={visitNav}
+                    context={stateEntryNav}
                   />
                 ) : (
                   emptyRunPanel
@@ -1369,8 +1369,8 @@ export function WorkflowWorkspaceSurface({
                   api={api}
                   embedded
                   workflow={workflow}
-                  run={visitRun ?? run}
-                  visit={visitRun ? selectedVisit : undefined}
+                  run={stateEntryRun ?? run}
+                  entry={stateEntryRun ? selectedStateEntry : undefined}
                   nodeId={inspectedNode}
                   evaluationState={evaluationState}
                   liveEvents={state.liveEvents[liveEventDescriptorKey]}
@@ -1379,7 +1379,7 @@ export function WorkflowWorkspaceSurface({
                   definitionLabel={definitionLabel}
                   onOpenDefinition={
                     run &&
-                    !visitRun &&
+                    !stateEntryRun &&
                     inspectedNode &&
                     workflow?.nodeIds.includes(inspectedNode)
                       ? openCurrentDefinition

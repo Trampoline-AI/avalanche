@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 class MachineControlRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     op: Literal[
-        "get", "resolve", "send", "history", "visit", "events", "retry", "fire_next", "links"
+        "get", "resolve", "send", "history", "entry", "events", "retry", "fire_next", "links"
     ]
     run_id: str = ""
     machine: str = ""
@@ -25,7 +25,7 @@ class MachineControlRequest(BaseModel):
     event: str = ""
     payload: JsonValue = None
     idempotency_key: str = ""
-    visit: int = Field(default=1, ge=1)
+    entry: int = Field(default=1, ge=1)
     cursor: str | None = None
     limit: int = Field(default=20, ge=1, le=100)
 
@@ -34,7 +34,7 @@ class MachinePageCursor(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
     op: Literal["history", "events"]
     run_id: str
-    visit: int
+    entry: int
     after: int = Field(ge=0)
 
 
@@ -45,7 +45,7 @@ class MachineHead(BaseModel):
     deployment_id: str = ""
     status: str
     state: str
-    visit: int
+    entry: int
     version: Literal[1] = 1
     accepts: list[str]
     due: float | None
@@ -76,7 +76,7 @@ def machine_head(op: Operator, run_id: str) -> MachineHead:
         read_state = connection.execute(
             "SELECT read_state FROM runs WHERE run_id=?", (run_id,)
         ).fetchone()[0]
-        timers = MachinesTable.timers(connection, run_id, record.visit)
+        timers = MachinesTable.timers(connection, run_id, record.entry)
         inbox = MachinesTable.inbox(connection, run_id)
         receipts = [
             MachineEventReceipt.model_validate_json(row[0])
@@ -93,7 +93,7 @@ def machine_head(op: Operator, run_id: str) -> MachineHead:
         run_id=run_id,
         status=record.run_status.value,
         state=record.state,
-        visit=record.visit,
+        entry=record.entry,
         accepts=[] if state is None else [edge.event for edge in state.transitions],
         due=timers[0].due if timers else None,
         finished=record.phase in {"final", "closed"},
@@ -115,7 +115,7 @@ def control_machine(op: Operator, request: MachineControlRequest) -> JsonValue:
         read_state = connection.execute(
             "SELECT read_state FROM runs WHERE run_id=?", (request.run_id,)
         ).fetchone()[0]
-    if read_state == "expired" and request.op in {"history", "events", "visit"}:
+    if read_state == "expired" and request.op in {"history", "events", "entry"}:
         return {"read_state": "expired", "items": [], "next_cursor": None}
     if request.op == "links":
         return {direction: [link.model_dump(mode="json") for link in links]
@@ -142,18 +142,18 @@ def control_machine(op: Operator, request: MachineControlRequest) -> JsonValue:
     # Never acquire the operator lock while holding the store transaction lock.
     current_snapshot = (
         op.get_latest_run_snapshot(request.run_id, operator_instance_id=op.operator_instance_id)
-        if request.op == "visit"
+        if request.op == "entry"
         else None
     )
     with op._state_store.transaction() as connection:
         if MachinesTable.load(connection, request.run_id) is None:
             raise ValueError("not_machine")
-        if request.op == "visit":
-            visit = MachinesTable.visit(connection, request.run_id, request.visit)
-            snapshot = visit.snapshot or current_snapshot
+        if request.op == "entry":
+            entry = MachinesTable.entry(connection, request.run_id, request.entry)
+            snapshot = entry.snapshot or current_snapshot
             assert snapshot is not None
             # The full domain snapshot retains qualified topology, I/O and detail tokens.
-            result = visit.model_dump(mode="json", by_alias=True)
+            result = entry.model_dump(mode="json", by_alias=True)
             from pydantic import TypeAdapter
 
             from .models import RunSnapshot
@@ -177,33 +177,35 @@ def control_machine(op: Operator, request: MachineControlRequest) -> JsonValue:
         offset = 0
         if request.cursor is not None:
             cursor = MachinePageCursor.model_validate_json(request.cursor)
-            if (cursor.op, cursor.run_id, cursor.visit) != (
+            if (cursor.op, cursor.run_id, cursor.entry) != (
                 request.op,
                 request.run_id,
-                request.visit,
+                request.entry,
             ):
                 raise ValueError("invalid_machine_cursor")
             offset = cursor.after
         if request.op == "history":
             rows = connection.execute(
-                "SELECT record_json FROM machine_visits WHERE run_id=? AND visit>? "
-                "ORDER BY visit LIMIT ?",
+                "SELECT record_json FROM machine_state_entries WHERE run_id=? AND entry>? "
+                "ORDER BY entry LIMIT ?",
                 (request.run_id, offset, request.limit + 1),
             ).fetchall()
-            from .state.machines import VisitRecord
+            from .state.machines import StateEntryRecord
 
-            visits = [VisitRecord.model_validate_json(row[0]) for row in rows[: request.limit]]
-            items = [
-                visit.transition.model_dump(mode="json", by_alias=True)
-                for visit in visits
-                if visit.transition is not None
+            entries = [
+                StateEntryRecord.model_validate_json(row[0]) for row in rows[: request.limit]
             ]
-            last = visits[-1].visit if visits else offset
+            items = [
+                entry.transition.model_dump(mode="json", by_alias=True)
+                for entry in entries
+                if entry.transition is not None
+            ]
+            last = entries[-1].entry if entries else offset
         else:
             rows = connection.execute(
-                "SELECT record_json FROM machine_facts WHERE run_id=? AND visit=? AND tseq>? "
+                "SELECT record_json FROM machine_facts WHERE run_id=? AND entry=? AND tseq>? "
                 "ORDER BY tseq LIMIT ?",
-                (request.run_id, request.visit, offset, request.limit + 1),
+                (request.run_id, request.entry, offset, request.limit + 1),
             ).fetchall()
             facts = [FactRecord.model_validate_json(row[0]) for row in rows[: request.limit]]
             items = [
@@ -215,7 +217,7 @@ def control_machine(op: Operator, request: MachineControlRequest) -> JsonValue:
     return {
         "items": items,
         "next_cursor": MachinePageCursor(
-            op=request.op, run_id=request.run_id, visit=request.visit, after=last
+            op=request.op, run_id=request.run_id, entry=request.entry, after=last
         ).model_dump_json()
         if len(rows) > request.limit
         else None,

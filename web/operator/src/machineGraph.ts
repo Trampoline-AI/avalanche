@@ -11,7 +11,7 @@ export interface MachineGraphView {
   status?: string;
   /** Absolute Unix seconds when the current state's timer fires. */
   due?: number | null;
-  /** Opens a state's latest visit; omitted for a definition. */
+  /** Opens a state's latest state entry; omitted for a definition. */
   onOpenState?: (state: string) => void;
   /**
    * The state selected on a run page (what narrows its timeline). With `onOpenState`

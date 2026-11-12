@@ -695,12 +695,12 @@ class GrpcStateProvider:
         raise last_race
 
     def get_run_result_document(
-        self, run_id: str, *, visit: int | None = None, node_id: str | None = None
+        self, run_id: str, *, entry: int | None = None, node_id: str | None = None
     ) -> RunResult:
         """Read the shared result model without materializing artifact references."""
         response = self._call(
             self._stub.GetRunResult,
-            pb.GetRunResultRequestV2(run_id=run_id, visit=visit, node_id=node_id),
+            pb.GetRunResultRequestV2(run_id=run_id, entry=entry, node_id=node_id),
         )
         raw = response.value.value_json.encode("utf-8")
         if response.run_id != run_id or len(raw) != response.value.size_bytes:
@@ -710,12 +710,12 @@ class GrpcStateProvider:
         return RunResult.from_payload(
             run_id,
             EncodedWorkflowResult(value_json=response.value.value_json),
-            visit=visit,
+            entry=entry,
             node_id=node_id,
         )
 
     def get_run_result(
-        self, run_id: str, *, visit: int | None = None, node_id: str | None = None
+        self, run_id: str, *, entry: int | None = None, node_id: str | None = None
     ) -> Any:
         """Retrieve and decode a terminally successful workflow result.
 
@@ -728,7 +728,7 @@ class GrpcStateProvider:
             kwargs["metadata"] = self._metadata
         try:
             response = self._stub.GetRunResult(
-                pb.GetRunResultRequestV2(run_id=run_id, visit=visit, node_id=node_id),
+                pb.GetRunResultRequestV2(run_id=run_id, entry=entry, node_id=node_id),
                 **kwargs,
             )
             value_bytes = response.value.value_json.encode("utf-8")

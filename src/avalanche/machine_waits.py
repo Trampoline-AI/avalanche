@@ -154,15 +154,15 @@ class MachineWaits(LocalWaits):
             )
         return None
 
-    def add_visit_waits(
+    def add_state_entry_waits(
         self,
         declarations: Mapping[str, tuple[WaitSpec, type[BaseModel] | None]],
     ) -> None:
         # LocalWaits owns decision/sleep validation and fake-clock resolution.
-        visit = LocalWaits(self.run_id, declarations)
-        self._waits = visit._waits
-        self._events = visit._events
-        self._queue = visit._queue
+        entry = LocalWaits(self.run_id, declarations)
+        self._waits = entry._waits
+        self._events = entry._events
+        self._queue = entry._queue
 
     def close(self) -> None:
         self.buffer.clear()

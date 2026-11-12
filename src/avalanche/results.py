@@ -54,7 +54,7 @@ class EncodedWorkflowResult:
 
 
 class RunResult(BaseModel):
-    """One flow, closed machine, completed visit, or accepted step result.
+    """One flow, closed machine, completed state entry, or accepted step result.
 
     ``value`` uses the same versioned codec on every host. Artifacts carry
     immutable references, never bytes. Absence is an HTTP error, not JSON null.
@@ -63,7 +63,7 @@ class RunResult(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True)
     run_id: str = Field(min_length=1)
-    visit: int | None = Field(default=None, ge=1)
+    entry: int | None = Field(default=None, ge=1)
     node_id: str | None = None
     version: Literal[1] = 1
     value: ResultJsonValue
@@ -74,12 +74,12 @@ class RunResult(BaseModel):
         run_id: str,
         payload: EncodedWorkflowResult,
         *,
-        visit: int | None = None,
+        entry: int | None = None,
         node_id: str | None = None,
     ) -> RunResult:
         validate_workflow_result_document(payload.value_json, set())
         return cls(
-            run_id=run_id, visit=visit, node_id=node_id, **strict_json_loads(payload.value_json)
+            run_id=run_id, entry=entry, node_id=node_id, **strict_json_loads(payload.value_json)
         )
 
     def decode(self) -> Any:

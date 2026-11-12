@@ -250,10 +250,10 @@ def test_artifact_refs_are_immutable_and_reject_forged_bindings(transport):
     assert excinfo.value.code() == grpc.StatusCode.INVALID_ARGUMENT
 
 
-def test_pre_restart_run_and_visit_history_remains_readable_over_grpc(tmp_path):
+def test_pre_restart_run_and_state_entry_history_remains_readable_over_grpc(tmp_path):
     fixture = Path(__file__).parents[1] / "fixtures" / "local_machine.py"
     state_db = tmp_path / "state.db"
-    values = {"ticket": 1, "journal": str(tmp_path / "visits")}
+    values = {"ticket": 1, "journal": str(tmp_path / "entries")}
 
     @contextmanager
     def served():
@@ -328,7 +328,7 @@ def test_pre_restart_run_and_visit_history_remains_readable_over_grpc(tmp_path):
             run_id: service.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=run_id))
             for run_id in (machine_id, flow_id)
         }
-        visits = [control(service, "visit", run_id=machine_id, visit=n) for n in (1, 2, 3)]
+        entries = [control(service, "entry", run_id=machine_id, entry=n) for n in (1, 2, 3)]
         bodies = {run_id: activity_bodies(service, run_id) for run_id in before}
         assert all(bodies.values())
         old_page = service.ListRunSummaries(pb.ListRunSummariesRequestV2(page_size=1))
@@ -337,7 +337,7 @@ def test_pre_restart_run_and_visit_history_remains_readable_over_grpc(tmp_path):
 
     with served() as (operator, service):
         assert operator.instance_first_sequence == stored_sequence
-        # Advance this instance without changing either retained run or its visits.
+        # Advance this instance without changing either retained run or its state entries.
         fresh_id = operator.start_run("ordinary_child", input={**values, "ticket": 3})
         wait_for_status(operator, fresh_id, RunStatus.SUCCESS)
         assert operator.current_sequence > operator.instance_first_sequence
@@ -358,24 +358,24 @@ def test_pre_restart_run_and_visit_history_remains_readable_over_grpc(tmp_path):
             )
             transitions.extend(history["items"])
         assert len(transitions) == 2
-        for previous in visits:
-            visit = control(service, "visit", run_id=machine_id, visit=previous["visit"])
-            assert visit["state"] == previous["state"]
+        for previous in entries:
+            entry = control(service, "entry", run_id=machine_id, entry=previous["entry"])
+            assert entry["state"] == previous["state"]
             assert [
                 (node["node_id"], node["status"], node["revision"])
-                for node in visit["snapshot"]["nodes"]
+                for node in entry["snapshot"]["nodes"]
             ] == [
                 (node["node_id"], node["status"], node["revision"])
                 for node in previous["snapshot"]["nodes"]
             ]
-        events = control(service, "events", run_id=machine_id, visit=1, limit=1)
+        events = control(service, "events", run_id=machine_id, entry=1, limit=1)
         facts = list(events["items"])
         while events["next_cursor"]:
             events = control(
                 service,
                 "events",
                 run_id=machine_id,
-                visit=1,
+                entry=1,
                 limit=1,
                 cursor=events["next_cursor"],
             )
@@ -398,7 +398,7 @@ def test_pre_restart_run_and_visit_history_remains_readable_over_grpc(tmp_path):
 
         # A cursor newly issued for old history is usable for retained live replay.
         baseline = ParseDict(
-            control(service, "visit", run_id=machine_id, visit=1)["snapshot"],
+            control(service, "entry", run_id=machine_id, entry=1)["snapshot"],
             pb.RunSnapshotV2(),
         )
         watch = service.WatchRunStatus(

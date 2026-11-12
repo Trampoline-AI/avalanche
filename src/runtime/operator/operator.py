@@ -58,7 +58,7 @@ from .input_files import (
     StagedInputFile,
     StagedInputFileError,
 )
-from .machine_host import CatalogReloaded, MachineHost, VisitFinished
+from .machine_host import CatalogReloaded, MachineHost, StateEntryFinished
 from .models import (
     AgentEvent,
     AgentEventAppended,
@@ -272,10 +272,10 @@ class _RunHandle:
 
 @dataclass(kw_only=True)
 class _MachineRunHandle(_RunHandle):
-    """Visit lifecycle belongs only to machine coordinators, not ordinary flows."""
+    """State entry lifecycle belongs only to machine coordinators, not ordinary flows."""
 
-    machine_visit: InstanceRecord
-    visit_finished: VisitFinished | None = None
+    machine_state_entry: InstanceRecord
+    state_entry_finished: StateEntryFinished | None = None
 
 
 @dataclass(frozen=True)
@@ -660,8 +660,14 @@ class Operator:
                 with self._state_store.transaction() as connection:
                     request = RunsTable.read_request(connection, parent)
                     machine = MachinesTable.load(connection, parent)
-                self.start_run(run.workflow_id, run_id=parent, input=request.input,
-                               context=request.context, _resume=True, _machine_visit=machine)
+                self.start_run(
+                    run.workflow_id,
+                    run_id=parent,
+                    input=request.input,
+                    context=request.context,
+                    _resume=True,
+                    _machine_state_entry=machine,
+                )
             if watch and self._workflow_paths:
                 self._start_watcher()
             if schedule and self._workflow_paths:
@@ -1761,7 +1767,7 @@ class Operator:
         )
 
     def get_run_result(
-        self, run_id: str, *, visit: int | None = None, node_id: str | None = None
+        self, run_id: str, *, entry: int | None = None, node_id: str | None = None
     ) -> Any:
         """Return a successful run's decoded workflow result.
 
@@ -1770,11 +1776,11 @@ class Operator:
         not expose a partial payload.
         """
         return decode_workflow_result(
-            self._get_run_result_payload(run_id, visit=visit, node_id=node_id)
+            self._get_run_result_payload(run_id, entry=entry, node_id=node_id)
         )
 
     def _get_run_result_payload(
-        self, run_id: str, *, visit: int | None = None, node_id: str | None = None
+        self, run_id: str, *, entry: int | None = None, node_id: str | None = None
     ) -> EncodedWorkflowResult:
         """Load one validated result payload from the persisted result store.
 
@@ -1782,11 +1788,11 @@ class Operator:
         result is served even when the run itself is not known in memory, such as
         after an operator restart.
         """
-        if visit is not None or node_id is not None:
-            if visit is not None and visit < 1:
-                raise ValueError("visit must be positive")
+        if entry is not None or node_id is not None:
+            if entry is not None and entry < 1:
+                raise ValueError("state entry must be positive")
             qualified = (
-                f"v{visit}.{node_id}" if visit is not None and node_id else node_id or ""
+                f"e{entry}.{node_id}" if entry is not None and node_id else node_id or ""
             )
             with self._state_store.transaction() as connection:
                 if (
@@ -1796,9 +1802,11 @@ class Operator:
                     is None
                 ):
                     raise KeyError(run_id)
-                value_json = StepResultTable.get(connection, run_id, visit or 0, qualified)
+                value_json = StepResultTable.get(connection, run_id, entry or 0, qualified)
             if value_json is None:
-                raise RunResultNotReadyError("Requested step or visit has no accepted result")
+                raise RunResultNotReadyError(
+                    "Requested step or state entry has no accepted result"
+                )
             return EncodedWorkflowResult(value_json=value_json)
         with self._lock:
             run = self._runs.get(run_id)
@@ -1927,7 +1935,7 @@ class Operator:
         context: dict[str, Any] | None = None,
         expected_version: str = "",
         input_files: tuple[StagedInputFile, ...] = (),
-        _machine_visit: InstanceRecord | None = None,
+        _machine_state_entry: InstanceRecord | None = None,
         _key_claim: list[JsonValue] | None = None,
         _resume: bool = False,
     ) -> str:
@@ -1959,12 +1967,12 @@ class Operator:
         ):
             raise ValueError("Workflow version changed; reload the start form")
         if (descriptor.machine_spec_json or descriptor.key_fields) and (
-            _machine_visit is None and _key_claim is None and not _resume
+            _machine_state_entry is None and _key_claim is None and not _resume
         ):
             return self._machine_host.start(flow_name, request, run_id, triggered_by)
-        if _machine_visit is not None:
+        if _machine_state_entry is not None:
             with self._state_store.transaction() as connection:
-                request = RunsTable.read_request(connection, _machine_visit.run_id)
+                request = RunsTable.read_request(connection, _machine_state_entry.run_id)
             input, context = request.input, request.context
         import_root, workflow_relative_module_file = resolve_live_source(
             configured_root, descriptor.locator
@@ -1976,13 +1984,16 @@ class Operator:
             # Stored runs are loaded at startup, so this also refuses the ID of a run
             # from before a restart, and of any result such a run stored.
             if run_id in self._active_runs or (
-                run_id in self._runs and _machine_visit is None and not _resume
+                run_id in self._runs and _machine_state_entry is None and not _resume
             ):
                 raise RunAlreadyExistsError(f"Run {run_id} already exists")
             # Callers learn about a missing required field now, not from a run that
             # fails while it is prepared. Cron and webhook runs report it as a failed
             # run. A reused run ID still reports the existing run first.
-            if _machine_visit is None and triggered_by in (TriggerKind.MANUAL, TriggerKind.API):
+            if _machine_state_entry is None and triggered_by in (
+                TriggerKind.MANUAL,
+                TriggerKind.API,
+            ):
                 missing = missing_required_input(descriptor.input_schema_json, input)
                 if missing:
                     raise MissingRunInputError(missing)
@@ -2015,7 +2026,7 @@ class Operator:
                         (result_bundle.device, result_bundle.inode),
                         control_child,
                         cancel_reader,
-                        _machine_visit,
+                        _machine_state_entry,
                         machine_reader,
                         self._resume_results(run_id) if _resume else None,
                     ),
@@ -2038,8 +2049,8 @@ class Operator:
                 raise
             make_handle = (
                 _RunHandle
-                if _machine_visit is None
-                else partial(_MachineRunHandle, machine_visit=_machine_visit)
+                if _machine_state_entry is None
+                else partial(_MachineRunHandle, machine_state_entry=_machine_state_entry)
             )
             handle = make_handle(
                 process=process,
@@ -2079,7 +2090,7 @@ class Operator:
                 assignment_event.set()
                 run = (
                     self._runs[run_id]
-                    if _machine_visit is not None or _resume
+                    if _machine_state_entry is not None or _resume
                     else RunState(
                         run_id=run_id,
                         flow_name=descriptor.display_name,
@@ -2091,7 +2102,7 @@ class Operator:
                     )
                 )
                 self._runs[run_id] = run
-                if _machine_visit is None and not _resume:
+                if _machine_state_entry is None and not _resume:
 
                     def claim_key(connection: sqlite3.Connection) -> None:
                         if _key_claim is not None:
@@ -2151,14 +2162,14 @@ class Operator:
             _teardown_process_group(process, windows_job)
             with self._lock:
                 run = self._runs.get(run_id)
-                if run is not None and _machine_visit is None and not _resume:
+                if run is not None and _machine_state_entry is None and not _resume:
                     self._forget_run_details_locked(run)
                     try:
                         with self._state_store.transaction() as connection:
                             RunsTable.discard_start(connection, run_id)
                     except (StateStoreError, sqlite3.Error) as exc:
                         failure.add_note(f"Removing the stored run also failed: {exc}")
-                if _machine_visit is None and not _resume:
+                if _machine_state_entry is None and not _resume:
                     self._runs.pop(run_id, None)
                     self._run_created_sequences.pop(run_id, None)
                     self._run_revisions.pop(run_id, None)
@@ -2226,7 +2237,7 @@ class Operator:
                     run.status = RunStatus.PENDING
                 handle.drain_thread = drain
 
-                def replace_visit_nodes(connection: sqlite3.Connection) -> None:
+                def replace_state_entry_nodes(connection: sqlite3.Connection) -> None:
                     if isinstance(handle, _MachineRunHandle):
                         connection.execute(
                             "DELETE FROM run_nodes WHERE run_id=? AND node_id NOT IN ("
@@ -2237,7 +2248,7 @@ class Operator:
 
                 notifications = self._publish_run_locked(
                     run,
-                    machine_write=replace_visit_nodes,
+                    machine_write=replace_state_entry_nodes,
                     nodes_expanded=isinstance(handle, _MachineRunHandle),
                     changed_node_ids=tuple(run.nodes)
                     if isinstance(handle, _MachineRunHandle)
@@ -2292,7 +2303,9 @@ class Operator:
             self._wait_for_notifications(notifications)
         if isinstance(handle, _MachineRunHandle):
             self._machine_host.queue.put(
-                VisitFinished(run_id, handle.machine_visit.visit, "failed", None, None)
+                StateEntryFinished(
+                    run_id, handle.machine_state_entry.entry, "failed", None, None
+                )
             )
 
     def wait_control(self, run_id: str, request: WaitControlRequest) -> WaitControlResponse:
@@ -2344,7 +2357,8 @@ class Operator:
             return stored
         available = request.limit - len(stored.waits)
         if available <= 0:
-            # A subsequent page can inspect live visit waits without losing the stored prefix.
+            # A subsequent page can inspect live state entry waits without losing the
+            # stored prefix.
             return stored.model_copy(update={"next_offset": request.offset + request.limit})
         live = controls.request(
             request.model_copy(
@@ -2362,13 +2376,17 @@ class Operator:
         if self.get_run(run_id) is None:
             raise KeyError(run_id)
         with self._state_store.transaction() as connection:
-            return {"parents": RunCallsTable.links(connection, run_id, parents=True),
-                    "children": RunCallsTable.links(connection, run_id, parents=False)}
+            return {
+                "parents": RunCallsTable.links(connection, run_id, parents=True),
+                "children": RunCallsTable.links(connection, run_id, parents=False),
+            }
 
     def cancel_run(self, run_id: str) -> None:
         run = self.get_run(run_id)
         if run is None or run.status in {
-            RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED
+            RunStatus.SUCCESS,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
         }:
             return
         with self._state_store.transaction() as connection:
@@ -2960,10 +2978,10 @@ class Operator:
                     self._result_store.discard(handle.result_bundle)
                 if (
                     isinstance(handle, _MachineRunHandle)
-                    and handle.visit_finished is not None
+                    and handle.state_entry_finished is not None
                     and not self._closed
                 ):
-                    self._machine_host.queue.put(handle.visit_finished)
+                    self._machine_host.queue.put(handle.state_entry_finished)
 
     def _apply_event(
         self,
@@ -2974,10 +2992,12 @@ class Operator:
         event_type = _validate_run_event(event, validate_result=False)
         if event_type == "step_result":
             payload = EncodedWorkflowResult(value_json=event["value_json"])
-            visit = handle.machine_visit.visit if isinstance(handle, _MachineRunHandle) else 0
+            entry = (
+                handle.machine_state_entry.entry if isinstance(handle, _MachineRunHandle) else 0
+            )
             with self._state_store.transaction() as connection:
                 StepResultTable.put(
-                    connection, run_id, visit, event["node_id"], payload.value_json
+                    connection, run_id, entry, event["node_id"], payload.value_json
                 )
             return False
         if event_type == "machine_step":
@@ -2987,6 +3007,7 @@ class Operator:
             request = MachineStepRequest.model_validate_json(event["request_json"])
             reply = Future()
             self._machine_host.queue.put(MachineStep(request, reply))
+
             def deliver(future):
                 try:
                     response = MachineStepResponse(
@@ -3002,9 +3023,11 @@ class Operator:
                     # response delivers on the host owner; frame writes must serialize.
                     with handle.controls.machine_lock:
                         handle.controls.machine_writer.send_bytes(
-                            response.model_dump_json().encode())
+                            response.model_dump_json().encode()
+                        )
                 except (BrokenPipeError, OSError):
                     pass  # Cancellation or operator shutdown already stopped the coordinator.
+
             reply.add_done_callback(deliver)
             return False
         if event_type == "wait_snapshot":
@@ -3060,9 +3083,9 @@ class Operator:
             self._result_store.discard(handle.result_bundle)
         if terminal and isinstance(handle, _MachineRunHandle):
             outcome = json.loads(event.get("machine_outcome_json", "null"))
-            handle.visit_finished = VisitFinished(
+            handle.state_entry_finished = StateEntryFinished(
                 run_id,
-                handle.machine_visit.visit,
+                handle.machine_state_entry.entry,
                 event["status"],
                 outcome["output"] if outcome is not None else None,
                 outcome["event"] if outcome is not None else None,
@@ -3071,9 +3094,15 @@ class Operator:
                 payload = self._result_store.load(stored_result)
                 with self._state_store.transaction() as connection:
                     StepResultTable.put(
-                        connection, run_id, handle.machine_visit.visit, "", payload.value_json
+                        connection,
+                        run_id,
+                        handle.machine_state_entry.entry,
+                        "",
+                        payload.value_json,
                     )
-                if handle.machine_visit.spec.states[handle.machine_visit.state].final:
+                if handle.machine_state_entry.spec.states[
+                    handle.machine_state_entry.state
+                ].final:
                     with self._state_store.transaction() as connection:
                         RunResultTable.insert(connection, run_id, stored_result)
                 else:
@@ -3739,8 +3768,8 @@ class Operator:
     def _finish_exited_run(self, run_id: str, handle: _RunHandle) -> None:
         if isinstance(handle, _MachineRunHandle):
             self._result_store.discard(handle.result_bundle)
-            handle.visit_finished = VisitFinished(
-                run_id, handle.machine_visit.visit, "failed", None, None
+            handle.state_entry_finished = StateEntryFinished(
+                run_id, handle.machine_state_entry.entry, "failed", None, None
             )
             return
         cancelled = handle.cancel_event.is_set()

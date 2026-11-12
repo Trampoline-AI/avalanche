@@ -115,7 +115,7 @@ def prepare_run_references(value: T, *, root: Path | None = None) -> T:
     """Retain local references; materialize portable workspace ingress only once.
 
     A reference Workspace already names the folder its steps edit in place.
-    Portable manifests need one folder before crossing a process/visit boundary.
+    Portable manifests need one folder before crossing a process/state entry boundary.
     """
     if isinstance(value, Workspace):
         if value.is_reference:

@@ -66,8 +66,8 @@ interface InspectorProps {
   onOpenDefinition?: () => void;
   /** The workflow's input draft, editable from the input panel. */
   inputDraft?: InputDraft;
-  /** `run` is this machine visit's snapshot; step results read through the visit. */
-  visit?: number;
+  /** `run` is this machine state entry's snapshot; step results read through the state entry. */
+  entry?: number;
   onClose: () => void;
 }
 
@@ -210,7 +210,7 @@ function AgentAndStepInspector({
   embedded = false,
   definitionLabel = "Current definition",
   onOpenDefinition,
-  visit,
+  entry,
   onClose,
 }: InspectorProps) {
   const [selectedTab, setSelectedTab] = useState<AgentTab>("trace");
@@ -293,7 +293,7 @@ function AgentAndStepInspector({
       ? Object.hasOwn(run.topology.agentFieldSchemasJson, nodeId ?? "")
       : Boolean(node?.trace)
     : isWorkflowAgentNode;
-  const stepResult = useStepResult(api, runId, run && !isAgentNode ? node : undefined, visit);
+  const stepResult = useStepResult(api, runId, run && !isAgentNode ? node : undefined, entry);
   const evaluationRecord =
     run && isAgentNode ? evaluationState.records[nodeId ?? ""] : undefined;
   const rawEvaluationDeclaration = run?.topology?.evaluationMetadataJson[nodeId ?? ""];

@@ -4,7 +4,7 @@
 It does not execute state work during discovery. Assign each `ava.state(work)`
 to a local variable; that variable is the state's stable name. Work is an
 ordinary step or workflow. Exactly one state is initial; final states have no
-outgoing transitions. Each visit has at most 64 nodes, including bounded map
+outgoing transitions. Each state entry has at most 64 nodes, including bounded map
 children.
 
 ```python
@@ -38,7 +38,7 @@ only those key fields (full input validation belongs to a new run). There is no 
 transitions optionally declare a Pydantic payload schema, timers hold seconds,
 and graph metadata carries retry policies, waits, maps and emissions.
 Discovery rejects unknown targets, invalid initial/final states, undeclared
-internal emissions and oversized visits. An event accepted by no state produces
+internal emissions and oversized state entries. An event accepted by no state produces
 a non-fatal discovery warning.
 
 ## Keys are a run feature
@@ -90,7 +90,7 @@ workflow output (the event's data for an event-returning workflow).
 `ava.Event` is also the base for typed decision answers. The previous decision
 base was renamed without an alias. `OutcomeUnknownError` is different: an
 external effect may have succeeded even though its reply was lost, so its name
-and uncertainty policy are unchanged. Local visits reuse the existing decision
+and uncertainty policy are unchanged. Local state entries reuse the existing decision
 and reconcile controls; `m.decide(node, answer, reason=...)` resumes a parked
 local decision without replaying verified work.
 
@@ -98,7 +98,7 @@ local decision without replaying verified work.
 
 `state.on("changed", payload=Changed)` validates external payloads against that
 model. Without `payload=`, the body must be empty. Events accepted by the current
-state are buffered while its work runs, then consumed after the whole visit
+state are buffered while its work runs, then consumed after the whole state entry
 finishes. Unlisted events are ignored. `defer=["changed"]` opts into buffering
 for a later state. On transition the inbox drops events the new state neither
 accepts nor defers. `m.waits.facts` exposes ignored/dropped local inbox facts.
@@ -131,7 +131,7 @@ mismatched file digest is rejected.
 An existing key is resolved after authorization and validation of key fields only.
 Replacement input/files are ignored, not retained or applied; only a new key needs
 complete input/artifact validation. General machine reruns, from-step reruns and
-from-visit reruns are unsupported. Interrupted-visit repair is a new visit in the
+from-state-entry reruns are unsupported. Interrupted-state-entry repair is a new state entry in the
 same state/run, not replay. A whole replay requires a different business key.
 Key-to-run identity is permanent even when terminal evidence expires under the
 host's normal retention policy: reads return `read_state="expired"`, not an empty
@@ -186,7 +186,7 @@ assert run.handle.result().status == "accepted"
 
 `ava.call(target, input, *, timeout=None, when=True)` declares a start plus a
 workerless wait and returns the child's typed final output. It is a graph
-operation, **not** an awaited function. A visit can call a flow or another
+operation, **not** an awaited function. A state entry can call a flow or another
 machine, including a different key of its own definition. A machine call waits
 until the instance closes; its queued events continue to follow ordinary inbox
 rules. The target object is captured by name without eagerly building its graph.
@@ -284,28 +284,28 @@ ava run history RUN_ID --limit 20
 ava result RUN_ID --wait --output-dir ./approved-result
 ```
 
-### Read run, visit and step outputs
+### Read run, state entry and step outputs
 
 ```sh
 ava run result RUN_ID --json                       # final output, after closure
-ava run result RUN_ID --visit 1 --json              # completed visit's return
-ava run result RUN_ID --visit 1 --node inspect_1 --json
+ava run result RUN_ID --entry 1 --json              # completed entry's return
+ava run result RUN_ID --entry 1 --node inspect_1 --json
 ```
 
-The same commands read ordinary flows; omit `--visit` for a flow step.
+The same commands read ordinary flows; omit `--entry` for a flow step.
 `ava result` is equivalent to `ava run result`. `--wait` waits for the selected
-result, so reading a completed visit does not wait for the machine to close.
+result, so reading a completed state entry does not wait for the machine to close.
 Without `--json`, use `--output-dir PATH` to explicitly download artifacts.
 
 Operator REST serves the same document at
-`GET /api/v1/runs/RUN_ID/result?visit=1&node_id=inspect_1`.
-The document has `run_id`, nullable `visit` and `node_id`, `version: 1`, and
+`GET /api/v1/runs/RUN_ID/result?entry=1&node_id=inspect_1`.
+The document has `run_id`, nullable `entry` and `node_id`, `version: 1`, and
 `value` in the shared result codec. Models use JSON aliases; tuples have a tuple
 kind; sets are canonical ordered lists. File and Workspace values carry references,
 not inline bytes. A successful null return is a scalar null value; a missing,
 unfinished or failed result is an error, never a fabricated null.
 
-Completed visit/step outputs survive an operator restart and expire with the
+Completed state entry/step outputs survive an operator restart and expire with the
 run's retained details. Outputs discarded by older operator versions cannot be
 reconstructed from display previews.
 
@@ -313,7 +313,7 @@ Delta uses `delta runs result RUN_ID --json` with the same selectors and shape,
 and `GET /v1/orgs/ORG/projects/PROJECT/runs/RUN_ID/result`. A flow deployment
 must carry its explicit return declaration: redeploy older flows to enable final
 run-result reads. Existing per-step `/outputs` reads remain available. Machine
-visit results stay readable after visit compaction through bounded archive reads.
+state entry results stay readable after state-entry compaction through bounded archive reads.
 
 Use `ava machine send approved --run RUN_ID` when the run ID is available;
 this form omits the machine name because the run already identifies it.
@@ -324,8 +324,8 @@ reads a JSON payload from a file. It does not upload an artifact; a declared
 File or Workspace field takes an existing reference, such as one returned by
 another run. `ava run` retains the ordinary `--file FIELD=PATH` and
 `--workspace FIELD=DIR` input facilities. Captured input belongs to the original
-run. All visits of an instance share one workspace folder, kept across operator
-restarts, so a later visit sees earlier edits, as flow steps do. Repeating an
+run. All state entries of an instance share one workspace folder, kept across operator
+restarts, so a later state entry sees earlier edits, as flow steps do. Repeating an
 existing key validates the key first, then returns the existing run without
 replacing its input or claiming new files.
 
@@ -344,20 +344,20 @@ the run finishes. Reusing the key with different JSON is a conflict. Admission
 is not consumption: deferred, consumed and dropped events are later facts.
 
 `after()` uses an absolute UTC deadline from state entry. It never interrupts
-unfinished visit work. The shared reducer chooses final completion first, then
+unfinished state entry work. The shared reducer chooses final completion first, then
 the earliest expired timer, a returned internal event, and the first consumable
 external event. A state transition cancels its remaining timers. `ava dev`
 additionally enables the run-owned `timers:fire-next` control; the normal
 operator refuses it.
 
-The database retains machine runs, visit snapshots, receipts, inbox and timers.
+The database retains machine runs, state entry snapshots, receipts, inbox and timers.
 Restarting while waiting re-arms the original deadlines; overdue timers fire
 once through the transition transaction, in deadline order. Restarting in the
-middle of visit work stops its old process and marks that visit `interrupted`
+middle of state entry work stops its old process and marks that state entry `interrupted`
 with an unknown outcome. It does **not** repeat side effects automatically:
 
 ```sh
-ava run retry RUN_ID --visit  # explicit new visit, same run/key/state
+ava run retry RUN_ID --entry  # explicit new entry, same run/key/state
 ava run cancel RUN_ID         # also works while parked on a timer/event
 ```
 
@@ -365,15 +365,15 @@ Check an uncertain external effect before retrying. General machine reruns are
 not supported; a distinct business instance requires a different input key.
 Ordinary unfinished flow runs still fail on restart rather than resume (P10).
 Finished decision cards and receipts remain readable after restart, including
-cards from earlier machine visits. Stored records have no automatic expiry;
+cards from earlier machine state entries. Stored records have no automatic expiry;
 normal state pruning/deletion removes retained data but keeps the key-to-run
 link, and history reads explicitly report `expired`. Removing the database
 itself is a destructive identity reset.
 
-Each visit imports the latest source code on disk and records the operator's
+Each state entry imports the latest source code on disk and records the operator's
 catalog revision. Only a successfully loaded definition without the run's current
 state produces `needs_attention` with `state_missing`. Restore that state and run
-`ava run retry RUN_ID --visit` to resume without redoing its completed work or
+`ava run retry RUN_ID --entry` to resume without redoing its completed work or
 changing the run/key. If the state is intentionally retired, cancel the run and
 start with a new key instead.
 
@@ -414,11 +414,11 @@ A validation subprocess that exits nonzero or by signal has a separate durable
 budget: three failures per receipt, with the same backoff, then no automatic
 retries. The facts show `validation_retry_limit` and the process exit status;
 the receipt and inbox row remain. Restart does not reset the failure count.
-After repairing the source, `ava run retry RUN_ID --visit` resets that budget and
-validates the queued event again; it does not start a new visit on a waiting run.
-A visit that already started but fails to prepare remains `interrupted` and
+After repairing the source, `ava run retry RUN_ID --entry` resets that budget and
+validates the queued event again; it does not start a new state entry on a waiting run.
+A state entry that already started but fails to prepare remains `interrupted` and
 requires explicit retry; restoring a definition never replays uncertain work.
-A retry while source is still unavailable creates no new visit and now fails
+A retry while source is still unavailable creates no new state entry and now fails
 with `definition_unavailable`; a loaded graph without the current state fails
 with `state_missing`. This corrects the former successful no-op: CLI exits
 unsuccessfully, REST returns 409 and gRPC returns FAILED_PRECONDITION, each with
@@ -427,7 +427,7 @@ successful explicit retry. A send queued on such a run while its state is absent
 records `state_missing`, not `definition_unavailable`.
 
 Editing a timer delay does not move an already-entered state's deadline; the
-new delay applies on the next entry. Local visits are therefore different from
+new delay applies on the next entry. Local state entries are therefore different from
 Delta, where an instance remains pinned to its starting deployment. Application
 environment comes from the operator; see [self-hosting environment files](
 ../README.md#application-environment-for-self-hosters).
@@ -436,20 +436,20 @@ environment comes from the operator; see [self-hosting environment files](
 
 A machine run is a run: `ava operator` opens it on the normal run page. The
 runs panel (titled Runs) lists it by its key label. The bottom pane has two
-tabs, Logs and Timeline. The Timeline lists, in time order: each visit entered
-and left (with the arc it took), the visit's steps, events received (accepted,
+tabs, Logs and Timeline. The Timeline lists, in time order: each state entry entered
+and left (with the arc it took), the state entry's steps, events received (accepted,
 deferred, ignored, dropped, delivered) with their send receipts, timers armed,
 fired or cancelled, waits, a cancel and the outcome. What the run waits for now
 (its timer, deferred events, open waits) stays pinned on top, and Send event
 stays in the run controls.
 
 Hover an entry to light up its state and arc on the graph; click a state on
-the graph to show only its entries. A visit entry's Steps action opens that
-visit's steps; Logs shows its step logs, which the Logs tab also lists for the
-whole run, labelled by visit. Flow runs have the same tab with their steps,
+the graph to show only its entries. A state-entry row's Steps action opens that
+state entry's steps; Logs shows its step logs, which the Logs tab also lists for the
+whole run, labelled by state entry. Flow runs have the same tab with their steps,
 waits, retries and outcome.
 
-Selecting a visit's step shows its typed output in the step panel's Run I/O
+Selecting a state entry's step shows its typed output in the step panel's Run I/O
 tab, read from the result route, as for a flow step. Under the run list, the
 selected run appears between its parents and its children (from `ava.call` and
 `ava.start_run`), with status and time ago; flow and machine runs look the same.
@@ -463,16 +463,16 @@ routes, not a separate machine start or list product. A run snapshot includes
 
 - `POST /runs/{run}/machine/events/{name}`: JSON body and `Idempotency-Key`,
   returns the receipt with HTTP 202.
-- `GET /runs/{run}/machine`: current state/visit, accepts, absolute `due`,
+- `GET /runs/{run}/machine`: current state/state entry, accepts, absolute `due`,
   pending events and the most recent 100 receipts.
 - `GET /runs/{run}/machine/history?limit=20&cursor=...`: bounded transitions.
-- `GET /runs/{run}/machine/visits/{visit}`: scoped snapshot, qualified nodes,
+- `GET /runs/{run}/machine/entries/{entry}`: scoped snapshot, qualified nodes,
   entry/exit clocks, catalog revision and transition.
-- `GET /runs/{run}/machine/visits/{visit}/events?limit=20&cursor=...`: bounded
+- `GET /runs/{run}/machine/entries/{entry}/events?limit=20&cursor=...`: bounded
   event facts. An empty page can still have a continuation.
-- `POST /runs/{run}/machine/visits:retry`: explicit interrupted-visit repair.
+- `POST /runs/{run}/machine/entries:retry`: explicit interrupted-state-entry repair.
 - `POST /runs/{run}/machine/timers:fire-next`: dev-only timer control.
-- `GET /runs/{run}/result?visit=&node_id=`: typed run, visit or step result.
+- `GET /runs/{run}/result?entry=&node_id=`: typed run, state entry or step result.
 - `GET /runs/{run}/links`: native parent and child links.
 
 The gRPC `ControlMachine` method carries these typed operations as JSON, next

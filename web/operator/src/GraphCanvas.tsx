@@ -901,7 +901,7 @@ export const CONTROLS_CLEARANCE = 76;
  * Keeps the fitted graph clear of a panel floating over the canvas's left edge (the
  * run timeline): the layout's own left margin starts past the panel's right edge.
  * Only the panel's width counts, and it is fixed, so the graph never re-fits when
- * the panel grows (runs, visits or waits loading).
+ * the panel grows (runs, state entries or waits loading).
  */
 export function reserveFit(
   options: FitViewOptions,

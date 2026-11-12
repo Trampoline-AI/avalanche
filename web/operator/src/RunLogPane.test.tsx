@@ -205,7 +205,7 @@ describe("run logs", () => {
     expect(screen.getByText("Fresh validation output")).toBeInTheDocument();
   });
 
-  it("shows a visit step's scope in a chip under the static Logs label, with a clear", async () => {
+  it("shows a state entry step's scope in a chip under the static Logs label, with a clear", async () => {
     const onClearNode = vi.fn();
     const api = createApi({ listLogPage: async () => page([]) });
     render(
@@ -213,18 +213,18 @@ describe("run logs", () => {
         api={api}
         run={RunSnapshotMsg.create({
           ...run,
-          topology: { ...run.topology!, displayNames: { "v2.apply_nits": "v2.apply_nits" } },
+          topology: { ...run.topology!, displayNames: { "e2.apply_nits": "e2.apply_nits" } },
         })}
-        nodeId="v2.apply_nits"
+        nodeId="e2.apply_nits"
         onSelectNode={() => undefined}
         onClearNode={onClearNode}
       />,
     );
     const pane = screen.getByRole("region", { name: "Run logs" });
     expect(within(pane).getByRole("button", { name: /^Logs/ })).toHaveTextContent("Logs");
-    expect(within(pane).getByText("Step: apply_nits · visit 2")).toBeInTheDocument();
+    expect(within(pane).getByText("Step: apply_nits · entry 2")).toBeInTheDocument();
     fireEvent.click(
-      within(pane).getByRole("button", { name: "Clear scope (Step: apply_nits · visit 2)" }),
+      within(pane).getByRole("button", { name: "Clear scope (Step: apply_nits · entry 2)" }),
     );
     expect(onClearNode).toHaveBeenCalledOnce();
   });

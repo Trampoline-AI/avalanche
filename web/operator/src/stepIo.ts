@@ -61,10 +61,10 @@ export function mapStepIo(stepIo: StepIoV2): StepIo {
   return mapped;
 }
 
-/** Which accepted result to read: a run's, a machine visit's, or one step's. */
+/** Which accepted result to read: a run's, a machine state entry's, or one step's. */
 export interface RunResultTarget {
-  /** A machine visit; with `nodeId`, that visit's step (unqualified, e.g. `triage_1`). */
-  visit?: number;
+  /** A machine state entry; with `nodeId`, that state entry's step (unqualified, e.g. `triage_1`). */
+  entry?: number;
   nodeId?: string;
 }
 
