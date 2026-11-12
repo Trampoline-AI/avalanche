@@ -154,6 +154,8 @@ interface CardData extends Record<string, unknown> {
   placeholderHint?: string;
   /** A state machine's current state (machine mode only). */
   current?: boolean;
+  /** The run this start/call node started; opens that run's page. */
+  childRun?: GraphChildRun;
   descriptionsExpanded: boolean;
   onOpen: () => void;
   inspectionDisabled?: boolean;
@@ -471,6 +473,25 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
           </span>
         )}
       </header>
+      {data.childRun && (
+        <div className="node-child-run relative z-[3] flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 self-stretch font-mono text-[9px] text-secondary">
+          <span className="tracking-[.12em] uppercase">Child run</span>
+          {data.childRun.onOpen ? (
+            <button
+              type="button"
+              onClick={data.childRun.onOpen}
+              title={data.childRun.runId}
+              aria-label={`Open child run ${data.childRun.name ? `${data.childRun.name}, ` : ""}${data.childRun.runId}`}
+              className="nodrag nopan inline-flex min-w-0 cursor-pointer items-center gap-1 rounded border border-line bg-panel px-1.5 py-0.5 text-left text-acid [overflow-wrap:anywhere] hover:border-acid focus-visible:outline-2 focus-visible:outline-acid"
+            >
+              {data.childRun.status && <RunStatus status={data.childRun.status} glyphOnly />}
+              {data.childRun.name || data.childRun.runId} →
+            </button>
+          ) : (
+            <span title={data.childRun.runId}>{data.childRun.runId}</span>
+          )}
+        </div>
+      )}
       {data.mapItems && (
         <div className="relative z-[3] flex flex-wrap gap-1" aria-label="Map items">
           {data.mapItems.map((item) =>
@@ -1064,6 +1085,16 @@ type TopologyView = Pick<
   | "mapSpecs"
 >;
 
+/** A child run a call/start node created or attached to (from the run's lineage). */
+export interface GraphChildRun {
+  runId: string;
+  /** Its flow or machine name and key, e.g. "support_ticket #611". */
+  name: string;
+  status?: string;
+  /** Absent while the child's run summary is not known yet. */
+  onOpen?: () => void;
+}
+
 interface GraphCanvasProps {
   /** Draws a state machine with the same cards, canvas and controls as a flow. */
   machine?: MachineGraphView;
@@ -1080,6 +1111,8 @@ interface GraphCanvasProps {
   selectedNodeId?: string;
   onClearNode?: () => void;
   onOpenNode: (nodeId: string) => void;
+  /** Start/call nodes' child runs by node ID; each card links to its child's page. */
+  childRuns?: Record<string, GraphChildRun>;
   inspectionDisabled?: boolean;
   /**
    * What the run timeline points at (a hovered or selected entry): a machine
@@ -1101,6 +1134,7 @@ function GraphCanvasView({
   selectedNodeId,
   onClearNode,
   onOpenNode,
+  childRuns,
   inspectionDisabled = false,
   highlight,
 }: GraphCanvasProps) {
@@ -1443,6 +1477,7 @@ function GraphCanvasView({
           instructionLine,
           descriptionsExpanded,
           onOpen: openCallbacks[nodeId],
+          childRun: runTopology ? childRuns?.[nodeId] : undefined,
           inspectionDisabled,
         },
       };
@@ -1460,6 +1495,7 @@ function GraphCanvasView({
   }, [
     inputCard,
     agentNodeIds,
+    childRuns,
     classifierCards,
     descriptionsExpanded,
     evaluationCards,
@@ -1790,6 +1826,26 @@ function sameRunNodeState(
   });
 }
 
+function sameChildRuns(
+  left: Record<string, GraphChildRun> | undefined,
+  right: Record<string, GraphChildRun> | undefined,
+) {
+  if (left === right) return true;
+  const leftIds = Object.keys(left ?? {});
+  if (leftIds.length !== Object.keys(right ?? {}).length) return false;
+  return leftIds.every((nodeId) => {
+    const a = left![nodeId];
+    const b = right?.[nodeId];
+    return (
+      b !== undefined &&
+      a.runId === b.runId &&
+      a.name === b.name &&
+      a.status === b.status &&
+      Boolean(a.onOpen) === Boolean(b.onOpen)
+    );
+  });
+}
+
 export const GraphCanvas = memo(
   GraphCanvasView,
   (left, right) =>
@@ -1807,5 +1863,6 @@ export const GraphCanvas = memo(
     left.onOpenNode === right.onOpenNode &&
     left.inspectionDisabled === right.inspectionDisabled &&
     left.highlight === right.highlight &&
+    sameChildRuns(left.childRuns, right.childRuns) &&
     sameRunNodeState(left.runNodes, right.runNodes),
 );

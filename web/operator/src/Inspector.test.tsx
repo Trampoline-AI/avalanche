@@ -1834,6 +1834,79 @@ describe("standard step run values", () => {
     expect(output).toHaveTextContent("100");
   });
 
+  it("shows the step's accepted typed result from the shared result route", async () => {
+    const full = { count: 100, rows: Array.from({ length: 30 }, (_, index) => index) };
+    const getRunResult = vi.fn(async () => full);
+    renderRun(
+      {
+        status: "success",
+        stepIo: {
+          inputs: stepIo.inputs,
+          output: {
+            kind: "json",
+            typeName: "app.Counts",
+            value: { count: 100, rows: [0, 1, "… [+28 more items]"] },
+            truncated: true,
+          },
+        },
+      },
+      { api: createApi({ getRunResult }) },
+    );
+
+    const output = screen.getByRole("region", { name: "Output" });
+    await waitFor(() => expect(within(output).queryByText(/truncated/i)).toBeNull());
+    expect(getRunResult).toHaveBeenCalledWith(
+      snapshotFor().summary!.runId,
+      { visit: undefined, nodeId: node.nodeId },
+      expect.any(AbortSignal),
+    );
+    expect(output).toHaveTextContent("app.Counts");
+    expect(output).toHaveTextContent("[30 items]");
+  });
+
+  it("reads a machine visit's step through its visit by the step's own ID", async () => {
+    const getRunResult = vi.fn(async () => ({ resolution: "closed" }));
+    const visitNodeId = `v2.${node.nodeId}`;
+    render(
+      <Inspector
+        api={createApi({ getRunResult })}
+        workflow={workflow}
+        run={RunSnapshotMsg.create({
+          ...snapshotFor(),
+          nodes: [{ ...node, nodeId: visitNodeId, status: "success" }],
+        })}
+        nodeId={visitNodeId}
+        visit={2}
+        onClose={() => undefined}
+      />,
+    );
+
+    const value = await screen.findByRole("group", { name: "Return value" });
+    expect(value).toHaveTextContent("closed");
+    expect(getRunResult).toHaveBeenCalledWith(
+      snapshotFor().summary!.runId,
+      { visit: 2, nodeId: node.nodeId },
+      expect.any(AbortSignal),
+    );
+  });
+
+  it("falls back to the preview when the host has no accepted result", async () => {
+    const getRunResult = vi.fn(async () => {
+      throw new Error("Requested step or visit has no accepted result");
+    });
+    renderRun({ status: "success", stepIo }, { api: createApi({ getRunResult }) });
+
+    await waitFor(() => expect(getRunResult).toHaveBeenCalled());
+    expect(screen.getByRole("region", { name: "Output" })).toHaveTextContent("100");
+  });
+
+  it("does not read a result for a step that has not succeeded", () => {
+    const getRunResult = vi.fn(async () => null);
+    renderRun({ status: "running", stepIo }, { api: createApi({ getRunResult }) });
+
+    expect(getRunResult).not.toHaveBeenCalled();
+  });
+
   it("keeps a failed call's inputs without inventing an output", () => {
     renderRun({
       status: "failed",

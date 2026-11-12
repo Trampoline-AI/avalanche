@@ -29,7 +29,13 @@
   parked parent reattaches after restart; created children alone receive parent
   cancellation. Refuse self/cyclic waits and capture target names lazily.
 - Inspect native run links with `ava run links RUN_ID --json` or
-  `GET /api/v1/runs/RUN_ID/links`. UI rendering and the Delta port are separate.
+  `GET /api/v1/runs/RUN_ID/links`. The Delta port is separate.
+- The operator UI run page shows the run tree under the run list, the same for
+  flow and machine runs: parents, the run and its children with status and time
+  ago. Call and start nodes link to their child run; rows open runs of other
+  flows and machines. A step's Run I/O output (flow steps and machine visit
+  steps alike) reads the accepted typed result from the shared result route,
+  falling back to the bounded preview.
 
 - Read typed flow, machine-final, visit and step results through one versioned
   reference-only result model. The local operator retains completed non-final

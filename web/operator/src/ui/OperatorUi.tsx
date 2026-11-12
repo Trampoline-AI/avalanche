@@ -76,6 +76,11 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
     },
     [setSelection, workflow],
   );
+  // A run tree row or a call node's child run: that run's page, in its own flow or machine.
+  const openRun = useCallback(
+    (runId: string, workflowId: string) => select({ kind: "run", workflowId, runId }),
+    [select],
+  );
   const explorerExpanded = explorerPinned || explorerHovered;
   const workspaceStyle = {
     "--workspace-explorer-width": `${explorerWidth}px`,
@@ -221,6 +226,7 @@ export function OperatorUi({ host, navigation }: OperatorUiProps) {
               workflow={workflow}
               selectedRunId={selection?.kind === "run" ? selection.runId : undefined}
               onSelectRun={selectWorkflowRun}
+              onOpenRun={openRun}
               selectRun={selectRun}
               startRun={startRun}
               cancelRun={cancelRun}

@@ -1396,6 +1396,110 @@ describe("operator transport boundary", () => {
     });
   });
 
+  it("reads shared run, visit and step results in display form", async () => {
+    // The host's versioned codec, exactly as the operator's GetRunResult returns it.
+    const valueJson = JSON.stringify({
+      version: 1,
+      value: {
+        kind: "dict",
+        items: [
+          ["ticket", { kind: "scalar", value: 611 }],
+          [
+            "pair",
+            {
+              kind: "tuple",
+              items: [
+                { kind: "scalar", value: "a" },
+                { kind: "scalar", value: null },
+              ],
+            },
+          ],
+          [
+            "counts",
+            {
+              kind: "list",
+              items: [
+                { kind: "scalar", value: 1 },
+                { kind: "scalar", value: 2.5 },
+              ],
+            },
+          ],
+          [
+            "document",
+            { kind: "file", version: 1, ref: { workspace: "local-ws:v1:x", path: "doc.txt" } },
+          ],
+        ],
+      },
+    });
+    const getRunResult = vi.fn(() => ({
+      response: Promise.resolve({
+        runId: "run-1",
+        value: { valueJson, sha256: "", sizeBytes: "0" },
+      }),
+    }));
+    const api = apiWith({ getRunResult });
+    await expect(api.getRunResult("run-1", { visit: 2, nodeId: "close_1" })).resolves.toEqual({
+      ticket: 611,
+      pair: ["a", null],
+      counts: [1, 2.5],
+      document: {
+        kind: "file",
+        version: 1,
+        ref: { workspace: "local-ws:v1:x", path: "doc.txt" },
+      },
+    });
+    await api.getRunResult("run-1");
+    expect(getRunResult.mock.calls.map(([request]) => request)).toEqual([
+      { runId: "run-1", visit: 2, nodeId: "close_1" },
+      { runId: "run-1" },
+    ]);
+    const malformed = apiWith({
+      getRunResult: () => ({
+        response: Promise.resolve({
+          runId: "run-1",
+          value: {
+            valueJson: '{"version":1,"value":{"kind":"bytes"}}',
+            sha256: "",
+            sizeBytes: "0",
+          },
+        }),
+      }),
+    });
+    await expect(malformed.getRunResult("run-1")).rejects.toThrow(/unknown result kind/);
+  });
+
+  it("reads a run's parent and child links through the machine control", async () => {
+    const link = {
+      parent_run_id: "run-1",
+      node_id: "start_run_1",
+      child_run_id: "run-2",
+      created: true,
+    };
+    const controlMachine = vi.fn(() => ({
+      response: Promise.resolve({
+        resultJson: JSON.stringify({ parents: [], children: [link] }),
+      }),
+    }));
+    await expect(apiWith({ controlMachine }).getRunLinks("run-1")).resolves.toEqual({
+      parents: [],
+      children: [
+        { parentRunId: "run-1", nodeId: "start_run_1", childRunId: "run-2", created: true },
+      ],
+    });
+    expect(controlMachine).toHaveBeenCalledWith(
+      { requestJson: JSON.stringify({ op: "links", run_id: "run-1" }) },
+      undefined,
+    );
+    const invalid = apiWith({
+      controlMachine: () => ({
+        response: Promise.resolve({
+          resultJson: JSON.stringify({ parents: [{}], children: [] }),
+        }),
+      }),
+    });
+    await expect(invalid.getRunLinks("run-1")).rejects.toThrow(/Invalid run link/);
+  });
+
   it("keeps only the selected visit's waits and maps retained audits", async () => {
     const card = (nodeId: string, audit: unknown = null) =>
       JSON.stringify({

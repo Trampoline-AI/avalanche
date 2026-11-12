@@ -50,7 +50,7 @@ const READ_MIN_SPACING_MS = 250;
  * a burst of revisions faster than the host answers still completes reads and ends
  * with a read of the latest state.
  */
-function useRead<T>(
+export function useRead<T>(
   load: ((signal: AbortSignal) => Promise<T>) | undefined,
   { live = false, refreshKey }: MachineReadRefresh = {},
 ) {

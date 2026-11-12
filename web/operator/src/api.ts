@@ -11,7 +11,7 @@ import { runKeyLabel } from "./runKey";
 import { DescriptorPageOrder, TRIGGER_KINDS, type TriggerKind } from "./model";
 import { mapEvaluationRecord, type EvaluationRecord } from "./evaluations";
 import { parseTraceHeaderNative } from "./agentTrace/common";
-import { mapStepIo } from "./stepIo";
+import { mapStepIo, parseRunResultDocument, type RunResultTarget } from "./stepIo";
 import { isUnknownRecord } from "./guards";
 import { parseJsonValue, parseNullableSchema } from "./stepInterface";
 import type { WaitCard } from "./RunWaitPanel";
@@ -190,6 +190,44 @@ import type {
   MachineVisitEvent,
 } from "./machine";
 
+/** One parent-to-child edge: `nodeId` is the parent's start node that created or attached to the child. */
+export interface RunLink {
+  parentRunId: string;
+  nodeId: string;
+  childRunId: string;
+  /** False when the parent attached to an existing keyed run it did not create. */
+  created: boolean;
+}
+
+export interface RunLinks {
+  parents: RunLink[];
+  children: RunLink[];
+}
+
+function mapRunLinks(value: unknown): RunLinks {
+  const links = (items: unknown): RunLink[] => {
+    if (!Array.isArray(items)) throw new Error("Invalid run links");
+    return items.map((item: unknown) => {
+      if (
+        !isUnknownRecord(item) ||
+        typeof item.parent_run_id !== "string" ||
+        typeof item.node_id !== "string" ||
+        typeof item.child_run_id !== "string" ||
+        typeof item.created !== "boolean"
+      )
+        throw new Error("Invalid run link");
+      return {
+        parentRunId: item.parent_run_id,
+        nodeId: item.node_id,
+        childRunId: item.child_run_id,
+        created: item.created,
+      };
+    });
+  };
+  if (!isUnknownRecord(value)) throw new Error("Invalid run links");
+  return { parents: links(value.parents), children: links(value.children) };
+}
+
 export interface OperatorApi {
   /**
    * The host's live run statuses: a run in one of them is still changing, so its
@@ -233,6 +271,18 @@ export interface OperatorApi {
   ): Promise<MachineEventReceipt>;
   retryMachineVisit?(runId: string): Promise<void>;
   fireNextMachineTimer?(runId: string): Promise<void>;
+  /**
+   * The accepted typed result of a run, a machine visit or one step (of a visit),
+   * in display form (File/Workspace as their references). Rejects while there is
+   * no accepted result yet.
+   */
+  getRunResult?(
+    runId: string,
+    target?: RunResultTarget,
+    signal?: AbortSignal,
+  ): Promise<JsonValue>;
+  /** Native call/start_run lineage: the runs that started this run and those it started. */
+  getRunLinks?(runId: string, signal?: AbortSignal): Promise<RunLinks>;
   getCatalog(signal?: AbortSignal): Promise<CatalogSnapshotMsg>;
   loadBaseline(signal?: AbortSignal): Promise<StructuralBaseline>;
   getWorkflowNodeSource(
@@ -930,6 +980,27 @@ export class GrpcWebOperatorApi implements OperatorApi {
 
   async retryMachineVisit(runId: string): Promise<void> {
     await this.controlMachine({ op: "retry", run_id: runId });
+  }
+
+  async getRunResult(
+    runId: string,
+    target: RunResultTarget = {},
+    signal?: AbortSignal,
+  ): Promise<JsonValue> {
+    const response = await this.client.getRunResult(
+      {
+        runId,
+        ...(target.visit !== undefined ? { visit: target.visit } : {}),
+        ...(target.nodeId !== undefined ? { nodeId: target.nodeId } : {}),
+      },
+      signal ? { abort: signal } : undefined,
+    ).response;
+    if (response.runId !== runId || !response.value) throw new Error("Invalid run result");
+    return parseRunResultDocument(response.value.valueJson);
+  }
+
+  async getRunLinks(runId: string, signal?: AbortSignal): Promise<RunLinks> {
+    return mapRunLinks(await this.controlMachine({ op: "links", run_id: runId }, signal));
   }
 
   private rememberScope(scopeRef: ScopeReferenceV2 | undefined): string {

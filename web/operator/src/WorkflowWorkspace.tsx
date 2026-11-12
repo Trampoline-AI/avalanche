@@ -29,6 +29,7 @@ import { RunLogPane, visitStep } from "./RunLogPane";
 import { stepScopeLabel } from "./ScopeChip";
 import { RunControls } from "./RunControls";
 import { DecisionForm, type WaitCard } from "./RunWaitPanel";
+import { childRunsByNode, RunTree, runName, useRunLinks } from "./RunTree";
 import { RunTimeline, type TimelineFocus } from "./RunTimeline";
 import {
   entryHighlight,
@@ -166,6 +167,11 @@ interface WorkflowWorkspaceSurfaceProps extends Pick<
   runActionsEnabled?: boolean;
   definitionLabel?: string;
   bottomRightPanel?: ReactNode;
+  /**
+   * Opens a related run (a parent or child in the run tree, or a call node's child)
+   * whose flow or machine may differ. Omitted: only runs of this workflow open.
+   */
+  onOpenRun?: (runId: string, workflowId: string) => void;
 }
 
 /** Both hosts share selection policy, graph, run controls, and the inspector column. */
@@ -245,6 +251,7 @@ export function WorkflowWorkspaceSurface({
   timelineView,
   onTimelineViewChange,
   layoutStorageKey,
+  onOpenRun,
 }: WorkflowWorkspaceSurfaceProps) {
   const [inspectedNode, setInspectedNode] = useState<string>();
   const {
@@ -1022,6 +1029,62 @@ export function WorkflowWorkspaceSurface({
       error={timelineError}
     />
   ) : undefined;
+  const runLinks = useRunLinks(api, run ? selectedRunId : undefined, machineRefresh).links;
+  const catalogWorkflows = state.catalog?.workflows;
+  const workflowName = useCallback(
+    (id: string) => catalogWorkflows?.find((item) => item.workflowId === id)?.displayName,
+    [catalogWorkflows],
+  );
+  const openRelatedRun = useCallback(
+    (runId: string) => {
+      const target = state.runs[runId]?.workflowId;
+      if (!target) return;
+      if (onOpenRun) onOpenRun(runId, target);
+      else if (target === workflowId) selectWorkflowRun(runId);
+    },
+    [onOpenRun, selectWorkflowRun, state.runs, workflowId],
+  );
+  const runTree =
+    runLinks && displayedRunId && displayedRunId === selectedRunId ? (
+      <RunTree
+        runId={displayedRunId}
+        links={runLinks}
+        runs={state.runs}
+        workflowName={workflowName}
+        onOpenRun={openRelatedRun}
+      />
+    ) : undefined;
+  const childRunNodes = useMemo(() => {
+    const byNode = childRunsByNode(
+      runLinks,
+      displayedRunId,
+      shownTopology?.graph,
+      shownTopology?.nodeTypes,
+    );
+    if (!Object.keys(byNode).length) return undefined;
+    return Object.fromEntries(
+      Object.entries(byNode).map(([nodeId, childRunId]) => {
+        const summary = state.runs[childRunId];
+        return [
+          nodeId,
+          {
+            runId: childRunId,
+            name: runName(summary, summary ? workflowName(summary.workflowId) : undefined),
+            status: summary?.status,
+            onOpen: summary ? () => openRelatedRun(childRunId) : undefined,
+          },
+        ];
+      }),
+    );
+  }, [
+    displayedRunId,
+    openRelatedRun,
+    runLinks,
+    shownTopology?.graph,
+    shownTopology?.nodeTypes,
+    state.runs,
+    workflowName,
+  ]);
   const runListPanel = workflowId ? (
     <RunListPanel
       key={workflowId}
@@ -1039,6 +1102,7 @@ export function WorkflowWorkspaceSurface({
       deployments={deployments}
       timelineView={timelineView}
       onTimelineViewChange={onTimelineViewChange}
+      selectedRunSection={runTree}
     />
   ) : undefined;
   const normalRunControls = (historical ? loadedRun : workflow) ? (
@@ -1172,6 +1236,7 @@ export function WorkflowWorkspaceSurface({
                     selectedNodeId={inspectedNode}
                     onClearNode={clearGraphSelection}
                     onOpenNode={openNode}
+                    childRuns={childRunNodes}
                     highlight={graphHighlight}
                     bottomRightPanel={
                       bottomRightPanel === undefined ? runControlsPanel : bottomRightPanel
@@ -1299,6 +1364,7 @@ export function WorkflowWorkspaceSurface({
                   embedded
                   workflow={workflow}
                   run={visitRun ?? run}
+                  visit={visitRun ? selectedVisit : undefined}
                   nodeId={inspectedNode}
                   evaluationState={evaluationState}
                   liveEvents={state.liveEvents[liveEventDescriptorKey]}

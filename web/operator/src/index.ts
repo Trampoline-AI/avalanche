@@ -9,8 +9,11 @@ export type {
   LogDescriptorPage,
   LogPageRequest,
   OperatorApi,
+  RunLink,
+  RunLinks,
   StructuralBaseline,
 } from "./api";
+export type { RunResultTarget } from "./stepIo";
 export type { EvaluationRecord, EvaluationResult } from "./evaluations";
 export { OperatorUi } from "./ui/OperatorUi";
 export type {

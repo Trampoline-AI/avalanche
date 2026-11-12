@@ -1661,6 +1661,143 @@ describe.each(["hosted", "local"] as const)("%s shared workspace", (host) => {
   });
 });
 
+describe("run tree", () => {
+  const machine = FlowInfoMsg.create({
+    ...workflow,
+    name: "tickets",
+    displayName: "Tickets",
+    workflowId: "flows.py::tickets",
+  });
+  const now = Date.now() / 1000;
+  const parent = RunSummaryMsg.create({
+    ...summary,
+    status: "waiting",
+    triggeredAt: now - 120,
+  });
+  const child = RunSummaryMsg.create({
+    ...summary,
+    runId: "run-child",
+    workflowId: machine.workflowId,
+    workflowDisplayName: machine.displayName,
+    label: "#611",
+    status: "success",
+    createdSequence: "2",
+    triggeredAt: now - 60,
+  });
+  const callTopology = WorkflowTopologyMsg.create({
+    nodeIds: ["start_run_1", "run_1"],
+    graph: { start_run_1: { children: ["run_1"] }, run_1: { children: [] } },
+    nodeTypes: { start_run_1: "run", run_1: "wait" },
+    displayNames: { start_run_1: "start_run", run_1: "run" },
+  });
+  const link = {
+    parentRunId: parent.runId,
+    nodeId: "start_run_1",
+    childRunId: child.runId,
+    created: true,
+  };
+
+  function treeApi() {
+    const getRunLinks = vi.fn(async (runId: string) =>
+      runId === parent.runId
+        ? { parents: [], children: [link] }
+        : runId === child.runId
+          ? { parents: [link], children: [] }
+          : { parents: [], children: [] },
+    );
+    const api = createApi({
+      loadBaseline: async () => ({
+        ...baseline,
+        catalog: CatalogSnapshotMsg.create({
+          ...baseline.catalog,
+          workflows: [workflow, machine],
+        }),
+        runs: [parent, child],
+      }),
+      getLatestRunSnapshot: async (runId) =>
+        runId === parent.runId
+          ? RunSnapshotMsg.create({
+              ...snapshotFor(parent),
+              topology: callTopology,
+              nodes: [
+                NodeSnapshotMsg.create({ nodeId: "start_run_1", status: "success" }),
+                NodeSnapshotMsg.create({ nodeId: "run_1", status: "running" }),
+              ],
+            })
+          : snapshotFor(child),
+      getRunLinks,
+    });
+    return { api, getRunLinks };
+  }
+
+  it("shows a run between its parent and children and opens them both ways", async () => {
+    const { api, getRunLinks } = treeApi();
+    render(<OperatorUi host={{ api, presentation }} />);
+    fireEvent.click(await screen.findByRole("button", { name: /run-1,/ }));
+
+    const tree = await screen.findByRole("region", { name: "Run tree" });
+    expect(getRunLinks).toHaveBeenCalledWith(parent.runId, expect.any(AbortSignal));
+    const current = within(tree).getByText("this run").closest("[aria-current]")!;
+    expect(current).toHaveTextContent("Orders");
+    const childRow = within(tree).getByRole("button", {
+      name: "Open child run Tickets #611, run-child, success",
+    });
+    expect(childRow).toHaveTextContent("1 min ago");
+    expect(within(childRow).getByText("1 min ago")).toHaveAttribute("title");
+    // The call's start node and its wait both lead to the child run.
+    expect(
+      screen.getAllByRole("button", { name: "Open child run Tickets #611, run-child" }),
+    ).toHaveLength(2);
+
+    fireEvent.click(childRow);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /run-child,/ })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+    const childTree = await screen.findByRole("region", { name: "Run tree" });
+    await within(childTree).findByRole("button", {
+      name: "Open parent run Orders, run-1, waiting",
+    });
+    expect(within(childTree).getByText("this run").closest("[aria-current]")).toHaveTextContent(
+      "Tickets #611",
+    );
+
+    fireEvent.click(
+      within(childTree).getByRole("button", { name: "Open parent run Orders, run-1, waiting" }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /run-1,/ })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+    fireEvent.click(
+      (
+        await screen.findAllByRole("button", { name: "Open child run Tickets #611, run-child" })
+      )[0],
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /run-child,/ })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+  });
+
+  it("shows no tree for a run without parents or children", async () => {
+    const { api, getRunLinks } = treeApi();
+    getRunLinks.mockImplementation(async () => ({ parents: [], children: [] }));
+    render(<OperatorUi host={{ api, presentation }} />);
+    fireEvent.click(await screen.findByRole("button", { name: /run-1,/ }));
+
+    await waitFor(() => expect(getRunLinks).toHaveBeenCalled());
+    expect(screen.queryByRole("region", { name: "Run tree" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Open child run/ })).toBeNull();
+  });
+});
+
 describe("persisted workspace layout", () => {
   it.each([undefined, "host.layout"])(
     "keeps panel sizes across workflow remounts with key %s",
