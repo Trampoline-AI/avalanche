@@ -377,7 +377,7 @@ MIGRATIONS += (
 )
 
 MIGRATIONS += (
-    Migration(version=10, name="native child links and run waits", statements=(
+    Migration(version=11, name="native child links and run waits", statements=(
         """CREATE TABLE run_links (
             parent_run_id TEXT NOT NULL REFERENCES runs(run_id) ON DELETE CASCADE,
             node_id TEXT NOT NULL,
