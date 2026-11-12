@@ -674,7 +674,7 @@ class MachineHost:
                     "SELECT json_extract(record_json, '$.receipt_id') FROM machine_facts "
                     "WHERE run_id=? AND json_extract(record_json, '$.status')='accepted' "
                     "AND json_extract(record_json, '$.reason') "
-                    "IN ('definition_unavailable', 'state_missing')",
+                    "IN ('definition_unavailable', 'state_missing', 'validation_pending')",
                     (record.run_id,),
                 )
             }
@@ -777,6 +777,7 @@ class MachineHost:
         if record.phase in {"final", "closed"}:
             raise WaitRefusalError("run_closed", 409)
         unavailable_reason = None
+        validation_failure = None
         try:
             spec = self._current_spec(record, required=True)
         except WaitRefusalError as exc:
@@ -800,6 +801,13 @@ class MachineHost:
                 self._definition_unavailable(record, str(exc))
                 spec = None
                 unavailable_reason = "definition_unavailable"
+                accepted = True
+            except (MachineValidationProcessError, TimeoutExpired) as exc:
+                # The validator itself failed, not the payload: accept and
+                # queue durably, then let inbox recovery retry validation
+                # with backoff and show the failure as the run's state.
+                validation_failure = f"{type(exc).__name__}: {exc}"
+                unavailable_reason = "validation_pending"
                 accepted = True
         receipt = MachineEventReceipt(
             receipt_id=uuid4().hex,
@@ -847,6 +855,19 @@ class MachineHost:
                 reason=unavailable_reason,
                 at=receipt.accepted_at,
             )
+            if validation_failure is not None:
+                MachinesTable.fact(
+                    connection,
+                    record.run_id,
+                    record.entry,
+                    status="validation_failed",
+                    receipt_id=receipt.receipt_id,
+                    event=command.event,
+                    reason=validation_failure,
+                    at=receipt.accepted_at,
+                )
+        if validation_failure is not None:
+            self._defer_inbox_validation(record, validation_failure, failures=1)
         # The receipt is durable before publication or driving work.
         with self.op._lock:
             run_status = self.op._runs[record.run_id].status

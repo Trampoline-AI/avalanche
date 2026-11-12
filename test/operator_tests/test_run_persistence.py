@@ -1518,6 +1518,87 @@ class Approval(ava.BaseInput):
         op.close()
 
 
+@pytest.mark.parametrize("failure", ["exit", "timeout"])
+def test_send_accepts_and_queues_when_validator_fails(tmp_path, monkeypatch, failure):
+    """A crashing or hanging validator during send is not a server error (#541).
+
+    Real operator, real validation child: send returns the accepted receipt,
+    the event stays durably queued, the run shows the validation failure, and
+    the same event is delivered once after the validator is repaired.
+    """
+    from runtime.operator import machine_validation
+    from runtime.operator.state.machines import MachinesTable
+
+    root = tmp_path / "source"
+    root.mkdir()
+    fixture = root / "machine.py"
+    source = (Path(__file__).parents[1] / "fixtures" / "local_machine.py").read_text()
+    source = source.replace(
+        "import avalanche as ava",
+        """import avalanche as ava
+import os
+from pydantic import model_validator
+
+class Approval(ava.BaseInput):
+    gate: str
+    failure: str
+
+    @model_validator(mode="after")
+    def check_process(self):
+        if Path(self.gate).exists():
+            if self.failure == "exit":
+                os._exit(23)
+            time.sleep(65)
+        return self
+""",
+    ).replace('pending.on("approved")', 'pending.on("approved", payload=Approval)')
+    fixture.write_text(source)
+    gate = tmp_path / "fail-validation"
+    gate.touch()
+    op = _operator(root, tmp_path / "state.db")
+    try:
+        run_id = op.start_run("approval", input={"ticket": 1, "journal": str(tmp_path / "j")})
+        _wait_until(lambda: _machine_record(op, run_id).phase == "waiting")
+        if failure == "timeout":
+            run = machine_validation.subprocess.run
+
+            def bounded_child(args, **kwargs):
+                if args[1:] == ["-m", "runtime.operator.machine_validation"]:
+                    kwargs["timeout"] = 3  # Real child timeout, not a synthetic exception.
+                return run(args, **kwargs)
+
+            monkeypatch.setattr(machine_validation.subprocess, "run", bounded_child)
+        payload = {"gate": str(gate), "failure": failure}
+        receipt = op._machine_host.send(run_id, "approved", payload, "validator-down")
+        assert receipt.status == "accepted" and not receipt.duplicate
+        with op._state_store.transaction() as c:
+            assert [row.receipt_id for row in MachinesTable.inbox(c, run_id)] == [
+                receipt.receipt_id
+            ]
+            facts = _machine_facts(c, run_id)
+        expected = "MachineValidationProcessError" if failure == "exit" else "TimeoutExpired"
+        assert any(
+            f.status == "validation_failed" and expected in (f.reason or "") for f in facts
+        ), [(f.status, f.reason) for f in facts]
+        assert any(f.status == "definition_unavailable" for f in facts)
+        replay = op._machine_host.send(run_id, "approved", payload, "validator-down")
+        assert replay.duplicate and replay.receipt_id == receipt.receipt_id
+        gate.unlink()  # Repair the validator; backoff recovery delivers the event.
+        assert _wait_terminal(op, run_id).status is RunStatus.SUCCESS
+        with op._state_store.transaction() as c:
+            facts = _machine_facts(c, run_id)
+            assert (
+                sum(
+                    f.status == "consumed" and f.receipt_id == receipt.receipt_id for f in facts
+                )
+                == 1
+            )
+            assert not MachinesTable.inbox(c, run_id)
+        assert op.fatal_error is None
+    finally:
+        op.close()
+
+
 def _count_machine_reloads(op):
     calls = []
     refresh = op._refresh_workflows

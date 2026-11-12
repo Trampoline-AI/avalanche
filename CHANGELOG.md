@@ -7,6 +7,9 @@
   carry `entry`, step IDs are `e2.step`, SDK types are `StateEntry*` and the
   operator UI shows "Entry N". The local operator's state database migrates once
   and drops machine runs recorded before the rename (flow runs are kept).
+- Local operator: a machine `send` whose payload validator crashes or times out
+  is accepted and queued instead of failing with a server error. The run shows
+  the validation failure, and the event is delivered once the validator works.
 
 ## 0.20.11
 
