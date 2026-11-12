@@ -1786,6 +1786,28 @@ describe("run tree", () => {
     );
   });
 
+  it("hands another workflow's run to the embedding host's onOpenRun", async () => {
+    // A host routing its own run pages (the Delta console) embeds WorkflowWorkspace.
+    const { api } = treeApi();
+    const onOpenRun = vi.fn();
+    render(
+      <WorkflowWorkspace
+        api={api}
+        workflowId={workflow.workflowId}
+        navigation={{ selectedRunId: parent.runId, onSelectRun: () => undefined }}
+        onOpenRun={onOpenRun}
+      />,
+    );
+
+    const tree = await screen.findByRole("region", { name: "Run tree" });
+    fireEvent.click(
+      await within(tree).findByRole("button", {
+        name: "Open child run Tickets #611, run-child, success",
+      }),
+    );
+    expect(onOpenRun).toHaveBeenCalledWith(child.runId, machine.workflowId);
+  });
+
   it("shows no tree for a run without parents or children", async () => {
     const { api, getRunLinks } = treeApi();
     getRunLinks.mockImplementation(async () => ({ parents: [], children: [] }));

@@ -129,6 +129,12 @@ export interface WorkflowWorkspaceProps {
     selectedRunId?: string;
     onSelectRun: (runId: string | undefined) => void;
   };
+  /**
+   * Opens a related run (a parent or child in the run tree, or a call node's child)
+   * whose flow or machine may differ, for hosts that route their own run pages.
+   * Omitted: only runs of this workflow open.
+   */
+  onOpenRun?: (runId: string, workflowId: string) => void;
 }
 
 interface WorkflowWorkspaceSurfaceProps extends Pick<
@@ -1438,6 +1444,7 @@ export function WorkflowWorkspace({
   timelineView,
   onTimelineViewChange,
   layoutStorageKey,
+  onOpenRun,
 }: WorkflowWorkspaceProps) {
   const { state, startRun, cancelRun, selectRun, setScheduleEnabled } =
     useOperatorProjection(api);
@@ -1510,6 +1517,7 @@ export function WorkflowWorkspace({
       deployments={deployments}
       timelineView={timelineView}
       onTimelineViewChange={onTimelineViewChange}
+      onOpenRun={onOpenRun}
     />
   );
 }

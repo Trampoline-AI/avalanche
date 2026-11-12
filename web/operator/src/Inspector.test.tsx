@@ -1890,6 +1890,20 @@ describe("standard step run values", () => {
     );
   });
 
+  it("reads the result of a step its host reports as succeeded", async () => {
+    // Delta's step word for a finished step is `succeeded`, the local operator's `success`.
+    const getRunResult = vi.fn(async () => ({ total: 7 }));
+    renderRun({ status: "succeeded", stepIo }, { api: createApi({ getRunResult }) });
+
+    const output = screen.getByRole("region", { name: "Output" });
+    await waitFor(() => expect(output).toHaveTextContent("total"));
+    expect(getRunResult).toHaveBeenCalledWith(
+      snapshotFor().summary!.runId,
+      { visit: undefined, nodeId: node.nodeId },
+      expect.any(AbortSignal),
+    );
+  });
+
   it("falls back to the preview when the host has no accepted result", async () => {
     const getRunResult = vi.fn(async () => {
       throw new Error("Requested step or visit has no accepted result");

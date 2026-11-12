@@ -33,7 +33,9 @@ export function useStepResult(
     (signal: AbortSignal) => api.getRunResult!(runId!, { visit, nodeId: stepId }, signal),
     [api, runId, visit, stepId],
   );
-  const ready = Boolean(api.getRunResult && runId && stepId && node?.status === "success");
+  // A finished step: `success` on the local operator, `succeeded` on Delta.
+  const finished = node?.status === "success" || node?.status === "succeeded";
+  const ready = Boolean(api.getRunResult && runId && stepId && finished);
   const read = useRead(ready ? load : undefined);
   if (!ready) return undefined;
   if (read.error !== undefined) return { status: "unavailable", error: read.error };

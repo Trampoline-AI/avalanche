@@ -14,6 +14,8 @@ export type {
   StructuralBaseline,
 } from "./api";
 export type { RunResultTarget } from "./stepIo";
+// The shared result codec, for hosts whose result route returns it (Delta's `/result`).
+export { decodeRunResultValue } from "./stepIo";
 export type { EvaluationRecord, EvaluationResult } from "./evaluations";
 export { OperatorUi } from "./ui/OperatorUi";
 export type {
