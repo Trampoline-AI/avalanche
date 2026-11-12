@@ -158,21 +158,21 @@ from runtime.operator.operator import Operator
 op = Operator([sys.argv[1]], watch=False, schedule=False, state_db=sys.argv[2])
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
 parked = sys.argv[3] == 'parked'
-parent = op.start_run('gated_parent' if parked else 'call_parent',
-                      input={'id': 101, 'target': 'slow_child', 'journal': sys.argv[4]})
-until = time.monotonic() + 60
-while time.monotonic() < until:
-    with op._state_store.transaction() as connection:
-        row = connection.execute('SELECT child_run_id FROM run_waits WHERE parent_run_id=?',
-                                 (parent,)).fetchone()
-    if row is not None and op.get_run(row[0]).status.value == (
-            'waiting' if parked else 'running'):
-        print(json.dumps({'parent': parent, 'child': row[0]}), flush=True)
-        break
-    time.sleep(.02)
-else:
-    raise RuntimeError('parent did not park')
 try:
+    parent = op.start_run('gated_parent' if parked else 'call_parent',
+                          input={'id': 101, 'target': 'slow_child', 'journal': sys.argv[4]})
+    until = time.monotonic() + 60
+    while time.monotonic() < until:
+        with op._state_store.transaction() as connection:
+            row = connection.execute('SELECT child_run_id FROM run_waits WHERE parent_run_id=?',
+                                     (parent,)).fetchone()
+        if row is not None and op.get_run(row[0]).status.value == (
+                'waiting' if parked else 'running'):
+            print(json.dumps({'parent': parent, 'child': row[0]}), flush=True)
+            break
+        time.sleep(.02)
+    else:
+        raise RuntimeError('parent did not park')
     sys.stdin.read()
 finally:
     op.close()
