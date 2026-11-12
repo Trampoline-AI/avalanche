@@ -273,11 +273,13 @@ uv run ava state clear                   # delete every run (asks first)
 ```
 
 Machine runs additionally keep their key, visits, inbox, receipts and absolute
-timer deadlines in this database. A waiting machine re-arms its timers after a
+timer deadlines in this database, and all visits of an instance share one
+workspace folder. A waiting machine re-arms its timers after a
 restart; an overdue timer fires once. A visit interrupted in the middle of work
 has an unknown outcome and is not replayed automatically. Use
 `ava run retry RUN_ID --visit` to start a new visit in the same state, or
 `ava run cancel RUN_ID`. This does not resume arbitrary unfinished flow DAGs.
+A run parked on `ava.call` reattaches to its original child after a restart.
 See [state machines](docs/state-machines.md#run-locally).
 
 SQLite uses WAL and `synchronous=FULL`; accepted receipts and transitions commit
@@ -330,6 +332,8 @@ authentication; do not expose it to an untrusted network. A separately launched
 | GET | `/runs/{run_id}` | Snapshot with `summary`, node states, and topology |
 | POST | `/runs/{run_id}/cancel` | `200` acknowledging cancellation; poll for terminal state |
 | GET | `/runs/{run_id}/output` | Retained result value and file descriptors |
+| GET | `/runs/{run_id}/result` | Typed run, visit (`visit`) or step (`node_id`) result |
+| GET | `/runs/{run_id}/links` | Parent and child runs started by `ava.call` or `ava.start_run` |
 | GET | `/runs/{run_id}/activity` | Paginated log or node-event descriptors |
 
 Percent-encode run IDs and workflow selectors when placing them in URL paths.
@@ -552,6 +556,8 @@ uv add "avalanche-ai[lance,claude,openai]"
 ## Documentation
 
 - [DAG API](docs/dag-api.md)
+- [State machines and native calls](docs/state-machines.md)
+- [File references](docs/file-references.md)
 - [Agent steps](docs/agent-steps.md)
 - [Classifier steps](docs/classifier-steps.md)
 - [Data model and storage API](docs/data-model-api.md)

@@ -59,9 +59,18 @@ start both through the normal run path and resolve run IDs or named
 keys return the original run and ignore replacement non-key input/files; omitted
 `key=` keeps independent ordinary flow starts. Discovery exports `key_fields` for
 both kinds. The embedded runner refuses keyed workflows because it has no durable
-identity index; use `.test()` for isolated authoring or a run-capable host.
-This SDK commit supplies the declaration/discovery/test-host contract; CLI lookup
-and durable local/Delta key storage are host integration work, not credited here.
+identity index; use `.test()` for isolated authoring or a run-capable host such
+as `ava operator`.
+
+Key fields follow one portable contract (`avalanche.run_keys`) on the test host,
+the local operator and deployed hosts: `str`, `int`, `float`, `bool`, `None`,
+`UUID`, `date`, UTC `datetime`, enums (by value), tuples, sets and frozensets
+(sorted canonically, independent of the hash seed), plain nested models and
+plain unions or `Optional`. Existing list, dict and literal key shapes keep
+their bytes. The decorator refuses a key field with custom validators or
+serializers, aliases or alias generators, default factories, or an unsupported
+type or model configuration, and the error names the field. Normalize business
+values before the start and pass a plain identity field instead.
 
 ## Typed work events
 
@@ -110,6 +119,14 @@ into the target run before issuing a receipt, including deferred events. A host
 that has not implemented uploads must explicitly refuse them, never accept an
 unusable reference. The in-memory test host can bind locally registered references;
 it is not durable artifact storage.
+
+The local operator passes File and Workspace values to another run, as child
+input or in an event, by reference: the recipient binds the same file or folder,
+and nothing is restaged, exported or copied. Local references are not snapshots;
+the file or folder must stay on disk, as for flows. A replayed start or send
+binds nothing new. Event payloads, including deferred ones, are validated
+against the receiving model before acceptance; a missing reference or a
+mismatched file digest is rejected.
 
 An existing key is resolved after authorization and validation of key fields only.
 Replacement input/files are ignored, not retained or applied; only a new key needs
@@ -190,8 +207,11 @@ run ID and stop dependent work. Timeout leaves the child running. Self-instance
 waits (`child_run_self_wait`) and wait cycles (`child_run_wait_cycle`) are refused.
 Cancelling the caller cancels only runs it created, not keyed runs it attached
 to. The local operator stores waits and links in SQLite, restores parked callers
-after restart, and exposes both link directions with `ava run links RUN_ID --json`
-and `GET /api/v1/runs/RUN_ID/links`. No UI tree or Delta port is included yet.
+after restart (a crash or SIGINT/SIGTERM; stopping the operator cancels
+nothing), and exposes both link directions with `ava run links RUN_ID --json`
+and `GET /api/v1/runs/RUN_ID/links`. A child still executing at restart fails,
+and its caller receives that failure. The operator UI shows the run tree (see
+[Operator UI](#operator-ui)). Delta runs the same calls.
 
 `ava.start_run` returns `ava.RunStart(run_id, key, created, read_state)`. An
 unkeyed flow has `key=None`; a permanent key may resolve to an `expired` run
@@ -300,12 +320,14 @@ this form omits the machine name because the run already identifies it.
 `--key` is repeated for multiple key fields. Values use the ordinary flow-input
 JSON field grammar: numbers stay numbers, booleans stay booleans, and strings
 must be JSON quoted (for example `--key 'repo="acme/api"'`). `--data @event.json`
-reads a JSON payload from a file. It does not upload an artifact. Event bodies
-are JSON only: File/Workspace reference objects are explicitly refused.
-`ava run` retains the ordinary `--file FIELD=PATH` and `--workspace FIELD=DIR`
-input facilities. Captured input belongs to the original run, not to a visit's
-temporary directory. Repeating an existing key validates the key first, then
-returns the existing run without replacing its input or claiming new files.
+reads a JSON payload from a file. It does not upload an artifact; a declared
+File or Workspace field takes an existing reference, such as one returned by
+another run. `ava run` retains the ordinary `--file FIELD=PATH` and
+`--workspace FIELD=DIR` input facilities. Captured input belongs to the original
+run. All visits of an instance share one workspace folder, kept across operator
+restarts, so a later visit sees earlier edits, as flow steps do. Repeating an
+existing key validates the key first, then returns the existing run without
+replacing its input or claiming new files.
 
 Definition and run lists display a TYPE column (`flow` or `machine`); detail
 prints Kind. Machine definition detail includes states and key fields from
@@ -427,6 +449,12 @@ visit's steps; Logs shows its step logs, which the Logs tab also lists for the
 whole run, labelled by visit. Flow runs have the same tab with their steps,
 waits, retries and outcome.
 
+Selecting a visit's step shows its typed output in the step panel's Run I/O
+tab, read from the result route, as for a flow step. Under the run list, the
+selected run appears between its parents and its children (from `ava.call` and
+`ava.start_run`), with status and time ago; flow and machine runs look the same.
+A call or start node on the graph links to its child run.
+
 ### Run-owned transport
 
 The browser REST prefix is `/api/v1`. Start/list/show/cancel use the normal run
@@ -444,6 +472,8 @@ routes, not a separate machine start or list product. A run snapshot includes
   event facts. An empty page can still have a continuation.
 - `POST /runs/{run}/machine/visits:retry`: explicit interrupted-visit repair.
 - `POST /runs/{run}/machine/timers:fire-next`: dev-only timer control.
+- `GET /runs/{run}/result?visit=&node_id=`: typed run, visit or step result.
+- `GET /runs/{run}/links`: native parent and child links.
 
 The gRPC `ControlMachine` method carries these typed operations as JSON, next
 to ordinary `StartRun`, `CancelRun`, `GetRunSnapshot` and `ControlWait`. These
