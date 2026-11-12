@@ -622,20 +622,25 @@ def test_machine_file_and_workspace_inputs_belong_to_the_run_after_restart(tmp_p
         )
         assert readback.returncode == 0, readback.stderr
         assert RunResult.model_validate_json(readback.stdout).decode() == step_value
-        import httpx
+        import urllib.error
+        import urllib.request
 
         from runtime.operator.web import start_browser_server
 
         browser = start_browser_server(f"127.0.0.1:{port}", port=0)
+        base = f"http://{browser.host}:{browser.port}/api/v1/runs/{run_id}/result"
         try:
-            response = httpx.get(
-                f"http://{browser.host}:{browser.port}/api/v1/runs/{run_id}/result",
-                params={"visit": 1, "node_id": "inspect_artifacts_1"},
-            )
-            assert response.status_code == 200, response.text
-            assert response.json() == json.loads(readback.stdout)
-            pending = httpx.get(f"http://{browser.host}:{browser.port}/api/v1/runs/{run_id}/result")
-            assert pending.status_code == 409
+            with urllib.request.urlopen(
+                base + "?visit=1&node_id=inspect_artifacts_1", timeout=30
+            ) as response:
+                assert response.status == 200
+                assert json.loads(response.read()) == json.loads(readback.stdout)
+            try:
+                urllib.request.urlopen(base, timeout=30)
+            except urllib.error.HTTPError as pending:
+                assert pending.code == 409
+            else:
+                raise AssertionError("pending machine result must be 409")
         finally:
             browser.close()
         equivalent = subprocess.run(
