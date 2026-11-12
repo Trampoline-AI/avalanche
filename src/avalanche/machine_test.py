@@ -45,6 +45,7 @@ from .machine_nodes import MachineNode, execute_machine_node
 from .machine_waits import MachineWaits
 from .policies import MAX_GENERATION, Event, NonRetryableError, OutcomeUnknownError, event
 from .run_handle import RunHandle
+from .run_keys import canonical_json
 from .run_steps import RunNode, RunStart, RunTarget, operation_enabled
 from .runtime import BaseInput, RunContext
 from .runtime.providers import PROVIDERS
@@ -555,9 +556,7 @@ class InMemoryMachineHost:
 
     @staticmethod
     def _key(key: MachineKey) -> str:
-        return json.dumps(
-            key, sort_keys=True, ensure_ascii=False, separators=(",", ":"), allow_nan=False
-        )
+        return canonical_json(key)
 
     async def _start_run(
         self, target: str, input: BaseInput | dict[str, JsonValue] | None
