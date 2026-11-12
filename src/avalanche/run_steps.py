@@ -103,8 +103,10 @@ class RunWaitNode(WaitNode):
     def __init__(self, spec: WaitSpec, definition: RunTarget | None) -> None:
         super().__init__(spec, None)
         self.definition = definition
+
         def call_result(start: RunStart | None) -> RunResult | None:
             raise RuntimeError("Run waits require a run-capable scheduler host")
+
         call_result.__name__ = "call"
         self.fn = call_result
 
@@ -115,21 +117,33 @@ class RunWaitNode(WaitNode):
         if self.definition is None:
             return value
         from .machine import Machine
+
         if isinstance(self.definition, Machine):
             from functools import reduce
             from operator import or_
+
             self.definition()
-            models = tuple(dict.fromkeys(
-                self.definition.works[state.work].output_type
-                for state in self.definition.spec.states.values() if state.final
-                if self.definition.works[state.work].output_type is not None
-            ))
+            import inspect
+
+            models = []
+            for state in self.definition.spec.states.values():
+                if not state.final:
+                    continue
+                work = self.definition.works[state.work]
+                model = work.output_type
+                if model is None and isinstance(work.returns, NodeFuture):
+                    model = inspect.signature(
+                        work.returns.node.fn, eval_str=True
+                    ).return_annotation
+                if model is not None and model is not inspect.Signature.empty:
+                    models.append(model)
             return TypeAdapter(reduce(or_, models)).validate_python(value) if models else value
         flow = self.definition if isinstance(self.definition, Workflow) else self.definition()
         if flow.output_type is not None:
             return flow.validate_output(value)
         if isinstance(flow.returns, NodeFuture):
             import inspect
+
             signature = inspect.signature(flow.returns.node.fn, eval_str=True)
             annotation = signature.return_annotation
             if annotation is not inspect.Signature.empty:

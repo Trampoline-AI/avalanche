@@ -2151,14 +2151,14 @@ class Operator:
             _teardown_process_group(process, windows_job)
             with self._lock:
                 run = self._runs.get(run_id)
-                if run is not None and _machine_visit is None:
+                if run is not None and _machine_visit is None and not _resume:
                     self._forget_run_details_locked(run)
                     try:
                         with self._state_store.transaction() as connection:
                             RunsTable.discard_start(connection, run_id)
                     except (StateStoreError, sqlite3.Error) as exc:
                         failure.add_note(f"Removing the stored run also failed: {exc}")
-                if _machine_visit is None:
+                if _machine_visit is None and not _resume:
                     self._runs.pop(run_id, None)
                     self._run_created_sequences.pop(run_id, None)
                     self._run_revisions.pop(run_id, None)
@@ -2366,6 +2366,11 @@ class Operator:
                     "children": RunCallsTable.links(connection, run_id, parents=False)}
 
     def cancel_run(self, run_id: str) -> None:
+        run = self.get_run(run_id)
+        if run is None or run.status in {
+            RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED
+        }:
+            return
         with self._state_store.transaction() as connection:
             children = RunCallsTable.links(connection, run_id, parents=False)
         self._cancel_run_process(run_id)

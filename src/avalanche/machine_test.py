@@ -436,8 +436,6 @@ class MachineTest:
             if answer.kind == "fail" or self._attempts[ref.future_id] >= MAX_GENERATION:
                 raise OutcomeUnknownError("reconciliation failed or generation ceiling")
         if isinstance(node, RunNode):
-            if node.definition is not None:
-                self.host.register(node.definition)
             args = [_resolve_to_ref(value, self._values) for value in ref.args]
             kwargs = {
                 name: _resolve_to_ref(value, self._values) for name, value in ref.kwargs.items()
@@ -447,6 +445,8 @@ class MachineTest:
             bound.apply_defaults()
             if not operation_enabled(bound.arguments["when"]):
                 return None
+            if node.definition is not None:
+                self.host.register(node.definition)
             target = TypeAdapter(str).validate_python(bound.arguments["target"], strict=True)
             address = (self.handle.run_id, self._visit, ref.future_id)
             if address not in self.host.starts:

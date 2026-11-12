@@ -274,6 +274,21 @@ def has_child(value: CallInput) -> bool:
     return value.depth > 0
 
 
+@ava.step
+def large_child_text() -> str:
+    return "x" * (3 * 1024 * 1024)
+
+
+@ava.workflow
+def large_child():
+    return large_child_text()
+
+
+@ava.workflow
+def large_call_parent():
+    return ava.call(large_child)
+
+
 @ava.workflow(input=CallInput, output=CallOutput)
 def call_parent():
     return ava.call(call_target(ava.input), ava.input)
@@ -309,6 +324,17 @@ def flow_call_machine():
     return done
 
 
+@ava.machine(input=CallInput, key=("id",))
+def failing_child_machine():
+    done = ava.state(echo_result, initial=True, final=True)
+    return done
+
+
+@ava.workflow(input=Ticket)
+def lifecycle_call_parent():
+    return ava.call(approval, ava.input)
+
+
 @ava.workflow(input=CallInput)
 def self_wait_visit():
     return ava.call(self_wait_machine, ava.input)
@@ -340,4 +366,3 @@ def cycle_a():
 def cycle_b():
     done = ava.state(cycle_b_visit, initial=True, final=True)
     return done
-

@@ -43,9 +43,15 @@ class RunCallsTable:
             f"SELECT * FROM run_links WHERE {column}=? ORDER BY parent_run_id, node_id",
             (run_id,),
         ).fetchall()
-        return [RunLink(parent_run_id=row["parent_run_id"], node_id=row["node_id"],
-                        child_run_id=row["child_run_id"], created=bool(row["created"]))
-                for row in rows]
+        return [
+            RunLink(
+                parent_run_id=row["parent_run_id"],
+                node_id=row["node_id"],
+                child_run_id=row["child_run_id"],
+                created=bool(row["created"]),
+            )
+            for row in rows
+        ]
 
     @staticmethod
     def arm(connection: sqlite3.Connection, request: MachineStepRequest) -> None:
@@ -65,12 +71,17 @@ class RunCallsTable:
             waiting.setdefault(row[0], set()).add(row[1])
         check_run_wait(request.parent_run_id, request.child_run_id, waiting)
         from avalanche.policies import WaitSpec
+
         assert isinstance(request.spec, WaitSpec)
         seconds = request.spec.timeout_seconds
         connection.execute(
             "INSERT INTO run_waits VALUES (?, ?, ?, ?, NULL)",
-            (request.parent_run_id, request.node_id, request.child_run_id,
-             time.time() + seconds if seconds is not None else None),
+            (
+                request.parent_run_id,
+                request.node_id,
+                request.child_run_id,
+                time.time() + seconds if seconds is not None else None,
+            ),
         )
 
     @staticmethod
@@ -85,8 +96,11 @@ class RunCallsTable:
 
     @staticmethod
     def parents(connection: sqlite3.Connection) -> set[str]:
-        return {row[0] for row in connection.execute(
-            "SELECT DISTINCT w.parent_run_id FROM run_waits w "
-            "JOIN run_nodes n ON n.run_id=w.parent_run_id AND n.node_id=w.node_id "
-            "WHERE n.status='running'"
-        ).fetchall()}
+        return {
+            row[0]
+            for row in connection.execute(
+                "SELECT DISTINCT w.parent_run_id FROM run_waits w "
+                "JOIN run_nodes n ON n.run_id=w.parent_run_id AND n.node_id=w.node_id "
+                "WHERE n.status='running'"
+            ).fetchall()
+        }

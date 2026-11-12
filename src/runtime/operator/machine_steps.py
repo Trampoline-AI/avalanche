@@ -16,9 +16,11 @@ from avalanche.machine_host import (
 )
 from avalanche.machine_nodes import MachineNode
 from avalanche.policies import WaitSpec
-from avalanche.results import RunResult
+from avalanche.results import MAX_RESULT_VALUE_JSON_BYTES, RunResult
 from avalanche.run_steps import RunNode, RunOpSpec, RunStart, RunWaitNode, operation_enabled
 from avalanche.runtime import RunContext
+
+MAX_HOST_STEP_BYTES = MAX_RESULT_VALUE_JSON_BYTES + 4096
 
 type HostStepOutput = RunStart | MachineEventReceipt | RunResult | None
 
@@ -49,10 +51,14 @@ class MachineStepRequest(BaseModel):
         bound.apply_defaults()
         if isinstance(node, RunWaitNode):
             start = bound.arguments["start"]
-            return cls(node_id=context.node_id, spec=node.spec,
-                       parent_run_id=context.run_id,
-                       child_run_id=start.run_id if start is not None else "",
-                       enabled=start is not None, idempotency_key=context.step_key)
+            return cls(
+                node_id=context.node_id,
+                spec=node.spec,
+                parent_run_id=context.run_id,
+                child_run_id=start.run_id if start is not None else "",
+                enabled=start is not None,
+                idempotency_key=context.step_key,
+            )
         if not operation_enabled(bound.arguments["when"]):
             return cls(
                 node_id=context.node_id,

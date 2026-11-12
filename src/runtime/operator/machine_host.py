@@ -37,7 +37,14 @@ from .machine_validation import (
     MachineValidationProcessError,
     validate_native,
 )
-from .models import RunState, RunStatus, TriggerKind, WorkflowDescriptor, WorkflowTopology
+from .models import (
+    NodeStatus,
+    RunState,
+    RunStatus,
+    TriggerKind,
+    WorkflowDescriptor,
+    WorkflowTopology,
+)
 from .registry import UnknownWorkflow
 from .source import resolve_live_source
 from .state.machines import (
@@ -938,9 +945,12 @@ class MachineHost:
         else:
             record.reason = "outcome_unknown"
             visit.disposition = "indeterminate"
+            work = record.spec.work_graphs[record.spec.states[record.state].work]
+            run = self.op.get_run(record.run_id)
+            assert run is not None
             known_call_failure = any(
-                "child_run_" in (node.error or "")
-                for node in self.op.get_run(record.run_id).nodes.values()
+                run.nodes[f"v{record.visit}.{node_id}"].status == NodeStatus.FAILED
+                for node_id, wait in work.node_waits.items() if wait.kind == "run"
             )
             self._commit(
                 record,
@@ -1111,6 +1121,14 @@ class MachineHost:
                         if row["response_json"] is not None else None)
             if response is None:
                 child = self.op.get_run(row["child_run_id"])
+                assert child is not None
+                if child.status == RunStatus.WAITING:
+                    with self.op._state_store.transaction() as connection:
+                        machine = MachinesTable.load(connection, child.run_id)
+                    if machine is not None and machine.reason == "outcome_unknown":
+                        self._commit(machine, lambda connection: None, RunStatus.FAILED)
+                        child = self.op.get_run(child.run_id)
+                        assert child is not None
                 code = None
                 output = None
                 if child.status == RunStatus.SUCCESS:

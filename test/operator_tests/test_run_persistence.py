@@ -1935,8 +1935,23 @@ def test_a_connected_client_reads_stored_runs_from_the_restarted_operator(flows,
         second = _operator(flows, state_db)
         server = serve_operator(second, port=port, block=False)
         try:
-            _wait_until(lambda: provider.ping())
-            after = provider.get_run(run_id)
+            from runtime.operator.client import OperatorCallError
+            after = None
+
+            def read_restarted_run():
+                nonlocal after
+                try:
+                    after = provider.get_run(run_id)
+                except OperatorCallError as exc:
+                    if exc.status != grpc.StatusCode.UNAVAILABLE:
+                        raise
+                    return False
+                return after.operator_instance_id != old_instance
+
+            # ping() can still report the old channel's recent success. Wait for
+            # an actual snapshot from the new instance, not that cached health bit.
+            _wait_until(read_restarted_run)
+            assert after is not None
             assert after.operator_instance_id == second.operator_instance_id != old_instance
             assert after.status is RunStatus.SUCCESS
             assert _node_view(after) == _node_view(before)

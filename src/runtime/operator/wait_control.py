@@ -188,11 +188,11 @@ def serve_wait_controls(
                 + ([machine_reader] if machine_reader is not None else [])
             )
             if machine_reader is not None and machine_reader in ready:
-                from .machine_steps import MachineStepResponse
+                from .machine_steps import MAX_HOST_STEP_BYTES, MachineStepResponse
 
                 machine_pending.resolve(
                     MachineStepResponse.model_validate_json(
-                        machine_reader.recv_bytes(MAX_CONTROL_BYTES)
+                        machine_reader.recv_bytes(MAX_HOST_STEP_BYTES)
                     )
                 )
                 continue

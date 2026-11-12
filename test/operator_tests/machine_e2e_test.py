@@ -71,11 +71,28 @@ def test_operator_native_calls(tmp_path):
             assert len(links) == 1 and links[0].created
             assert op.run_links(links[0].child_run_id)["parents"][0].parent_run_id == run
 
-        failed = op.start_run("call_parent", input={"id": 20, "fail": True})
-        terminal(failed)
-        assert op.get_run(failed).status == RunStatus.FAILED
-        assert any("child_run_failed" in (node.error or "")
-                   for node in op.get_run(failed).nodes.values())
+        large = op.start_run("large_call_parent")
+        terminal(large)
+        assert op.get_run(large).status == RunStatus.SUCCESS
+        assert len(decode_workflow_result(op._get_run_result_payload(large))) == 3 * 1024 * 1024
+
+        for target in ("echo_child", "failing_child_machine"):
+            failed = op.start_run(
+                "call_parent", input={"id": 20, "fail": True, "target": target}
+            )
+            terminal(failed)
+            assert op.get_run(failed).status == RunStatus.FAILED
+            assert any("child_run_failed" in (node.error or "")
+                       for node in op.get_run(failed).nodes.values())
+
+        lifecycle = op.start_run("lifecycle_call_parent", input={
+            "ticket": 70, "journal": str(tmp_path / "lifecycle-visits")})
+        lifecycle_link = wait_for(lambda: op.run_links(lifecycle)["children"])[0]
+        wait_for(lambda: op.get_run(lifecycle_link.child_run_id).status == RunStatus.WAITING)
+        assert op.get_run(lifecycle).status == RunStatus.RUNNING
+        op._machine_host.send(lifecycle_link.child_run_id, "approved", {}, "close-child")
+        terminal(lifecycle)
+        assert op.get_run(lifecycle).status == RunStatus.SUCCESS
 
         timed = op.start_run("timeout_parent", input={"id": 30})
         terminal(timed)
@@ -83,6 +100,15 @@ def test_operator_native_calls(tmp_path):
                    for node in op.get_run(timed).nodes.values())
         timed_child = op.run_links(timed)["children"][0].child_run_id
         wait_for(lambda: op.get_run(timed_child).status == RunStatus.RUNNING)
+        op.cancel_run(timed)  # Cancelling a terminal timeout must not cancel its live child.
+        assert op.get_run(timed_child).status == RunStatus.RUNNING
+
+        cancelled = op.start_run("call_parent", input={"id": 31, "target": "slow_child"})
+        cancel_child = wait_for(lambda: op.run_links(cancelled)["children"])[0].child_run_id
+        op.cancel_run(cancel_child)
+        terminal(cancelled)
+        assert any("child_run_cancelled" in (node.error or "")
+                   for node in op.get_run(cancelled).nodes.values())
 
         created = op.start_run("call_parent", input={"id": 40, "target": "slow_child"})
         link = wait_for(lambda: op.run_links(created)["children"])[0]
