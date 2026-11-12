@@ -15,6 +15,8 @@ import {
   ClassifierQuestions,
 } from "./ClassifierDetails";
 import { StepInterfacePanel } from "./StepInterfacePanel";
+import { parseNullableSchema } from "./stepInterface";
+import { workflowInputFields } from "./workflowInput";
 
 const declaration: ClassifierDeclaration = {
   runtime: { model: "jev-latest", timeout: 10 },
@@ -207,8 +209,10 @@ it("exposes nested serialized fields, nullable variants, constraints, and finite
   expect(state.getByRole("group", { name: "text minLength" })).toHaveTextContent("2");
   fireEvent.click(state.getByRole("button", { name: "Expand owner schema" }));
   expect(state.getByRole("group", { name: "owner default" })).toHaveTextContent("null");
-  expect(state.getByRole("group", { name: "anyOf 1 schema" })).toHaveTextContent("string");
-  expect(state.getByRole("group", { name: "anyOf 2 schema" })).toHaveTextContent("null");
+  // A nullable field reads as one type; its plain alternatives get no rows of their own.
+  const owner = state.getByRole("group", { name: "owner schema" });
+  expect(owner).toHaveTextContent("string | null");
+  expect(within(owner).getAllByRole("group")).toHaveLength(1);
   fireEvent.click(state.getByRole("button", { name: "Expand children schema" }));
   fireEvent.click(state.getByRole("button", { name: "Expand Items schema" }));
   expect(state.getByText(/Recursive reference/)).toBeVisible();
@@ -265,6 +269,92 @@ it("shows unresolved and external schema references without following them", () 
   fireEvent.click(screen.getByRole("button", { name: "Expand remote schema" }));
   expect(screen.getByText(/Unresolved local reference/)).toBeVisible();
   expect(screen.getByText(/External reference; not fetched/)).toBeVisible();
+});
+
+it("reads schema types as their alternatives and keeps only titles an author wrote", () => {
+  // The shape Pydantic emits: every field titled after its name, models under $defs.
+  const jsonSchema = parseNullableSchema(
+    {
+      title: "TripRequest",
+      type: "object",
+      properties: {
+        traveller: { anyOf: [{ $ref: "#/$defs/Traveller" }, { type: "null" }], default: null },
+        booking_reference: {
+          anyOf: [{ type: "string" }, { type: "null" }],
+          default: null,
+          title: "Booking Reference",
+        },
+        notes: {
+          anyOf: [{ type: "string" }, { type: "null" }],
+          default: null,
+          title: "Notes for the agent",
+        },
+        seat: {
+          anyOf: [{ enum: ["aisle", "window"], type: "string" }, { type: "null" }],
+          title: "Seat",
+        },
+        stops: { type: "array", items: { $ref: "#/$defs/Stop" }, title: "Stops" },
+        tags: { type: "array", items: { type: "string" }, title: "Tags" },
+        extras: { type: "object", additionalProperties: { type: "integer" }, title: "Extras" },
+        contact: { anyOf: [{ $ref: "#/$defs/Traveller" }, { $ref: "#/$defs/Stop" }] },
+      },
+      $defs: {
+        Traveller: {
+          title: "Traveller",
+          type: "object",
+          properties: { name: { type: "string", title: "Name" } },
+          required: ["name"],
+        },
+        Stop: {
+          title: "Stop",
+          type: "object",
+          properties: { city: { type: "string", title: "City" } },
+        },
+      },
+    },
+    "schema",
+  )!;
+  const types = Object.fromEntries(
+    workflowInputFields({ typeName: "TripRequest", jsonSchema, consumerNodeIds: [] }).map(
+      (field) => [field.name, field.typeLabel],
+    ),
+  );
+  expect(types).toEqual({
+    traveller: "Traveller | null",
+    booking_reference: "string | null",
+    notes: "string | null",
+    seat: '"aisle" | "window" | null',
+    stops: "list[Stop]",
+    tags: "list[string]",
+    extras: "dict[string, integer]",
+    contact: "Traveller | Stop",
+  });
+
+  render(<ClassifierDefinition declaration={{ ...declaration, input_schema: jsonSchema }} />);
+  fireEvent.click(screen.getByRole("button", { name: "Expand state schema" }));
+  // The schema tree and the field list name each type the same way.
+  for (const [name, type] of Object.entries(types)) {
+    const row = screen.getByRole("group", { name: `${name} schema` });
+    expect(within(row).getByText(type, { selector: "code" })).toBeVisible();
+  }
+  expect(screen.queryByText("Booking Reference")).toBeNull();
+  expect(screen.getByRole("group", { name: "notes schema" })).toHaveTextContent(
+    "Notes for the agent",
+  );
+  // Types that say everything have nothing to open.
+  for (const name of ["seat", "tags", "extras"])
+    expect(screen.queryByRole("button", { name: `Expand ${name} schema` })).toBeNull();
+  // An optional model opens straight onto its fields.
+  fireEvent.click(screen.getByRole("button", { name: "Expand traveller schema" }));
+  const traveller = within(screen.getByRole("group", { name: "traveller schema" }));
+  expect(traveller.getByRole("group", { name: "name schema" })).toHaveTextContent("string");
+  expect(traveller.queryByRole("group", { name: "Traveller schema" })).toBeNull();
+  // Several models are told apart by name, each opening onto its own fields.
+  fireEvent.click(screen.getByRole("button", { name: "Expand contact schema" }));
+  const contact = within(screen.getByRole("group", { name: "contact schema" }));
+  fireEvent.click(contact.getByRole("button", { name: "Expand Stop schema" }));
+  expect(contact.getByRole("group", { name: "city schema" })).toBeVisible();
+  expect(screen.queryByText(/anyOf/)).toBeNull();
 });
 
 it("distinguishes an omitted Noul criterion from an explicitly null criterion", () => {

@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- The operator UI's schema view reads types the way they are written:
+  `string | null`, `Address | null`, `list[Address]`, `"aisle" | "window"`,
+  `dict[string, integer]`. Alternatives no longer appear as `Union` with
+  `anyOf 1` / `anyOf 2` rows; an optional model opens straight onto its fields.
+  A generated title that only repeats the field name is hidden, and a field's
+  `default` is separated from its value. The input field list uses the same
+  notation.
+
 ## 0.20.9
 
 - Store local flow and machine keys with the shared UTF-8 key serializer, and

@@ -1,4 +1,5 @@
 import { isUnknownRecord } from "./guards";
+import { referenceName, schemaTypeLabel } from "./schemaType";
 import type { FlowInfoMsg, RunInputMsg, TriggerKind } from "./model";
 import {
   parseJsonValue,
@@ -114,22 +115,6 @@ export function decodeWorkflowInputDeclaration(
   };
 }
 
-function referenceName(reference: string): string {
-  return reference.split("/").at(-1) || reference;
-}
-
-function typeLabel(schema: Schema): string {
-  if (typeof schema === "boolean") return "any";
-  if (schema.$ref !== undefined) return referenceName(schema.$ref);
-  if (schema.enum) return schema.enum.map((item) => JSON.stringify(item)).join(" | ");
-  if (schema.anyOf) return schema.anyOf.map(typeLabel).join(" | ");
-  if (schema.type === "array" && schema.items !== undefined && !Array.isArray(schema.items)) {
-    return `list[${typeLabel(schema.items)}]`;
-  }
-  if (Array.isArray(schema.type)) return schema.type.join(" | ");
-  return schema.type ?? "any";
-}
-
 /** List the declared fields in schema order with their types, defaults and descriptions. */
 export function workflowInputFields(
   declaration: WorkflowInputDeclaration,
@@ -145,7 +130,7 @@ export function workflowInputFields(
           : { kind: "computed" };
     return {
       name,
-      typeLabel: typeLabel(schema),
+      typeLabel: schemaTypeLabel(schema, name),
       default: fieldDefault,
       description: property?.description,
       schema,

@@ -1,6 +1,13 @@
 import { useId, useMemo, useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 
+import {
+  authoredTitle,
+  listsEnumValues,
+  restatesName,
+  schemaTypeLabel,
+  unionMembers,
+} from "./schemaType";
 import type { JsonSchema, Schema, StepInterface, StepOutput } from "./stepInterface";
 import { ValueView } from "./ValueView";
 
@@ -9,6 +16,8 @@ type SchemaChild = {
   path: string;
   schema: Schema;
   required?: boolean;
+  /** The parent's type label already names this child, so it is listed only for its details. */
+  named?: boolean;
 };
 
 function schemaChildren(schema: JsonSchema, includeDefinitions = false): SchemaChild[] {
@@ -32,31 +41,41 @@ function schemaChildren(schema: JsonSchema, includeDefinitions = false): SchemaC
       });
     }
   }
-  const arrays: [string, Schema[] | undefined][] = [
+  const alternatives: [string, Schema[] | undefined][] = [
     ["anyOf", schema.anyOf],
     ["oneOf", schema.oneOf],
     ["allOf", schema.allOf],
-    ["prefixItems", schema.prefixItems],
   ];
-  for (const [keyword, schemas] of arrays) {
+  for (const [keyword, schemas] of alternatives) {
     schemas?.forEach((value, index) =>
       children.push({
-        label: `${keyword === "prefixItems" ? "Item" : keyword} ${index + 1}`,
+        // An alternative is known by its type, never by its position in the keyword.
+        label: schemaTypeLabel(value),
         path: `${keyword}/${index}`,
         schema: value,
+        named: true,
       }),
     );
   }
+  schema.prefixItems?.forEach((value, index) =>
+    children.push({
+      label: `Item ${index + 1}`,
+      path: `prefixItems/${index}`,
+      schema: value,
+      named: true,
+    }),
+  );
   if (Array.isArray(schema.items)) {
     schema.items.forEach((value, index) =>
       children.push({
         label: `Item ${index + 1}`,
         path: `items/${index}`,
         schema: value,
+        named: true,
       }),
     );
   } else if (schema.items !== undefined) {
-    children.push({ label: "Items", path: "items", schema: schema.items });
+    children.push({ label: "Items", path: "items", schema: schema.items, named: true });
   }
   const nested: [string, string, Schema | undefined][] = [
     ["additionalProperties", "Additional properties", schema.additionalProperties],
@@ -76,6 +95,9 @@ function schemaChildren(schema: JsonSchema, includeDefinitions = false): SchemaC
         label,
         path,
         schema: value,
+        // `dict[string, X]` already names the value type.
+        named:
+          path === "additionalProperties" && !schema.properties && typeof value !== "boolean",
       });
   }
   return children;
@@ -92,22 +114,6 @@ function schemaIndex(root: JsonSchema): ReadonlyMap<string, Schema> {
   }
   visit(root, "#");
   return index;
-}
-
-function schemaType(schema: Schema): string {
-  if (typeof schema === "boolean") return schema ? "Any JSON" : "No values allowed";
-  if (schema.type) return Array.isArray(schema.type) ? schema.type.join(" | ") : schema.type;
-  if (schema.$ref !== undefined)
-    return (
-      schema.$ref.split("/").at(-1)?.replace(/~1/g, "/").replace(/~0/g, "~") || "Reference"
-    );
-  if (schema.anyOf) return "Union";
-  if (schema.oneOf) return "Exactly one variant";
-  if (schema.allOf) return "All constraints";
-  if (schema.properties) return "object";
-  if (schema.items !== undefined || schema.prefixItems) return "array";
-  if (schema.enum) return "enum";
-  return "Any JSON";
 }
 
 const STRUCTURAL_KEYWORDS: Record<string, true> = {
@@ -138,6 +144,155 @@ const STRUCTURAL_KEYWORDS: Record<string, true> = {
   else: true,
 };
 
+/**
+ * What expanding a schema adds to its one-line type: keyword values the type does not
+ * show, and nested schemas that have details of their own. `typeListsValues` is false
+ * where the line shows a model name in place of the schema's own enum or const values.
+ */
+function schemaDetails(schema: JsonSchema, typeListsValues = true) {
+  const annotations = Object.entries(schema).filter(([key]) => {
+    if (key === "required")
+      return schema.required?.some((name) => !Object.hasOwn(schema.properties ?? {}, name));
+    if (Object.hasOwn(STRUCTURAL_KEYWORDS, key)) return false;
+    if (typeListsValues && key === "const") return false;
+    if (typeListsValues && key === "enum") return !listsEnumValues(schema);
+    return true;
+  });
+  const children = schemaChildren(schema).filter(
+    (child) => !child.named || hasDetails(child.schema),
+  );
+  return { annotations, children };
+}
+
+function hasDetails(schema: Schema, typeListsValues = true): boolean {
+  if (typeof schema === "boolean") return false;
+  if (schema.description || schema.$ref !== undefined) return true;
+  const { annotations, children } = schemaDetails(schema, typeListsValues);
+  return annotations.length > 0 || children.length > 0;
+}
+
+function referenceTarget(
+  schema: JsonSchema,
+  index: ReadonlyMap<string, Schema>,
+): Schema | undefined {
+  const reference = schema.$ref;
+  if (reference !== "" && !reference?.startsWith("#")) return undefined;
+  try {
+    return index.get(reference === "" ? "#" : decodeURIComponent(reference));
+  } catch {
+    // An invalid URI fragment is displayed as unresolved, never fetched.
+    return undefined;
+  }
+}
+
+/**
+ * The schema a plain reference stands for. Pydantic stores nested model bodies in
+ * `$defs`; their fields show directly under the referencing field, not as a second
+ * "Reference target" model. A reference back to a schema already open stays a reference.
+ */
+function inlinedReference(
+  schema: Schema,
+  index: ReadonlyMap<string, Schema>,
+  ancestors: readonly Schema[],
+): Schema | undefined {
+  if (typeof schema === "boolean") return undefined;
+  if (!Object.keys(schema).every((key) => ["$ref", "$defs", "definitions"].includes(key)))
+    return undefined;
+  const referenced = referenceTarget(schema, index);
+  if (referenced === undefined || referenced === schema || ancestors.includes(referenced))
+    return undefined;
+  return referenced;
+}
+
+const isNull = (schema: Schema) => typeof schema !== "boolean" && schema.type === "null";
+
+/** The expanded body of a schema: its description, keyword values and nested schemas. */
+function SchemaDetails({
+  label,
+  schema,
+  index,
+  ancestors,
+  typeListsValues,
+}: {
+  label: string;
+  schema: JsonSchema;
+  index: ReadonlyMap<string, Schema>;
+  ancestors: readonly Schema[];
+  typeListsValues: boolean;
+}) {
+  const { annotations, children } = schemaDetails(schema, typeListsValues);
+  const reference = schema.$ref;
+  const referenced = referenceTarget(schema, index);
+  const recursive =
+    referenced !== undefined && (referenced === schema || ancestors.includes(referenced));
+  const within = [...ancestors, schema];
+  // `Model | null` opens straight onto the model: one alternative has anything to show.
+  const alternatives = unionMembers(schema)?.filter((member) => !isNull(member));
+  const only = alternatives?.length === 1 ? alternatives[0] : undefined;
+  const optional =
+    only !== undefined && typeof only !== "boolean" && hasDetails(only)
+      ? (inlinedReference(only, index, within) ?? (only.$ref === undefined ? only : undefined))
+      : undefined;
+  return (
+    <>
+      {schema.description && (
+        <p className="m-0 whitespace-pre-wrap text-secondary">{schema.description}</p>
+      )}
+      {annotations.map(([key, value]) => (
+        <div key={key} className="min-w-0" role="group" aria-label={`${label} ${key}`}>
+          <span className="mr-1.5 font-mono text-[9px] text-muted">{key}</span>{" "}
+          <ValueView value={value} jsonOnly />
+        </div>
+      ))}
+      {reference !== undefined && (
+        <div className="min-w-0">
+          <p className="m-0 font-mono text-[10px] text-muted">{reference}</p>
+          {referenced === undefined ? (
+            <p className="mt-1 mb-0 text-muted">
+              {reference.startsWith("#")
+                ? "Unresolved local reference."
+                : "External reference; not fetched."}
+            </p>
+          ) : recursive ? (
+            <p className="mt-1 mb-0 text-muted">
+              Recursive reference; schema already shown above.
+            </p>
+          ) : (
+            <div className="mt-2">
+              <SchemaNode
+                label="Reference target"
+                schema={referenced}
+                index={index}
+                ancestors={within}
+              />
+            </div>
+          )}
+        </div>
+      )}
+      {optional !== undefined && typeof optional !== "boolean" ? (
+        <SchemaDetails
+          label={label}
+          schema={optional}
+          index={index}
+          ancestors={[...within, only!]}
+          typeListsValues={optional === only}
+        />
+      ) : (
+        children.map((child) => (
+          <SchemaNode
+            key={child.path}
+            label={child.label}
+            schema={child.schema}
+            required={child.required}
+            index={index}
+            ancestors={within}
+          />
+        ))
+      )}
+    </>
+  );
+}
+
 function SchemaNode({
   label,
   schema,
@@ -151,39 +306,14 @@ function SchemaNode({
   index: ReadonlyMap<string, Schema>;
   ancestors: readonly Schema[];
   required?: boolean;
+  /** The declared type, where the schema alone does not name it. */
   typeName?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const detailsId = useId();
   const object = typeof schema === "boolean" ? undefined : schema;
-  const children = object ? schemaChildren(object) : [];
-  const annotations = object
-    ? Object.entries(object).filter(
-        ([key]) =>
-          !Object.hasOwn(STRUCTURAL_KEYWORDS, key) ||
-          (key === "required" &&
-            object.required?.some((name) => !Object.hasOwn(object.properties ?? {}, name))),
-      )
-    : [];
-  const reference = object?.$ref;
-  let referenced: Schema | undefined;
-  if (reference === "" || reference?.startsWith("#")) {
-    try {
-      referenced = index.get(reference === "" ? "#" : decodeURIComponent(reference));
-    } catch {
-      // An invalid URI fragment is displayed as unresolved, never fetched.
-    }
-  }
-  const recursive =
-    referenced !== undefined && (referenced === schema || ancestors.includes(referenced));
-  // Pydantic stores nested model bodies in $defs. Show their fields directly
-  // under the referencing field, not as a second "Reference target" model.
-  if (
-    object &&
-    referenced !== undefined &&
-    !recursive &&
-    Object.keys(object).every((key) => ["$ref", "$defs", "definitions"].includes(key))
-  ) {
+  const referenced = inlinedReference(schema, index, ancestors);
+  if (referenced !== undefined) {
     return (
       <SchemaNode
         label={label}
@@ -191,14 +321,23 @@ function SchemaNode({
         index={index}
         ancestors={[...ancestors, schema]}
         required={required}
-        typeName={typeName}
+        typeName={typeName ?? schemaTypeLabel(schema)}
       />
     );
   }
-  const expandable = Boolean(
-    object?.description || reference !== undefined || children.length || annotations.length,
-  );
-  const type = schemaType(schema);
+  // A type name that is the label itself says nothing; show the schema's own type.
+  const named = typeName !== undefined && typeName !== label;
+  const own = schemaTypeLabel(schema, label);
+  // Alone on a row, "any" and "never" are spelled out.
+  const type = named
+    ? typeName
+    : own === "any"
+      ? "Any JSON"
+      : own === "never"
+        ? "No values allowed"
+        : own;
+  const title = authoredTitle(schema, label);
+  const expandable = hasDetails(schema, !named);
   return (
     <div
       role="group"
@@ -226,66 +365,27 @@ function SchemaNode({
         )}
         <div className="min-w-0 flex-1">
           <strong className="font-semibold">{label}</strong>
-          <code className="ml-2 font-mono text-[10px] text-muted">
-            {typeName || object?.title || type}
-            {(typeName || object?.title) && type !== (typeName || object?.title)
-              ? ` · ${type}`
-              : ""}
-          </code>
+          <code className="ml-2 font-mono text-[10px] text-muted">{type}</code>
+          {title !== undefined && !restatesName(title, type) && (
+            <span className="ml-2 text-[10px] text-secondary">{title}</span>
+          )}
         </div>
         {required !== undefined && (
           <span className="text-[9px] text-muted">{required ? "Required" : "Optional"}</span>
         )}
       </div>
-      {expanded && (
+      {expanded && object && (
         <div
           id={detailsId}
           className="mt-2 ml-1.5 grid min-w-0 gap-2 border-l border-line pl-3"
         >
-          {object?.description && (
-            <p className="m-0 whitespace-pre-wrap text-secondary">{object.description}</p>
-          )}
-          {annotations.map(([key, value]) => (
-            <div key={key} className="min-w-0" role="group" aria-label={`${label} ${key}`}>
-              <span className="font-mono text-[9px] text-muted">{key}</span>
-              <ValueView value={value} jsonOnly />
-            </div>
-          ))}
-          {reference !== undefined && (
-            <div className="min-w-0">
-              <p className="m-0 font-mono text-[10px] text-muted">{reference}</p>
-              {referenced === undefined ? (
-                <p className="mt-1 mb-0 text-muted">
-                  {reference.startsWith("#")
-                    ? "Unresolved local reference."
-                    : "External reference; not fetched."}
-                </p>
-              ) : recursive ? (
-                <p className="mt-1 mb-0 text-muted">
-                  Recursive reference; schema already shown above.
-                </p>
-              ) : (
-                <div className="mt-2">
-                  <SchemaNode
-                    label="Reference target"
-                    schema={referenced}
-                    index={index}
-                    ancestors={[...ancestors, schema]}
-                  />
-                </div>
-              )}
-            </div>
-          )}
-          {children.map((child) => (
-            <SchemaNode
-              key={child.path}
-              label={child.label}
-              schema={child.schema}
-              required={child.required}
-              index={index}
-              ancestors={[...ancestors, schema]}
-            />
-          ))}
+          <SchemaDetails
+            label={label}
+            schema={object}
+            index={index}
+            ancestors={ancestors}
+            typeListsValues={!named}
+          />
         </div>
       )}
     </div>
