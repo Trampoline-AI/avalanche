@@ -71,6 +71,22 @@ def test_operator_native_calls(tmp_path):
             assert len(links) == 1 and links[0].created
             assert op.run_links(links[0].child_run_id)["parents"][0].parent_run_id == run
 
+        # A retained key can outlive its result: fail the call, not the host owner.
+        from runtime.operator.state.results import RunResultTable
+        expired = op.start_run("keyed_echo_child", input={"id": 19})
+        terminal(expired)
+        with op._state_store.transaction() as connection:
+            stored = RunResultTable.delete(connection, expired)
+        assert stored is not None
+        op._result_store.discard(stored)
+        unavailable = op.start_run(
+            "call_parent", input={"id": 19, "target": "keyed_echo_child"}
+        )
+        terminal(unavailable)
+        assert op.get_run(unavailable).status == RunStatus.FAILED
+        assert any("child_run_failed" in (node.error or "") and expired in node.error
+                   for node in op.get_run(unavailable).nodes.values())
+
         large = op.start_run("large_call_parent")
         terminal(large)
         assert op.get_run(large).status == RunStatus.SUCCESS

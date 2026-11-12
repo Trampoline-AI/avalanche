@@ -252,6 +252,11 @@ def echo_child():
 
 
 @ava.workflow(input=CallInput, output=CallOutput, key=("id",))
+def keyed_echo_child():
+    return echo_result(ava.input)
+
+
+@ava.workflow(input=CallInput, output=CallOutput, key=("id",))
 def slow_child():
     waiting = ava.sleep(timedelta(days=1))
     output = echo_result(ava.input)

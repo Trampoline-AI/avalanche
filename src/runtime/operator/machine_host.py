@@ -1130,10 +1130,15 @@ class MachineHost:
                         child = self.op.get_run(child.run_id)
                         assert child is not None
                 code = None
+                detail = ""
                 output = None
                 if child.status == RunStatus.SUCCESS:
-                    output = RunResult.from_payload(child.run_id,
-                                                    self.op._get_run_result_payload(child.run_id))
+                    try:
+                        output = RunResult.from_payload(
+                            child.run_id, self.op._get_run_result_payload(child.run_id))
+                    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+                        code = "child_run_failed"
+                        detail = f": result unavailable ({exc})"
                 elif child.status == RunStatus.FAILED:
                     code = "child_run_failed"
                 elif child.status == RunStatus.CANCELLED:
@@ -1147,7 +1152,7 @@ class MachineHost:
                     continue
                 response = MachineStepResponse(
                     node_id=row["node_id"], output=output,
-                    error=f"{code}: {child.run_id}" if code is not None else None)
+                    error=f"{code}: {child.run_id}{detail}" if code is not None else None)
                 with self.op._state_store.transaction() as connection:
                     RunCallsTable.latch(connection, row["parent_run_id"], response)
             future = self.run_waiters.pop(address, None)

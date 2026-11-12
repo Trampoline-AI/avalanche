@@ -101,6 +101,9 @@ class RunCallsTable:
             for row in connection.execute(
                 "SELECT DISTINCT w.parent_run_id FROM run_waits w "
                 "JOIN run_nodes n ON n.run_id=w.parent_run_id AND n.node_id=w.node_id "
-                "WHERE n.status='running'"
+                "WHERE n.status='running' AND NOT EXISTS ("
+                "SELECT 1 FROM run_nodes active WHERE active.run_id=w.parent_run_id "
+                "AND active.status='running' "
+                "AND active.node_type NOT IN ('wait','run','machine'))"
             ).fetchall()
         }
