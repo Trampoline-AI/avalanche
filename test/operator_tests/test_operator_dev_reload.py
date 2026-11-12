@@ -199,14 +199,15 @@ def test_cancel_request_is_non_terminal_until_coordinator_stops(tmp_path):
         operator.close()
 
 
-def test_close_cancels_run_after_start_returns_id(tmp_path):
+def test_close_stops_run_without_requesting_user_cancellation(tmp_path):
     workflow = _write_standalone(tmp_path, body="time.sleep(10)")
+    db = tmp_path / "state.db"
     operator = Operator(
         [str(workflow)],
         watch=False,
         schedule=False,
         cancel_grace=0.1,
-        state_db=":memory:",
+        state_db=db,
     )
     run_id = operator.start_run("flow")
     handle = operator._active_runs[run_id]
@@ -219,8 +220,13 @@ def test_close_cancels_run_after_start_returns_id(tmp_path):
     snapshot = operator.get_latest_run_snapshot(
         run_id, operator_instance_id=operator.operator_instance_id
     )
-    assert snapshot is not None and snapshot.summary.status == RunStatus.CANCELLED
+    assert snapshot is not None and snapshot.summary.status != RunStatus.CANCELLED
     assert operator._active_runs == {}
+    restarted = Operator([str(workflow)], watch=False, schedule=False, state_db=db)
+    try:
+        assert restarted.get_run(run_id).status == RunStatus.FAILED
+    finally:
+        restarted.close()
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX signal semantics")
