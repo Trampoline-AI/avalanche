@@ -1431,7 +1431,7 @@ describe("operator transport boundary", () => {
         ],
       },
     });
-    const getRunResult = vi.fn(() => ({
+    const getRunResult = vi.fn((_request: unknown) => ({
       response: Promise.resolve({
         runId: "run-1",
         value: { valueJson, sha256: "", sizeBytes: "0" },
