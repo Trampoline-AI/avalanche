@@ -27,9 +27,14 @@ def validate_event_payload(
             failure = WaitRefusalError("event_payload_must_be_empty", 422)
             continue
         try:
-            return model.model_validate_json(json.dumps(wire, allow_nan=False), strict=True)
+            return bind_references(
+                model.model_validate_json(json.dumps(wire, allow_nan=False), strict=True),
+                LocalReferenceBinder(),
+            )
         except ValidationError as exc:
             failure = exc
+        except (OSError, RuntimeError) as exc:
+            raise ValueError(str(exc)) from exc
     if failure is not None:
         raise failure
     raise ValueError("Event has no receiving edge")
@@ -88,22 +93,18 @@ class MachineWaits(LocalWaits):
             if key in self.accepts:
                 if model is None and wire != {}:
                     raise WaitRefusalError("event_payload_must_be_empty", 422)
-                value = (
-                    model.model_validate_json(json.dumps(wire, allow_nan=False), strict=True)
-                    if model is not None
-                    else None
-                )
+                value = validate_event_payload(wire, (model,))
+                if value is not None:
+                    value.model_dump(mode="json")
             else:
                 models = tuple(
                     edges[key] for edges in self.payloads.values() if key in edges
                 )
                 if key in self.defer and models:
-                    validate_event_payload(wire, models)
+                    validated = validate_event_payload(wire, models)
+                    if validated is not None:
+                        validated.model_dump(mode="json")
                 value = deepcopy(wire) if key in self.defer else None
-            if accepted:
-                from .references import validate_local_references
-
-                validate_local_references(wire)
             schema = model.model_json_schema() if model is not None else {}
             reason = "accepted" if accepted else "ignored"
             receipt = self._receipt(address, wire, schema, principal, reason)

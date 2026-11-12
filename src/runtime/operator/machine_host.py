@@ -682,9 +682,7 @@ class MachineHost:
                 return False
             reason = None
             status = "validated"
-            if row.event not in accepts:
-                if row.event in state.defer:
-                    continue
+            if row.event not in accepts and row.event not in state.defer:
                 status, reason = "ignored", "not_accepted_by_restored_state"
             else:
                 try:
@@ -778,10 +776,6 @@ class MachineHost:
                 spec = None
                 unavailable_reason = "definition_unavailable"
                 accepted = True
-        if accepted:
-            from avalanche.references import validate_local_references
-
-            validate_local_references(command.payload)
         receipt = MachineEventReceipt(
             receipt_id=uuid4().hex,
             key=command.idempotency_key,

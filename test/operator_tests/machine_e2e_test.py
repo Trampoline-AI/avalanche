@@ -368,6 +368,8 @@ async def test_machine_run_control_early_events_payloads_and_defer(tmp_path):
 
     m = await lifecycle.test_async(Input(id=1))
     assert (await m.asend("amended", Amended(sha="ignored"))).reason == "ignored"
+    with pytest.raises(ValidationError):
+        await m.asend("deferred", {"sha": 123})
     assert (await m.asend("deferred", Amended(sha="queued"))).reason == "accepted"
     drive = asyncio.create_task(m.asend("start"))
     await entered.wait()
@@ -446,9 +448,9 @@ async def test_machine_run_control_early_events_payloads_and_defer(tmp_path):
     )
     instance = await fixture.artifact_approval.test_async(ticket)
     identity = instance.handle.run_id
-    committed = local_workspace(source)
+    delivery_workspace = local_workspace(source)
     await instance.asend(
-        "artifacts", fixture.ArtifactDelivery(document=file, workspace=committed)
+        "artifacts", fixture.ArtifactDelivery(document=file, workspace=delivery_workspace)
     )
     assert instance.input.workspace.path != source
     await instance.asend("approved")
@@ -458,7 +460,7 @@ async def test_machine_run_control_early_events_payloads_and_defer(tmp_path):
         "counts": [1, 2, 3],
     }
     assert (instance.input.workspace.path / "data.txt").read_text() == "capturedxxxx"
-    assert (committed.path / "data.txt").read_text() == "captured"
+    assert (delivery_workspace.path / "data.txt").read_text() == "captured"
     assert instance.host.flow_runs[0].input.document.ref == file.ref
 
 
