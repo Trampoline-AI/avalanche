@@ -287,7 +287,12 @@ class RunsTable:
         if cursor.rowcount != 1:
             raise StateRowError(f"Run {stored.run.run_id} is not stored")
         _upsert_nodes(connection, stored, node_ids)
-        if stored.run.status in {RunStatus.SUCCESS, RunStatus.WAITING}:
+        if stored.run.status in {
+            RunStatus.SUCCESS,
+            RunStatus.WAITING,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+        }:
             from .workspaces import index_run_commits
 
             index_run_commits(connection, stored.run.run_id)

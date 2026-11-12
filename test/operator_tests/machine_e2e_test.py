@@ -453,7 +453,10 @@ async def test_machine_run_control_early_events_payloads_and_defer(tmp_path):
     assert {file.ref.workspace, committed.reference} <= instance.waits.reference_grants
     await instance.asend("approved")
     assert instance.handle.run_id == identity and instance.handle.done()
-    assert instance.host.flow_runs[0].handle.result() == "retained event bytes:capturedxxx"
+    assert instance.host.flow_runs[0].handle.result().model_dump() == {
+        "text": "retained event bytes:capturedxxx",
+        "counts": [1, 2, 3],
+    }
     assert (committed.path / "data.txt").read_text() == "captured"
     assert instance.host.flow_runs[0].input.document.ref == file.ref
 

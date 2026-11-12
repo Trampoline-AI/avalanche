@@ -663,9 +663,7 @@ def _with_node_streams(
             stdout_binding = stdout.bind_node(name)
             stderr_binding = stderr.bind_node(name)
             try:
-                result = _publish_node_value(await fn(*args, **kwargs))
-                _commit_node_workspaces()
-                return result
+                return await fn(*args, **kwargs)
             finally:
                 stdout.flush()
                 stderr.flush()
@@ -683,9 +681,7 @@ def _with_node_streams(
         stdout_binding = stdout.bind_node(name)
         stderr_binding = stderr.bind_node(name)
         try:
-            result = _publish_node_value(fn(*args, **kwargs))
-            _commit_node_workspaces()
-            return result
+            return fn(*args, **kwargs)
         finally:
             stdout.flush()
             stderr.flush()
@@ -840,7 +836,8 @@ def _with_step_result(
 
         @wraps(fn)
         async def async_wrapper(*args: object, **kwargs: object) -> object:
-            result = await fn(*args, **kwargs)
+            result = _publish_node_value(await fn(*args, **kwargs))
+            _commit_node_workspaces()
             publish(result)
             return result
 
@@ -848,7 +845,8 @@ def _with_step_result(
 
     @wraps(fn)
     def wrapper(*args: object, **kwargs: object) -> object:
-        result = fn(*args, **kwargs)
+        result = _publish_node_value(fn(*args, **kwargs))
+        _commit_node_workspaces()
         publish(result)
         return result
 
