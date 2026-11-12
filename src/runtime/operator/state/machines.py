@@ -9,6 +9,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, JsonValue
 
 from avalanche.machine_spec import MachineSpec
+from avalanche.run_keys import canonical_json as canonical_key_json
 
 from ..models import RunSnapshot, RunStatus
 
@@ -93,7 +94,7 @@ class FactRecord(JournalModel):
     reason: str | None = None
 
 
-def canonical_json(value: JsonValue) -> str:
+def journal_json(value: JsonValue) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
@@ -132,7 +133,7 @@ class MachinesTable:
     def find(connection: sqlite3.Connection, machine: str, key: list[JsonValue]) -> str | None:
         row = connection.execute(
             "SELECT run_id FROM runs WHERE workflow_id=? AND key=?",
-            (machine, canonical_json(key)),
+            (machine, canonical_key_json(key)),
         ).fetchone()
         return None if row is None else row["run_id"]
 
@@ -140,7 +141,7 @@ class MachinesTable:
     def write(connection: sqlite3.Connection, record: InstanceRecord) -> None:
         connection.execute(
             "UPDATE runs SET key=?, machine_json=? WHERE run_id=?",
-            (canonical_json(record.key), record.model_dump_json(), record.run_id),
+            (canonical_key_json(record.key), record.model_dump_json(), record.run_id),
         )
 
     @staticmethod
@@ -232,7 +233,7 @@ class MachinesTable:
         connection.execute(
             "INSERT INTO wait_decisions VALUES (?, ?, ?) "
             "ON CONFLICT(run_id, position) DO UPDATE SET card_json=excluded.card_json",
-            (record.run_id, position, canonical_json(card)),
+            (record.run_id, position, journal_json(card)),
         )
 
     @staticmethod

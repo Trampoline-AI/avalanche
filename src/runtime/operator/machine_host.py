@@ -45,7 +45,7 @@ from .state.machines import (
     TimerRecord,
     TransitionRecord,
     VisitRecord,
-    canonical_json,
+    journal_json,
 )
 from .state.runs import RunRequest
 
@@ -192,7 +192,7 @@ class MachineHost:
             or not all(char.isprintable() for char in idempotency_key)
         ):
             raise ValueError("idempotency_key must contain 1-256 printable characters")
-        canonical_json(payload)
+        journal_json(payload)
 
     def retry(self, run_id: str) -> None:
         reply: Future[None] = Future()
@@ -737,7 +737,7 @@ class MachineHost:
     def _send(self, command: Send) -> MachineEventReceipt:
         self.validate_send(command.event, command.payload, command.idempotency_key)
         record = self._load(command.run_id)
-        request_json = canonical_json(command.payload)
+        request_json = journal_json(command.payload)
         with self.op._state_store.transaction() as connection:
             replay = connection.execute(
                 "SELECT request_json, response_json FROM wait_receipts "

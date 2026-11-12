@@ -9,11 +9,14 @@ version. Tables use ``STRICT`` so SQLite rejects values of the wrong type.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 import time
 from dataclasses import dataclass
 
 from pydantic import BaseModel, ConfigDict
+
+from avalanche.run_keys import canonical_json
 
 from ._transaction import sqlite_transaction
 from .errors import StateSchemaMismatchError, StateSchemaTooNewError
@@ -353,7 +356,21 @@ MIGRATIONS += (
     ),
 )
 
+MIGRATIONS += (Migration(version=9, name="canonical UTF-8 run keys", statements=()),)
+
 LATEST_SCHEMA_VERSION = MIGRATIONS[-1].version
+
+
+def _canonicalize_run_keys(connection: sqlite3.Connection) -> None:
+    # Both flow and machine keys used the old ASCII-escaped serializer. Rewrite
+    # identity only: historical request/receipt bytes must remain unchanged.
+    rows = connection.execute("SELECT run_id, key FROM runs WHERE key IS NOT NULL")
+    while batch := rows.fetchmany(256):
+        connection.executemany(
+            "UPDATE runs SET key=? WHERE run_id=?",
+            [(canonical_json(json.loads(row["key"])), row["run_id"]) for row in batch],
+        )
+
 
 _CREATE_SCHEMA_MIGRATIONS = """
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -419,6 +436,8 @@ def migrate(
             with sqlite_transaction(connection):
                 for statement in migration.statements:
                     connection.execute(statement)
+                if migration.version == 9:
+                    _canonicalize_run_keys(connection)
                 if rebuild_runs and connection.execute("PRAGMA foreign_key_check").fetchone():
                     raise StateSchemaMismatchError("Run table rebuild broke a foreign key")
                 connection.execute(

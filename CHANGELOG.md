@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Store local flow and machine keys with the shared UTF-8 key serializer, and
+  migrate older ASCII-escaped identities without changing their run IDs or receipts.
+
 - Use one portable run-key contract on the SDK test host, local operator and
   deployed hosts. UUIDs, dates, UTC datetimes, enums, tuples, sets/frozensets,
   nested plain models and plain unions now share typed normalization; unordered

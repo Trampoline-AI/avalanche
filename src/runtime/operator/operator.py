@@ -2049,7 +2049,7 @@ class Operator:
 
                     def claim_key(connection: sqlite3.Connection) -> None:
                         if _key_claim is not None:
-                            from .state.machines import canonical_json
+                            from avalanche.run_keys import canonical_json
 
                             connection.execute(
                                 "UPDATE runs SET key=? WHERE run_id=?",
