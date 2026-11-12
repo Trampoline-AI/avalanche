@@ -511,7 +511,9 @@ class FakeOperatorApi implements OperatorApi {
     // Without a state entry, the run's waits of every state entry (as the local operator lists them).
     if (entry === undefined) {
       const entries = Array.from({ length: item.entry }, (_, index) => index + 1);
-      return (await Promise.all(entries.map((each) => this.stateEntryWaits(item, each)))).flat();
+      return (
+        await Promise.all(entries.map((each) => this.stateEntryWaits(item, each)))
+      ).flat();
     }
     return this.stateEntryWaits(item, entry);
   }

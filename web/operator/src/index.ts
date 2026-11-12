@@ -37,11 +37,11 @@ export type * from "./machine";
 export {
   MachineRunActions,
   MachineSendPanel,
-  machineVisits,
+  machineStateEntries,
   useMachineHistory,
   useMachineInstance,
-  useMachineVisit,
-  useMachineVisitDetails,
+  useMachineStateEntry,
+  useMachineStateEntryDetails,
   useRunWaits,
 } from "./MachineWorkspace";
 // The run timeline (bottom pane tab beside Logs), for flow and machine runs.
@@ -56,7 +56,7 @@ export {
 } from "./timelineEntries";
 export type {
   GraphHighlight,
-  MachineVisitDetail,
+  MachineStateEntryDetail,
   PendingItem,
   TimelineArc,
   TimelineEntry,

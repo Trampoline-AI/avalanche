@@ -548,9 +548,14 @@ export function WorkflowWorkspaceSurface({
       ? machineRead.value
       : undefined;
   const machineHistory = useMachineHistory(api, machineRunId, machineRefresh);
-  const [stateEntrySelection, setStateEntrySelection] = useState<{ runId: string; entry: number }>();
+  const [stateEntrySelection, setStateEntrySelection] = useState<{
+    runId: string;
+    entry: number;
+  }>();
   const selectedStateEntry =
-    stateEntrySelection && stateEntrySelection.runId === machineRunId ? stateEntrySelection.entry : undefined;
+    stateEntrySelection && stateEntrySelection.runId === machineRunId
+      ? stateEntrySelection.entry
+      : undefined;
   const currentStateEntry =
     selectedStateEntry !== undefined &&
     selectedStateEntry === machineInstance?.entry &&
@@ -725,7 +730,9 @@ export function WorkflowWorkspaceSurface({
   );
   const terminalStatuses = api.terminalRunStatuses ?? LOCAL_TERMINAL_RUN_STATUSES;
   const fromStart =
-    machineHistory.cursor === undefined && hiddenStateEntries === 0 && (shownStateEntries[0] ?? 1) <= 1;
+    machineHistory.cursor === undefined &&
+    hiddenStateEntries === 0 &&
+    (shownStateEntries[0] ?? 1) <= 1;
   const timelineEntries = useMemo<TimelineEntry[]>(() => {
     if (!run) return [];
     if (machineRunId) {
@@ -844,7 +851,10 @@ export function WorkflowWorkspaceSurface({
     [selectedRunId],
   );
   // A state entry's step opens once that state entry's steps are on the graph.
-  const [pendingStateEntryNode, setPendingStateEntryNode] = useState<{ entry: number; nodeId: string }>();
+  const [pendingStateEntryNode, setPendingStateEntryNode] = useState<{
+    entry: number;
+    nodeId: string;
+  }>();
   useEffect(() => {
     if (
       !pendingStateEntryNode ||
@@ -1298,9 +1308,11 @@ export function WorkflowWorkspaceSurface({
                       className={`historical-badge${bannerHidden} pointer-events-none absolute top-[18px] right-[18px] z-[5] max-w-[280px] rounded border border-history-line bg-history-surface px-3 py-[9px] text-[9px] text-history-ink shadow-[0_4px_14px_var(--color-shadow-4)] max-[700px]:hidden [&>span]:mb-[3px] [&>span]:block [&>span]:font-mono [&>span]:text-[8px] [&>span]:text-amber [&>span]:uppercase`}
                     >
                       <span>expired</span>
-                      {stateEntryExpired && !runExpired ? "This state entry's" : "This run's"} history and
-                      artifacts expired under the run&apos;s retention policy. The run and its
-                      label remain.
+                      {stateEntryExpired && !runExpired
+                        ? "This state entry's"
+                        : "This run's"}{" "}
+                      history and artifacts expired under the run&apos;s retention policy. The
+                      run and its label remain.
                     </div>
                   ) : run && !runLive ? (
                     <div
@@ -1323,7 +1335,9 @@ export function WorkflowWorkspaceSurface({
                     run={stateEntryRun ?? run}
                     nodeId={inspectedNode === INPUT_NODE_ID ? undefined : inspectedNode}
                     liveLogs={
-                      displayedRunId && !stateEntryRun ? state.liveLogs[displayedRunId] : undefined
+                      displayedRunId && !stateEntryRun
+                        ? state.liveLogs[displayedRunId]
+                        : undefined
                     }
                     onSelectNode={openLogNode}
                     onClearNode={() => setInspectedNode(undefined)}

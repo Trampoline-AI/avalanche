@@ -85,7 +85,12 @@ const transitions: MachineTransition[] = [
   { from: "ready_to_merge", to: "closed", event: "merged", source: "external", entry: 4 },
 ];
 
-function stateEntryRecord(entry: number, stateName: string, entered: number, left: number | null) {
+function stateEntryRecord(
+  entry: number,
+  stateName: string,
+  entered: number,
+  left: number | null,
+) {
   return {
     entry,
     state: stateName,
@@ -386,7 +391,12 @@ describe("machine run timeline", () => {
     const kinds = new Set(foreign.map((entry) => entry.kind));
     expect(kinds.has("event")).toBe(false);
     expect(kinds.has("receipt")).toBe(false);
-    for (const kind of ["state-entry-entered", "state-entry-left", "timer-armed", "outcome"] as const)
+    for (const kind of [
+      "state-entry-entered",
+      "state-entry-left",
+      "timer-armed",
+      "outcome",
+    ] as const)
       expect(kinds.has(kind)).toBe(true);
     expect(
       foreign.some((entry) =>

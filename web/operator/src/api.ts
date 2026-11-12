@@ -250,7 +250,11 @@ export interface OperatorApi {
     page?: MachinePageRequest,
     signal?: AbortSignal,
   ): Promise<MachinePage<MachineTransition>>;
-  getMachineStateEntry?(runId: string, entry: number, signal?: AbortSignal): Promise<MachineStateEntry>;
+  getMachineStateEntry?(
+    runId: string,
+    entry: number,
+    signal?: AbortSignal,
+  ): Promise<MachineStateEntry>;
   getMachineStateEntryEvents?(
     runId: string,
     entry: number,

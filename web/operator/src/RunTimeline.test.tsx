@@ -290,7 +290,9 @@ describe("run timeline in the bottom pane", () => {
     const runs = screen.getByRole("region", { name: "Runs" });
     expect(within(runs).queryByText("State entries")).not.toBeInTheDocument();
     expect(within(runs).queryByText("Waits")).not.toBeInTheDocument();
-    expect(screen.queryByRole("region", { name: "Machine state entries" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("region", { name: "Machine state entries" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Run waits section")).not.toBeInTheDocument();
     expect(events()).toEqual([
       "run-started",

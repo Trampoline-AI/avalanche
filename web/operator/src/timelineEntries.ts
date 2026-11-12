@@ -461,8 +461,8 @@ function eventVerdict(
 export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
   const { spec, instance, details, history, waits = [] } = input;
   const transitions = new Map(history.map((transition) => [transition.entry, transition]));
-  const entries = [...input.entries].sort((left, right) => left - right);
-  const firstEntered = entries
+  const stateEntries = [...input.entries].sort((left, right) => left - right);
+  const firstEntered = stateEntries
     .map((entry) => details.get(entry)?.record?.entered_at)
     .find((value): value is number => typeof value === "number");
   const wallBase = input.startedAt || firstEntered || 0;
@@ -484,11 +484,11 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
   const matchedReceipts = new Set<string>();
   // Which state entry accepted each receipt, so a later delivery reads as a deferred one.
   const acceptedIn = new Map<string, number>();
-  for (const entry of entries)
+  for (const entry of stateEntries)
     for (const fact of details.get(entry)?.events ?? [])
       if (fact.status === "accepted" && fact.receipt_id) acceptedIn.set(fact.receipt_id, entry);
   const windows: { entry: number; from: number; to: number }[] = [];
-  for (const entry of entries) {
+  for (const entry of stateEntries) {
     const detail = details.get(entry);
     const record = detail?.record;
     const transition = record?.transition ?? transitions.get(entry) ?? null;
@@ -584,7 +584,9 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
       // A directly accepted event's delivery is the transition itself; only a
       // delivery of an event accepted (deferred) in an earlier state entry is shown.
       if (fact.status === "consumed") {
-        const acceptedStateEntry = fact.receipt_id ? acceptedIn.get(fact.receipt_id) : undefined;
+        const acceptedStateEntry = fact.receipt_id
+          ? acceptedIn.get(fact.receipt_id)
+          : undefined;
         if (acceptedStateEntry === undefined || acceptedStateEntry === entry) continue;
       }
       const verdict = eventVerdict(fact, declaration);
@@ -693,7 +695,7 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
   }
   // Receipts the event facts do not show (not read, or not reported) stand alone,
   // in the state entry whose clocks contain them.
-  const lastStateEntry = entries.at(-1) ?? instance.entry;
+  const lastStateEntry = stateEntries.at(-1) ?? instance.entry;
   for (const receipt of instance.receipts ?? []) {
     if (matchedReceipts.has(receipt.receipt_id)) continue;
     if (acceptedIn.has(receipt.receipt_id)) continue;
@@ -719,7 +721,7 @@ export function machineTimeline(input: MachineTimelineInput): TimelineEntry[] {
       sort: [entry, PHASE_BODY, offset ?? Infinity, 10_000],
     });
   }
-  const finalStateEntry = entries.includes(instance.entry);
+  const finalStateEntry = stateEntries.includes(instance.entry);
   if (finalStateEntry && (input.settled || instance.finished)) {
     const status = input.status ?? instance.status;
     if (status && !entries.some((entry) => entry.kind === "cancelled")) {
