@@ -9,6 +9,11 @@
   A generated title that only repeats the field name is hidden, and a field's
   `default` is separated from its value. The input field list uses the same
   notation.
+- Renamed: a machine "visit" is now a **state entry**. `ava run result --visit N`
+  is `--entry N`, `ava run retry RUN_ID --visit` is `--entry`, result documents
+  carry `entry`, step IDs are `e2.step`, SDK types are `StateEntry*` and the
+  operator UI shows "Entry N". The local operator's state database migrates once
+  and drops machine runs recorded before the rename (flow runs are kept).
 
 ## 0.20.9
 
