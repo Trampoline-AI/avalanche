@@ -137,6 +137,7 @@ narrow file or directory.
   refactor or migration.
 - TUI behavior normally needs both headless Textual coverage (`test/tui_test.py`) and tmux coverage (`test/tui_tmux_test.py`) when terminal rendering, sizing, or input behavior changes.
 - CI installs all extras, runs Ruff, then separates ordinary tests (`not tmux`) and tmux tests into distinct jobs.
+- The tmux job is paused as a merge gate while the TUI is reworked: it runs only on manual dispatch of Avalanche CI (`gh workflow run avalanche.yml -f tmux=true`). Restore it to `required.needs` when TUI work resumes.
 - Branch coverage is configured for `src/avalanche`; `make test-cov` reports missing lines. Do not treat a focused green test as proof for unrelated runtime or tmux paths.
 - Run `make smoke-test` for changes affecting documented examples or the main user path, and `uv build` for metadata or entry-point changes.
 
