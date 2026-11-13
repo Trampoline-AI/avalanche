@@ -2452,3 +2452,123 @@ def test_a_missing_ps_command_is_a_lookup_error(monkeypatch):
     monkeypatch.setattr(run_processes.shutil, "which", lambda name: None)
     with pytest.raises(RunProcessLookupError, match="ps"):
         identify_run_process(os.getpid())
+
+
+@pytest.mark.parametrize("failure", ["exit", "timeout"])
+def test_capped_event_reason_on_every_surface_and_retry(tmp_path, monkeypatch, capsys, failure):
+    """#539/#540 on a real operator, gRPC server, REST proxy and CLI.
+
+    A crashing or hanging validator spends the receipt's three-failure budget; the run
+    then shows `validation_retry_limit` on gRPC, REST and the CLI. After the source is
+    repaired, `ava run retry --entry` validates it again and the run proceeds in order.
+    """
+    import socket
+
+    import grpc
+    from fastapi.testclient import TestClient
+
+    from ava_cli.app import main as ava
+    from runtime.operator import machine_validation
+    from runtime.operator.proto import operator_pb2 as pb
+    from runtime.operator.proto import operator_pb2_grpc as pb_grpc
+    from runtime.operator.rest import create_rest_app
+    from runtime.operator.server import serve
+    from runtime.operator.state.machines import MachinesTable
+
+    root = tmp_path / "source"
+    root.mkdir()
+    source = (Path(__file__).parents[1] / "fixtures" / "local_machine.py").read_text()
+    source = source.replace(
+        "import avalanche as ava",
+        """import avalanche as ava
+import os
+from pydantic import model_validator
+
+class Approval(ava.BaseInput):
+    gate: str
+    attempts: str
+    failure: str
+
+    @model_validator(mode="after")
+    def check_process(self):
+        with Path(self.attempts).open("a") as output:
+            output.write(f"{time.time()}\\n")
+        if Path(self.gate).exists():
+            if self.failure == "exit":
+                os._exit(23)
+            time.sleep(65)
+        return self
+""",
+    ).replace('pending.on("approved")', 'pending.on("approved", payload=Approval)')
+    (root / "machine.py").write_text(source)
+    if failure == "timeout":
+        run = machine_validation.subprocess.run
+
+        def bounded_child(args, **kwargs):
+            if args[1:] == ["-m", "runtime.operator.machine_validation"]:
+                kwargs["timeout"] = 1  # Real child timeout, not a synthetic exception.
+            return run(args, **kwargs)
+
+        monkeypatch.setattr(machine_validation.subprocess, "run", bounded_child)
+    gate, attempts = tmp_path / "fail-validation", tmp_path / "attempts"
+    gate.touch()
+    op = _operator(root, tmp_path / "state.db")
+    with socket.socket() as sock:
+        sock.bind(("localhost", 0))
+        port = sock.getsockname()[1]
+    server = serve(op, port=port, block=False)
+    channel = grpc.insecure_channel(f"localhost:{port}")
+    try:
+        grpc.channel_ready_future(channel).result(timeout=5)
+        stub = pb_grpc.OperatorServiceV2Stub(channel)
+        rest = TestClient(create_rest_app(channel))
+        run_id = op.start_run("approval", input={"ticket": 1, "journal": str(tmp_path / "j")})
+        _wait_until(lambda: _machine_record(op, run_id).phase == "waiting")
+        payload = {"gate": str(gate), "attempts": str(attempts), "failure": failure}
+        capped = op._machine_host.send(run_id, "approved", payload, "capped")
+        behind = op._machine_host.send(
+            run_id, "approved", {**payload, "gate": str(tmp_path / "absent")}, "behind"
+        )
+        assert capped.status == behind.status == "accepted"
+        _wait_until(lambda: _machine_record(op, run_id).reason == "validation_retry_limit", 90)
+        capped_at = len(attempts.read_text().splitlines())
+        time.sleep(4)
+        assert len(attempts.read_text().splitlines()) == capped_at  # no automatic retries
+
+        def grpc_head():
+            reply = stub.ControlMachine(pb.ControlMachineRequestV2(
+                request_json=json.dumps({"op": "get", "run_id": run_id})), timeout=30)
+            return json.loads(reply.result_json)
+
+        assert grpc_head()["reason"] == "validation_retry_limit"
+        snapshot = stub.GetRunSnapshot(pb.GetRunSnapshotRequestV2(run_id=run_id), timeout=30)
+        assert json.loads(snapshot.machine_json)["reason"] == "validation_retry_limit"
+        response = rest.get(f"/v1/runs/{run_id}/machine")
+        assert response.status_code == 200
+        assert response.json()["reason"] == "validation_retry_limit"
+        capsys.readouterr()
+        assert ava(["run", "show", run_id, "--json", "--connect", f"localhost:{port}"]) == 0
+        shown = json.loads(capsys.readouterr().out)
+        assert json.loads(shown["machine_json"])["reason"] == "validation_retry_limit"
+        with op._state_store.transaction() as c:
+            facts = _machine_facts(c, run_id)
+        failed = [f for f in facts if f.status == "validation_failed"]
+        assert len(failed) == 3 and all(f.receipt_id == capped.receipt_id for f in failed)
+        expected = "MachineValidationProcessError" if failure == "exit" else "TimeoutExpired"
+        assert all(expected in (f.reason or "") for f in failed)
+
+        gate.unlink()  # repair: the validator no longer fails
+        args = ["run", "retry", run_id, "--entry", "--connect", f"localhost:{port}"]
+        assert ava(args) == 0
+        assert _wait_terminal(op, run_id).status is RunStatus.SUCCESS
+        with op._state_store.transaction() as c:
+            facts = _machine_facts(c, run_id)
+            assert not MachinesTable.inbox(c, run_id)
+        consumed = [f.receipt_id for f in facts if f.status == "consumed"]
+        assert consumed[:1] == [capped.receipt_id]  # receipt order kept
+        assert _machine_record(op, run_id).reason is None
+        assert op.fatal_error is None
+    finally:
+        channel.close()
+        server.stop(grace=0).wait()
+        op.close()

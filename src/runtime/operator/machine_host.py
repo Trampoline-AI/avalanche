@@ -336,10 +336,12 @@ class MachineHost:
             record.reason = None
         return spec
 
-    def _definition_unavailable(self, record: InstanceRecord, summary: str) -> None:
+    def _definition_unavailable(
+        self, record: InstanceRecord, summary: str, *, reason: str = "definition_unavailable"
+    ) -> None:
         # Never implicitly replay interrupted work when its definition returns.
         if record.reason != "outcome_unknown":
-            record.reason = "definition_unavailable"
+            record.reason = reason
         self._commit(
             record,
             lambda connection: MachinesTable.fact(
@@ -644,23 +646,27 @@ class MachineHost:
         if failures >= 3:
             retry.next_at = float("inf")
             summary = (
-                "validation_retry_limit: " + summary + "; repair source and retry state entry"
+                "validation_retry_limit: " + summary
+                + "; repair source and retry state entry"
             )
-        else:
-            retry.next_at = time.monotonic() + retry.delay
-            retry.delay = min(60.0, retry.delay * 2)
+            self._definition_unavailable(record, summary, reason="validation_retry_limit")
+            return
+        retry.next_at = time.monotonic() + retry.delay
+        retry.delay = min(60.0, retry.delay * 2)
         self._definition_unavailable(record, summary)
 
     def _recover_inbox(self, record: InstanceRecord) -> bool:
         """Finish deferred validation; one backoff wake, never discard a crashed receipt."""
         retry = self._inbox_retries.get(record.run_id)
         if retry is not None and time.monotonic() < retry.next_at:
-            summary = (
-                "validation_retry_limit: repair source and retry state entry"
-                if retry.next_at == float("inf")
-                else "Validation recovery pending"
-            )
-            self._definition_unavailable(record, summary)
+            if retry.next_at == float("inf"):
+                self._definition_unavailable(
+                    record,
+                    "validation_retry_limit: repair source and retry state entry",
+                    reason="validation_retry_limit",
+                )
+            else:
+                self._definition_unavailable(record, "Validation recovery pending")
             return False
         with self.op._state_store.transaction() as connection:
             inbox = MachinesTable.inbox(connection, record.run_id)
@@ -699,7 +705,9 @@ class MachineHost:
             if row.receipt_id not in pending - validated:
                 continue
             if failures.get(row.receipt_id, 0) >= 3:
-                self._defer_inbox_validation(record, "Validation process failed", failures=3)
+                self._defer_inbox_validation(
+                    record, f"receipt {row.receipt_id} ({row.event})", failures=3
+                )
                 return False
             reason = None
             status = "validated"
@@ -708,7 +716,10 @@ class MachineHost:
             else:
                 try:
                     self._validate_event(record, row.event, row.payload)
-                except MachineValidationProcessError as exc:
+                except (MachineValidationProcessError, TimeoutExpired) as exc:
+                    # A crashed or hung validator spends the receipt's budget either way:
+                    # three failures stop automatic retries, so repeated 60 s timeouts
+                    # cannot keep occupying the machine owner thread.
                     with self.op._state_store.transaction() as connection:
                         MachinesTable.fact(
                             connection,
@@ -717,17 +728,18 @@ class MachineHost:
                             status="validation_failed",
                             receipt_id=row.receipt_id,
                             event=row.event,
-                            reason=str(exc),
+                            reason=f"{type(exc).__name__}: {exc}"[:2000],
                             at=time.time(),
                         )
                     self._defer_inbox_validation(
-                        record, str(exc), failures=failures.get(row.receipt_id, 0) + 1
+                        record,
+                        f"receipt {row.receipt_id} ({row.event}): {type(exc).__name__}: {exc}",
+                        failures=failures.get(row.receipt_id, 0) + 1,
                     )
                     return False
                 except (
                     MachineDefinitionUnavailableError,
                     FileNotFoundError,
-                    TimeoutExpired,
                     UnknownWorkflow,
                 ) as exc:
                     self._defer_inbox_validation(record, f"{type(exc).__name__}: {exc}")
@@ -1304,6 +1316,8 @@ class MachineHost:
                                 self._arm_timers(record, unavailable=True)
                             raise
                         self._inbox_retries.pop(run_id, None)
+                        if record.reason == "validation_retry_limit":
+                            record.reason = None
                         with self.op._state_store.transaction() as connection:
                             MachinesTable.fact(
                                 connection,

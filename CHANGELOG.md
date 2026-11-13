@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed: a machine event whose validation failed three times (`ava operator`)
+  looked like a transient source outage. The run's reason is now
+  `validation_retry_limit` in REST, gRPC and `ava run show`, and validator
+  timeouts count toward the same three-failure budget instead of retrying
+  forever. Repair the source, then `ava run retry RUN_ID --entry`.
 - **Breaking:** a `Workspace` no longer carries file bytes. `ava.Workspace()` is
   the run's own workspace: one directory the host creates on first use and keeps
   with the run. Steps read and edit it in place, and only its reference crosses

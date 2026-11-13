@@ -405,17 +405,21 @@ with the validation error; events not accepted/deferred by the restored state
 produce an `ignored` fact. Receipts remain replayable, and valid/deferred events
 follow the ordinary reducer/inbox rules. Admission still does not promise a
 transition. If source loading fails during validation, the event stays queued.
-Validation timeouts and source-lookup races also leave the event queued with
-`definition_unavailable`, without stopping the operator. Recovery uses one heap
+Source-lookup races also leave the event queued with `definition_unavailable`,
+without stopping the operator. Recovery uses one heap
 wake per run, backing off from one second to 60 seconds even without a user timer
 or while watching. Original timer deadlines are unchanged. If source becomes
 unavailable again, source backoff or the watcher also gates that recovery wake.
-A validation subprocess that exits nonzero or by signal has a separate durable
-budget: three failures per receipt, with the same backoff, then no automatic
-retries. The facts show `validation_retry_limit` and the process exit status;
-the receipt and inbox row remain. Restart does not reset the failure count.
-After repairing the source, `ava run retry RUN_ID --entry` resets that budget and
-validates the queued event again; it does not start a new state entry on a waiting run.
+A validation subprocess that exits nonzero, dies by signal or times out (60 s)
+has a separate durable budget: three failures per receipt, with the same
+backoff, then no automatic retries, so a hung validator holds the host for at
+most three timeouts. The run's reason is then `validation_retry_limit` (run
+detail in REST, gRPC `GetRunSnapshot` and `ava run show`), and its facts name the
+receipt and the failure. The receipt and inbox row remain; restart does not reset
+the failure count. The inbox is consumed in receipt order, so events queued behind
+a capped event wait for it. After repairing the source, `ava run retry RUN_ID
+--entry` resets the budget and validates the queued event again; it does not
+start a new state entry on a waiting run.
 A state entry that already started but fails to prepare remains `interrupted` and
 requires explicit retry; restoring a definition never replays uncertain work.
 A retry while source is still unavailable creates no new state entry and now fails
