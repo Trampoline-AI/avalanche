@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from datetime import datetime, timedelta
 
@@ -78,6 +79,26 @@ def wait_for_event(
     return WaitNode(spec, model, slug=slug)()
 
 
+def _decision_schema(outcome: type[Event]) -> dict[str, JsonValue]:
+    """The decision's own fields; reviewers are not asked for the named-event envelope."""
+    schema = outcome.model_json_schema()
+    inherited = {
+        name
+        for name, field in Event.model_fields.items()
+        if outcome.model_fields[name].annotation is field.annotation
+        and outcome.model_fields[name].default is field.default
+    }
+    schema["properties"] = {
+        name: value for name, value in schema["properties"].items() if name not in inherited
+    }
+    defs = schema.get("$defs", {})
+    if "JsonValue" in defs and "#/$defs/JsonValue" not in json.dumps(schema["properties"]):
+        del defs["JsonValue"]
+        if not defs:
+            del schema["$defs"]
+    return schema
+
+
 def _decision_node(
     outcome: type[Event],
     *,
@@ -102,7 +123,7 @@ def _decision_node(
     )
     spec = WaitSpec(
         kind="decision",
-        schema=outcome.model_json_schema(),
+        schema=_decision_schema(outcome),
         prompt=prompt,
         timeout_seconds=_seconds(timeout) if timeout is not None else None,
         show_node_id=show_ref.future_id if show_ref is not None else None,

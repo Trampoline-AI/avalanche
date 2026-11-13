@@ -243,6 +243,8 @@ function waitEntries(
   const entries: TimelineEntry[] = [];
   const where = inStateEntry(base.state, base.entry);
   cards.forEach((card, index) => {
+    // A wait the run has not reached yet ("pending") has not opened.
+    if (card.state === "pending") return;
     const node = nodes.get(card.nodeId);
     const step = node ? stepName(node, base.entry || undefined) : card.nodeId;
     const subject = waitSubject(card, step, base.accepts);
@@ -789,7 +791,7 @@ export function machinePending(
     });
   for (const card of waits)
     if (
-      (card.state === "pending" || card.state === "waiting") &&
+      card.state === "waiting" &&
       card.nodeId.startsWith(`e${instance.entry}.`) &&
       !isTimerWait(card, spec, state)
     )
@@ -813,11 +815,11 @@ export function machinePending(
   return items;
 }
 
-/** What a flow run waits for now: its open waits. */
+/** What a flow run is blocked on now: reached waits only, never later unreached ones. */
 export function flowPending(waits: readonly WaitCard[], settled: boolean): PendingItem[] {
   if (settled) return [];
   return waits
-    .filter((card) => card.state === "pending" || card.state === "waiting")
+    .filter((card) => card.state === "waiting")
     .map((card) => ({
       id: `wait:${card.nodeId}`,
       kind: "wait" as const,
