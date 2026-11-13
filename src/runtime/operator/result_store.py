@@ -256,6 +256,19 @@ class ResultStore:
         The accepted bundle is not indexed yet: the operator records it with
         :class:`RunResultTable` once the run has ended in success, or discards it.
         """
+        return self.accept_with_value(pending, manifest_sha256, cancel_signal)[0]
+
+    def accept_with_value(
+        self,
+        pending: PendingResultBundle,
+        manifest_sha256: str,
+        cancel_signal: CancellationSignal | None = None,
+    ) -> tuple[StoredWorkflowResult, str]:
+        """Accept a worker's bundle and also return its validated value JSON.
+
+        The value is the one just validated and written, so a caller that needs
+        it does not have to read the accepted bundle back.
+        """
         _validate_sha256(manifest_sha256, "manifest sha256")
         with self._lock:
             self._ensure_open()
@@ -270,7 +283,7 @@ class ResultStore:
             finally:
                 pending_bundle.close()
             self._discard_pending(pending)
-            return self._write_accepted_bundle(payload, cancel_signal)
+            return self._write_accepted_bundle(payload, cancel_signal), payload.value_json
 
     def load(
         self,

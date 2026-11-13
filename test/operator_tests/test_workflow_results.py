@@ -609,14 +609,14 @@ def test_parent_cancellation_wins_after_success_bundle_validation(tmp_path, monk
         flow_name="flow",
         status=RunStatus.RUNNING,
     )
-    accept = operator._result_store.accept
+    accept = operator._result_store.accept_with_value
 
     def accept_then_cancel(*args, **kwargs):
         stored = accept(*args, **kwargs)
         cancel_event.set()
         return stored
 
-    monkeypatch.setattr(operator._result_store, "accept", accept_then_cancel)
+    monkeypatch.setattr(operator._result_store, "accept_with_value", accept_then_cancel)
     try:
         assert operator._apply_event(
             run_id,

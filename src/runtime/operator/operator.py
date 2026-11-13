@@ -133,6 +133,7 @@ from .result_store import (
     PendingResultBundle,
     ResultPublicationCancelledError,
     ResultStore,
+    StoredWorkflowResult,
     duplicate_bundle_descriptor_for_spawn,
     report_result_index,
     require_worker_descriptor_transfer,
@@ -3095,16 +3096,15 @@ class Operator:
                 "workflow success was not quiesced before result validation"
             )
         cancelled_result = result_manifest_sha256 is not None and handle.cancel_event.is_set()
+        stored_result: StoredWorkflowResult | None = None
+        result_value_json: str | None = None
         try:
-            stored_result = (
-                self._result_store.accept(
+            if result_manifest_sha256 is not None and not cancelled_result:
+                stored_result, result_value_json = self._result_store.accept_with_value(
                     handle.result_bundle,
                     result_manifest_sha256,
                     cancel_signal=handle.cancel_event,
                 )
-                if result_manifest_sha256 is not None and not cancelled_result
-                else None
-            )
         except ResultPublicationCancelledError:
             cancelled_result = True
             stored_result = None
@@ -3123,15 +3123,14 @@ class Operator:
                 outcome["output"] if outcome is not None else None,
                 outcome["event"] if outcome is not None else None,
             )
-            if stored_result is not None:
-                payload = self._result_store.load(stored_result)
+            if stored_result is not None and result_value_json is not None:
                 with self._state_store.transaction() as connection:
                     StepResultTable.put(
                         connection,
                         run_id,
                         handle.machine_state_entry.entry,
                         "",
-                        payload.value_json,
+                        result_value_json,
                     )
                 if handle.machine_state_entry.spec.states[
                     handle.machine_state_entry.state
