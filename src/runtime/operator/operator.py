@@ -42,6 +42,7 @@ from avalanche.classifier.models import (
 from avalanche.evaluations import EvaluationDeclaration
 from avalanche.local_waits import WaitRefusalError
 from avalanche.mapping import MapSpec, NodesExpanded
+from avalanche.references import read_stored_trees
 from avalanche.step_interface import StepInterface
 
 from ._signals import shutdown_cleanup
@@ -149,6 +150,14 @@ from .run_processes import (
 )
 from .run_topology import expand_run
 from .run_worker import run_worker
+from .run_workspaces import (
+    WORKSPACE_FOLDER_NAME,
+    StagedWorkspace,
+    StagedWorkspaceError,
+    WorkspaceChunk,
+    open_workspace_root,
+    stage_input_workspace,
+)
 from .source import is_watch_path_included, resolve_live_source, resolve_watch_roots
 from .state import OperatorStateStore, StateDbPath, StateStoreError
 from .state.agent_events import RunAgentEventsTable
@@ -612,6 +621,7 @@ class Operator:
             self._result_store = result_store
             report_result_index(result_store)
             self._input_files = self._open_input_file_staging()
+            self._workspace_root = open_workspace_root(self._state_store.path)
             self._notification_stop_enqueued = False
             self._notification_shutdown_thread: threading.Thread | None = None
             self._notification_queue: queue.Queue[_RunNotifications | None] = queue.Queue()
@@ -1847,6 +1857,22 @@ class Operator:
             )
         return self._input_files.stage(name, media_type, content)
 
+    @property
+    def workspace_root(self) -> Path:
+        """The store folder that keeps this operator's workspaces."""
+        return self._workspace_root
+
+    def stage_input_workspace(
+        self, selector: str, field_name: str, chunks: Iterable[WorkspaceChunk]
+    ) -> StagedWorkspace:
+        """Copy a directory a client streams into the store, for a declared input field."""
+        descriptor = self._registry.resolve(selector)
+        if field_name not in input_file_fields(descriptor.input_schema_json).declared:
+            raise StagedWorkspaceError(
+                f"Workflow {descriptor.workflow_id} declares no input field {field_name!r}"
+            )
+        return stage_input_workspace(self._workspace_root, chunks)
+
     def input_file_fields(self, selector: str) -> InputFileFields:
         """The input fields a workflow declares, and which of them hold a list."""
         return input_file_fields(self._registry.resolve(selector).input_schema_json)
@@ -1952,7 +1978,13 @@ class Operator:
         triggered_at = time.time()
         try:
             request = RunRequest(
-                input=None if input is None else to_jsonable_python(input),
+                # A file tree an earlier release stored inline becomes this run's own
+                # folder: steps edit a workspace in place, so runs never share one.
+                input=(
+                    None
+                    if input is None
+                    else read_stored_trees(to_jsonable_python(input), own_copy=True)
+                ),
                 context=None if context is None else to_jsonable_python(context),
                 input_files=input_files,
             )
@@ -2715,6 +2747,7 @@ class Operator:
             folder / RESULTS_DIRECTORY,
             folder / INPUT_FILE_FOLDER_NAME,
             folder / SCHEDULE_INPUT_FOLDER_NAME,
+            folder / WORKSPACE_FOLDER_NAME,
         )
 
     def _record_fatal_error(self, error: Exception) -> None:

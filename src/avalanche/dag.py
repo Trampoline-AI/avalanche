@@ -1682,7 +1682,9 @@ def _with_current_run_context(
     vector.
 
     """
-    from .references import LocalReferenceBinder, rebind_arguments
+    from runtime._async import resolve_awaitable
+
+    from .references import LocalReferenceBinder, bind_run_workspaces, rebind_arguments
     from .runtime import RunContext
     from .runtime.context import _run_with_context
 
@@ -1739,8 +1741,15 @@ def _with_current_run_context(
 
         unwrapped_args = _unwrap_lineaged_tree(args)
         unwrapped_kwargs = _unwrap_lineaged_tree(kwargs)
-        unwrapped_args, unwrapped_kwargs = rebuild(unwrapped_args, unwrapped_kwargs)
-        result = _run_with_context(context, fn, *unwrapped_args, **unwrapped_kwargs)
+
+        def invoke(*args: Any, **kwargs: Any) -> Any:
+            # Bind inside the run context: Workspace() names this run's workspace,
+            # in the step's arguments and in what it returns.
+            args, kwargs = rebuild(args, kwargs)
+            result = resolve_awaitable(fn(*args, **kwargs))
+            return bind_run_workspaces(result, LocalReferenceBinder())
+
+        result = _run_with_context(context, invoke, *unwrapped_args, **unwrapped_kwargs)
         return _wrap_lineaged_result(result, context, num_returns=num_returns)
 
     return wrapped

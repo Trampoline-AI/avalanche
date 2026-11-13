@@ -5,14 +5,17 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import stat
 import threading
 import unicodedata
 from collections import OrderedDict
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from enum import Enum
 from numbers import Real
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Literal
 from uuid import uuid4
 
@@ -20,6 +23,7 @@ import grpc
 from pydantic import BaseModel, JsonValue
 from ulid import ULID
 
+from avalanche.references import reading_workspace_store
 from avalanche.runtime import File
 from avalanche.workspace import Workspace
 
@@ -106,6 +110,7 @@ MAX_TRANSPORT_METADATA_KEY_BYTES = 256
 MAX_TRANSPORT_METADATA_VALUE_BYTES = 8 * 1024
 MAX_TRANSPORT_METADATA_BYTES = 16 * 1024
 _EVENTS_STREAM = "operator-events"
+_WORKSPACE_CHUNK_BYTES = 512 * 1024
 
 
 class StreamState(str, Enum):
@@ -751,7 +756,10 @@ class GrpcStateProvider:
                 value_json=response.value.value_json,
                 files=files,
             )
-            result = decode_workflow_result(payload)
+            # Local references are folders in the operator's store, on its machine.
+            store = Path(response.workspace_root) if response.workspace_root else None
+            with reading_workspace_store(store):
+                result = decode_workflow_result(payload)
         except grpc.RpcError as error:
             with self._lifecycle_lock:
                 if not self._closed:
@@ -1986,6 +1994,54 @@ class GrpcStateProvider:
         )
         resp = self._call(self._stub.StartRun, request)
         return resp.run_id
+
+    def stage_input_workspace(
+        self, workflow_selector: str, field_name: str, directory: Path
+    ) -> Workspace:
+        """Send a directory to the operator, which keeps the copy in its own store.
+
+        The files are streamed, never loaded whole, and the returned workspace is
+        the reference to put in the run input. Symbolic links and special files
+        are refused.
+        """
+        if self._read_only:
+            from tui.state import TuiExtensionError
+
+            raise TuiExtensionError("read_only", "Provider is read-only")
+        if not directory.is_dir() or directory.is_symlink():
+            raise ValueError("Workspace source must be a directory")
+
+        def messages() -> Iterator[pb.StageInputWorkspaceRequestV2]:
+            yield pb.StageInputWorkspaceRequestV2(
+                workflow_selector=workflow_selector, field_name=field_name
+            )
+            for folder, folder_names, file_names in os.walk(directory):
+                folder_names.sort()
+                for name in (*folder_names, *sorted(file_names)):
+                    entry = Path(folder, name)
+                    relative = entry.relative_to(directory).as_posix()
+                    mode = entry.lstat().st_mode
+                    if stat.S_ISDIR(mode):
+                        yield pb.StageInputWorkspaceRequestV2(path=relative, directory=True)
+                    elif stat.S_ISREG(mode):
+                        with entry.open("rb") as source:
+                            piece = source.read(_WORKSPACE_CHUNK_BYTES)
+                            while True:
+                                following = source.read(_WORKSPACE_CHUNK_BYTES)
+                                yield pb.StageInputWorkspaceRequestV2(
+                                    path=relative, content=piece, end_of_file=not following
+                                )
+                                if not following:
+                                    break
+                                piece = following
+                    else:
+                        raise ValueError(
+                            f"Workspace source rejects symlinks and special files: {relative}"
+                        )
+
+        # A directory takes as long as it is large: no unary deadline applies.
+        response = self._call(self._stub.StageInputWorkspace, messages(), timeout=None)
+        return Workspace(reference=response.reference)
 
     def set_schedule_enabled(
         self,
@@ -3343,7 +3399,7 @@ def _json_payload_default(value: Any) -> Any:
     if isinstance(value, File):
         return value.model_dump()
     if isinstance(value, Workspace):
-        return value._manifest_for_serialization()
+        return value.manifest()
     raise TypeError(f"Input JSON does not support {type(value).__name__}")
 
 

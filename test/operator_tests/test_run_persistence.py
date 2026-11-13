@@ -2131,6 +2131,176 @@ def test_files_a_run_used_stay_next_to_the_database_and_unused_ones_go(flows, tm
         operator.close()
 
 
+_WORKSPACE_FLOW = """
+import os
+
+import avalanche as ava
+from pydantic import BaseModel
+
+
+class Snapshot(BaseModel, frozen=True):
+    files: int
+    checkout: ava.Workspace
+
+
+@ava.source
+def fill(checkout: ava.Workspace) -> Snapshot:
+    for index in range(6):
+        (checkout.path / f"part-{index}.bin").write_bytes(os.urandom(1024 * 1024))
+    return Snapshot(files=6, checkout=checkout)
+
+
+@ava.step
+def measure(snapshot: Snapshot) -> Snapshot:
+    assert sum(path.stat().st_size for path in snapshot.checkout.path.iterdir()) == 6 << 20
+    return snapshot
+
+
+@ava.workflow
+def checkout_flow():
+    return (snapshot := fill(checkout=ava.Workspace())) >> measure(snapshot)
+"""
+
+
+def test_a_run_workspace_is_a_reference_kept_moved_and_removed_with_its_run(tmp_path):
+    from runtime.operator.state.maintenance import StateMaintenance
+
+    project = tmp_path / "project"
+    project.mkdir()
+    flow = project / "checkout_flow.py"
+    flow.write_text(_WORKSPACE_FLOW)
+    state_db = project / "state" / "state.db"
+    operator = _operator(flow, state_db)
+    try:
+        run_id = operator.start_run("checkout_flow", TriggerKind.MANUAL)
+        assert _wait_terminal(operator, run_id).status is RunStatus.SUCCESS
+        result = operator.get_run_result(run_id)
+        with operator._state_store.transaction() as connection:
+            stored = [
+                row["value_json"]
+                for row in connection.execute(
+                    "SELECT value_json FROM step_results WHERE run_id=?", (run_id,)
+                )
+            ]
+    finally:
+        operator.close()
+
+    # A 6 MiB tree crossed two steps and the result as a reference only.
+    assert len(stored) == 2 and all(len(value) < 1024 for value in stored)
+    reference = result["checkout"].reference
+    (folder,) = (state_db.parent / "workspaces" / "runs").iterdir()
+    assert result["checkout"].path == folder
+    names = [f"part-{index}.bin" for index in range(6)]
+    assert sorted(path.name for path in folder.iterdir()) == names
+
+    # The store is the only record of its folders: move the whole project, and an
+    # operator started on the moved database serves the same reference and files.
+    moved = tmp_path / "moved"
+    project.rename(moved)
+    state_db = moved / "state" / "state.db"
+    flow = moved / "checkout_flow.py"
+    operator = _operator(flow, state_db)
+    try:
+        restored = operator.get_run_result(run_id)["checkout"]
+        assert restored.reference == reference
+        assert restored.path == state_db.parent / "workspaces" / "runs" / folder.name
+        assert sorted(path.name for path in restored.path.iterdir()) == names
+        # A later run of the moved project gets its own folder beside the first.
+        second = operator.start_run("checkout_flow", TriggerKind.MANUAL)
+        assert _wait_terminal(operator, second).status is RunStatus.SUCCESS
+        assert operator.get_run_result(second)["checkout"].path.parent == restored.path.parent
+    finally:
+        operator.close()
+
+    with StateMaintenance.open(state_db) as maintenance:
+        assert maintenance.info().workspaces.entries == 2
+        (deleted,) = maintenance.delete([run_id], on_deleted=lambda run: None)
+        assert deleted.workspace_removed
+        assert maintenance.info().workspaces.entries == 1
+    assert not restored.path.exists()
+
+
+_WORKSPACE_INPUT_FLOW = """
+import avalanche as ava
+
+
+class Request(ava.BaseInput):
+    tree: ava.Workspace
+
+
+@ava.source
+def edit(request: Request) -> ava.Workspace:
+    text = (request.tree.path / "nested" / "data.txt").read_text()
+    (request.tree.path / "seen.txt").write_text(text)
+    return request.tree
+
+
+@ava.workflow(input=Request)
+def tree_flow():
+    return edit()
+"""
+
+
+def test_ava_run_workspace_is_copied_into_the_operators_store(tmp_path):
+    from runtime.operator.state.maintenance import StateMaintenance
+
+    # The operator's project, its state and the client's directory are three
+    # unrelated folders; the client never shares a working directory with it.
+    project = tmp_path / "operator-project"
+    project.mkdir()
+    flow = project / "tree_flow.py"
+    flow.write_text(_WORKSPACE_INPUT_FLOW)
+    state_db = project / "state" / "state.db"
+    source = tmp_path / "client" / "tree"
+    (source / "nested").mkdir(parents=True)
+    (source / "nested" / "data.txt").write_text("captured")
+    (source / "large.bin").write_bytes(b"x" * (3 * 1024 * 1024 + 7))
+    (source / "empty.txt").touch()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+
+    operator = _operator(flow, state_db)
+    server = serve_operator(operator, port=(port := _free_port()), block=False)
+    try:
+        started = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "ava_cli",
+                "run",
+                "tree_flow",
+                "--connect",
+                f"127.0.0.1:{port}",
+                "--workspace",
+                f"tree={source}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            cwd=elsewhere,
+        )
+        assert started.returncode == 0, started.stderr
+        run_id = started.stdout.strip()
+        assert _wait_terminal(operator, run_id).status is RunStatus.SUCCESS
+        returned = operator.get_run_result(run_id)
+    finally:
+        server.stop(grace=0).wait()
+        operator.close()
+
+    captures = state_db.parent / "workspaces" / "captures"
+    (copy,) = captures.iterdir()
+    assert returned.path == copy
+    assert (copy / "seen.txt").read_text() == "captured"
+    assert (copy / "large.bin").stat().st_size == 3 * 1024 * 1024 + 7
+    assert (copy / "empty.txt").read_bytes() == b""
+    # The run worked on the operator's copy; the client's directory is untouched.
+    assert not (source / "seen.txt").exists()
+
+    with StateMaintenance.open(state_db) as maintenance:
+        maintenance.delete([run_id], on_deleted=lambda run: None)
+    assert not copy.exists()
+
+
 def test_closing_a_lasting_staging_folder_keeps_only_used_files(tmp_path):
     staging = InputFileStaging(tmp_path, keep_used_files=True)
     used = staging.stage("used.txt", "", b"u")

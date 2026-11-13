@@ -26,7 +26,6 @@ from avalanche.agent.trace import (
     Turn,
     file_input_evidence,
 )
-from avalanche.workspace import WorkspaceEntry
 
 _NO_USAGE = PredictRLMUsage(
     main=PredictRLMTokenUsage(input_tokens=0, output_tokens=0, cost=0.0, cache_hits=0),
@@ -278,22 +277,6 @@ def test_file_evidence_of_an_unbound_reference_uses_its_recorded_digest(tmp_path
     unbound = ava.File.model_validate(ava.File.from_path(source).model_dump())
 
     assert file_input_evidence(unbound).sha256 == hashlib.sha256(b"hello").hexdigest()
-
-
-def test_value_workspace_evidence_counts_entries_and_bytes():
-    workspace = ava.Workspace(
-        entries=(
-            WorkspaceEntry(path="docs", kind="directory"),
-            WorkspaceEntry(path="docs/a.txt", kind="file", content=b"abc"),
-            WorkspaceEntry(path="b.txt", kind="file", content=b"de"),
-        )
-    )
-
-    assert file_input_evidence(workspace).model_dump() == {
-        "kind": "workspace",
-        "entry_count": 3,
-        "total_size_bytes": 5,
-    }
 
 
 def test_reference_workspace_evidence_keeps_the_reference_not_the_path(tmp_path):

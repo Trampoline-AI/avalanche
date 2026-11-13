@@ -568,9 +568,7 @@ class MachineHost:
         )
         from .run_input_capture import capture_keyed_input
 
-        captured = capture_keyed_input(
-            self.op, command.request.model_copy(update={"input": values})
-        )
+        captured = capture_keyed_input(command.request.model_copy(update={"input": values}))
         return self.op.start_run(
             command.selector,
             command.trigger,
@@ -600,9 +598,7 @@ class MachineHost:
         )
         from .run_input_capture import capture_keyed_input
 
-        captured = capture_keyed_input(
-            self.op, command.request.model_copy(update={"input": values})
-        )
+        captured = capture_keyed_input(command.request.model_copy(update={"input": values}))
         command = Start(
             command.selector, captured, command.run_id, command.trigger, command.reply
         )

@@ -55,8 +55,9 @@ Reference workspaces serialize as:
 ```
 
 The old untagged `{"version": 1, "reference": "..."}` form is accepted with
-`DeprecationWarning` for this release only. Value workspace manifests are
-unchanged; unlike File references, they still explicitly carry their tree data.
+`DeprecationWarning` for this release only. `ava.Workspace()`, the run's own
+workspace, serializes as `{"version": 1, "entries": []}` until a host names it. A
+manifest with a non-empty `entries` list is refused: a workspace carries no file bytes.
 
 Deserialized File/Workspace values are unbound. Accessing an unbound `.path`,
 `open()`, or `read_bytes()` fails clearly. A reference contains identity, not

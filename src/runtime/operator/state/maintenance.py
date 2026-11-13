@@ -32,6 +32,13 @@ from ..input_files import INPUT_FILE_FOLDER_NAME
 from ..models import RunStatus
 from ..result_store import ResultIndexReport, ResultStore
 from ..run_processes import DEFAULT_CANCEL_GRACE_SECONDS, stop_run_process
+from ..run_workspaces import (
+    captured_folders,
+    remove_run_workspace,
+    remove_workspace_folder,
+    run_workspace_folders,
+    stored_tree_folders,
+)
 from .errors import StateRowError, StateStoreError
 from .results import RunResultRow, RunResultTable
 from .run_details import DeletedRunDetails, delete_run_details
@@ -79,6 +86,8 @@ class StateInfo:
     """``entries`` counts staged input-file folders."""
     schedule_inputs: FolderUsage
     """``entries`` counts schedule input-file folders."""
+    workspaces: FolderUsage
+    """``entries`` counts run workspace folders."""
     result_index: ResultIndexReport
     unreferenced_input_files: tuple[Path, ...]
     """Input-file folders no stored run uses."""
@@ -109,6 +118,8 @@ class DeletedRun:
     """The run's result bundle, or ``None`` when it stored no result."""
     input_file_folders: tuple[str, ...]
     """Staged input-file folders it used that no remaining run uses."""
+    workspace_removed: bool = False
+    """Whether the run had a workspace folder, removed with it."""
 
 
 @dataclass(frozen=True)
@@ -231,6 +242,7 @@ class StateMaintenance:
         used_schedule_folders = {
             input_file.folder for schedule in schedules for input_file in schedule.input_files
         }
+        run_workspaces = run_workspace_folders(self._database)
         return StateInfo(
             database=self._database,
             database_bytes=self._bytes_at_open,
@@ -244,6 +256,11 @@ class StateMaintenance:
             ),
             schedule_inputs=FolderUsage(
                 self._schedule_root, len(schedule_folders), _tree_bytes(self._schedule_root)
+            ),
+            workspaces=FolderUsage(
+                run_workspaces,
+                len(_token_folders(run_workspaces)[0]),
+                _tree_bytes(run_workspaces),
             ),
             result_index=self._results.check_index(),
             unreferenced_input_files=tuple(
@@ -364,6 +381,14 @@ class StateMaintenance:
             ]
             for name in unused_schedule_folders:
                 _remove_folder(self._schedule_root / name)
+            # Run workspaces, captured directories, and trees read from older results.
+            for root in (
+                run_workspace_folders(self._database),
+                stored_tree_folders(self._database),
+                captured_folders(self._database),
+            ):
+                for name in _token_folders(root)[0]:
+                    remove_workspace_folder(root / name)
         except (OSError, ValueError) as exc:
             raise StateMaintenanceError(
                 f"Every run is already deleted from {self._database}, but removing their "
@@ -438,7 +463,14 @@ class StateMaintenance:
             result = RunResultTable.delete(connection, run_id)
             details = delete_run_details(connection, run_id)
             keys = RunsTable.input_file_keys(connection, run_id)
+            tokens = RunsTable.workspace_tokens(connection, run_id)
             RunsTable.delete(connection, run_id)
+            # Directories staged as this run's input, unless another run uses them.
+            captures = tuple(
+                token
+                for token in tokens
+                if not RunsTable.workspace_token_in_use(connection, token)
+            )
             folders = tuple(
                 sorted(
                     {
@@ -453,6 +485,9 @@ class StateMaintenance:
                 self._remove_bundle(result)
             for name in folders:
                 _remove_folder(self._input_root / name)
+            workspace_removed = remove_run_workspace(self._database, run_id)
+            for token in captures:
+                remove_workspace_folder(captured_folders(self._database) / token)
         except (OSError, ValueError) as exc:
             # The result store refuses a bundle that is not a private directory.
             raise StateMaintenanceError(
@@ -466,6 +501,7 @@ class StateMaintenance:
             details=details,
             result_bundle=None if result is None else result.bundle_name,
             input_file_folders=folders,
+            workspace_removed=workspace_removed,
         )
 
     def _remove_bundle(self, result: RunResultRow) -> None:

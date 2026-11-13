@@ -1,5 +1,34 @@
 # Changelog
 
+## Unreleased
+
+- **Breaking:** a `Workspace` no longer carries file bytes. `ava.Workspace()` is
+  the run's own workspace: one directory the host creates on first use and keeps
+  with the run. Steps read and edit it in place, and only its reference crosses
+  step, process and result boundaries, so no step pays for a copy and a large tree
+  no longer fails with "Workflow result JSON exceeds 4194304 bytes". Every
+  `Workspace()` in a run is the same directory; use subfolders to keep files apart.
+- **Breaking:** `Workspace.entries`, `WorkspaceEntry` and the inline tree wire form
+  are removed. A manifest with a non-empty `entries` list fails validation with
+  `workspace_value_unsupported` on every host. `Workspace.from_path(DIR)` still
+  copies `DIR` once, now on disk into the host's store instead of into memory.
+  `snapshot()` returns the same workspace.
+- `ava run --workspace FIELD=DIR` streams `DIR` to the operator, which keeps the copy
+  in its own store (`workspaces/captures/`) and removes it with the run. The run no
+  longer depends on the client's machine or temporary folder.
+  `GrpcStateProvider.stage_input_workspace` does the same from Python.
+- The local operator keeps run workspaces in `workspaces/` next to its state
+  database. That folder is the only record of them, so a project moved or copied
+  with its state keeps every reference. They survive a restart, and `ava state delete`, `prune` and `clear`
+  remove them with their run; `ava state info` reports them. Results and run inputs
+  that earlier releases stored with an inline tree stay readable: a result's tree
+  is written once to `workspaces/stored-trees/` and returned as a reference, and a
+  run input's tree is written to that run's own folder at every start.
+- An agent step with a `Workspace` output and no `Workspace` input works in the
+  run's workspace and returns it by reference. Workspace paths are no longer
+  limited to eight components, and a workspace may hold symbolic links;
+  `ava result --output-dir` still refuses to export a workspace that has any.
+
 ## 0.20.13
 
 - Operator UI: `MachineInstance.pending_events[].payload` is optional, for hosts

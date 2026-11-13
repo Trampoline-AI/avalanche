@@ -82,8 +82,9 @@ With either, the step runs as an SDK `SandboxAgent` in a local sandbox on the
 host (the SDK's `UnixLocalSandboxClient`). Its root, which is the commands'
 working directory, is the step's `ava.Workspace` input: the agent edits that
 folder in place, as ClaudeAgent does. A step without a workspace input works in
-a temporary folder, removed after the call. The SDK keeps no snapshot of the
-sandbox: Avalanche snapshots the workspaces a step returns.
+a temporary folder, removed after the call, unless it returns a workspace: then
+it works in the run's workspace. The SDK keeps no snapshot of the sandbox:
+Avalanche returns a workspace by reference.
 
 ```python
 class Tidy(ava.Signature):
@@ -400,7 +401,7 @@ The model's JSON answer, validated against the signature. OpenAIAgent returns
 | Output type | OpenAI Agents SDK |
 | --- | --- |
 | `ava.File`, `list[ava.File]` | With sandbox tools, the model writes each file in the output folder, any kind of file, and answers with its path; a path outside the folder, or to a missing file, raises `AgentOutputError`. Without them, the model answers each file with its `name` and whole text `content`, and Avalanche writes the text as UTF-8; a name with folders, `.` or `..`, or a name used twice in one answer, raises `AgentOutputError`, and binary files cannot be written. |
-| `ava.Workspace` | Needs sandbox tools. The model does not answer it: Avalanche returns the sandbox root, the workspace input when the step has one, else the temporary folder, captured as a snapshot. |
+| `ava.Workspace` | Needs sandbox tools. The model does not answer it: Avalanche returns the sandbox root by reference: the workspace input when the step has one, else the run's workspace. |
 
 Other output types that hold files, such as a model with an `ava.File` field or
 `ava.File | None`, are rejected.

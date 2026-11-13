@@ -1,32 +1,15 @@
-"""Retain keyed-run references and materialize portable ingress once, not per state entry."""
+"""Check keyed-run references and read file trees stored inline by earlier releases."""
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-from pydantic import JsonValue
-
-from avalanche.references import prepare_run_references, validate_local_references
-from avalanche.workspace import Workspace
+from avalanche.references import read_stored_trees, validate_local_references
 
 from .state.runs import RunRequest
 
-if TYPE_CHECKING:
-    from .operator import Operator
 
-
-def capture_keyed_input(op: Operator, request: RunRequest) -> RunRequest:
-    def capture(value: JsonValue) -> JsonValue:
-        if isinstance(value, dict):
-            if value.get("kind") == "workspace" or set(value) == {"version", "entries"}:
-                workspace = prepare_run_references(
-                    Workspace.model_validate(value), root=op.input_files.root.parent / "inputs"
-                )
-                return workspace.manifest()
-            return {name: capture(child) for name, child in value.items()}
-        if isinstance(value, list):
-            return [capture(child) for child in value]
-        return value
-
-    validate_local_references(request.input)
-    return request.model_copy(update={"input": capture(request.input)})
+def capture_keyed_input(request: RunRequest) -> RunRequest:
+    captured = (
+        None if request.input is None else read_stored_trees(request.input, own_copy=True)
+    )
+    validate_local_references(captured)
+    return request.model_copy(update={"input": captured})

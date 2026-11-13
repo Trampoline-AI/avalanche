@@ -1,16 +1,16 @@
-"""Compare peak RSS growth for reference and value workspaces in fresh processes.
+"""Measure peak RSS growth of a workflow that passes a workspace between two steps.
 
-Run each mode separately so resource.getrusage's lifetime high-water mark does not
-carry over between trials::
+Run each mode in a fresh process so resource.getrusage's lifetime high-water mark
+does not carry over between trials::
 
-    uv run python scripts/benchmark_workspace.py reference
-    uv run python scripts/benchmark_workspace.py value
+    uv run python scripts/benchmark_workspace.py            # the run's workspace
+    uv run python scripts/benchmark_workspace.py reference  # a host directory
 
 Each run writes and hashes a 200 MB file through a two-node local workflow. The
 measurement starts immediately before Workflow.run() and ends after its result.
 Imports, graph construction, and a 1 MiB write buffer precede the baseline. The
-reference trial fails if peak RSS growth reaches 50 MB. MB means 1,000,000 bytes.
-The script owns and removes its fixture directory; Avalanche does not own it.
+trial fails if peak RSS growth reaches 50 MB. MB means 1,000,000 bytes.
+The script owns and removes its fixture directory, which also holds the run workspace.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import platform
 import resource
 import sys
@@ -26,6 +27,7 @@ from pathlib import Path
 
 import avalanche as ava
 import avalanche.workspace as workspace_module
+from avalanche.references import LOCAL_WORKSPACE_ROOT_ENV
 
 
 def peak_rss_bytes() -> int:
@@ -35,7 +37,7 @@ def peak_rss_bytes() -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("reference", "value"))
+    parser.add_argument("mode", nargs="?", choices=("run", "reference"), default="run")
     parser.add_argument("--size-mb", type=int, default=200)
     args = parser.parse_args()
     if args.size_mb <= 0:
@@ -51,6 +53,7 @@ def main() -> None:
 
     with tempfile.TemporaryDirectory(prefix="avalanche-workspace-benchmark-") as directory:
         root = Path(directory)
+        os.environ[LOCAL_WORKSPACE_ROOT_ENV] = str(root)
         workspace = (
             ava.Workspace.from_directory(root, reference="host-managed:benchmark")
             if args.mode == "reference"
@@ -87,8 +90,8 @@ def main() -> None:
         result = workflow.run(executor=executor).result(timeout=300)
         after = peak_rss_bytes()
         assert result == expected.hexdigest(), "file digest mismatch"
-        host_file_preserved = (root / "payload.bin").is_file()
-        assert host_file_preserved == (args.mode == "reference")
+        host_file_preserved = bool(list(root.rglob("payload.bin")))
+        assert host_file_preserved, "the workspace file must stay where the step wrote it"
         growth = after - before
         record = {
             "mode": args.mode,
@@ -99,7 +102,7 @@ def main() -> None:
             "rss_growth_bytes": growth,
             "rss_growth_mb": growth / 1_000_000,
             "reference_bound_bytes": 50_000_000,
-            "reference_bound_passed": growth < 50_000_000 if args.mode == "reference" else None,
+            "reference_bound_passed": growth < 50_000_000,
             "host_file_preserved": host_file_preserved,
             "python": platform.python_version(),
             "platform": platform.platform(),
@@ -110,8 +113,8 @@ def main() -> None:
         }
     record["fixture_removed"] = not root.exists()
     print(json.dumps(record, sort_keys=True), flush=True)
-    if args.mode == "reference" and growth >= 50_000_000:
-        raise SystemExit("reference workspace peak RSS growth must be below 50 MB")
+    if growth >= 50_000_000:
+        raise SystemExit("workspace peak RSS growth must be below 50 MB")
 
 
 if __name__ == "__main__":

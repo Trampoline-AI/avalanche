@@ -195,6 +195,11 @@ def _print_info(state: StateMaintenance) -> int:
             f"{_plural(info.schedule_inputs.entries, 'folder')}, "
             f"{_size(info.schedule_inputs.size_bytes)} in {info.schedule_inputs.path}",
         ),
+        (
+            "Workspaces",
+            f"{_plural(info.workspaces.entries, 'folder')}, "
+            f"{_size(info.workspaces.size_bytes)} in {info.workspaces.path}",
+        ),
     ]
     width = max(len(label) for label, _ in rows) + 1
     for label, value in rows:
@@ -245,6 +250,7 @@ def _print_deleted(run: DeletedRun) -> None:
         _plural(details.evaluations, "evaluation"),
         "its result bundle" if run.result_bundle is not None else "no result bundle",
         _plural(len(run.input_file_folders), "input-file folder"),
+        *(("its workspace",) if run.workspace_removed else ()),
     ]
     print(f"Deleted run {run.run_id} ({run.status.value}): {', '.join(removed)}.")
 

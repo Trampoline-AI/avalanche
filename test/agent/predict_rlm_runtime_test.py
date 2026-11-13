@@ -401,7 +401,7 @@ def test_file_and_workspace_inputs_are_recorded_without_bytes(tmp_path):
             "size_bytes": 12,
             "sha256": hashlib.sha256(b"secret bytes").hexdigest(),
         },
-        "workspace": {"kind": "workspace", "entry_count": 0, "total_size_bytes": 0},
+        "workspace": {"kind": "workspace_reference", "reference": "run-workspace:unbound"},
     }
 
 

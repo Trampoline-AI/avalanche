@@ -11,6 +11,7 @@ adapters.
 
 from __future__ import annotations
 
+import re
 import sqlite3
 from collections.abc import Collection, Iterator, Mapping
 from dataclasses import dataclass
@@ -43,6 +44,7 @@ from .errors import StateRowError
 from .rows import json_column, json_value, row_model
 
 _RUNS = "runs"
+_LOCAL_WORKSPACE_TOKEN = re.compile(r"local-ws:v1:([0-9a-f]{32})")
 _NODES = "run_nodes"
 _INPUT_FILES = "run_input_files"
 _TOPOLOGY = TypeAdapter(WorkflowTopology)
@@ -381,6 +383,27 @@ class RunsTable:
             run_row = row_model(_RunRow, row, table=_RUNS)
             runs.append(_loaded_run(run_row, nodes.pop(run_row.run_id, ())))
         return tuple(runs)
+
+    @staticmethod
+    def workspace_tokens(connection: sqlite3.Connection, run_id: str) -> tuple[str, ...]:
+        """Tokens of the local workspace references a stored run's request names."""
+        row = connection.execute(
+            f"SELECT request_json FROM {_RUNS} WHERE run_id = ?", (run_id,)
+        ).fetchone()
+        if row is None or row["request_json"] is None:
+            return ()
+        return tuple(dict.fromkeys(_LOCAL_WORKSPACE_TOKEN.findall(row["request_json"])))
+
+    @staticmethod
+    def workspace_token_in_use(connection: sqlite3.Connection, token: str) -> bool:
+        """Whether any stored run's request still names this workspace reference."""
+        return (
+            connection.execute(
+                f"SELECT 1 FROM {_RUNS} WHERE instr(request_json, ?) LIMIT 1",
+                (f"local-ws:v1:{token}",),
+            ).fetchone()
+            is not None
+        )
 
     @staticmethod
     def read_request(connection: sqlite3.Connection, run_id: str) -> RunRequest:

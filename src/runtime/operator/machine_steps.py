@@ -67,9 +67,10 @@ class MachineStepRequest(BaseModel):
                 idempotency_key=context.step_key,
             )
         if isinstance(node, RunNode):
-            from avalanche.references import prepare_run_references
+            from avalanche.references import LocalReferenceBinder, bind_run_workspaces
 
-            value = prepare_run_references(bound.arguments["input"])
+            # Another run receives this value: name the sender's workspace first.
+            value = bind_run_workspaces(bound.arguments["input"], LocalReferenceBinder())
             wire = value.model_dump(mode="json") if isinstance(value, BaseModel) else value
             return cls(
                 node_id=context.node_id,
@@ -79,14 +80,16 @@ class MachineStepRequest(BaseModel):
                 target=bound.arguments["target"],
                 idempotency_key=context.step_key,
             )
-        from avalanche.references import prepare_run_references
+        from avalanche.references import LocalReferenceBinder, bind_run_workspaces
 
         return cls(
             node_id=context.node_id,
             spec=node.spec,
             key=TypeAdapter(list[JsonValue] | str).validate_python(bound.arguments["key"]),
             event=bound.arguments["event"],
-            payload=payload_to_json(prepare_run_references(bound.arguments["payload"])),
+            payload=payload_to_json(
+                bind_run_workspaces(bound.arguments["payload"], LocalReferenceBinder())
+            ),
             idempotency_key=bound.arguments["idempotency_key"] or context.step_key,
         )
 

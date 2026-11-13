@@ -338,9 +338,7 @@ def test_spawned_results_materialize_nested_files_workspaces_and_large_payloads(
             "done",
         )
         assert {
-            entry.path: entry.content
-            for entry in result["workspace"].entries
-            if entry.kind == "file"
+            path.name: path.read_bytes() for path in result["workspace"].path.iterdir()
         } == {"report.txt": b"workspace-content"}
 
 

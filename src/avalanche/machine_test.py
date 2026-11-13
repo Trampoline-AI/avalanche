@@ -89,11 +89,10 @@ class MachineTest:
         self.host = host if host is not None else InMemoryMachineHost(stub=stub)
         self.machine = machine
         self.spec = machine.spec
-        from .references import LocalReferenceBinder, bind_references, prepare_run_references
+        from .references import LocalReferenceBinder, bind_references
 
         self.input = bind_references(
-            prepare_run_references(machine.input_type.model_validate(input)),
-            LocalReferenceBinder(),
+            machine.input_type.model_validate(input), LocalReferenceBinder()
         )
         self.state = self.spec.initial
         self.history: list[MachineHistory] = []
@@ -770,12 +769,10 @@ class WorkflowTest(MachineTest):
         self.host = host if host is not None else InMemoryMachineHost(stub=stub)
         for target in targets:
             self.host.register(target)
-        from .references import LocalReferenceBinder, bind_references, prepare_run_references
+        from .references import LocalReferenceBinder, bind_references
 
         self.input = bind_references(
-            prepare_run_references(
-                workflow.input_type.model_validate(input) if workflow.input_type else None
-            ),
+            workflow.input_type.model_validate(input) if workflow.input_type else None,
             LocalReferenceBinder(),
         )
         self.handle: RunHandle[LocalValue] = RunHandle(uuid4().hex)

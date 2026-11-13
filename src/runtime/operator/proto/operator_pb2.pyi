@@ -545,6 +545,32 @@ class StageInputFileRequestV2(_message.Message):
     content: bytes
     def __init__(self, workflow_selector: _Optional[str] = ..., field_name: _Optional[str] = ..., name: _Optional[str] = ..., media_type: _Optional[str] = ..., content: _Optional[bytes] = ...) -> None: ...
 
+class StageInputWorkspaceRequestV2(_message.Message):
+    __slots__ = ("workflow_selector", "field_name", "path", "directory", "content", "end_of_file")
+    WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
+    FIELD_NAME_FIELD_NUMBER: _ClassVar[int]
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    DIRECTORY_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_FIELD_NUMBER: _ClassVar[int]
+    END_OF_FILE_FIELD_NUMBER: _ClassVar[int]
+    workflow_selector: str
+    field_name: str
+    path: str
+    directory: bool
+    content: bytes
+    end_of_file: bool
+    def __init__(self, workflow_selector: _Optional[str] = ..., field_name: _Optional[str] = ..., path: _Optional[str] = ..., directory: bool = ..., content: _Optional[bytes] = ..., end_of_file: bool = ...) -> None: ...
+
+class StagedInputWorkspaceV2(_message.Message):
+    __slots__ = ("reference", "files", "size_bytes")
+    REFERENCE_FIELD_NUMBER: _ClassVar[int]
+    FILES_FIELD_NUMBER: _ClassVar[int]
+    SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    reference: str
+    files: int
+    size_bytes: int
+    def __init__(self, reference: _Optional[str] = ..., files: _Optional[int] = ..., size_bytes: _Optional[int] = ...) -> None: ...
+
 class ResolveRunRequestV2(_message.Message):
     __slots__ = ("workflow_selector", "key_fields_json")
     WORKFLOW_SELECTOR_FIELD_NUMBER: _ClassVar[int]
@@ -1023,18 +1049,20 @@ class GetRunResultRequestV2(_message.Message):
     def __init__(self, run_id: _Optional[str] = ..., entry: _Optional[int] = ..., node_id: _Optional[str] = ...) -> None: ...
 
 class RunResultV2(_message.Message):
-    __slots__ = ("cursor", "run_id", "value", "files", "scope_ref")
+    __slots__ = ("cursor", "run_id", "value", "files", "scope_ref", "workspace_root")
     CURSOR_FIELD_NUMBER: _ClassVar[int]
     RUN_ID_FIELD_NUMBER: _ClassVar[int]
     VALUE_FIELD_NUMBER: _ClassVar[int]
     FILES_FIELD_NUMBER: _ClassVar[int]
     SCOPE_REF_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_ROOT_FIELD_NUMBER: _ClassVar[int]
     cursor: LifecycleCursorV2
     run_id: str
     value: ResultValueV2
     files: _containers.RepeatedCompositeFieldContainer[ResultFileDescriptorV2]
     scope_ref: ScopeReferenceV2
-    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., run_id: _Optional[str] = ..., value: _Optional[_Union[ResultValueV2, _Mapping]] = ..., files: _Optional[_Iterable[_Union[ResultFileDescriptorV2, _Mapping]]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ...) -> None: ...
+    workspace_root: str
+    def __init__(self, cursor: _Optional[_Union[LifecycleCursorV2, _Mapping]] = ..., run_id: _Optional[str] = ..., value: _Optional[_Union[ResultValueV2, _Mapping]] = ..., files: _Optional[_Iterable[_Union[ResultFileDescriptorV2, _Mapping]]] = ..., scope_ref: _Optional[_Union[ScopeReferenceV2, _Mapping]] = ..., workspace_root: _Optional[str] = ...) -> None: ...
 
 class RunOutputArtifactDescriptorV2(_message.Message):
     __slots__ = ("artifact_ref", "name", "media_type")

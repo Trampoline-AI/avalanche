@@ -127,7 +127,7 @@ the operator's canonical selector when names are ambiguous.
 | `--input JSON` | Omitted | JSON **object** for the declared `BaseInput` model. |
 | `--context JSON` | Omitted | JSON **object** for declared run context. |
 | `--file FIELD=PATH` | None; repeatable | Read local bytes and attach a top-level `File` input. |
-| `--workspace FIELD=DIR` | None; repeatable | Capture a local directory as a top-level `Workspace` input. |
+| `--workspace FIELD=DIR` | None; repeatable | Send a local directory to the operator, which keeps a copy in its own store, and pass that copy as a top-level `Workspace` input. Symbolic links and special files are refused. |
 
 The same field cannot be supplied by JSON, a file attachment, and/or a workspace.
 Invalid JSON, assignment syntax, duplicate fields, or an operator submission error

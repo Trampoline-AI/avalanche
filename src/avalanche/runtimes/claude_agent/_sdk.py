@@ -86,7 +86,7 @@ from ...agent.trace import (
     retained_fields,
 )
 from ...file import File
-from ...references import AgentOutputFolder
+from ...references import AgentOutputFolder, agent_output_workspace
 from ...workspace import Workspace
 from ._prompt import TranscriptFormatError, first_prompt
 from .runtime import unknown_sdk_options
@@ -161,8 +161,11 @@ async def run(
     with contextlib.ExitStack() as stack:
         if workspace_inputs:
             workspace = getattr(request.inputs, workspace_inputs[0])
-            # A reference workspace runs in place, so the agent's writes land in the
-            # host's directory; a value workspace runs in its temporary copy.
+        elif workspace_outputs:
+            # A workspace output with no workspace input is the run's workspace.
+            workspace, _ = agent_output_workspace()
+        if workspace is not None:
+            # The agent works in place: its writes land in the host's directory.
             directory = workspace.path
         else:
             directory = Path(
@@ -415,13 +418,9 @@ def _outputs(
     signature = request.signature
     if not workspace_outputs and output_folder is None:
         return JsonOutputs(text=json.dumps(structured_output))
-    # A reference snapshot is bound to its directory, which a JSON round trip loses,
-    # so Claude's values are validated here and the snapshot joins them as an object.
-    snapshot = (
-        (workspace.snapshot() if workspace is not None else Workspace.from_path(directory))
-        if workspace_outputs
-        else None
-    )
+    # A workspace is bound to its directory, which a JSON round trip loses, so
+    # Claude's values are validated here and the workspace joins them as an object.
+    snapshot = workspace if workspace_outputs else None
     outputs: dict[str, object] = dict(structured_output)
     files = (
         _output_files(request, outputs, file_outputs, output_folder, directory)

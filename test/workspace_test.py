@@ -1,49 +1,215 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
-import os
 import pickle
 from pathlib import Path
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 import avalanche as ava
 import avalanche.workspace as workspace_module
-from avalanche.workspace import WorkspaceEntry
+from avalanche.references import (
+    LOCAL_WORKSPACE_ROOT_ENV,
+    LocalReferenceBinder,
+    read_stored_trees,
+)
+from avalanche.results import EncodedWorkflowResult
+from avalanche.workspace import refuses_value_workspace
 from runtime.operator.client import _json_payload
 from runtime.operator.results import decode_workflow_result, encode_workflow_result
 
 
-def _workspace_files(workspace: ava.Workspace) -> dict[str, bytes]:
+@pytest.fixture
+def workspace_root(tmp_path, monkeypatch) -> Path:
+    """A host workspace folder that lasts only for this test."""
+    root = tmp_path / "host-workspaces"
+    root.mkdir()
+    monkeypatch.setenv(LOCAL_WORKSPACE_ROOT_ENV, str(root))
+    return root
+
+
+def _inline_tree(files: dict[str, bytes]) -> dict:
+    """The wire form earlier releases used to carry a tree's bytes."""
+    parents = {str(parent) for name in files for parent in Path(name).parents}
+    directories = sorted(parents - {"."})
     return {
-        entry.path: entry.content
-        for entry in workspace.entries
-        if entry.kind == "file" and entry.content is not None
+        "version": 1,
+        "entries": [
+            *({"kind": "directory", "path": path} for path in directories),
+            *(
+                {
+                    "kind": "file",
+                    "path": path,
+                    "content": base64.b64encode(content).decode(),
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                }
+                for path, content in files.items()
+            ),
+        ],
     }
 
 
-def test_workspace_value_pickle_state_is_unchanged():
+def test_run_workspace_placeholder_carries_no_tree_and_needs_a_run():
     workspace = ava.Workspace()
-    state = {
-        "__dict__": {"entries": ()},
-        "__pydantic_extra__": None,
-        "__pydantic_fields_set__": set(),
-        "__pydantic_private__": {
-            "_materialized_path": None,
-            "_materialized_identity": None,
-        },
-    }
-    assert workspace.__getstate__() == state
-    restored = ava.Workspace.__new__(ava.Workspace)
-    restored.__setstate__(state)
-    for value in (restored, pickle.loads(pickle.dumps(workspace))):
+    for value in (workspace, pickle.loads(pickle.dumps(workspace))):
         assert value.reference is None
         assert not value.is_reference
         assert value.model_dump() == {"version": 1, "entries": []}
-        assert value.__getstate__() == state
+        assert ava.Workspace.model_validate(value.model_dump()).reference is None
         with pytest.raises(RuntimeError):
             _ = value.path
+
+
+def test_flow_steps_share_one_run_workspace_in_place(workspace_root):
+    class Snapshot(BaseModel, frozen=True):
+        files: int
+        checkout: ava.Workspace
+
+    seen: dict[str, Path] = {}
+
+    @ava.source
+    def fill(checkout: ava.Workspace) -> Snapshot:
+        seen["fill"] = checkout.path
+        for index in range(3):
+            (checkout.path / f"part-{index}.bin").write_bytes(b"x" * 2 * 1024 * 1024)
+        return Snapshot(files=3, checkout=checkout)
+
+    @ava.step
+    def measure(snapshot: Snapshot, other: ava.Workspace) -> Snapshot:
+        seen["measure"] = snapshot.checkout.path
+        # A second Workspace() in the same run is the same folder.
+        seen["other"] = other.path
+        sizes = [path.stat().st_size for path in snapshot.checkout.path.iterdir()]
+        assert sum(sizes) == 6 * 1024 * 1024
+        return snapshot
+
+    @ava.workflow
+    def flow():
+        snapshot = fill(checkout=ava.Workspace())
+        return measure(snapshot, ava.Workspace())
+
+    result = flow().run(executor=ava.LocalExecutor()).result()
+
+    assert seen["fill"] == seen["measure"] == seen["other"]
+    assert seen["fill"].parent == workspace_root / "runs"
+    # The step's files are still where it wrote them: nothing was copied or removed.
+    assert len(list(seen["fill"].iterdir())) == 3
+    encoded = encode_workflow_result(result)
+    assert len(encoded.value_json) < 1024
+    assert result.checkout.reference.startswith("local-ws:v1:")
+    restored = decode_workflow_result(encoded)["checkout"]
+    assert restored.path == seen["fill"]
+
+
+def test_workspace_created_inside_a_step_is_returned_by_reference(workspace_root):
+    @ava.source
+    def write():
+        workspace = ava.Workspace()
+        workspace.path.joinpath("made.txt").write_text("made")
+        return {"workspace": workspace}
+
+    @ava.workflow
+    def flow():
+        return write()
+
+    workspace = flow().run(executor=ava.LocalExecutor()).result()["workspace"]
+
+    assert workspace.reference.startswith("local-ws:v1:")
+    assert workspace.path.joinpath("made.txt").read_text() == "made"
+    assert LocalReferenceBinder().bind_workspace(workspace) == workspace.path
+
+
+def test_from_path_copies_the_directory_once_and_refers_to_the_copy(workspace_root, tmp_path):
+    source = tmp_path / "source"
+    (source / "nested").mkdir(parents=True)
+    (source / "nested" / "kept.txt").write_text("kept")
+    workspace = ava.Workspace.from_path(source)
+    (source / "later.txt").write_text("written after")
+    workspace.path.joinpath("edit.txt").write_text("edited")
+
+    assert workspace.path.parent == workspace_root / "captures"
+    assert workspace.path.joinpath("nested", "kept.txt").read_text() == "kept"
+    assert not workspace.path.joinpath("later.txt").exists()
+    assert not (source / "edit.txt").exists()
+    assert str(tmp_path) not in workspace.model_dump_json()
+    with pytest.raises(ValueError):
+        ava.Workspace.from_path(source / "later.txt")
+
+
+def test_workspace_refuses_an_inline_file_tree():
+    tree = _inline_tree({"a.txt": b"a"})
+    for value in (tree, {"entries": tree["entries"]}):
+        with pytest.raises(ValidationError) as refused:
+            ava.Workspace.model_validate(value)
+        assert refuses_value_workspace(refused.value)
+    with pytest.raises(ValidationError) as other:
+        ava.Workspace.model_validate({"version": 2, "entries": []})
+    assert not refuses_value_workspace(other.value)
+
+
+def test_stored_inline_tree_result_is_read_once_as_a_reference(workspace_root):
+    tree = _inline_tree({"docs/a.txt": b"alpha", "b.bin": b"\x00\x01"})
+    stored = EncodedWorkflowResult(
+        value_json=json.dumps(
+            {
+                "version": 1,
+                "value": {
+                    "kind": "dict",
+                    "items": [["checkout", {"kind": "workspace", "manifest": tree}]],
+                },
+            }
+        )
+    )
+
+    first = decode_workflow_result(stored)["checkout"]
+    second = decode_workflow_result(stored)["checkout"]
+
+    assert first.reference == second.reference
+    assert first.path == second.path
+    assert first.path.parent == workspace_root / "stored-trees"
+    assert first.path.joinpath("docs/a.txt").read_bytes() == b"alpha"
+    assert first.path.joinpath("b.bin").read_bytes() == b"\x00\x01"
+    assert read_stored_trees({"checkout": tree})["checkout"] == first.manifest()
+
+
+def test_each_run_started_from_a_stored_inline_tree_edits_its_own_copy(workspace_root):
+    tree = _inline_tree({"notes.txt": b"stored"})
+    binder = LocalReferenceBinder()
+
+    def start() -> Path:
+        manifest = read_stored_trees({"checkout": tree}, own_copy=True)["checkout"]
+        return binder.bind_workspace(ava.Workspace.model_validate(manifest))
+
+    first, second = start(), start()
+    (first / "notes.txt").write_text("edited by the first run")
+    (first / "extra.txt").write_text("left behind")
+
+    assert first != second
+    assert first.parent == second.parent == workspace_root / "captures"
+    assert (second / "notes.txt").read_text() == "stored"
+    assert not (second / "extra.txt").exists()
+    assert (start() / "notes.txt").read_text() == "stored"
+
+
+@pytest.mark.parametrize("corruption", ["escape", "sha256", "missing_parent", "duplicate"])
+def test_stored_inline_tree_is_refused_when_unsafe_or_corrupt(workspace_root, corruption):
+    tree = _inline_tree({"docs/a.txt": b"alpha"})
+    if corruption == "escape":
+        tree["entries"][1]["path"] = "../a.txt"
+    elif corruption == "sha256":
+        tree["entries"][1]["sha256"] = "0" * 64
+    elif corruption == "missing_parent":
+        del tree["entries"][0]
+    else:
+        tree["entries"].append(dict(tree["entries"][1]))
+
+    with pytest.raises(ValueError):
+        read_stored_trees(tree)
+    assert not any((workspace_root / "stored-trees").glob("[0-9a-f]*"))
+    assert not (workspace_root.parent / "a.txt").exists()
 
 
 def test_directory_workspace_uses_host_path_without_capture(tmp_path, monkeypatch):
@@ -56,18 +222,11 @@ def test_directory_workspace_uses_host_path_without_capture(tmp_path, monkeypatc
         raise AssertionError("reference workspace attempted to capture or materialize")
 
     monkeypatch.setattr(ava.Workspace, "from_path", unexpected_capture)
-    monkeypatch.setattr(workspace_module.tempfile, "mkdtemp", unexpected_capture)
-    monkeypatch.setattr(workspace_module._MaterializationOwner, "register", unexpected_capture)
     workspace = ava.Workspace.from_directory(path, reference="opaque: host / data")
     assert workspace.path == path
     assert workspace.reference == "opaque: host / data"
     assert workspace.is_reference
-    assert workspace.entries == ()
-    assert workspace.snapshot().path == path
-    assert workspace.snapshot().reference == workspace.reference
-    assert (
-        workspace_module.run_workspace_invocation(lambda value: value, workspace) is workspace
-    )
+    assert workspace.snapshot() is workspace
     assert workspace.path.joinpath("keep.txt").read_text() == "host-owned"
     assert ava.Workspace().reference is None
     assert not ava.Workspace().is_reference
@@ -123,7 +282,6 @@ def test_reference_workspace_serialization_is_path_free_and_unbound(tmp_path):
     ):
         assert restored.reference == reference
         assert restored.is_reference
-        assert restored.entries == ()
         with pytest.raises(
             RuntimeError, match="^workspace reference is not bound to a directory$"
         ):
@@ -136,10 +294,7 @@ def test_reference_workspace_serialization_is_path_free_and_unbound(tmp_path):
     assert tmp_path.is_dir()
 
 
-@pytest.mark.parametrize("entries", [(), (WorkspaceEntry(path="empty", kind="directory"),)])
-def test_reference_workspace_rejects_entries(entries):
-    with pytest.raises(ValueError):
-        ava.Workspace(entries=entries, reference="ref")
+def test_reference_workspace_rejects_entries():
     with pytest.raises(ValueError):
         ava.Workspace.model_validate({"version": 1, "reference": "ref", "entries": []})
 
@@ -206,341 +361,27 @@ def test_reference_workspace_local_workflow_preserves_host_directory(tmp_path, f
     assert tmp_path.joinpath("created.txt").read_text() == "created"
 
 
-def test_unbound_reference_passes_return_capture_without_binding():
-    workspace = ava.Workspace.model_validate({"version": 1, "reference": "remote:example"})
-    assert (
-        workspace_module.run_workspace_invocation(lambda value: value, workspace) is workspace
+@pytest.mark.parametrize("fault", ["escape", "unfinished", "interleaved", "orphan"])
+def test_a_refused_workspace_stream_leaves_nothing_in_the_store(tmp_path, fault):
+    from runtime.operator.run_workspaces import (
+        StagedWorkspaceError,
+        WorkspaceChunk,
+        stage_input_workspace,
     )
 
+    def piece(path, content=b"x", end=True):
+        return WorkspaceChunk(path=path, directory=False, content=content, end_of_file=end)
 
-def test_workspace_rejects_source_and_child_symlinks(tmp_path):
-    source = tmp_path / "source"
-    source.mkdir()
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "secret.txt").write_text("outside")
+    folder = WorkspaceChunk(path="docs", directory=True, content=b"", end_of_file=False)
+    chunks = {
+        "escape": [folder, piece("../outside.txt")],
+        "unfinished": [folder, piece("docs/a.txt", end=False)],
+        "interleaved": [piece("a.txt", end=False), piece("b.txt")],
+        "orphan": [piece("missing/a.txt")],
+    }[fault]
 
-    root_link = tmp_path / "root-link"
-    root_link.symlink_to(outside, target_is_directory=True)
-    with pytest.raises(ValueError, match="source must be a directory"):
-        ava.Workspace.from_path(root_link)
+    with pytest.raises(StagedWorkspaceError):
+        stage_input_workspace(tmp_path / "store", iter(chunks))
 
-    (source / "file-link").symlink_to(outside / "secret.txt")
-    with pytest.raises(ValueError, match="unsupported entry 'file-link'"):
-        ava.Workspace.from_path(source)
-
-    (source / "file-link").unlink()
-    (source / "directory-link").symlink_to(outside, target_is_directory=True)
-    with pytest.raises(ValueError, match="unsupported entry 'directory-link'"):
-        ava.Workspace.from_path(source)
-
-
-@pytest.mark.parametrize("replacement_kind", ["file", "directory"])
-def test_workspace_rejects_entry_replaced_with_symlink_before_open(
-    tmp_path,
-    monkeypatch,
-    replacement_kind,
-):
-    source = tmp_path / "source"
-    source.mkdir()
-    selected = source / "selected"
-    outside = tmp_path / "outside"
-    if replacement_kind == "file":
-        selected.write_text("selected")
-        outside.write_text("outside secret")
-    else:
-        selected.mkdir()
-        (selected / "inside.txt").write_text("selected")
-        outside.mkdir()
-        (outside / "secret.txt").write_text("outside secret")
-
-    real_open = os.open
-    replaced = False
-
-    def replace_before_open(path, flags, *, dir_fd=None):
-        nonlocal replaced
-        if path == "selected" and dir_fd is not None and not replaced:
-            replaced = True
-            selected.rename(source / "selected-original")
-            selected.symlink_to(
-                outside,
-                target_is_directory=replacement_kind == "directory",
-            )
-        if dir_fd is None:
-            return real_open(path, flags)
-        return real_open(path, flags, dir_fd=dir_fd)
-
-    monkeypatch.setattr(workspace_module.os, "open", replace_before_open)
-
-    with pytest.raises(ValueError, match="entry 'selected' changed while being captured"):
-        ava.Workspace.from_path(source)
-    assert replaced
-    assert (
-        outside if replacement_kind == "file" else outside / "secret.txt"
-    ).read_text() == "outside secret"
-
-
-def test_workspace_rejects_root_replacement_without_following_it(tmp_path, monkeypatch):
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "selected.txt").write_text("selected")
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (outside / "secret.txt").write_text("outside secret")
-    source_identity = (source.stat().st_dev, source.stat().st_ino)
-    real_listdir = os.listdir
-    replaced = False
-
-    def replace_root_after_listing(descriptor):
-        nonlocal replaced
-        names = real_listdir(descriptor)
-        metadata = os.fstat(descriptor)
-        if (metadata.st_dev, metadata.st_ino) == source_identity and not replaced:
-            replaced = True
-            source.rename(tmp_path / "source-original")
-            source.symlink_to(outside, target_is_directory=True)
-        return names
-
-    monkeypatch.setattr(workspace_module.os, "listdir", replace_root_after_listing)
-
-    with pytest.raises(ValueError, match="root directory changed while being captured"):
-        ava.Workspace.from_path(source)
-    assert replaced
-    assert (outside / "secret.txt").read_text() == "outside secret"
-
-
-def test_workspace_rejects_directory_mutation_after_listing(tmp_path, monkeypatch):
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "selected.txt").write_text("selected")
-    source_identity = (source.stat().st_dev, source.stat().st_ino)
-    real_listdir = os.listdir
-    mutated = False
-
-    def mutate_root_after_listing(descriptor):
-        nonlocal mutated
-        names = real_listdir(descriptor)
-        metadata = os.fstat(descriptor)
-        if (metadata.st_dev, metadata.st_ino) == source_identity and not mutated:
-            mutated = True
-            (source / "concurrent.txt").write_text("concurrent")
-        return names
-
-    monkeypatch.setattr(workspace_module.os, "listdir", mutate_root_after_listing)
-
-    with pytest.raises(ValueError, match="root directory changed while being captured"):
-        ava.Workspace.from_path(source)
-    assert mutated
-
-
-def test_workspace_rejects_file_mutation_after_open(tmp_path, monkeypatch):
-    source = tmp_path / "source"
-    source.mkdir()
-    selected = source / "selected.txt"
-    selected.write_text("selected")
-    selected_identity = (selected.stat().st_dev, selected.stat().st_ino)
-    real_read = os.read
-    mutated = False
-
-    def mutate_file_before_read(descriptor, size):
-        nonlocal mutated
-        metadata = os.fstat(descriptor)
-        if (metadata.st_dev, metadata.st_ino) == selected_identity and not mutated:
-            mutated = True
-            selected.write_text("concurrent mutation")
-        return real_read(descriptor, size)
-
-    monkeypatch.setattr(workspace_module.os, "read", mutate_file_before_read)
-
-    with pytest.raises(ValueError, match="entry 'selected.txt' changed while being captured"):
-        ava.Workspace.from_path(source)
-    assert mutated
-
-
-@pytest.mark.parametrize("excess_depth", [False, True])
-def test_workspace_depth_boundary_closes_capture_descriptors(
-    tmp_path, monkeypatch, excess_depth
-):
-    current = tmp_path
-    parts = []
-    for index in range(workspace_module._MAX_WORKSPACE_CAPTURE_DEPTH - 1 + excess_depth):
-        part = f"level-{index}"
-        parts.append(part)
-        current /= part
-        current.mkdir()
-    current.joinpath("value.txt").write_text("value")
-    real_open, real_close = os.open, os.close
-    live = set()
-
-    def tracked_open(path, flags, *args, **kwargs):
-        descriptor = real_open(path, flags, *args, **kwargs)
-        live.add(descriptor)
-        return descriptor
-
-    def tracked_close(descriptor):
-        live.remove(descriptor)
-        return real_close(descriptor)
-
-    monkeypatch.setattr(workspace_module.os, "open", tracked_open)
-    monkeypatch.setattr(workspace_module.os, "close", tracked_close)
-    if excess_depth:
-        with pytest.raises(ValueError, match="depth limit"):
-            ava.Workspace.from_path(tmp_path)
-    else:
-        assert _workspace_files(ava.Workspace.from_path(tmp_path)) == {
-            "/".join([*parts, "value.txt"]): b"value"
-        }
-    assert live == set()
-
-
-@pytest.mark.parametrize(
-    "path",
-    ["../escape", "/absolute", ".", "missing/child"],
-)
-def test_workspace_manifest_rejects_unsafe_or_incomplete_tree(tmp_path, path):
-    (tmp_path / "value.txt").write_bytes(b"contents")
-    manifest = ava.Workspace.from_path(tmp_path).manifest()
-    manifest["entries"][0]["path"] = path
-    with pytest.raises(ValueError):
-        ava.Workspace.from_manifest(manifest)
-
-
-@pytest.mark.parametrize("corruption", ["content", "sha256", "duplicate", "collision"])
-def test_workspace_manifest_rejects_corrupt_content_and_colliding_paths(tmp_path, corruption):
-    (tmp_path / "value.txt").write_bytes(b"contents")
-    manifest = ava.Workspace.from_path(tmp_path).manifest()
-    entry = manifest["entries"][0]
-    if corruption == "content":
-        entry["content"] = "not-base64!"
-    elif corruption == "sha256":
-        entry["sha256"] = "0" * 64
-    elif corruption == "duplicate":
-        manifest["entries"].append(dict(entry))
-    else:
-        manifest["entries"].append({**entry, "path": "value.txt/child"})
-    with pytest.raises(ValueError):
-        ava.Workspace.from_manifest(manifest)
-
-
-def test_workspace_rejects_corrupt_constructed_tree_before_materialization(monkeypatch):
-    corrupt = ava.Workspace.model_construct(
-        entries=(
-            WorkspaceEntry.model_construct(
-                path=".",
-                kind="directory",
-                content=None,
-                sha256=None,
-            ),
-        )
-    )
-
-    def unexpected_materialization(*args, **kwargs):
-        raise AssertionError("temporary tree was allocated before validation")
-
-    monkeypatch.setattr("avalanche.workspace.tempfile.mkdtemp", unexpected_materialization)
-
-    from avalanche.workspace import run_workspace_invocation
-
-    with pytest.raises(ValueError, match="root pseudo-path"):
-        run_workspace_invocation(lambda workspace: workspace.path, corrupt)
-
-
-@pytest.fixture
-def executor():
-    return ava.LocalExecutor()
-
-
-def test_workspace_transport_isolates_siblings_propagates_returns_and_cleans(
-    tmp_path, executor
-):
-    (tmp_path / "before.txt").write_bytes(b"\x00before\xff")
-    (tmp_path / "empty").mkdir()
-
-    class Request(ava.BaseInput):
-        workspace: ava.Workspace
-
-    class NestedResult(BaseModel):
-        workspaces: list[ava.Workspace]
-
-    workspace = pickle.loads(pickle.dumps(ava.Workspace.from_path(tmp_path)))
-    request = Request.model_validate(json.loads(_json_payload(Request(workspace=workspace))))
-
-    @ava.source
-    def left(request: Request):
-        path = request.workspace.path
-        assert path.joinpath("empty").is_dir()
-        path.joinpath("left.txt").write_text("left")
-        restored = pickle.loads(pickle.dumps(request.workspace))
-        assert not path.exists()
-        return {"workspace": restored, "paths": [str(path)]}
-
-    @ava.step
-    def next_step(result):
-        workspace = result["workspace"]
-        path = workspace.path
-        assert path.joinpath("left.txt").read_text() == "left"
-        path.joinpath("after.txt").write_text("after")
-        return {"workspace": workspace, "paths": [*result["paths"], str(path)]}
-
-    @ava.source
-    def right(request: Request):
-        path = request.workspace.path
-        assert not path.joinpath("left.txt").exists()
-        path.joinpath("right.txt").write_text("right")
-        return {"workspace": request.workspace, "paths": [str(path)]}
-
-    @ava.workflow(input=Request)
-    def flow():
-        return next_step(left(ava.input)), right(ava.input)
-
-    left_result, right_result = flow().run(input=request, executor=executor).result(timeout=30)
-    assert _workspace_files(left_result["workspace"]) == {
-        "before.txt": b"\x00before\xff",
-        "left.txt": b"left",
-        "after.txt": b"after",
-    }
-    assert _workspace_files(right_result["workspace"]) == {
-        "before.txt": b"\x00before\xff",
-        "right.txt": b"right",
-    }
-    paths = left_result["paths"] + right_result["paths"]
-    assert len(set(paths)) == 3
-    assert all(not Path(path).exists() for path in paths)
-    assert sorted(path.name for path in tmp_path.iterdir()) == ["before.txt", "empty"]
-    restored = decode_workflow_result(
-        encode_workflow_result({"nested": NestedResult(workspaces=[left_result["workspace"]])})
-    )["nested"]["workspaces"][0]
-    assert restored.manifest() == left_result["workspace"].manifest()
-    with pytest.raises(RuntimeError):
-        _ = restored.path
-
-
-def test_workspace_invocation_cleanup_runs_after_failure(tmp_path):
-    source = tmp_path / "source"
-    source.mkdir()
-    (source / "keep.txt").write_text("caller-owned")
-    materialized_paths: list[Path] = []
-
-    class Request(ava.BaseInput):
-        workspace: ava.Workspace
-
-    @ava.source(retries=0)
-    def fail(request: Request):
-        materialized_paths.append(request.workspace.path)
-        request.workspace.path.joinpath("transient.txt").write_text("transient")
-        raise RuntimeError("node failed")
-
-    @ava.workflow(input=Request)
-    def flow():
-        return fail(ava.input)
-
-    with pytest.raises(RuntimeError, match="node failed"):
-        flow().run(
-            input=Request(workspace=ava.Workspace.from_path(source)),
-            executor=ava.LocalExecutor(),
-        ).result()
-
-    assert len(materialized_paths) == 1
-    assert not materialized_paths[0].exists()
-    assert (source / "keep.txt").read_text() == "caller-owned"
-    assert not (source / "transient.txt").exists()
+    assert list((tmp_path / "store" / "captures").iterdir()) == []
+    assert not (tmp_path / "outside.txt").exists()

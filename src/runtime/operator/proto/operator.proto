@@ -35,6 +35,11 @@ service OperatorServiceV2 {
   // StartRun and SetScheduleEnabled accept in input_files. Staged files live in
   // the operator's staging folder; ones no run or schedule used expire.
   rpc StageInputFile(StageInputFileRequestV2) returns (FileAttachmentV2);
+  // Copies a directory into the operator's workspace store and returns the
+  // reference a run input uses for it. The first message names the target; the
+  // rest carry the tree, parents before children.
+  rpc StageInputWorkspace(stream StageInputWorkspaceRequestV2)
+      returns (StagedInputWorkspaceV2);
   rpc ListRunSummaries(ListRunSummariesRequestV2) returns (RunSummaryPageV2);
   rpc GetRunSnapshot(GetRunSnapshotRequestV2) returns (RunSnapshotV2);
   rpc ListRunActivity(ListRunActivityRequestV2) returns (RunActivityPageV2);
@@ -312,6 +317,26 @@ message StageInputFileRequestV2 {
   string name = 3;
   string media_type = 4;
   bytes content = 5;
+}
+
+message StageInputWorkspaceRequestV2 {
+  // First message only: the workflow and declared input field the directory is for.
+  string workflow_selector = 1;
+  string field_name = 2;
+  // Later messages: one entry, by its POSIX path relative to the directory.
+  string path = 3;
+  // A directory entry. Otherwise the message is one piece of the file at path.
+  bool directory = 4;
+  bytes content = 5;
+  // Set on the last piece of a file.
+  bool end_of_file = 6;
+}
+
+message StagedInputWorkspaceV2 {
+  // The workspace reference to put in the run input.
+  string reference = 1;
+  uint64 files = 2;
+  uint64 size_bytes = 3;
 }
 
 message ResolveRunRequestV2 {
@@ -688,6 +713,9 @@ message RunResultV2 {
   ResultValueV2 value = 3;
   repeated ResultFileDescriptorV2 files = 4;
   ScopeReferenceV2 scope_ref = 5;
+  // The folder on the operator's machine that keeps its workspaces. A client on
+  // that machine binds the result's local workspace references inside it.
+  string workspace_root = 6;
 }
 
 message RunOutputArtifactDescriptorV2 {

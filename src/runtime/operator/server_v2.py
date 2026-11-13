@@ -69,6 +69,7 @@ from .proto import operator_pb2 as pb
 from .proto import operator_pb2_grpc as pb_grpc
 from .registry import AmbiguousWorkflow, UnknownWorkflow
 from .results import ResultFileAttachment
+from .run_workspaces import StagedWorkspaceError, WorkspaceChunk
 from .server import TRACE_CHUNK_BYTES, _ambiguous_detail, _decode_json_object
 
 _EVENTS_STREAM = "operator-events"
@@ -1225,6 +1226,41 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             size_bytes=staged.size_bytes,
         )
 
+    def StageInputWorkspace(self, request_iterator, context):  # noqa: N802
+        first = next(request_iterator, None)
+        if first is None or not first.workflow_selector:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "workflow_selector is required")
+        if not first.field_name:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, "field_name is required")
+        chunks = (
+            WorkspaceChunk(
+                path=item.path,
+                directory=item.directory,
+                content=item.content,
+                end_of_file=item.end_of_file,
+            )
+            for item in request_iterator
+        )
+        try:
+            staged = self._op.stage_input_workspace(
+                first.workflow_selector, first.field_name, chunks
+            )
+        except AmbiguousWorkflow as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, _ambiguous_detail(exc))
+        except UnknownWorkflow as exc:
+            context.abort(grpc.StatusCode.NOT_FOUND, exc.args[0])
+        except StagedWorkspaceError as exc:
+            context.abort(grpc.StatusCode.INVALID_ARGUMENT, str(exc))
+        except OSError as exc:
+            context.abort(
+                grpc.StatusCode.FAILED_PRECONDITION, f"Could not store the workspace: {exc}"
+            )
+        return pb.StagedInputWorkspaceV2(
+            reference=staged.workspace.reference,
+            files=staged.files,
+            size_bytes=staged.size_bytes,
+        )
+
     def CancelRun(self, request, context):  # noqa: N802
         if not request.run_id:
             context.abort(grpc.StatusCode.INVALID_ARGUMENT, "run_id is required")
@@ -1489,6 +1525,7 @@ class OperatorV2Servicer(pb_grpc.OperatorServiceV2Servicer):
             cursor=self._cursor(run_sequence),
             run_id=request.run_id,
             scope_ref=self._scope(),
+            workspace_root=str(self._op.workspace_root),
             value=pb.ResultValueV2(
                 value_json=payload.value_json,
                 sha256=sha256_hex(value_bytes),

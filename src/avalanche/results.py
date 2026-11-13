@@ -14,7 +14,7 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter
 
 from avalanche.runtime import File
-from avalanche.workspace import _WORKSPACE_SERIALIZER_CONTEXT_KEY, Workspace
+from avalanche.workspace import _WORKSPACE_SERIALIZER_CONTEXT_KEY, Workspace, is_inline_tree
 
 type ResultJsonValue = (
     None | bool | int | float | str | list[ResultJsonValue] | dict[str, ResultJsonValue]
@@ -169,7 +169,7 @@ def encode_workflow_result(value: Any) -> EncodedWorkflowResult:
     def serialize_workspace(workspace: Workspace) -> dict[str, Any]:
         return {
             "__operator_workspace_marker__": marker_token,
-            "manifest": workspace._manifest_for_serialization(),
+            "manifest": workspace.manifest(),
         }
 
     if isinstance(value, BaseModel) and not isinstance(value, (File, Workspace)):
@@ -280,7 +280,7 @@ def _encode_value(
     if type(value) is dict and value.get("kind") == "workspace":
         return {"kind": "workspace", "manifest": Workspace.from_manifest(value).manifest()}
     if isinstance(value, Workspace):
-        return {"kind": "workspace", "manifest": value._manifest_for_serialization()}
+        return {"kind": "workspace", "manifest": value.manifest()}
     if (
         type(value) is dict
         and value.get("__operator_workspace_marker__") == marker_token
@@ -300,7 +300,7 @@ def _encode_value(
             context={
                 _WORKSPACE_SERIALIZER_CONTEXT_KEY: lambda workspace: {
                     "__operator_workspace_marker__": marker_token,
-                    "manifest": workspace._manifest_for_serialization(),
+                    "manifest": workspace.manifest(),
                 },
             },
         )
@@ -532,14 +532,19 @@ def _decode_value(
         if set(encoded) != {"kind", "manifest"} or type(encoded["manifest"]) is not dict:
             raise ValueError("Malformed workspace workflow result")
         try:
-            workspace = Workspace.from_manifest(encoded["manifest"])
-            if (
-                isinstance(attachments, dict)
-                and workspace.reference is not None
-                and workspace.reference.startswith("local-ws:v1:")
-            ):
-                from avalanche.references import LocalReferenceBinder
+            manifest = encoded["manifest"]
+            if not isinstance(attachments, dict):
+                # Validation only: a tree stored inline by an earlier release is
+                # still a stored result, read when the value is decoded.
+                if not is_inline_tree(manifest):
+                    Workspace.from_manifest(manifest)
+                return None
+            from avalanche.references import LocalReferenceBinder, read_stored_trees
 
+            workspace = Workspace.from_manifest(read_stored_trees(manifest))
+            if workspace.reference is not None and workspace.reference.startswith(
+                "local-ws:v1:"
+            ):
                 return Workspace.from_directory(
                     LocalReferenceBinder().bind_workspace(workspace),
                     reference=workspace.reference,

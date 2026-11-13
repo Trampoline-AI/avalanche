@@ -19,6 +19,7 @@ import grpc
 from pydantic import JsonValue
 
 from avalanche.file import File
+from avalanche.references import read_stored_trees
 from avalanche.workspace import Workspace
 
 from .operator import StructuralBaselineUnavailableError
@@ -40,8 +41,9 @@ def result_file_references(value_json: str) -> tuple[tuple[str, File | Workspace
             if value.get("kind") == "file" and "ref" in value:
                 files.append((path, File.model_validate(value)))
             elif value.get("kind") == "workspace":
-                # Retain the directory descriptor, never its embedded bodies.
-                files.append((path, Workspace.from_manifest(value["manifest"])))
+                # A tree an earlier release stored inline is listed by its reference.
+                manifest = read_stored_trees(value["manifest"])
+                files.append((path, Workspace.from_manifest(manifest)))
             else:
                 pending.extend(
                     (path + "/" + key.replace("~", "~0").replace("/", "~1"), item)
@@ -205,8 +207,8 @@ class TuiResourceReader:
                     "kind": "workspace",
                     "downloadable": False,
                     "reason": "Directory export requires ava result --output-dir",
-                    "reference": file.manifest() if file.is_reference else None,
-                    "entry_count": None if file.is_reference else len(file.entries),
+                    "reference": file.manifest(),
+                    "entry_count": None,
                 }
             after = _Position(target, revision, offset + 1) if offset + 1 < len(files) else None
             return row, after, revision

@@ -1134,21 +1134,24 @@ class Report(ava.Signature):
 
 
 @pytest.mark.asyncio
-async def test_a_workspace_with_a_link_fails_after_the_final_event(scripted):
-    # Without a workspace input the sandbox is a temporary folder, captured when returned.
+async def test_a_workspace_output_without_an_input_is_the_run_workspace(scripted, tmp_path):
     scripted(_shell("touch a.txt && ln -s a.txt link.txt", call_id="call-1"), _answer())
-    observed = []
-    with (
-        capture_agent_evidence(observed.append, errors="raise"),
-        pytest.raises(AgentOutputError, match="workspace cannot be returned"),
-    ):
-        await ava.Agent(
+    (tmp_path / "run").mkdir()
+    workspace = ava.Workspace.from_directory(tmp_path / "run", reference="snapshot:run")
+    with ava.file_reference_context(workspace, attempt="attempt-1"):
+        result = await ava.Agent(
             signature=WorkspaceOutput,
             step_name="folder",
             runtime=OpenAIAgent(model=MODEL, builtin_tools=["shell"]),
         )(question="?")
 
-    assert observed[-1].outputs is None
+    # The agent worked in the run's workspace and returned it by reference, links included.
+    returned = next(
+        value for value in vars(result.outputs).values() if isinstance(value, ava.Workspace)
+    )
+    assert returned.reference == "snapshot:run"
+    assert (tmp_path / "run" / "a.txt").is_file()
+    assert (tmp_path / "run" / "link.txt").is_symlink()
 
 
 @pytest.mark.asyncio

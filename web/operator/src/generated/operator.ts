@@ -789,6 +789,62 @@ export interface StageInputFileRequestV2 {
     content: Uint8Array;
 }
 /**
+ * @generated from protobuf message avalanche.operator.StageInputWorkspaceRequestV2
+ */
+export interface StageInputWorkspaceRequestV2 {
+    /**
+     * First message only: the workflow and declared input field the directory is for.
+     *
+     * @generated from protobuf field: string workflow_selector = 1
+     */
+    workflowSelector: string;
+    /**
+     * @generated from protobuf field: string field_name = 2
+     */
+    fieldName: string;
+    /**
+     * Later messages: one entry, by its POSIX path relative to the directory.
+     *
+     * @generated from protobuf field: string path = 3
+     */
+    path: string;
+    /**
+     * A directory entry. Otherwise the message is one piece of the file at path.
+     *
+     * @generated from protobuf field: bool directory = 4
+     */
+    directory: boolean;
+    /**
+     * @generated from protobuf field: bytes content = 5
+     */
+    content: Uint8Array;
+    /**
+     * Set on the last piece of a file.
+     *
+     * @generated from protobuf field: bool end_of_file = 6
+     */
+    endOfFile: boolean;
+}
+/**
+ * @generated from protobuf message avalanche.operator.StagedInputWorkspaceV2
+ */
+export interface StagedInputWorkspaceV2 {
+    /**
+     * The workspace reference to put in the run input.
+     *
+     * @generated from protobuf field: string reference = 1
+     */
+    reference: string;
+    /**
+     * @generated from protobuf field: uint64 files = 2
+     */
+    files: string;
+    /**
+     * @generated from protobuf field: uint64 size_bytes = 3
+     */
+    sizeBytes: string;
+}
+/**
  * @generated from protobuf message avalanche.operator.ResolveRunRequestV2
  */
 export interface ResolveRunRequestV2 {
@@ -1770,6 +1826,13 @@ export interface RunResultV2 {
      * @generated from protobuf field: avalanche.operator.ScopeReferenceV2 scope_ref = 5
      */
     scopeRef?: ScopeReferenceV2;
+    /**
+     * The folder on the operator's machine that keeps its workspaces. A client on
+     * that machine binds the result's local workspace references inside it.
+     *
+     * @generated from protobuf field: string workspace_root = 6
+     */
+    workspaceRoot: string;
 }
 /**
  * @generated from protobuf message avalanche.operator.RunOutputArtifactDescriptorV2
@@ -4502,6 +4565,156 @@ class StageInputFileRequestV2$Type extends MessageType<StageInputFileRequestV2> 
  */
 export const StageInputFileRequestV2 = new StageInputFileRequestV2$Type();
 // @generated message type with reflection information, may provide speed optimized methods
+class StageInputWorkspaceRequestV2$Type extends MessageType<StageInputWorkspaceRequestV2> {
+    constructor() {
+        super("avalanche.operator.StageInputWorkspaceRequestV2", [
+            { no: 1, name: "workflow_selector", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "field_name", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 3, name: "path", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 4, name: "directory", kind: "scalar", T: 8 /*ScalarType.BOOL*/ },
+            { no: 5, name: "content", kind: "scalar", T: 12 /*ScalarType.BYTES*/ },
+            { no: 6, name: "end_of_file", kind: "scalar", T: 8 /*ScalarType.BOOL*/ }
+        ]);
+    }
+    create(value?: PartialMessage<StageInputWorkspaceRequestV2>): StageInputWorkspaceRequestV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.workflowSelector = "";
+        message.fieldName = "";
+        message.path = "";
+        message.directory = false;
+        message.content = new Uint8Array(0);
+        message.endOfFile = false;
+        if (value !== undefined)
+            reflectionMergePartial<StageInputWorkspaceRequestV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: StageInputWorkspaceRequestV2): StageInputWorkspaceRequestV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string workflow_selector */ 1:
+                    message.workflowSelector = reader.string();
+                    break;
+                case /* string field_name */ 2:
+                    message.fieldName = reader.string();
+                    break;
+                case /* string path */ 3:
+                    message.path = reader.string();
+                    break;
+                case /* bool directory */ 4:
+                    message.directory = reader.bool();
+                    break;
+                case /* bytes content */ 5:
+                    message.content = reader.bytes();
+                    break;
+                case /* bool end_of_file */ 6:
+                    message.endOfFile = reader.bool();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: StageInputWorkspaceRequestV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string workflow_selector = 1; */
+        if (message.workflowSelector !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.workflowSelector);
+        /* string field_name = 2; */
+        if (message.fieldName !== "")
+            writer.tag(2, WireType.LengthDelimited).string(message.fieldName);
+        /* string path = 3; */
+        if (message.path !== "")
+            writer.tag(3, WireType.LengthDelimited).string(message.path);
+        /* bool directory = 4; */
+        if (message.directory !== false)
+            writer.tag(4, WireType.Varint).bool(message.directory);
+        /* bytes content = 5; */
+        if (message.content.length)
+            writer.tag(5, WireType.LengthDelimited).bytes(message.content);
+        /* bool end_of_file = 6; */
+        if (message.endOfFile !== false)
+            writer.tag(6, WireType.Varint).bool(message.endOfFile);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.StageInputWorkspaceRequestV2
+ */
+export const StageInputWorkspaceRequestV2 = new StageInputWorkspaceRequestV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
+class StagedInputWorkspaceV2$Type extends MessageType<StagedInputWorkspaceV2> {
+    constructor() {
+        super("avalanche.operator.StagedInputWorkspaceV2", [
+            { no: 1, name: "reference", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
+            { no: 2, name: "files", kind: "scalar", T: 4 /*ScalarType.UINT64*/ },
+            { no: 3, name: "size_bytes", kind: "scalar", T: 4 /*ScalarType.UINT64*/ }
+        ]);
+    }
+    create(value?: PartialMessage<StagedInputWorkspaceV2>): StagedInputWorkspaceV2 {
+        const message = globalThis.Object.create((this.messagePrototype!));
+        message.reference = "";
+        message.files = "0";
+        message.sizeBytes = "0";
+        if (value !== undefined)
+            reflectionMergePartial<StagedInputWorkspaceV2>(this, message, value);
+        return message;
+    }
+    internalBinaryRead(reader: IBinaryReader, length: number, options: BinaryReadOptions, target?: StagedInputWorkspaceV2): StagedInputWorkspaceV2 {
+        let message = target ?? this.create(), end = reader.pos + length;
+        while (reader.pos < end) {
+            let [fieldNo, wireType] = reader.tag();
+            switch (fieldNo) {
+                case /* string reference */ 1:
+                    message.reference = reader.string();
+                    break;
+                case /* uint64 files */ 2:
+                    message.files = reader.uint64().toString();
+                    break;
+                case /* uint64 size_bytes */ 3:
+                    message.sizeBytes = reader.uint64().toString();
+                    break;
+                default:
+                    let u = options.readUnknownField;
+                    if (u === "throw")
+                        throw new globalThis.Error(`Unknown field ${fieldNo} (wire type ${wireType}) for ${this.typeName}`);
+                    let d = reader.skip(wireType);
+                    if (u !== false)
+                        (u === true ? UnknownFieldHandler.onRead : u)(this.typeName, message, fieldNo, wireType, d);
+            }
+        }
+        return message;
+    }
+    internalBinaryWrite(message: StagedInputWorkspaceV2, writer: IBinaryWriter, options: BinaryWriteOptions): IBinaryWriter {
+        /* string reference = 1; */
+        if (message.reference !== "")
+            writer.tag(1, WireType.LengthDelimited).string(message.reference);
+        /* uint64 files = 2; */
+        if (message.files !== "0")
+            writer.tag(2, WireType.Varint).uint64(message.files);
+        /* uint64 size_bytes = 3; */
+        if (message.sizeBytes !== "0")
+            writer.tag(3, WireType.Varint).uint64(message.sizeBytes);
+        let u = options.writeUnknownFields;
+        if (u !== false)
+            (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
+        return writer;
+    }
+}
+/**
+ * @generated MessageType for protobuf message avalanche.operator.StagedInputWorkspaceV2
+ */
+export const StagedInputWorkspaceV2 = new StagedInputWorkspaceV2$Type();
+// @generated message type with reflection information, may provide speed optimized methods
 class ResolveRunRequestV2$Type extends MessageType<ResolveRunRequestV2> {
     constructor() {
         super("avalanche.operator.ResolveRunRequestV2", [
@@ -7117,13 +7330,15 @@ class RunResultV2$Type extends MessageType<RunResultV2> {
             { no: 2, name: "run_id", kind: "scalar", T: 9 /*ScalarType.STRING*/ },
             { no: 3, name: "value", kind: "message", T: () => ResultValueV2 },
             { no: 4, name: "files", kind: "message", repeat: 2 /*RepeatType.UNPACKED*/, T: () => ResultFileDescriptorV2 },
-            { no: 5, name: "scope_ref", kind: "message", T: () => ScopeReferenceV2 }
+            { no: 5, name: "scope_ref", kind: "message", T: () => ScopeReferenceV2 },
+            { no: 6, name: "workspace_root", kind: "scalar", T: 9 /*ScalarType.STRING*/ }
         ]);
     }
     create(value?: PartialMessage<RunResultV2>): RunResultV2 {
         const message = globalThis.Object.create((this.messagePrototype!));
         message.runId = "";
         message.files = [];
+        message.workspaceRoot = "";
         if (value !== undefined)
             reflectionMergePartial<RunResultV2>(this, message, value);
         return message;
@@ -7147,6 +7362,9 @@ class RunResultV2$Type extends MessageType<RunResultV2> {
                     break;
                 case /* avalanche.operator.ScopeReferenceV2 scope_ref */ 5:
                     message.scopeRef = ScopeReferenceV2.internalBinaryRead(reader, reader.uint32(), options, message.scopeRef);
+                    break;
+                case /* string workspace_root */ 6:
+                    message.workspaceRoot = reader.string();
                     break;
                 default:
                     let u = options.readUnknownField;
@@ -7175,6 +7393,9 @@ class RunResultV2$Type extends MessageType<RunResultV2> {
         /* avalanche.operator.ScopeReferenceV2 scope_ref = 5; */
         if (message.scopeRef)
             ScopeReferenceV2.internalBinaryWrite(message.scopeRef, writer.tag(5, WireType.LengthDelimited).fork(), options).join();
+        /* string workspace_root = 6; */
+        if (message.workspaceRoot !== "")
+            writer.tag(6, WireType.LengthDelimited).string(message.workspaceRoot);
         let u = options.writeUnknownFields;
         if (u !== false)
             (u == true ? UnknownFieldHandler.onWrite : u)(this.typeName, message, writer);
@@ -8206,6 +8427,7 @@ export const OperatorServiceV2 = new ServiceType("avalanche.operator.OperatorSer
     { name: "ControlMachine", options: {}, I: ControlMachineRequestV2, O: ControlMachineResponseV2 },
     { name: "SetScheduleEnabled", options: {}, I: SetScheduleEnabledRequestV2, O: FlowInfoV2 },
     { name: "StageInputFile", options: {}, I: StageInputFileRequestV2, O: FileAttachmentV2 },
+    { name: "StageInputWorkspace", clientStreaming: true, options: {}, I: StageInputWorkspaceRequestV2, O: StagedInputWorkspaceV2 },
     { name: "ListRunSummaries", options: {}, I: ListRunSummariesRequestV2, O: RunSummaryPageV2 },
     { name: "GetRunSnapshot", options: {}, I: GetRunSnapshotRequestV2, O: RunSnapshotV2 },
     { name: "ListRunActivity", options: {}, I: ListRunActivityRequestV2, O: RunActivityPageV2 },

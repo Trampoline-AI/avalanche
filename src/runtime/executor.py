@@ -137,9 +137,9 @@ class LocalExecutor:
         Returns:
             Result if num_returns=1, tuple of results if num_returns>1
         """
-        from avalanche.workspace import run_workspace_invocation
+        from avalanche.workspace import snapshot_workspaces
 
-        result = run_workspace_invocation(call_sync_or_async, fn, *args, **kwargs)
+        result = snapshot_workspaces(call_sync_or_async(fn, *args, **kwargs))
         if num_returns > 1:
             # Ensure result is a tuple of expected length
             if isinstance(result, tuple) and len(result) == num_returns:
@@ -187,10 +187,9 @@ class LocalExecutor:
     ) -> tuple[Any, Any, Any | None]:
         """Execute a service-managed task synchronously."""
         from avalanche.execution_services import _run_with_execution_services
-        from avalanche.workspace import run_workspace_invocation
+        from avalanche.workspace import snapshot_workspaces
 
-        result, receipt = run_workspace_invocation(
-            _run_with_execution_services,
+        result, receipt = _run_with_execution_services(
             fn,
             execution_services,
             task,
@@ -202,7 +201,7 @@ class LocalExecutor:
             kwargs,
             num_returns=num_returns,
         )
-        return result, receipt, None
+        return snapshot_workspaces(result), receipt, None
 
     def wait(self, futures: list[Any]) -> None:
         """Local values are already computed; just resolve any awaitables."""

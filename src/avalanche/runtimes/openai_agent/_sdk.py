@@ -112,7 +112,7 @@ from ...agent.trace import (
     retained_fields,
 )
 from ...file import File
-from ...references import AgentOutputFolder
+from ...references import AgentOutputFolder, agent_output_workspace
 from ...workspace import Workspace
 from .runtime import DEFAULT_MAX_TURNS, unknown_model_settings
 
@@ -217,12 +217,14 @@ async def run(
     workspace: Workspace | None = (
         getattr(request.inputs, workspace_inputs[0]) if workspace_inputs else None
     )
+    if workspace is None and workspace_outputs:
+        # A workspace output with no workspace input is the run's workspace.
+        workspace, _ = agent_output_workspace()
     async with contextlib.AsyncExitStack() as stack:
         directory: Path | None = None
         skills_folder: Path | None = None
         if builtin_tools:
-            # A reference workspace runs in place, so the agent's writes land in the
-            # host's directory; a value workspace runs in its temporary copy.
+            # The agent works in place: its writes land in the host's directory.
             directory = (
                 workspace.path
                 if workspace is not None
@@ -894,17 +896,8 @@ def _outputs(
     # so the model's values are validated here and the snapshot joins them as an object.
     snapshot: Workspace | None = None
     if workspace_outputs:
-        assert directory is not None, "a workspace output needs the sandbox"
-        try:
-            if workspace is not None:
-                snapshot = workspace.snapshot()
-            else:
-                snapshot = Workspace.from_path(directory)
-        except (OSError, ValueError) as exc:
-            # Such as a symbolic link the agent made, which a snapshot cannot hold.
-            raise AgentOutputError(
-                f"agent step {request.step_name!r}: its workspace cannot be returned: {exc}"
-            ) from exc
+        assert workspace is not None, "a workspace output needs the sandbox"
+        snapshot = workspace
     files: dict[str, File | list[File]] = {}
     for name, single in file_outputs.items():
         assert output_folder is not None, "file outputs have their folder"

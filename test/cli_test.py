@@ -116,23 +116,21 @@ def test_ava_result_rehashes_materialized_workspace_files(monkeypatch, tmp_path)
     source.mkdir()
     (source / "report.txt").write_text("report")
     output = tmp_path / "download"
-    write_exclusive_file = app._write_exclusive_file
+    hash_output_file = app._hash_output_file
 
-    def corrupt_after_write(name, content, directory_fd):
-        write_exclusive_file(name, content, directory_fd)
-        if content == b"report":
-            descriptor = app.os.open(
-                name,
-                app.os.O_WRONLY | app.os.O_TRUNC | app.os.O_NOFOLLOW,
-                dir_fd=directory_fd,
-            )
-            try:
-                app.os.write(descriptor, b"tamper")
-                app.os.fsync(descriptor)
-            finally:
-                app.os.close(descriptor)
+    def corrupt_before_hash(name, directory_fd, **kwargs):
+        # The copy is written; change it before the exporter reads it back.
+        descriptor = app.os.open(
+            name, app.os.O_WRONLY | app.os.O_TRUNC | app.os.O_NOFOLLOW, dir_fd=directory_fd
+        )
+        try:
+            app.os.write(descriptor, b"tamper")
+            app.os.fsync(descriptor)
+        finally:
+            app.os.close(descriptor)
+        return hash_output_file(name, directory_fd, **kwargs)
 
-    monkeypatch.setattr(app, "_write_exclusive_file", corrupt_after_write)
+    monkeypatch.setattr(app, "_hash_output_file", corrupt_before_hash)
 
     with pytest.raises(ValueError):
         app._materialize_result(

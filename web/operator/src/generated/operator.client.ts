@@ -21,6 +21,9 @@ import type { RunSnapshotV2 } from "./operator";
 import type { GetRunSnapshotRequestV2 } from "./operator";
 import type { RunSummaryPageV2 } from "./operator";
 import type { ListRunSummariesRequestV2 } from "./operator";
+import type { StagedInputWorkspaceV2 } from "./operator";
+import type { StageInputWorkspaceRequestV2 } from "./operator";
+import type { ClientStreamingCall } from "@protobuf-ts/runtime-rpc";
 import type { FileAttachmentV2 } from "./operator";
 import type { StageInputFileRequestV2 } from "./operator";
 import type { FlowInfoV2 } from "./operator";
@@ -119,6 +122,14 @@ export interface IOperatorServiceV2Client {
      * @generated from protobuf rpc: StageInputFile
      */
     stageInputFile(input: StageInputFileRequestV2, options?: RpcOptions): UnaryCall<StageInputFileRequestV2, FileAttachmentV2>;
+    /**
+     * Copies a directory into the operator's workspace store and returns the
+     * reference a run input uses for it. The first message names the target; the
+     * rest carry the tree, parents before children.
+     *
+     * @generated from protobuf rpc: StageInputWorkspace
+     */
+    stageInputWorkspace(options?: RpcOptions): ClientStreamingCall<StageInputWorkspaceRequestV2, StagedInputWorkspaceV2>;
     /**
      * @generated from protobuf rpc: ListRunSummaries
      */
@@ -268,66 +279,77 @@ export class OperatorServiceV2Client implements IOperatorServiceV2Client, Servic
         return stackIntercept<StageInputFileRequestV2, FileAttachmentV2>("unary", this._transport, method, opt, input);
     }
     /**
+     * Copies a directory into the operator's workspace store and returns the
+     * reference a run input uses for it. The first message names the target; the
+     * rest carry the tree, parents before children.
+     *
+     * @generated from protobuf rpc: StageInputWorkspace
+     */
+    stageInputWorkspace(options?: RpcOptions): ClientStreamingCall<StageInputWorkspaceRequestV2, StagedInputWorkspaceV2> {
+        const method = this.methods[11], opt = this._transport.mergeOptions(options);
+        return stackIntercept<StageInputWorkspaceRequestV2, StagedInputWorkspaceV2>("clientStreaming", this._transport, method, opt);
+    }
+    /**
      * @generated from protobuf rpc: ListRunSummaries
      */
     listRunSummaries(input: ListRunSummariesRequestV2, options?: RpcOptions): UnaryCall<ListRunSummariesRequestV2, RunSummaryPageV2> {
-        const method = this.methods[11], opt = this._transport.mergeOptions(options);
+        const method = this.methods[12], opt = this._transport.mergeOptions(options);
         return stackIntercept<ListRunSummariesRequestV2, RunSummaryPageV2>("unary", this._transport, method, opt, input);
     }
     /**
      * @generated from protobuf rpc: GetRunSnapshot
      */
     getRunSnapshot(input: GetRunSnapshotRequestV2, options?: RpcOptions): UnaryCall<GetRunSnapshotRequestV2, RunSnapshotV2> {
-        const method = this.methods[12], opt = this._transport.mergeOptions(options);
+        const method = this.methods[13], opt = this._transport.mergeOptions(options);
         return stackIntercept<GetRunSnapshotRequestV2, RunSnapshotV2>("unary", this._transport, method, opt, input);
     }
     /**
      * @generated from protobuf rpc: ListRunActivity
      */
     listRunActivity(input: ListRunActivityRequestV2, options?: RpcOptions): UnaryCall<ListRunActivityRequestV2, RunActivityPageV2> {
-        const method = this.methods[13], opt = this._transport.mergeOptions(options);
+        const method = this.methods[14], opt = this._transport.mergeOptions(options);
         return stackIntercept<ListRunActivityRequestV2, RunActivityPageV2>("unary", this._transport, method, opt, input);
     }
     /**
      * @generated from protobuf rpc: ListEvaluations
      */
     listEvaluations(input: ListEvaluationsRequestV2, options?: RpcOptions): UnaryCall<ListEvaluationsRequestV2, EvaluationListV2> {
-        const method = this.methods[14], opt = this._transport.mergeOptions(options);
+        const method = this.methods[15], opt = this._transport.mergeOptions(options);
         return stackIntercept<ListEvaluationsRequestV2, EvaluationListV2>("unary", this._transport, method, opt, input);
     }
     /**
      * @generated from protobuf rpc: ReadActivityDetail
      */
     readActivityDetail(input: ReadActivityDetailRequestV2, options?: RpcOptions): ServerStreamingCall<ReadActivityDetailRequestV2, ActivityDetailChunkV2> {
-        const method = this.methods[15], opt = this._transport.mergeOptions(options);
+        const method = this.methods[16], opt = this._transport.mergeOptions(options);
         return stackIntercept<ReadActivityDetailRequestV2, ActivityDetailChunkV2>("serverStreaming", this._transport, method, opt, input);
     }
     /**
      * @generated from protobuf rpc: GetRunResult
      */
     getRunResult(input: GetRunResultRequestV2, options?: RpcOptions): UnaryCall<GetRunResultRequestV2, RunResultV2> {
-        const method = this.methods[16], opt = this._transport.mergeOptions(options);
+        const method = this.methods[17], opt = this._transport.mergeOptions(options);
         return stackIntercept<GetRunResultRequestV2, RunResultV2>("unary", this._transport, method, opt, input);
     }
     /**
      * @generated from protobuf rpc: ListRunOutputArtifacts
      */
     listRunOutputArtifacts(input: ListRunOutputArtifactsRequestV2, options?: RpcOptions): UnaryCall<ListRunOutputArtifactsRequestV2, RunOutputArtifactPageV2> {
-        const method = this.methods[17], opt = this._transport.mergeOptions(options);
+        const method = this.methods[18], opt = this._transport.mergeOptions(options);
         return stackIntercept<ListRunOutputArtifactsRequestV2, RunOutputArtifactPageV2>("unary", this._transport, method, opt, input);
     }
     /**
      * @generated from protobuf rpc: ReadRunOutputArtifact
      */
     readRunOutputArtifact(input: ReadRunOutputArtifactRequestV2, options?: RpcOptions): ServerStreamingCall<ReadRunOutputArtifactRequestV2, RunOutputArtifactChunkV2> {
-        const method = this.methods[18], opt = this._transport.mergeOptions(options);
+        const method = this.methods[19], opt = this._transport.mergeOptions(options);
         return stackIntercept<ReadRunOutputArtifactRequestV2, RunOutputArtifactChunkV2>("serverStreaming", this._transport, method, opt, input);
     }
     /**
      * @generated from protobuf rpc: WatchRunStatus
      */
     watchRunStatus(input: WatchRunStatusRequestV2, options?: RpcOptions): ServerStreamingCall<WatchRunStatusRequestV2, RunStatusEnvelopeV2> {
-        const method = this.methods[19], opt = this._transport.mergeOptions(options);
+        const method = this.methods[20], opt = this._transport.mergeOptions(options);
         return stackIntercept<WatchRunStatusRequestV2, RunStatusEnvelopeV2>("serverStreaming", this._transport, method, opt, input);
     }
 }

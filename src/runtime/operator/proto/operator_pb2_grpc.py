@@ -101,6 +101,11 @@ class OperatorServiceV2Stub(object):
                 request_serializer=operator__pb2.StageInputFileRequestV2.SerializeToString,
                 response_deserializer=operator__pb2.FileAttachmentV2.FromString,
                 _registered_method=True)
+        self.StageInputWorkspace = channel.stream_unary(
+                '/avalanche.operator.OperatorServiceV2/StageInputWorkspace',
+                request_serializer=operator__pb2.StageInputWorkspaceRequestV2.SerializeToString,
+                response_deserializer=operator__pb2.StagedInputWorkspaceV2.FromString,
+                _registered_method=True)
         self.ListRunSummaries = channel.unary_unary(
                 '/avalanche.operator.OperatorServiceV2/ListRunSummaries',
                 request_serializer=operator__pb2.ListRunSummariesRequestV2.SerializeToString,
@@ -237,6 +242,15 @@ class OperatorServiceV2Servicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def StageInputWorkspace(self, request_iterator, context):
+        """Copies a directory into the operator's workspace store and returns the
+        reference a run input uses for it. The first message names the target; the
+        rest carry the tree, parents before children.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListRunSummaries(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -348,6 +362,11 @@ def add_OperatorServiceV2Servicer_to_server(servicer, server):
                     servicer.StageInputFile,
                     request_deserializer=operator__pb2.StageInputFileRequestV2.FromString,
                     response_serializer=operator__pb2.FileAttachmentV2.SerializeToString,
+            ),
+            'StageInputWorkspace': grpc.stream_unary_rpc_method_handler(
+                    servicer.StageInputWorkspace,
+                    request_deserializer=operator__pb2.StageInputWorkspaceRequestV2.FromString,
+                    response_serializer=operator__pb2.StagedInputWorkspaceV2.SerializeToString,
             ),
             'ListRunSummaries': grpc.unary_unary_rpc_method_handler(
                     servicer.ListRunSummaries,
@@ -704,6 +723,33 @@ class OperatorServiceV2(object):
             '/avalanche.operator.OperatorServiceV2/StageInputFile',
             operator__pb2.StageInputFileRequestV2.SerializeToString,
             operator__pb2.FileAttachmentV2.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def StageInputWorkspace(request_iterator,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.stream_unary(
+            request_iterator,
+            target,
+            '/avalanche.operator.OperatorServiceV2/StageInputWorkspace',
+            operator__pb2.StageInputWorkspaceRequestV2.SerializeToString,
+            operator__pb2.StagedInputWorkspaceV2.FromString,
             options,
             channel_credentials,
             insecure,

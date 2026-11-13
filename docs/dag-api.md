@@ -297,7 +297,7 @@ result = document_flow().run(
 identity, rerun details, and optional caller metadata. `ava.File` carries file
 content. Use `ava.File.from_path(path)` when starting a run from Python.
 
-Use `ava.Workspace` for a portable directory input or result:
+Use `ava.Workspace` for a directory input or result. It is passed by reference:
 
 ```python
 class ReportInput(ava.BaseInput):
@@ -307,8 +307,9 @@ class ReportInput(ava.BaseInput):
 workspace = ava.Workspace.from_path("./project")
 ```
 
-Inside a node, `workspace.path` is a local directory. Return the workspace from a
-node to pass its changed contents downstream.
+`from_path` copies the directory once. Inside a node, `workspace.path` is that copy, edited in place. Use
+`ava.Workspace()` for the run's own workspace, which the host creates and keeps
+with the run.
 
 ### CLI file and workspace inputs
 

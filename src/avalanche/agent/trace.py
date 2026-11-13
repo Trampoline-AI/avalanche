@@ -200,7 +200,7 @@ class FileInputEvidence(BaseModel):
 
 
 class WorkspaceInputEvidence(BaseModel):
-    """A value ``ava.Workspace`` input as recorded in a trace."""
+    """An inline-tree workspace input, as traces of earlier releases recorded it."""
 
     model_config = _STRICT
 
@@ -237,14 +237,12 @@ def file_input_evidence(value: File | Workspace) -> FileInputEvidenceValue:
             size_bytes=identity.size,
             sha256=identity.sha256,
         )
-    if value.reference is not None:
-        return WorkspaceReferenceInputEvidence(reference=value.reference)
-    return WorkspaceInputEvidence(
-        entry_count=len(value.entries),
-        total_size_bytes=sum(
-            len(entry.content) for entry in value.entries if entry.content is not None
-        ),
-    )
+    if value.reference is None:
+        # Workspace() is the run's workspace: record the reference the host gave it.
+        from ..references import run_workspace_reference
+
+        return WorkspaceReferenceInputEvidence(reference=run_workspace_reference())
+    return WorkspaceReferenceInputEvidence(reference=value.reference)
 
 
 # Inputs and outputs a trace keeps, all fields together; the largest fields are left
