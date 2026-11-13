@@ -2,6 +2,8 @@
 
 ## 0.20.12
 
+- Operator UI: `MachineInstance.pending_events[].payload` is optional, for hosts
+  that keep event payloads out of the run read (Delta).
 - Renamed: a machine "visit" is now a **state entry**. `ava run result --visit N`
   is `--entry N`, `ava run retry RUN_ID --visit` is `--entry`, result documents
   carry `entry`, step IDs are `e2.step`, SDK types are `StateEntry*` and the

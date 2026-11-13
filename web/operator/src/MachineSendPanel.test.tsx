@@ -203,6 +203,11 @@ it("keeps a deferred choice across reads and drops it when no longer deferred", 
   fireEvent.change(screen.getByLabelText("Event"), { target: { value: "merged" } });
   view.rerender(panel(deferringAt("review", ["amended"]), api));
   expect(screen.getByLabelText<HTMLSelectElement>("Event").value).toBe("merged");
+  // The host rebuilt its reads: the run loads again, then reads the same state.
+  view.rerender(panel(undefined as unknown as MachineInstance, api));
+  expect(screen.queryByLabelText("Event")).toBeNull();
+  view.rerender(panel(deferringAt("review", ["amended"]), api));
+  expect(screen.getByLabelText<HTMLSelectElement>("Event").value).toBe("merged");
   // The run moved to a state that neither accepts nor defers `merged`.
   view.rerender(panel({ ...deferringAt("ready", ["back"]) }, api));
   expect(screen.getByLabelText<HTMLSelectElement>("Event").value).toBe("back");

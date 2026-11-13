@@ -58,7 +58,8 @@ export interface MachineInstance {
   /** Host-resolved definition for this run (pinned for deployment-based hosts). */
   machine_spec?: MachineSpec;
   /** Local operator extension; receipt admission is distinct from later event facts. */
-  pending_events?: { event: string; receipt_id: string; payload: JsonValue }[];
+  /** `payload` is omitted by hosts that keep event payloads out of the run read (Delta). */
+  pending_events?: { event: string; receipt_id: string; payload?: JsonValue }[];
   receipts?: MachineEventReceipt[];
 }
 export interface MachineStateEntryNode {

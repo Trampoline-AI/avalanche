@@ -565,11 +565,15 @@ export function MachineSendPanel({
   const sendable = useRef<string[]>([]);
   sendable.current = offered.map((item) => item.name);
   const offeredKey = sendable.current.join("\0");
+  // A re-read (the host rebuilt its reads, so the run is loading again) keeps the
+  // choice; only a loaded run that no longer offers it drops it.
+  const loaded = instance !== undefined;
   useEffect(() => {
+    if (!loaded) return;
     setEvent((current) =>
       current !== undefined && offeredKey.split("\0").includes(current) ? current : undefined,
     );
-  }, [offeredKey]);
+  }, [offeredKey, loaded]);
   return (
     <aside
       aria-label="Send event"
