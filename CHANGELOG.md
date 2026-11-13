@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.20.12
 
 - Renamed: a machine "visit" is now a **state entry**. `ava run result --visit N`
   is `--entry N`, `ava run retry RUN_ID --visit` is `--entry`, result documents
