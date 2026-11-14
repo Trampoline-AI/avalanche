@@ -789,7 +789,7 @@ export function machinePending(
       detail: `receipt ${deferred.receipt_id.slice(0, 8)}`,
       state,
     });
-  for (const card of waits)
+  for (const card of [...waits].sort(byDecisionFirst))
     if (
       card.state === "waiting" &&
       card.nodeId.startsWith(`e${instance.entry}.`) &&
@@ -815,11 +815,18 @@ export function machinePending(
   return items;
 }
 
+/** Decisions first (only they need a person), then the rest; stable by node id. */
+function byDecisionFirst(a: WaitCard, b: WaitCard): number {
+  const rank = Number(a.kind !== "decision") - Number(b.kind !== "decision");
+  return rank || (a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0);
+}
+
 /** What a flow run is blocked on now: reached waits only, never later unreached ones. */
 export function flowPending(waits: readonly WaitCard[], settled: boolean): PendingItem[] {
   if (settled) return [];
   return waits
     .filter((card) => card.state === "waiting")
+    .sort(byDecisionFirst)
     .map((card) => ({
       id: `wait:${card.nodeId}`,
       kind: "wait" as const,

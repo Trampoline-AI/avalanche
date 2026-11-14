@@ -625,6 +625,13 @@ describe("flow run timeline", () => {
     const open: WaitCard = { ...waits[0], state: "waiting", audit: undefined };
     expect(flowPending([open], false).map((item) => item.title)).toEqual(["Waiting: Ship it?"]);
     expect(flowPending([open], true)).toEqual([]);
+    const sleep: WaitCard = { ...open, nodeId: "a_sleep", kind: "sleep", prompt: null };
+    const event: WaitCard = { ...open, nodeId: "b_event", kind: "event", prompt: null };
+    expect(
+      flowPending([sleep, event, { ...open, nodeId: "z_decision" }], false).map(
+        (item) => item.card!.nodeId,
+      ),
+    ).toEqual(["z_decision", "a_sleep", "b_event"]);
   });
 });
 
