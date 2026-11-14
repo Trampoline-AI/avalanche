@@ -22,15 +22,12 @@ from .theme import (
     DIM_STYLE,
     ICE_FROST,
     ICE_STEEL,
-    OTHER_STATUS_CHAR,
-    OTHER_STATUS_STYLE,
     SKIP_EDGE_COLORS,
-    SPINNER_FRAMES,
-    STATUS_CHARS,
-    STATUS_STYLES,
     VIRTUAL_LABELS,
     VIRTUAL_STYLE,
-    status_display,
+    WaitKind,
+    node_status_display,
+    node_wait_kind,
 )
 
 # ── Layout tree nodes ─────────────────────────────────────────────────────
@@ -45,6 +42,8 @@ class DagNode:
     display_name: str = ""  # human-readable label (e.g. "fetch_orders")
     is_agent: bool = False
     map_summary: str = ""
+    wait_kind: WaitKind | None = None
+    map_summary_text: Text = field(default_factory=Text)
 
     @property
     def label(self) -> str:
@@ -190,6 +189,7 @@ def workflow_to_layout(info: WorkflowInfo) -> tuple[SeqGroup, list[DagNode]]:
                 info.node_types.get(nid, "step"),
                 info.display_names.get(nid) or display_name_from_id(nid),
                 nid in agents,
+                wait_kind=node_wait_kind(info, nid),
             )
             columns[levels[nid]].append(node)
             nodes.append(node)
@@ -226,6 +226,7 @@ def workflow_to_layout(info: WorkflowInfo) -> tuple[SeqGroup, list[DagNode]]:
             node_type=nt,
             display_name=dname,
             is_agent=nid in agent_node_ids,
+            wait_kind=node_wait_kind(info, nid),
         )
         all_nodes.append(dn)
         return dn
@@ -690,9 +691,7 @@ def _render_cross_track_skip_edges(
 def marker_for(node: DagNode, status: NodeStatus, frame: int) -> str:
     if node.virtual:
         return VIRTUAL_LABELS.get(node.name, node.name)
-    if status is NodeStatus.RUNNING:
-        return SPINNER_FRAMES[frame % len(SPINNER_FRAMES)]
-    return status_display(status, STATUS_CHARS, OTHER_STATUS_CHAR)
+    return node_status_display(status, node.wait_kind, frame)[0]
 
 
 def _duration_label(elapsed: float | None, status: NodeStatus) -> str:
@@ -777,20 +776,25 @@ def append_node(
     elapsed: float | None = None,
 ) -> None:
     m = marker_for(node, status, frame)
-    style = status_display(status, STATUS_STYLES, OTHER_STATUS_STYLE)
+    style = node_status_display(status, node.wait_kind, frame)[1]
     if node.virtual:
         text.append(m, VIRTUAL_STYLE)
         return
     dur = _duration_label(elapsed, status)
+    label_start = len(text) + 3 + len(node.display_name)
     if node is selected:
         sel = Style(bgcolor=ICE_STEEL, bold=True)
         label = f" {m} {node.label} ({dur}) " if dur else f" {m} {node.label} "
         text.append(label, Style(color=ICE_FROST) + sel)
+        # Selection must not hide the decision's amber warning.
+        text.stylize(style, len(text) - len(label) + 1, len(text) - len(label) + 2)
     else:
         text.append(f" {m}", style)
         text.append(f" {node.label} ", Style(color=ICE_FROST))
         if dur:
             text.append(f"({dur}) ", DIM_STYLE)
+    for span in node.map_summary_text.spans:
+        text.stylize(span.style, label_start + span.start, label_start + span.end)
 
 
 def append_node_caption(

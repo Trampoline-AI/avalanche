@@ -1,12 +1,15 @@
 """A map's index-aligned item list; missing items exist only in this view."""
 
+from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import Label, OptionList
 from textual.widgets.option_list import Option
 
-from runtime.operator.models import NodeStatus, RunStatus
+from runtime.operator.models import RunStatus
+
+from ..theme import node_status_display, node_wait_kind
 
 
 class MapItemsScreen(ModalScreen[str | None]):
@@ -51,19 +54,17 @@ class MapItemsScreen(ModalScreen[str | None]):
         options = self.query_one(OptionList)
         highlighted = options.highlighted
         options.clear_options()
-        symbols = {
-            NodeStatus.SUCCESS: "✓",
-            NodeStatus.RUNNING: "▶",
-            NodeStatus.FAILED: "✗",
-            NodeStatus.PENDING: "·",
-            NodeStatus.SKIPPED: "·",
-        }
         terminal = run.status in (RunStatus.SUCCESS, RunStatus.FAILED, RunStatus.CANCELLED)
         placeholder = "not run" if terminal else "not started"
         for i in range(n):
             item = items.get(i)
+            if item is not None:
+                icon, style = node_status_display(
+                    item.status, node_wait_kind(self.app.store.current_workflow, item.node_id)
+                )
+                label = Text.assemble((icon, style), f" {item.name}")
             options.add_option(
-                Option(f"{symbols[item.status]} {item.name}", id=item.node_id)
+                Option(label, id=item.node_id)
                 if item is not None
                 else Option(
                     f"· [{i}] {placeholder}",

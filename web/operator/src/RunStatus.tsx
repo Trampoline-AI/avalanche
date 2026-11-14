@@ -1,3 +1,4 @@
+import { AlertCircle, Clock } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 import { subscribeRunningGlyph } from "./glyphClock";
@@ -42,17 +43,39 @@ const toneClasses: Record<Tone, string> = {
   neutral: "text-run-status-muted",
 };
 
+export type WaitKind = "decision" | "sleep" | "event" | "run";
+
+/** Static by design: a wait is not executing work. */
+export function WaitStatus({ kind }: { kind: WaitKind }) {
+  const decision = kind === "decision";
+  const Icon = decision ? AlertCircle : Clock;
+  return (
+    <span
+      role="img"
+      aria-label={decision ? "Waiting for decision" : "Waiting for time or event"}
+      data-wait-kind={kind}
+      className={`inline-flex align-middle ${decision ? "font-bold text-amber" : "text-secondary opacity-60"}`}
+    >
+      <Icon aria-hidden="true" className="size-[1em]" strokeWidth={decision ? 3 : 2} />
+    </span>
+  );
+}
+
 export function RunStatus({
   status,
   glyphOnly = false,
+  waitKind,
 }: {
   status: string;
   glyphOnly?: boolean;
+  waitKind?: WaitKind;
 }) {
   const normalized = status.toLowerCase();
-  const tone = statusTone(status);
+  const waiting =
+    normalized === "waiting" || (waitKind !== undefined && statusTone(status) === "active");
+  const tone = waiting ? (waitKind === "decision" ? "warning" : "neutral") : statusTone(status);
   const glyph =
-    tone === "active" || tone === "warning"
+    tone === "active"
       ? "◐"
       : tone === "success"
         ? "✓"
@@ -63,9 +86,9 @@ export function RunStatus({
             : "○";
   const marker = useRef<HTMLSpanElement>(null);
   useEffect(() => {
-    if ((tone !== "active" && tone !== "warning") || !marker.current) return;
+    if (waiting || tone !== "active" || !marker.current) return;
     return subscribeRunningGlyph(marker.current);
-  }, [tone]);
+  }, [tone, waiting]);
   return (
     <span
       aria-label={glyphOnly ? status : undefined}
@@ -73,15 +96,19 @@ export function RunStatus({
       data-tone={tone}
       className={`run-status-text inline-flex items-center gap-1.5 whitespace-nowrap font-mono font-normal tracking-[0.06em] uppercase ${toneClasses[tone]}`}
     >
-      <span
-        ref={marker}
-        aria-hidden="true"
-        className="run-status-glyph"
-        data-glyph={tone === "active" ? "running" : tone}
-        data-char={glyph}
-      >
-        {glyph}
-      </span>
+      {waiting ? (
+        <WaitStatus kind={waitKind ?? "event"} />
+      ) : (
+        <span
+          ref={marker}
+          aria-hidden="true"
+          className="run-status-glyph"
+          data-glyph={tone === "active" ? "running" : tone}
+          data-char={glyph}
+        >
+          {glyph}
+        </span>
+      )}
       {!glyphOnly && status}
     </span>
   );

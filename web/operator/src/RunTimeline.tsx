@@ -1,6 +1,7 @@
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { formatElapsedSeconds } from "./elapsedDuration";
+import { WaitStatus } from "./RunStatus";
 import { formatRemaining } from "./machineGraph";
 import type { PendingItem, TimelineEntry, TimelineTone } from "./timelineEntries";
 
@@ -143,10 +144,7 @@ export function RunTimeline({
               onMouseEnter={() => onHover({ ...item, id: `pending:${item.id}` })}
             >
               <span className="text-[8px] tracking-[.12em] text-amber uppercase">Pending</span>
-              <span
-                aria-hidden="true"
-                className="mt-1 size-2 rounded-full border border-amber"
-              />
+              <WaitStatus kind={item.card?.kind === "decision" ? "decision" : "event"} />
               <span className="min-w-0 [overflow-wrap:anywhere]">
                 <span className="text-ink">{item.title}</span>
                 {item.detail && <span className="text-secondary"> · {item.detail}</span>}

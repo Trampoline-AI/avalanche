@@ -10,7 +10,7 @@ from textual.events import MouseDown, MouseMove, MouseUp
 from textual.message import Message
 from textual.widgets import Static
 
-from ..models import RunStatus, WorkflowInfo
+from ..models import NodeStatus, RunStatus, WorkflowInfo
 from ..state import status_label
 from ..theme import (
     ICE_BRIGHT,
@@ -23,6 +23,8 @@ from ..theme import (
     OTHER_STATUS_CHAR,
     OTHER_STATUS_STYLE,
     SPINNER_FRAMES,
+    node_status_display,
+    run_wait_kind,
     status_display,
 )
 
@@ -192,6 +194,11 @@ class Sidebar(Static, can_focus=True):
                     else:
                         icon = status_display(status, _STATUS_ICONS, OTHER_STATUS_CHAR)
                     icon_style = status_display(status, _STATUS_STYLES, OTHER_STATUS_STYLE)
+                    run = store.current_run
+                    if is_selected and run is not None:
+                        kind = run_wait_kind(run, p)
+                        if kind is not None:
+                            icon, icon_style = node_status_display(NodeStatus.RUNNING, kind)
                     if not isinstance(status, RunStatus):
                         icon += f" {status_label(status)}"
                 else:

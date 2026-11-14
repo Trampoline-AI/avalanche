@@ -696,6 +696,21 @@ export function WorkflowWorkspaceSurface({
     machineRefresh,
   );
   const waitCards = runWaits.value ?? EMPTY_WAITS;
+  const selectedRunWaitKind = useMemo(() => {
+    const active =
+      run?.nodes.filter((node) => ["running", "waiting"].includes(node.status)) ?? [];
+    const kinds = new Map(waitCards.map((card) => [card.nodeId, card.kind]));
+    if (
+      !active.length ||
+      active.some(
+        (node) =>
+          !kinds.has(node.nodeId) &&
+          run?.topology?.nodeTypes[node.mapParent || node.nodeId] !== "wait",
+      )
+    )
+      return undefined;
+    return active.some((node) => kinds.get(node.nodeId) === "decision") ? "decision" : "event";
+  }, [run, waitCards]);
   const windowStateEntries = useMemo(() => {
     if (!machineInstance) return [];
     // A window before the latest page of history does not hold the current state entry.
@@ -1108,6 +1123,7 @@ export function WorkflowWorkspaceSurface({
       workflowId={workflowId}
       runs={state.runs}
       selectedRunId={selectedRunId}
+      selectedRunWaitKind={selectedRunWaitKind}
       onSelectRun={selectWorkflowRun}
       onViewAll={openAllRuns}
       onClose={closeAllRuns}
@@ -1245,6 +1261,7 @@ export function WorkflowWorkspaceSurface({
                           ? undefined
                           : run?.nodes
                     }
+                    waits={waitCards}
                     expansions={stateEntryRun ? stateEntryRun.expansions : run?.expansions}
                     runTriggeredBy={previewWorkflow ? undefined : run?.summary?.triggeredBy}
                     inspectionDisabled={requestingRun}

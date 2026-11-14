@@ -11,7 +11,7 @@ from textual.message import Message
 from textual.strip import Strip
 from textual.widgets import Static
 
-from ..models import RunState, RunStatus
+from ..models import NodeStatus, RunState, RunStatus
 from ..state import status_label
 from ..theme import (
     DIM_STYLE,
@@ -25,6 +25,8 @@ from ..theme import (
     OTHER_STATUS_CHAR,
     OTHER_STATUS_STYLE,
     SPINNER_FRAMES,
+    node_status_display,
+    run_wait_kind,
     status_display,
 )
 
@@ -96,6 +98,10 @@ class RunHistoryWidget(Static):
             if run.status is RunStatus.RUNNING
             else status_display(run.status, RUN_STATUS_ICONS, OTHER_STATUS_CHAR)
         )
+        detail = store.current_run if selected else run
+        kind = run_wait_kind(detail, store.current_workflow)
+        if kind is not None:
+            icon, style = node_status_display(NodeStatus.RUNNING, kind)
         # started_at is a process-monotonic duration clock, not a calendar date.
         # triggered_at is the provider's wall-clock creation time; absent is unknown.
         ts = (

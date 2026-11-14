@@ -6,39 +6,16 @@ from rich.style import Style
 from rich.text import Text
 from textual.widgets import Static
 
-from ..models import NodeStatus
 from ..state import status_label
 from ..theme import (
     DIM_STYLE,
-    ICE_BRIGHT,
-    ICE_FAIL,
     ICE_FROST,
-    ICE_PURPLE,
     ICE_STEEL,
-    ICE_TEAL,
-    OTHER_STATUS_CHAR,
-    OTHER_STATUS_STYLE,
-    SPINNER_FRAMES,
-    status_display,
+    node_status_display,
+    node_wait_kind,
 )
 
 _VALUE_STYLE = Style(color=ICE_FROST)
-
-_NODE_STATUS_CHARS: dict[NodeStatus, str] = {
-    NodeStatus.PENDING: "○",
-    NodeStatus.RUNNING: "◐",
-    NodeStatus.SUCCESS: "✓",
-    NodeStatus.FAILED: "✗",
-    NodeStatus.SKIPPED: "⊘",
-}
-
-_NODE_STATUS_STYLES: dict[NodeStatus, Style] = {
-    NodeStatus.PENDING: Style(color=ICE_STEEL),
-    NodeStatus.RUNNING: Style(color=ICE_BRIGHT, bold=True),
-    NodeStatus.SUCCESS: Style(color=ICE_TEAL),
-    NodeStatus.FAILED: Style(color=ICE_FAIL),
-    NodeStatus.SKIPPED: Style(color=ICE_PURPLE),
-}
 
 
 class RunDetailWidget(Static):
@@ -75,11 +52,8 @@ class RunDetailWidget(Static):
 
         # Node rows
         for ns in run.nodes.values():
-            if ns.status is NodeStatus.RUNNING:
-                icon = SPINNER_FRAMES[frame % len(SPINNER_FRAMES)]
-            else:
-                icon = status_display(ns.status, _NODE_STATUS_CHARS, OTHER_STATUS_CHAR)
-            ns_style = status_display(ns.status, _NODE_STATUS_STYLES, OTHER_STATUS_STYLE)
+            kind = node_wait_kind(store.current_workflow, ns.node_id)
+            icon, ns_style = node_status_display(ns.status, kind, frame)
 
             text.append(f" {icon} ", ns_style)
             text.append(f"{ns.name:<18}", _VALUE_STYLE)

@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from typing import Literal
 
 from rich.style import Style
 from textual.theme import Theme
 
-from .models import LogLevel, NodeStatus, RunStatus
+from .models import LogLevel, NodeStatus, RunState, RunStatus, WorkflowInfo
 
 # ── Avalanche glacier palette ─────────────────────────────────────────────────
 # Derived from the avalanche logo: deep navy → purple → steel blue → teal → ice
@@ -98,6 +99,48 @@ STATUS_CHARS: dict[NodeStatus, str] = {
     NodeStatus.FAILED: "✗",
     NodeStatus.SKIPPED: "⊘",
 }
+
+WaitKind = Literal["sleep", "event", "decision", "run"]
+WAIT_DECISION_CHAR = "!"
+WAIT_DECISION_STYLE = Style(color=ICE_WARN, bold=True)
+WAIT_TIME_CHAR = "◷"
+WAIT_TIME_STYLE = Style(color=ICE_STEEL, dim=True)
+
+
+def node_wait_kind(workflow: WorkflowInfo | None, node_id: str) -> WaitKind | None:
+    """Resolve declared waits, including mapped decision invocations."""
+    if workflow is None:
+        return None
+    spec = workflow.node_waits.get(node_id.split("[", 1)[0])
+    return spec.kind if spec is not None else None
+
+
+def node_status_display(
+    status: object, wait_kind: WaitKind | None = None, frame: int = 0
+) -> tuple[str, Style]:
+    """Only executing work animates; child-run waits are event-like waits."""
+    if status is NodeStatus.RUNNING:
+        if wait_kind == "decision":
+            return WAIT_DECISION_CHAR, WAIT_DECISION_STYLE
+        if wait_kind is not None:
+            return WAIT_TIME_CHAR, WAIT_TIME_STYLE
+        return SPINNER_FRAMES[frame % len(SPINNER_FRAMES)], STATUS_STYLES[NodeStatus.RUNNING]
+    return (
+        status_display(status, STATUS_CHARS, OTHER_STATUS_CHAR),
+        status_display(status, STATUS_STYLES, OTHER_STATUS_STYLE),
+    )
+
+
+def run_wait_kind(run: RunState, workflow: WorkflowInfo | None) -> WaitKind | None:
+    """Use loaded node state for a parked run's summary, never change runtime status."""
+    if run.status is not RunStatus.RUNNING:
+        return None
+    active = [node for node in run.nodes.values() if node.status is NodeStatus.RUNNING]
+    kinds: list[WaitKind | None] = [node_wait_kind(workflow, node.node_id) for node in active]
+    if not kinds or None in kinds:
+        return None
+    return "decision" if "decision" in kinds else kinds[0]
+
 
 VIRTUAL_LABELS: dict[str, str] = {
     "start": "start ◆",

@@ -218,8 +218,8 @@ describe("agent runtime on graph nodes", () => {
       ["accepted", "✓", "success", "success"],
       ["indeterminate", "✗", "danger", "danger"],
       ["expired", "✗", "danger", "danger"],
-      ["ready", "◐", "warning", "amber"],
-      ["waiting", "◐", "warning", "amber"],
+      ["ready", "○", "warning", "amber"],
+      ["waiting", null, "neutral", "muted"],
       ["intended", "○", "neutral", "muted"],
       ["cancelled", "⊘", "neutral", "muted"],
       ["somethingnew", "○", "neutral", "muted"],
@@ -241,6 +241,17 @@ describe("agent runtime on graph nodes", () => {
           color === "amber" ? "var(--color-amber)" : `var(--color-run-status-${color})`,
       });
       expect(card).toHaveStyle({ outline: "2px solid var(--color-acid)" });
+      expect(card.querySelector("svg.node-status-icon")).toBeNull();
+      expect(card.className).not.toMatch(/gradient-animate|shadow-|border-\[3px\]/);
+      expect(card).toHaveClass("node-agent", "node-claude");
+      if (status === "waiting") {
+        expect(
+          within(card).getByRole("img", { name: "Waiting for time or event" }),
+        ).toBeInTheDocument();
+        expect(card.querySelector(".lucide-clock")).toBeInTheDocument();
+        expect(card.querySelector(".run-status-glyph")).toBeNull();
+        continue;
+      }
       const marker = card.querySelector(".node-title .run-status-glyph")!;
       expect(marker).toHaveAttribute("data-glyph", tone === "active" ? "running" : tone);
       expect(marker).toHaveAttribute("data-char", glyph);
@@ -255,9 +266,6 @@ describe("agent runtime on graph nodes", () => {
       );
       expect(card.querySelectorAll(".run-status-glyph")).toHaveLength(1);
       expect(card.querySelector(".node-title")?.firstElementChild).toBe(marker.parentElement);
-      expect(card.querySelector("svg.node-status-icon")).toBeNull();
-      expect(card.className).not.toMatch(/gradient-animate|shadow-|border-\[3px\]/);
-      expect(card).toHaveClass("node-agent", "node-claude");
     }
   });
 });

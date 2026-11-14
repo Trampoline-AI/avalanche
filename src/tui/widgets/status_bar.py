@@ -6,7 +6,7 @@ from rich.style import Style
 from rich.text import Text
 from textual.widgets import Static
 
-from ..models import RunStatus
+from ..models import NodeStatus, RunStatus
 from ..state import get_operator_reachability, get_stream_state, status_label
 from ..theme import (
     DIM_STYLE,
@@ -19,6 +19,8 @@ from ..theme import (
     OTHER_STATUS_CHAR,
     OTHER_STATUS_STYLE,
     SPINNER_FRAMES,
+    node_status_display,
+    run_wait_kind,
     status_display,
 )
 
@@ -100,6 +102,9 @@ class StatusBar(Static):
             else:
                 icon = status_display(run.status, _STATUS_ICONS, OTHER_STATUS_CHAR)
             style = status_display(run.status, _STATUS_STYLES, OTHER_STATUS_STYLE)
+            kind = run_wait_kind(run, store.current_workflow)
+            if kind is not None:
+                icon, style = node_status_display(NodeStatus.RUNNING, kind)
             text.append(f" {icon}", style)
             if not isinstance(run.status, RunStatus):
                 text.append(f" {status_label(run.status)}", style)

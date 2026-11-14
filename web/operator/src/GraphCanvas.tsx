@@ -87,7 +87,8 @@ import {
   useGraphOrientation,
 } from "./useGraphOrientation";
 import { ClaudeLogo, isClaudeRuntime } from "./ClaudeLogo";
-import { RunStatus, statusTone, statusToneColor } from "./RunStatus";
+import { RunStatus, statusTone, statusToneColor, type WaitKind } from "./RunStatus";
+import type { WaitCard } from "./RunWaitPanel";
 import {
   INPUT_NODE_ID,
   decodeWorkflowInputDeclaration,
@@ -143,13 +144,14 @@ interface CardData extends Record<string, unknown> {
   composites?: Record<string, number>;
   identity?: string;
   status?: string;
+  waitKind?: WaitKind;
   error?: string;
   startedAt?: number;
   endedAt?: number;
   runningElapsedSeconds?: number;
   declaration?: AgentFieldSchemas;
   instructionLine?: string;
-  mapItems?: { id: string; status?: string; onOpen?: () => void }[];
+  mapItems?: { id: string; status?: string; waitKind?: WaitKind; onOpen?: () => void }[];
   mapSummary?: string;
   placeholderHint?: string;
   /** A state machine's current state (machine mode only). */
@@ -365,11 +367,17 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
       ? `node-agent${data.isClaude ? " node-claude" : ""}`
       : "";
   const state = data.status ?? "pending";
-  const stateColor = statusToneColor[statusTone(state)];
+  const waiting =
+    state === "waiting" || (data.waitKind !== undefined && statusTone(state) === "active");
+  const stateColor =
+    statusToneColor[
+      waiting ? (data.waitKind === "decision" ? "warning" : "neutral") : statusTone(state)
+    ];
   return (
     <article
       className={`node-card ${data.current ? "node-card--current" : ""} ${showDescription ? "node-card--description" : ""} ${isCompact ? `node-card--compact ${hasEvaluationRow ? "min-h-[130px]" : "min-h-[100px]"} justify-center gap-0 px-4 py-3` : "min-h-[130px] gap-2 p-4"} relative flex w-[360px] cursor-pointer flex-col items-stretch rounded border text-left motion-reduce:transition-none ${designationClass}`}
       data-node-state={state}
+      data-node-wait={waiting ? data.waitKind : undefined}
       data-current={data.current || undefined}
       style={
         {
@@ -449,7 +457,7 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
         <strong
           className={`node-title block self-stretch font-mono ${isCompact ? "text-xl" : "pr-[76px] text-sm"} leading-tight text-ink`}
         >
-          <RunStatus status={state} glyphOnly /> {data.label}
+          <RunStatus status={state} waitKind={data.waitKind} glyphOnly /> {data.label}
           {data.identity && ` ${data.identity}`}
         </strong>
         {data.classifierSummary && (
@@ -504,13 +512,11 @@ const WorkflowNodeCard = memo(({ data, selected }: NodeProps<Node<CardData>>) =>
                 title={`${item.id}: ${item.status}`}
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded border"
               >
-                {item.status === "success"
-                  ? "✓"
-                  : item.status === "running"
-                    ? "▶"
-                    : item.status === "failed"
-                      ? "✗"
-                      : "·"}
+                <RunStatus
+                  status={item.status ?? "pending"}
+                  waitKind={item.waitKind}
+                  glyphOnly
+                />
               </button>
             ) : (
               <span
@@ -1101,6 +1107,7 @@ interface GraphCanvasProps {
   workflow?: FlowInfoMsg;
   runTopology?: WorkflowTopologyMsg;
   runNodes?: NodeSnapshotMsg[];
+  waits?: readonly WaitCard[];
   expansions?: Record<string, number>;
   /** How the displayed run started, such as "manual" or "scheduled". */
   runTriggeredBy?: TriggerKind;
@@ -1126,6 +1133,7 @@ function GraphCanvasView({
   workflow,
   runTopology,
   runNodes = [],
+  waits = [],
   expansions = {},
   runTriggeredBy,
   evaluations,
@@ -1393,6 +1401,12 @@ function GraphCanvasView({
   const nodes = useMemo(() => {
     if (!topology) return [];
     const runtimeNodes = Object.fromEntries(runNodes.map((node) => [node.nodeId, node]));
+    const waitKinds = new Map(waits.map((card) => [card.nodeId, card.kind]));
+    // Time, external-event and child-run waits share the clock. Decision cards
+    // carry the human-action distinction even when the host only lists decisions.
+    const waitKindFor = (nodeId: string): WaitKind | undefined =>
+      waitKinds.get(nodeId) ??
+      (topology.nodeTypes[nodeId.split("[")[0]] === "wait" ? "event" : undefined);
     const labels = Object.fromEntries(
       topology.nodeIds.map((nodeId) => [
         nodeId,
@@ -1441,6 +1455,7 @@ function GraphCanvasView({
                   return {
                     id,
                     status: item?.status,
+                    waitKind: waitKindFor(id),
                     onOpen: item ? () => onOpenNode(id) : undefined,
                   };
                 })
@@ -1469,6 +1484,7 @@ function GraphCanvasView({
           composites:
             evaluation?.status === "completed" ? evaluation.result.composites : undefined,
           status: runtimeNode?.status,
+          waitKind: waitKindFor(nodeId),
           error: runtimeNode?.error,
           startedAt: runtimeNode?.startedAt || undefined,
           endedAt: runtimeNode?.endedAt || undefined,
@@ -1506,6 +1522,7 @@ function GraphCanvasView({
     positions,
     openCallbacks,
     runNodes,
+    waits,
     expansions,
     groupedTopology,
     highlight,

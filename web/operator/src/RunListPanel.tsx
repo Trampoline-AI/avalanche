@@ -13,7 +13,7 @@ import {
   twoLineWidth,
   useObservedWidth,
 } from "./priorityFit";
-import { RunStatus } from "./RunStatus";
+import { RunStatus, type WaitKind } from "./RunStatus";
 import { DeploymentList } from "./DeploymentList";
 import { formatAbsoluteTime, formatTimeAgo, useNow } from "./timeAgo";
 import { useTimelineScrollHandle } from "./useTimelineScrollHandle";
@@ -44,6 +44,7 @@ interface RunListPanelProps extends Pick<
   workflowId: string;
   runs: Record<string, RunSummaryMsg>;
   selectedRunId?: string;
+  selectedRunWaitKind?: WaitKind;
   onSelectRun: (runId: string | undefined) => void;
   onViewAll?: () => void;
   onClose?: () => void;
@@ -130,6 +131,7 @@ export function RunListPanel({
   workflowId,
   runs,
   selectedRunId,
+  selectedRunWaitKind,
   onSelectRun,
   onViewAll,
   onClose,
@@ -625,7 +627,12 @@ export function RunListPanel({
                           </span>
                         </span>
                         <span className="justify-self-end text-right">
-                          <RunStatus status={summary.status} />
+                          <RunStatus
+                            status={summary.status}
+                            waitKind={
+                              summary.runId === selectedRunId ? selectedRunWaitKind : undefined
+                            }
+                          />
                         </span>
                       </button>
                     );
