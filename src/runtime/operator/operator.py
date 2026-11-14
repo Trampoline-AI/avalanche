@@ -4136,11 +4136,16 @@ class Operator:
             )
             for update in updates
         )
-        structural_run = deepcopy(run)
-        structural_run.logs = []
-        structural_run.details_hydrated = False
-        for node in structural_run.nodes.values():
-            node.agent_trace_json = None
+        # One copy per consumer, made below; the run was copied here first and
+        # then copied again for each callback.
+        structural_run = replace(run, logs=[], details_hydrated=False)
+
+        def structural_copy() -> RunState:
+            copied = deepcopy(structural_run)
+            for node in copied.nodes.values():
+                node.agent_trace_json = None
+            return copied
+
         detail_updates: list[DetailUpdate] = []
         for update in updates:
             change = update.change
@@ -4180,7 +4185,7 @@ class Operator:
         notifications = _RunNotifications(
             sequence=publication_sequence,
             run_callbacks=tuple(
-                (callback, deepcopy(structural_run)) for callback in self._run_callbacks
+                (callback, structural_copy()) for callback in self._run_callbacks
             ),
             detail_callbacks=tuple(
                 (callback, deepcopy(detail))
